@@ -24,11 +24,19 @@ for (const file of ['Diagnostic-Hub.exe', 'win-unpacked/Diagnostic Hub.exe']) {
 const archive = path.join(directory, 'win-unpacked/resources/app.asar');
 for (const folder of ['dist/assets', 'dist-electron'])
     for (const file of fs.readdirSync(folder)) {
-        if (!fs.readFileSync(folder + '/' + file).equals(extractFile(archive, folder + '/' + file)))
+        if (
+            !fs
+                .readFileSync(path.join(folder, file))
+                .equals(extractFile(archive, path.join(folder, file)))
+        )
             throw Error('Packaged bundle mismatch: ' + file);
     }
 for (const file of ['app-icon.svg', 'app-icon.png', 'app-icon.ico'])
-    if (!fs.readFileSync('public/' + file).equals(extractFile(archive, 'dist/' + file)))
+    if (
+        !fs
+            .readFileSync(path.join('public', file))
+            .equals(extractFile(archive, path.join('dist', file)))
+    )
         throw Error('Packaged icon mismatch: ' + file);
 for (const file of [
     ...fs.readdirSync('dist/assets').map((f) => 'assets/' + f),
