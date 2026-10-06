@@ -1,0 +1,48 @@
+name: Verify website and gateway
+
+on:
+    workflow_call:
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: npm
+            - run: npm ci
+              env:
+                  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            - run: npm run verify
+            - run: npx playwright install --with-deps chromium firefox webkit
+            - run: npm run test:e2e
+            - run: npm run test:portability
+            - run: npm run build:web
+            - run: npm run package:web
+            - run: npm run package:launchers
+            - run: npm run package:gateway
+            - run: npm run checksums
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: Diagnostic-Hub-lab-gateway
+                  path: |
+                      release/*.tar.gz
+                      release/*.tar.gz.sha256
+                  if-no-files-found: error
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: Diagnostic-Hub-web-portable
+                  path: |
+                      release/*.zip
+                      release/*.zip.sha256
+                      release/download-run.*
+                  if-no-files-found: error
+            - uses: actions/upload-pages-artifact@v4
+              with:
+                  path: dist-web

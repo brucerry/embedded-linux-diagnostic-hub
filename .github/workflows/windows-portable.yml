@@ -1,0 +1,72 @@
+name: Verify and build Windows application
+
+on:
+    workflow_call:
+        secrets:
+            WINDOWS_CSC_LINK:
+                required: false
+            WINDOWS_CSC_KEY_PASSWORD:
+                required: false
+    workflow_dispatch:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: windows-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        runs-on: windows-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: npm
+            - run: npm ci
+            - run: npm run verify
+            - name: Test download command with Windows PowerShell 5.1
+              run:
+                  powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+                  tests/windows-downloader.ps1
+            - run: npm run build
+            - run: npm run build:web
+            - run: npx playwright install chromium
+            - run: npm run test:e2e
+            - run: npx tsx tests/desktop-smoke.ts
+            - name: Build portable executable
+              run: npx electron-builder --win portable --x64 --publish never
+              env:
+                  CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+                  CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+            - run: npm run verify:package
+            - name: Test packaged Windows application
+              shell: pwsh
+              run: |
+                  ./tests/windows-launch.ps1 -Executable "$PWD/release/Diagnostic-Hub.exe"
+                  ./tests/windows-host-verification.ps1 -Executable "$PWD/release/Diagnostic-Hub.exe"
+            - run: npm run checksums
+            - name: Record signing status
+              shell: pwsh
+              run: |
+                  $signature = (Get-AuthenticodeSignature release/Diagnostic-Hub.exe).Status.ToString()
+                  if ($signature -notin @('Valid', 'NotSigned')) { throw "Unexpected signature status: $signature" }
+                  if ($env:SIGNING_CONFIGURED -eq 'true' -and $signature -ne 'Valid') { throw 'Signing was configured but the executable is unsigned.' }
+                  $manifest = @{ version = (Get-Content package.json | ConvertFrom-Json).version; commit = $env:GITHUB_SHA; signature = $signature }
+                  $manifest | ConvertTo-Json | Set-Content release/build-info.json -Encoding utf8
+              env:
+                  SIGNING_CONFIGURED: ${{ secrets.WINDOWS_CSC_LINK != '' }}
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: Diagnostic-Hub-win-x64
+                  path: |
+                      release/Diagnostic-Hub.exe
+                      release/Diagnostic-Hub.exe.sha256
+                      release/build-info.json
+                  if-no-files-found: error

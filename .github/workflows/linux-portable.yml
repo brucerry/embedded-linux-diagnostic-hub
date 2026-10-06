@@ -1,0 +1,57 @@
+name: Verify and build Linux application
+
+on:
+    workflow_call:
+    workflow_dispatch:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: linux-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        runs-on: ubuntu-22.04
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: npm
+            - run: npm ci
+            - run: npm run verify
+            - run: npx playwright install --with-deps chromium
+            - run: npm run test:e2e
+            - run: npm run package:linux
+            - run: npm run verify:linux
+            - name: Run the packaged Linux application over loopback SSH
+              run: xvfb-run -a npx tsx tests/desktop-smoke.ts
+              env:
+                  HUB_TEST_SANDBOX: '1'
+                  HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
+            - name: Run AppImage without FUSE
+              run: xvfb-run -a npx tsx tests/desktop-smoke.ts
+              env:
+                  HUB_TEST_SANDBOX: '1'
+                  HUB_TEST_EXECUTABLE:
+                      ${{ github.workspace }}/release/Diagnostic-Hub-linux-x64.AppImage
+                  HUB_TEST_APPIMAGE: '1'
+            - name: Record Linux build identity
+              run: node scripts/record-linux-build.mjs
+            - run: npm run checksums
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: Diagnostic-Hub-linux-x64
+                  path: |
+                      release/Diagnostic-Hub-linux-x64.AppImage
+                      release/Diagnostic-Hub-linux-x64.AppImage.sha256
+                      release/Diagnostic-Hub-linux-x64.tar.gz
+                      release/Diagnostic-Hub-linux-x64.tar.gz.sha256
+                      release/linux-build-info.json
+                  if-no-files-found: error

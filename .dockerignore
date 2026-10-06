@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-web
+dist-electron
+release
+.git
+.env*
+test-results
+playwright-report
+
+validation
+dist-gateway
+
+dist-site/
