@@ -1,0 +1,6 @@
+# Keep source and scripts consistent with Prettier on every development host.
+* text=auto eol=lf
+
+# Preserve binary assets without line-ending conversion.
+*.ico binary
+*.png binary
