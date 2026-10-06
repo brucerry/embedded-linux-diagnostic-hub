@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-web/
+dist-gateway/
+dist-electron/
+release/
+validation/
+playwright-report/
+test-results/
+package-lock.json
+.env*
+!.env.gateway.example
+
+dist-site/

@@ -1,0 +1,125 @@
+{
+    "name": "embedded-linux-diagnostic-hub",
+    "productName": "Diagnostic Hub",
+    "version": "0.1.0",
+    "private": true,
+    "description": "A portable SSH diagnostic workbench for embedded Linux",
+    "author": "Diagnostic Hub contributors",
+    "license": "MIT",
+    "main": "dist-electron/main.cjs",
+    "scripts": {
+        "dev": "vite --host 127.0.0.1",
+        "desktop:dev": "npm run build:desktop && concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+        "build:desktop": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --out-extension:.js=.cjs --external:electron --external:ssh2",
+        "typecheck": "tsc --noEmit",
+        "build": "npm run typecheck && vite build && npm run build:desktop",
+        "build:web": "npm run typecheck && vite build --mode web",
+        "preview:web": "vite preview --mode web --host 127.0.0.1",
+        "build:gateway": "esbuild gateway/main.ts --bundle --platform=node --format=cjs --outfile=dist-gateway/main.cjs --external:ssh2",
+        "gateway": "npm run build:gateway && node --env-file=.env.gateway dist-gateway/main.cjs",
+        "package:gateway": "npm run build:gateway && node scripts/package-gateway.mjs",
+        "start": "electron .",
+        "test": "tsx --test tests/*.test.ts",
+        "test:e2e": "playwright test",
+        "test:desktop": "npm run build && tsx tests/desktop-smoke.ts",
+        "package:win": "npm run build && electron-builder --win portable --x64 --publish never",
+        "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --x64 --publish never",
+        "preview": "vite preview --host 127.0.0.1",
+        "generate:icons": "node scripts/generate-icons.mjs",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "verify": "npm run format:check && npm run typecheck && npm test",
+        "verify:package": "node scripts/verify-package.mjs release",
+        "checksums": "node scripts/checksums.mjs",
+        "package:web": "node scripts/build-portable-web.mjs && node scripts/package-web.mjs",
+        "verify:linux": "node scripts/verify-linux-package.mjs release",
+        "package:launchers": "node scripts/package-launchers.mjs",
+        "test:portability": "node scripts/build-portable-web.mjs && playwright test --config playwright.portability.config.ts"
+    },
+    "dependencies": {
+        "lucide-react": "^0.577.0",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+        "ssh2": "^1.17.0"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.58.2",
+        "@types/node": "^24.0.0",
+        "@types/react": "^19.2.0",
+        "@types/react-dom": "^19.2.0",
+        "@types/ssh2": "^1.15.5",
+        "@vitejs/plugin-react": "^6.0.0",
+        "concurrently": "^9.2.1",
+        "electron": "44.5.1",
+        "electron-builder": "^26.15.3",
+        "esbuild": "^0.28.2",
+        "fflate": "0.8.3",
+        "prettier": "3.9.9",
+        "tsx": "^4.21.0",
+        "typescript": "^5.9.3",
+        "vite": "^8.3.2",
+        "wait-on": "^9.0.0"
+    },
+    "build": {
+        "appId": "dev.diagnostichub.desktop",
+        "productName": "Diagnostic Hub",
+        "asar": true,
+        "npmRebuild": false,
+        "files": [
+            "dist/**/*",
+            "dist-electron/**/*",
+            "package.json",
+            "!node_modules/cpu-features{,/**/*}",
+            "!node_modules/ssh2/lib/protocol/crypto/build{,/**/*}"
+        ],
+        "directories": {
+            "output": "release"
+        },
+        "win": {
+            "target": [
+                {
+                    "target": "portable",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ],
+            "artifactName": "Diagnostic-Hub.exe",
+            "icon": "public/app-icon.ico"
+        },
+        "portable": {
+            "requestExecutionLevel": "user"
+        },
+        "linux": {
+            "target": [
+                {
+                    "target": "AppImage",
+                    "arch": [
+                        "x64"
+                    ]
+                },
+                {
+                    "target": "tar.gz",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ],
+            "executableName": "diagnostic-hub",
+            "artifactName": "Diagnostic-Hub-linux-${arch}.${ext}",
+            "category": "Development",
+            "icon": "public/app-icon.png"
+        },
+        "appImage": {
+            "executableArgs": [],
+            "artifactName": "Diagnostic-Hub-linux-x64.AppImage"
+        },
+        "toolsets": {
+            "appimage": "1.0.3"
+        },
+        "afterPack": "scripts/linux-after-pack.cjs"
+    },
+    "engines": {
+        "node": ">=24 <25"
+    }
+}
