@@ -1,4 +1,7 @@
-param([Parameter(Mandatory=$true)][string]$Executable)
+param(
+    [Parameter(Mandatory=$true)][string]$Executable,
+    [switch]$RequireVisibleCursor
+)
 $ErrorActionPreference = 'Stop'
 $temporary = Join-Path $env:TEMP ('DiagnosticHub-host-check-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temporary | Out-Null
@@ -23,6 +26,14 @@ public class HubCursorProbe {
 '@
 [HubCursorProbe]::SetProcessDPIAware() | Out-Null
 try {
+    # Establish the desktop's cursor capability before launching the application.
+    # Hosted runners can expose a window desktop without a visible mouse pointer.
+    $baselineCursor = New-Object HubCursorProbe+CursorInfo
+    $baselineCursor.Size = [Runtime.InteropServices.Marshal]::SizeOf($baselineCursor)
+    if (-not [HubCursorProbe]::GetCursorInfo([ref]$baselineCursor)) { throw 'Cannot query the Windows cursor before application launch.' }
+    $cursorInitiallyVisible = ($baselineCursor.Flags -band 1) -ne 0 -and $baselineCursor.Cursor -ne [IntPtr]::Zero
+    Write-Output ('Pre-launch Windows cursor: flags=' + $baselineCursor.Flags + ', visible=' + $cursorInitiallyVisible)
+    if ($RequireVisibleCursor -and -not $cursorInitiallyVisible) { throw 'Physical cursor acceptance requires a visible Windows cursor before launch.' }
     $copied = Join-Path $temporary 'Diagnostic-Hub.exe'
     Copy-Item -LiteralPath $Executable -Destination $copied
     $profile = Join-Path $temporary 'profile'
@@ -95,8 +106,14 @@ try {
     Start-Sleep -Milliseconds 150
     if ([HubCursorProbe]::GetAncestor([HubCursorProbe]::WindowFromPoint($point), 2) -ne [IntPtr]([long]$handle)) { throw ('Cursor check target mismatch: app='+$handle+' point='+$point.X+','+$point.Y+' root='+[HubCursorProbe]::GetAncestor([HubCursorProbe]::WindowFromPoint($point), 2)) }
     $cursor = New-Object HubCursorProbe+CursorInfo; $cursor.Size = [Runtime.InteropServices.Marshal]::SizeOf($cursor)
-    if (-not [HubCursorProbe]::GetCursorInfo([ref]$cursor) -or ($cursor.Flags -band 1) -eq 0 -or $cursor.Cursor -eq [IntPtr]::Zero) { throw 'The Windows cursor is not visible over the in-app confirmation.' }
-    Write-Output 'Windows GetCursorInfo confirms a visible cursor over the verification controls.'
+    if (-not [HubCursorProbe]::GetCursorInfo([ref]$cursor)) { throw 'Cannot query the Windows cursor over the in-app confirmation.' }
+    $cursorVisible = ($cursor.Flags -band 1) -ne 0 -and $cursor.Cursor -ne [IntPtr]::Zero
+    if (($RequireVisibleCursor -or $cursorInitiallyVisible) -and -not $cursorVisible) { throw 'The Windows cursor became invisible over the in-app confirmation.' }
+    if ($cursorVisible) {
+        Write-Output 'Windows GetCursorInfo confirms a visible cursor over the verification controls.'
+    } else {
+        Write-Warning ('Native visible-cursor acceptance unavailable: the desktop had no visible cursor before launch (flags=' + $baselineCursor.Flags + '). UI cursor styles and window interaction are still checked.')
+    }
     Evaluate $renderer "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Cancel verification').click()" | Out-Null
     Start-Sleep -Milliseconds 300
     if ((Evaluate $main 'globalThis.fixtureAuthentications') -ne 0) { throw 'Cancelled key was authenticated.' }

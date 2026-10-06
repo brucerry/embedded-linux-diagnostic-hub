@@ -83,10 +83,13 @@ connected boards:
 ```
 
 The latter verifies changed-host-key cancellation/approval, remembered-key reconnect, an enabled
-native window and visible cursor, plus valid LAN evidence retained alongside unavailable-attribute
-warnings. Physical target validation is separate from these loopback tests; follow
-[validation guidance](validation.md) and compare the collected report against direct read-only SSH
-output on the nominated target.
+native window and UI cursor styles, plus valid LAN evidence retained alongside unavailable-attribute
+warnings. It also requires the native cursor to stay visible when Windows reports a visible cursor
+before launch. Hosted desktops without an initially visible pointer report that physical check as
+unavailable; their UI and connection checks still run. Add `-RequireVisibleCursor` on an interactive
+Windows PC to require physical cursor acceptance. Physical target validation is separate from these
+loopback tests; follow [validation guidance](validation.md) and compare the collected report against
+direct read-only SSH output on the nominated target.
 
 ## Dependencies and generated assets
 
