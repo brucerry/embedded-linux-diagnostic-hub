@@ -212,6 +212,8 @@ test('overview stays mounted beneath the cover until fresh readings replace the 
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    // SSH can become connected before the first snapshot finishes rendering.
+    await expect(page.locator('.metric-card')).toHaveCount(4);
     await page.evaluate(() => {
         (window as any).originalMetric = document.querySelector('.metric-card');
         window.desktopTest.holdNextCollection = true;
