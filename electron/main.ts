@@ -14,10 +14,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DeviceMonitor } from '../backend/ssh/monitor';
 import { validateConnection } from '../backend/ssh/session';
-import { REPOSITORY_URL } from '../shared/project';
+import { RELEASES_URL, REPOSITORY_URL } from '../shared/project';
 import { createReport, validateSnapshot } from '../shared/report';
 import type { Snapshot } from '../shared/types';
+import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
+import { UpdateCoordinator } from './update-coordinator';
+import { UpdateReports } from './update-reports';
 
 const development = process.argv.includes('--dev') && !app.isPackaged;
 const appUrl = development ? 'http://127.0.0.1:5173/' : 'app://bundle/index.html';
@@ -25,6 +28,7 @@ let window: BrowserWindow;
 let keyPath: string | null = null;
 let connecting = false;
 let lastSnapshot: Snapshot | null = null;
+let collectionTask: Promise<Snapshot> | null = null;
 const hostVerification = new HostVerification((request) => {
     if (window && !window.isDestroyed()) window.webContents.send('hub:verify-host-key', request);
 });
@@ -86,6 +90,38 @@ async function verifyHost(endpoint: string, received: string): Promise<boolean> 
 }
 
 app.whenReady().then(async () => {
+    const updater = new ReleaseUpdater(
+        app.getVersion(),
+        path.join(app.getPath('userData'), 'updates'),
+        process.platform,
+        process.arch,
+        app.isPackaged,
+    );
+    const reports = new UpdateReports(path.join(app.getPath('userData'), 'update-reports'));
+    const update = new UpdateCoordinator(updater, reports, {
+        isConnecting: () => connecting,
+        isConnected: () => ssh.isConnected,
+        waitForCollection: async () => {
+            await collectionTask?.catch(() => {});
+        },
+        latestSnapshot: () => lastSnapshot,
+        disconnect: () => {
+            ssh.clear();
+            window.webContents.send('hub:disconnected', 'update');
+        },
+        progress: (message) => window.webContents.send('hub:update-progress', message),
+        restart: (execPath) => {
+            app.relaunch({
+                execPath,
+                args: [
+                    ...(process.platform === 'linux' ? ['--appimage-extract-and-run'] : []),
+                    `--user-data-dir=${app.getPath('userData')}`,
+                ],
+            });
+            setImmediate(() => app.quit());
+        },
+    });
+
     protocol.handle('app', (request) => {
         const url = new URL(request.url);
         const root = path.join(app.getAppPath(), 'dist');
@@ -127,6 +163,7 @@ app.whenReady().then(async () => {
         hostVerification.confirm(id, accepted),
     );
     registerHandler('hub:connect', async (input) => {
+        if (update.active) throw new Error('An update is in progress. SSH remains disconnected.');
         if (connecting) throw new Error('A connection is already in progress.');
         const options = validateConnection(input);
         connecting = true;
@@ -139,7 +176,6 @@ app.whenReady().then(async () => {
                     : undefined;
             if (options.auth === 'key' && !privateKey)
                 throw new Error('Select a private key first.');
-            lastSnapshot = null;
             await ssh.configure(
                 options,
                 (key) => verifyHost(`${options.host}:${options.port}`, key),
@@ -156,8 +192,18 @@ app.whenReady().then(async () => {
         ssh.clear();
     });
     registerHandler('hub:collect', async () => {
-        lastSnapshot = await ssh.collect();
-        return lastSnapshot;
+        if (update.active) throw new Error('Live collection is paused for the update.');
+        if (collectionTask) throw new Error('A collection is already running.');
+        const pending = ssh.collect().then((snapshot) => {
+            lastSnapshot = snapshot;
+            return snapshot;
+        });
+        collectionTask = pending;
+        try {
+            return await pending;
+        } finally {
+            collectionTask = null;
+        }
     });
     registerHandler('hub:pick-key', async () => {
         const choice = await dialog.showOpenDialog(window, {
@@ -168,7 +214,24 @@ app.whenReady().then(async () => {
         keyPath = choice.filePaths[0];
         return path.basename(keyPath);
     });
+    registerHandler('hub:check-updates', (includePrereleases) => {
+        if (update.active) throw new Error('An update is already in progress.');
+        return updater.check(includePrereleases as boolean);
+    });
+    registerHandler('hub:start-update', (request) => update.start(request));
+    registerHandler('hub:read-update-report', () => reports.read());
+    registerHandler('hub:clear-session-data', () => {
+        if (update.active) throw new Error('Wait for the update to finish before resetting data.');
+        if (connecting || collectionTask || ssh.isCollecting)
+            throw new Error('Wait for the current connection or collection to finish.');
+        lastSnapshot = null;
+    });
+    registerHandler('hub:acknowledge-update-report', (id) => {
+        if (typeof id !== 'string') throw new Error('Invalid saved update report.');
+        return reports.acknowledge(id);
+    });
     registerHandler('hub:open-repository', () => shell.openExternal(REPOSITORY_URL));
+    registerHandler('hub:open-releases', () => shell.openExternal(RELEASES_URL));
     registerHandler('hub:copy-text', (command) => {
         if (typeof command !== 'string' || command.length > 262144)
             throw new Error('Diagnostic text exceeds the clipboard limit.');

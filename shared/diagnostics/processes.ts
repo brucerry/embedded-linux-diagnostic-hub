@@ -100,10 +100,16 @@ export function processCpu(
     record: ProcessRecord,
     totalTicks: number | undefined,
     previous?: ProcessSample,
+    previousLookup?: ReadonlyMap<number, ProcessSample['records'][number]>,
 ): number | undefined {
-    const old = previous?.records.find((r) => r.pid === record.pid && r.start === record.start);
+    const old = previousLookup
+        ? previousLookup.get(record.pid)
+        : previous?.records.find((r) => r.pid === record.pid);
     const delta = totalTicks !== undefined && previous ? totalTicks - previous.totalTicks : 0;
-    const ticks = old && record.ticks !== undefined ? record.ticks - old.ticks : -1;
+    const ticks =
+        old && old.start === record.start && record.ticks !== undefined
+            ? record.ticks - old.ticks
+            : -1;
     return delta > 0 && ticks >= 0 && ticks <= delta ? (100 * ticks) / delta : undefined;
 }
 
@@ -113,6 +119,7 @@ export function processTable(
 ): EvidenceTable | undefined {
     const parsed = processResources(result);
     if (!parsed?.records.length) return;
+    const previousLookup = new Map(previous?.records.map((record) => [record.pid, record]));
     const mib = (value?: number) => (value === undefined ? '' : (value / 1024).toFixed(2));
     return {
         columns: [
@@ -128,7 +135,8 @@ export function processTable(
             'CPU % (system)',
         ],
         rows: parsed.records.map((r) => {
-            const cpu = processCpu(r, parsed.totalTicks, previous)?.toFixed(2) ?? '';
+            const cpu =
+                processCpu(r, parsed.totalTicks, previous, previousLookup)?.toFixed(2) ?? '';
             return [
                 String(r.pid),
                 r.name,

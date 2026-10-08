@@ -4,6 +4,7 @@ import type { EvidencePresentation } from '../../../shared/diagnostics/evidence'
 import {
     evidencePresentation,
     graphReadings,
+    HISTORY_LIMIT,
     type HistoryFrame,
 } from '../../../shared/diagnostics/presentation';
 import { processTable } from '../../../shared/diagnostics/processes';
@@ -19,7 +20,6 @@ interface EvidenceModalProps {
     result: ProbeResult;
     snapshot: Snapshot;
     mode: string;
-    live: boolean;
     history: HistoryFrame[];
     onCopy: (command: string) => Promise<void>;
     onClose: () => void;
@@ -30,12 +30,17 @@ export function EvidenceModal({
     result,
     snapshot,
     mode,
-    live,
     history,
     onCopy,
     onClose,
 }: EvidenceModalProps) {
-    const previousProcess = history.at(-2)?.processes;
+    const latestFrame = history.at(-1);
+    const precedingFrame = history.at(-2);
+    const previousProcess =
+        latestFrame?.connection === precedingFrame?.connection &&
+        latestFrame?.source === precedingFrame?.source
+            ? precedingFrame?.processes
+            : undefined;
     const presentation = useMemo<EvidencePresentation>(() => {
         const resources =
             probe.id === 'processes' ? processTable(result, previousProcess) : undefined;
@@ -48,8 +53,31 @@ export function EvidenceModal({
     }, [probe.id, result.stdout, result.status, previousProcess]);
     const preferred = 'stdout';
     const [tab, setTab] = useState<'stdout' | 'stderr' | 'table' | 'tree' | 'graph'>('stdout');
-    const readings = graphReadings(probe.id, result, snapshot, previousProcess);
-    const graphAvailable = live && readings.length > 0;
+    const graph = useMemo(() => {
+        const latestFrame = history.at(-1);
+        const current =
+            latestFrame?.capturedAt === snapshot.capturedAt
+                ? (latestFrame.readings[probe.id] ?? [])
+                : graphReadings(probe.id, result, snapshot, previousProcess);
+        // Imported reports and manually collected snapshots can plot a single real sample.
+        const frames =
+            current.length && latestFrame?.capturedAt !== snapshot.capturedAt
+                ? [
+                      ...history,
+                      {
+                          capturedAt: snapshot.capturedAt,
+                          readings: { [probe.id]: current },
+                          source: snapshot.endpoint,
+                      },
+                  ].slice(-HISTORY_LIMIT)
+                : history;
+        let readings = current;
+        for (let index = frames.length - 1; !readings.length && index >= 0; index--) {
+            readings = frames[index].readings[probe.id] ?? [];
+        }
+        return { history: frames, readings, retainedOnly: current.length === 0 };
+    }, [history, probe.id, result, snapshot, previousProcess]);
+    const graphAvailable = graph.readings.length > 0;
     const table = presentation.table;
     const command = result.command || probe.command;
     useEffect(() => {
@@ -195,7 +223,18 @@ export function EvidenceModal({
                         )}
                     </div>
                 ) : tab === 'graph' && graphAvailable ? (
-                    <LiveGraph id={probe.id} history={history} readings={readings} />
+                    <>
+                        {graph.retainedOnly && (
+                            <p className="graph-note">
+                                This snapshot has no numeric readings. Showing retained samples.
+                            </p>
+                        )}
+                        <LiveGraph
+                            id={probe.id}
+                            history={graph.history}
+                            readings={graph.readings}
+                        />
+                    </>
                 ) : (
                     <div className="snippet output-snippet">
                         <pre className="evidence-output" tabIndex={0}>

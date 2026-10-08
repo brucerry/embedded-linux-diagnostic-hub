@@ -28,6 +28,13 @@ export default defineConfig(({ mode }) => ({
         },
     ],
     base: mode === 'web' ? webBase(process.env.GITHUB_REPOSITORY, process.env.WEB_BASE_PATH) : './',
+    experimental: {
+        // Resolve workers beside the importing bundle on app://, Pages and nested web hosts.
+        // The shared renderer assets stay identical regardless of the HTML deployment base.
+        renderBuiltUrl(_filename, { hostType }) {
+            if (hostType === 'js') return { relative: true };
+        },
+    },
     build: { outDir: mode === 'web' ? 'dist-web' : 'dist' },
     server: { host: '127.0.0.1', port: 5173, strictPort: true },
 }));

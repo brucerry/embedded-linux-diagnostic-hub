@@ -18,12 +18,22 @@ async function connectFixture(page: Page) {
         };
         (window as unknown as { interaction: typeof state }).interaction = state;
         window.diagnosticHub = {
+            checkUpdates: async () => ({
+                currentVersion: '0.1.0',
+                installable: true,
+                release: null,
+            }),
+            startUpdate: async () => {},
+            readUpdateReport: async () => null,
+            acknowledgeUpdateReport: async () => {},
+            clearSessionData: async () => {},
             connect: async () => {},
             disconnect: async () => {
                 state.disconnects++;
             },
             pickKey: async () => null,
             openRepository: async () => {},
+            openReleases: async () => {},
             copyText: async (text) => {
                 state.copied.push(text);
             },
@@ -202,7 +212,7 @@ test('live graph and evidence updates preserve focus and every scroll position',
     await expect(dialog).not.toBeVisible();
 });
 
-test('soft dark layout stays readable on desktop/mobile with modern scrollbars and reduced motion', async ({
+test('soft dark layout stays readable and animated on desktop/mobile under system reduced motion', async ({
     page,
 }) => {
     await connectFixture(page);
@@ -238,7 +248,7 @@ test('soft dark layout stays readable on desktop/mobile with modern scrollbars a
     await page.emulateMedia({ reducedMotion: 'reduce' });
     expect(
         await page.locator('#evidence-panel').evaluate((el) => getComputedStyle(el).animationName),
-    ).toBe('none');
+    ).toBe('evidence-enter');
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.screenshot({

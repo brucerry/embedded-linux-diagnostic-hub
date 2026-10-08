@@ -13,6 +13,7 @@ import {
     Terminal,
     Unplug,
 } from 'lucide-react';
+import { useMemo } from 'react';
 import { evidence, formatKiB, summarize } from '../../shared/diagnostics/metrics';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
 import type { Category, Probe, Snapshot } from '../../shared/types';
@@ -23,7 +24,7 @@ import type { View } from '../app/view';
 import { Metric } from '../components/Metric';
 import { Progress } from '../components/Progress';
 interface OverviewProps {
-    snapshot: Snapshot;
+    snapshot: Snapshot | null;
     imported: boolean;
     connected: boolean;
     native: boolean;
@@ -31,9 +32,9 @@ interface OverviewProps {
     connecting: boolean;
     disconnecting: boolean;
     live: boolean;
-    refresh: () => Promise<void>;
+    refresh: () => Promise<boolean>;
     setView: (view: View) => void;
-    setSelectedProbe: (probe: Probe) => void;
+    onInspectProbe: (probe: Probe) => Promise<void>;
 }
 export function OverviewPage({
     snapshot,
@@ -46,11 +47,11 @@ export function OverviewPage({
     live,
     refresh,
     setView,
-    setSelectedProbe,
+    onInspectProbe,
 }: OverviewProps) {
-    const summary = summarize(snapshot);
-    const isDemo = snapshot.mode === 'demo';
-    const collected = snapshot.results.filter((item) => item.status === 'collected').length;
+    const summary = useMemo(() => summarize(snapshot), [snapshot]);
+    const isDemo = snapshot?.mode === 'demo';
+    const collected = snapshot?.results.filter((item) => item.status === 'collected').length ?? 0;
     const attention = summary.findings.filter((item) => item.level === 'warning').length;
     return (
         <>
@@ -78,9 +79,9 @@ export function OverviewPage({
                                     : 'Disconnected'}
                         </span>
                     </div>
-                    <h2>{summary.hostname}</h2>
+                    <h2>{snapshot ? summary.hostname : 'Identity not collected'}</h2>
                     <p>
-                        {summary.distro}
+                        {snapshot ? summary.distro : '—'}
                         <span>·</span>
                         {summary.architecture}
                         <span>·</span>
@@ -88,7 +89,7 @@ export function OverviewPage({
                     </p>
                     <div className="device-address">
                         <Cable size={15} />
-                        <span>{snapshot.endpoint}</span>
+                        <span>{snapshot?.endpoint ?? '—'}</span>
                         <span className="address-separator" />
                         <span>SSH</span>
                         <span className="address-separator" />
@@ -113,10 +114,12 @@ export function OverviewPage({
                     </button>
                     <span>
                         Captured{' '}
-                        {new Date(snapshot.capturedAt).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                        })}
+                        {snapshot
+                            ? new Date(snapshot.capturedAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                              })
+                            : '—'}
                     </span>
                 </div>
             </section>
@@ -218,21 +221,33 @@ export function OverviewPage({
                         'ddr',
                     ].map((id, index) => {
                         const probe = probes.find((item) => item.id === id)!;
-                        const result = snapshot.results.find((item) => item.id === id)!;
+                        const result = snapshot?.results.find((item) => item.id === id);
                         return (
                             <button
                                 className={`hardware-tile tone-${index % 4}`}
                                 key={id}
-                                onClick={() => setSelectedProbe(probe)}
+                                disabled={
+                                    !result &&
+                                    (busy || connecting || disconnecting || (connected && live))
+                                }
+                                onClick={() => void onInspectProbe(probe)}
                             >
                                 <RoundedIcon name={id} size={38} />
                                 <span>{probe.title}</span>
                                 <span className="tile-status">
-                                    {result.status === 'collected'
-                                        ? 'Evidence ready'
-                                        : result.status === 'unavailable'
-                                          ? 'Unavailable'
-                                          : 'Collection error'}
+                                    {!result
+                                        ? connected
+                                            ? busy || connecting
+                                                ? 'Collecting…'
+                                                : live
+                                                  ? 'Waiting for snapshot'
+                                                  : 'Collect snapshot'
+                                            : 'Connect device'
+                                        : result.status === 'collected'
+                                          ? 'Evidence ready'
+                                          : result.status === 'unavailable'
+                                            ? 'Unavailable'
+                                            : 'Collection error'}
                                     <ArrowUpRight size={16} />
                                 </span>
                             </button>
@@ -258,14 +273,16 @@ export function OverviewPage({
                         </span>
                         <div>
                             <strong>
-                                {collected} of {probes.length} checks collected
+                                {snapshot
+                                    ? `${collected} of ${probes.length} checks collected`
+                                    : 'No current snapshot'}
                             </strong>
                             <span>
                                 Collection success is evidence availability, not a hardware PASS.
                             </span>
                         </div>
                         <span className="coverage-number">
-                            {Math.round((collected / probes.length) * 100)}
+                            {snapshot ? Math.round((collected / probes.length) * 100) : '—'}
                             <small>%</small>
                         </span>
                     </div>
@@ -273,7 +290,7 @@ export function OverviewPage({
                         {(Object.keys(categoryLabels) as Category[])
                             .filter((category) => category !== 'logs')
                             .map((category) => {
-                                const items = snapshot.results.filter(
+                                const items = (snapshot?.results ?? []).filter(
                                     (result) =>
                                         probes.find((probe) => probe.id === result.id)?.category ===
                                         category,
@@ -289,11 +306,9 @@ export function OverviewPage({
                                         </span>
                                         <span>{categoryLabels[category]}</span>
                                         <span className="row-detail">
-                                            {
-                                                items.filter((item) => item.status === 'collected')
-                                                    .length
-                                            }
-                                            /{items.length} collected
+                                            {snapshot
+                                                ? `${items.filter((item) => item.status === 'collected').length}/${items.length} collected`
+                                                : 'Not collected'}
                                         </span>
                                         <ChevronRight size={14} />
                                     </button>
@@ -307,7 +322,7 @@ export function OverviewPage({
                         <div>
                             <h3>
                                 Things to investigate{' '}
-                                <span className="count-label">{attention}</span>
+                                <span className="count-label">{snapshot ? attention : '—'}</span>
                             </h3>
                             <p>Findings grounded in this snapshot.</p>
                         </div>
@@ -320,7 +335,7 @@ export function OverviewPage({
                                     className="finding"
                                     key={`${finding.probe}-${index}`}
                                     onClick={() =>
-                                        setSelectedProbe(
+                                        void onInspectProbe(
                                             probes.find((probe) => probe.id === finding.probe)!,
                                         )
                                     }
@@ -340,10 +355,13 @@ export function OverviewPage({
                         ) : (
                             <div className="empty-findings">
                                 <CircleCheck size={28} />
-                                <strong>No threshold findings</strong>
+                                <strong>
+                                    {snapshot ? 'No threshold findings' : 'Not collected'}
+                                </strong>
                                 <p>
-                                    Review the raw evidence for context. This is not a complete
-                                    device health assessment.
+                                    {snapshot
+                                        ? 'Review the raw evidence for context. This is not a complete device health assessment.'
+                                        : 'Findings will appear after a new snapshot is collected.'}
                                 </p>
                             </div>
                         )}
@@ -361,7 +379,7 @@ export function OverviewPage({
                         <Terminal size={18} />
                         <h3>Recent system activity</h3>
                         <span className="subtle-badge">
-                            {isDemo ? 'Sample logs' : 'Snapshot logs'}
+                            {!snapshot ? 'No snapshot' : isDemo ? 'Sample logs' : 'Snapshot logs'}
                         </span>
                     </div>
                     <button className="text-button" onClick={() => setView('logs')}>
@@ -369,8 +387,10 @@ export function OverviewPage({
                     </button>
                 </div>
                 <pre>
-                    {evidence(snapshot, 'logs').trim().split('\n').slice(-3).join('\n') ||
-                        'No log evidence collected. Open logs to inspect the result.'}
+                    {!snapshot
+                        ? 'Not collected'
+                        : evidence(snapshot, 'logs').trim().split('\n').slice(-3).join('\n') ||
+                          'No log evidence collected. Open logs to inspect the result.'}
                 </pre>
             </section>
         </>

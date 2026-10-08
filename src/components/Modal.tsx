@@ -24,7 +24,9 @@ export function Modal({
         document.body.style.overflow = 'hidden';
         const selector =
             'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea, summary, a[href], [tabindex="0"]';
-        (modal.querySelector(selector) as HTMLElement | null)?.focus({ preventScroll: true });
+        ((modal.querySelector(selector) as HTMLElement | null) ?? modal).focus({
+            preventScroll: true,
+        });
         const listener = (event: KeyboardEvent) => {
             if (event.key === 'Escape' && !actions.current.busy) actions.current.onClose();
             if (event.key === 'Tab') {

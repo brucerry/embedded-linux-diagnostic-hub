@@ -172,3 +172,12 @@ test(
         }
     },
 );
+
+test('a cleared overview has no numeric readings, load averages or findings', () => {
+    const summary = summarize(null);
+    assert.equal(summary.memory.usedPercent, null);
+    assert.deepEqual(summary.load, []);
+    assert.deepEqual(summary.filesystems, []);
+    assert.deepEqual(summary.findings, []);
+    assert.equal(summary.uptime, 'Unavailable');
+});

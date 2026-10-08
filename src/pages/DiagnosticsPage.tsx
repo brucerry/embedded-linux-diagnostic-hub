@@ -27,9 +27,8 @@ interface DiagnosticsProps {
     disconnecting: boolean;
     connected: boolean;
     live: boolean;
-    refresh: () => Promise<void>;
-    setSelectedProbe: (probe: Probe) => void;
-    onConnect: () => void;
+    refresh: () => Promise<boolean>;
+    onInspectProbe: (probe: Probe) => Promise<void>;
 }
 export function DiagnosticsPage({
     query,
@@ -42,10 +41,9 @@ export function DiagnosticsPage({
     connected,
     live,
     refresh,
-    setSelectedProbe,
-    onConnect,
+    onInspectProbe,
 }: DiagnosticsProps) {
-    const summary = snapshot ? summarize(snapshot) : null;
+    const summary = useMemo(() => (snapshot ? summarize(snapshot) : null), [snapshot]);
     const isDemo = snapshot?.mode === 'demo';
     const filtered = useMemo(
         () =>
@@ -63,8 +61,11 @@ export function DiagnosticsPage({
                     <div>
                         <strong>No diagnostic evidence collected</strong>
                         <span>
-                            Connect a target device to run these checks. Select any check to begin
-                            connecting, or import a saved report.
+                            {connected
+                                ? live
+                                    ? 'SSH is connected. Waiting for the first snapshot.'
+                                    : 'SSH is connected and live updates are paused. Select a check or Collect snapshot to read fresh data using this connection.'
+                                : 'Connect a target device to run these checks. Select any check to begin connecting, or import a saved report.'}
                         </span>
                     </div>
                 </div>
@@ -151,7 +152,11 @@ export function DiagnosticsPage({
                             className="probe-card"
                             key={probe.id}
                             data-match-rank={kind ? rank : undefined}
-                            onClick={() => (result ? setSelectedProbe(probe) : onConnect())}
+                            disabled={
+                                !result &&
+                                (busy || connecting || disconnecting || (connected && live))
+                            }
+                            onClick={() => void onInspectProbe(probe)}
                         >
                             <div className="probe-card-top">
                                 <span className="category-icon">
@@ -168,7 +173,8 @@ export function DiagnosticsPage({
                                     {categoryLabels[probe.category]}
                                 </span>
                                 <span>
-                                    {result ? 'Inspect' : 'Connect'} <ArrowUpRight size={14} />
+                                    {result ? 'Inspect' : connected ? 'Collect' : 'Connect'}{' '}
+                                    <ArrowUpRight size={14} />
                                 </span>
                             </div>
                         </button>

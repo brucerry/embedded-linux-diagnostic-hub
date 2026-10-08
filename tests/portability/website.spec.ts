@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createReport } from '../../shared/report';
 import { demoSnapshot } from '../fixtures/snapshots';
@@ -48,6 +48,30 @@ test('portable production website works at a nested URL on desktop and mobile', 
         await expect(page.getByText('NOT CONNECTED', { exact: true })).toBeVisible();
         await expect(page.locator('.metric-card')).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Connect target device' })).toBeVisible();
+        const workerFile = (await readdir(path.join(directory, 'assets'))).find((file) =>
+            file.startsWith('history.worker-'),
+        );
+        expect(workerFile).toBeTruthy();
+        const frame = await page.evaluate(
+            ({ workerFile, snapshot }) =>
+                new Promise<{ readings: Record<string, unknown[]> }>((resolve, reject) => {
+                    const worker = new Worker(new URL(`assets/${workerFile}`, location.href), {
+                        type: 'module',
+                    });
+                    worker.onmessage = (event) => {
+                        worker.terminate();
+                        if (event.data.error) reject(new Error(event.data.error));
+                        else resolve(event.data.frame);
+                    };
+                    worker.onerror = () => {
+                        worker.terminate();
+                        reject(new Error('Portable history worker did not load.'));
+                    };
+                    worker.postMessage({ snapshot });
+                }),
+            { workerFile, snapshot: demoSnapshot() },
+        );
+        expect(frame.readings.memory.length).toBeGreaterThan(0);
         const report = createReport(demoSnapshot());
         await page.locator('input[type=file]').setInputFiles({
             name: 'fixture.json',

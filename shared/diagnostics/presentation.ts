@@ -16,6 +16,8 @@ export interface HistoryFrame {
     capturedAt: string;
     readings: Record<string, Reading[]>;
     processes?: ProcessSample;
+    source?: string;
+    connection?: number;
 }
 export const HISTORY_LIMIT = 120;
 
@@ -38,13 +40,14 @@ export function graphReadings(
     });
     if (id === 'processes') {
         const parsed = processResources(result);
+        const previousLookup = new Map(previous?.records.map((record) => [record.pid, record]));
         return (
             parsed?.records.flatMap((record) => {
                 // Start time prevents joining different processes that reuse a PID.
                 if (record.start === undefined) return [];
                 const key = `process:${record.pid}:${record.start}`;
                 const label = `${record.name} (PID ${record.pid})`;
-                const cpu = processCpu(record, parsed.totalTicks, previous);
+                const cpu = processCpu(record, parsed.totalTicks, previous, previousLookup);
                 return [
                     ...(record.rss !== undefined
                         ? [

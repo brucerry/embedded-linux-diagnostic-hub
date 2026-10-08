@@ -1,7 +1,7 @@
 import type { Snapshot } from '../types';
 
-export function evidence(snapshot: Snapshot, id: string): string {
-    const result = snapshot.results.find((item) => item.id === id);
+export function evidence(snapshot: Snapshot | null, id: string): string {
+    const result = snapshot?.results.find((item) => item.id === id);
     return result?.status === 'collected' ? result.stdout : '';
 }
 
@@ -75,7 +75,7 @@ export function formatKiB(value: number): string {
         : `${Math.round(value / 1024)} MiB`;
 }
 
-export function summarize(snapshot: Snapshot) {
+export function summarize(snapshot: Snapshot | null) {
     const identity = evidence(snapshot, 'identity').trim().split('\n');
     const memory = parseMemory(evidence(snapshot, 'memory'));
     const filesystems = parseFilesystems(evidence(snapshot, 'storage'));
@@ -106,7 +106,7 @@ export function summarize(snapshot: Snapshot) {
             probe: 'memory',
         });
     }
-    const lan = snapshot.results.find((item) => item.id === 'ethernet');
+    const lan = snapshot?.results.find((item) => item.id === 'ethernet');
     if (lan?.status === 'collected' && /^Warning:/m.test(lan.stderr))
         findings.push({
             level: 'warning',
@@ -114,7 +114,7 @@ export function summarize(snapshot: Snapshot) {
             detail: 'Valid interface readings were collected. Inspect Standard error for skipped attributes; an interface being down does not establish a hardware fault.',
             probe: 'ethernet',
         });
-    for (const result of snapshot.results.filter((item) => item.status === 'error')) {
+    for (const result of (snapshot?.results ?? []).filter((item) => item.status === 'error')) {
         findings.push({
             level: result.status === 'error' ? 'warning' : 'info',
             title: `${result.id}: ${result.status === 'unavailable' ? 'capability unavailable' : 'collection failed'}`,
@@ -128,7 +128,7 @@ export function summarize(snapshot: Snapshot) {
         architecture: identity[3] || 'Unavailable',
         distro: parseRelease(evidence(snapshot, 'release')),
         uptime: formatUptime(evidence(snapshot, 'uptime')),
-        load: evidence(snapshot, 'load').trim().split(/\s+/).slice(0, 3),
+        load: evidence(snapshot, 'load').trim().split(/\s+/).filter(Boolean).slice(0, 3),
         memory,
         filesystems,
         findings,

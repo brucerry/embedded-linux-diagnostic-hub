@@ -50,6 +50,12 @@ export interface HostKeyVerification {
 }
 
 export interface DesktopBridge {
+    checkUpdates(includePrereleases: boolean): Promise<UpdateStatus>;
+    startUpdate(request: UpdateRequest): Promise<void>;
+    readUpdateReport(): Promise<UpdateRecovery | null>;
+    acknowledgeUpdateReport(id: string): Promise<void>;
+    clearSessionData(): Promise<void>;
+    onUpdateProgress?(callback: (progress: string) => void): () => void;
     onHostKeyVerification?(callback: (request: HostKeyVerification | null) => void): () => void;
     confirmHostKey?(id: string, accepted: boolean): Promise<boolean>;
     connect(options: ConnectOptions): Promise<void>;
@@ -58,8 +64,9 @@ export interface DesktopBridge {
     pickKey(): Promise<string | null>;
     copyText(command: string): Promise<void>;
     openRepository(): Promise<void>;
+    openReleases(): Promise<void>;
     exportReport(importedSnapshot?: Snapshot): Promise<boolean>;
-    onDisconnected(callback: () => void): () => void;
+    onDisconnected(callback: (reason?: 'update') => void): () => void;
 }
 
 export type UpdateMode = 'clean' | 'preserve' | 'smart';

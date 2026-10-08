@@ -13,10 +13,20 @@ async function connectFixture(page: import('@playwright/test').Page) {
         const resources = (count: number) =>
             `HUB_PROCESS_RESOURCES_V1\nSystemCPU: ${1000 + count * 100}\nMemTotal: 102400 kB\nPID: 42\nName: sample-daemon\nState: S (sleeping)\nUid: 0 0 0 0\nVmRSS: 10240 kB\nVmSize: 20480 kB\nVmSwap: 2048 kB\nThreads: 2\n42 (sample-daemon) ${Array.from({ length: 22 }, (_, i) => (i === 0 ? 'S' : i === 1 ? 1 : i === 11 ? count * 10 : i === 19 ? 200 : 0)).join(' ')}\n`;
         window.diagnosticHub = {
+            checkUpdates: async () => ({
+                currentVersion: '0.1.0',
+                installable: true,
+                release: null,
+            }),
+            startUpdate: async () => {},
+            readUpdateReport: async () => null,
+            acknowledgeUpdateReport: async () => {},
+            clearSessionData: async () => {},
             connect: async () => {},
             disconnect: async () => {},
             pickKey: async () => null,
             openRepository: async () => {},
+            openReleases: async () => {},
             copyText: async () => {},
             exportReport: async () => true,
             onDisconnected: () => () => {},
@@ -34,6 +44,7 @@ async function connectFixture(page: import('@playwright/test').Page) {
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
 }
 
 test('details reopen on Standard output and live memory/filesystem/flash graphs plot used and free together', async ({
@@ -74,7 +85,8 @@ test('details reopen on Standard output and live memory/filesystem/flash graphs 
         .locator('.probe-card')
         .filter({ has: page.getByRole('heading', { name: 'Memory overview', exact: true }) })
         .click();
-    await expect(page.getByRole('tab', { name: 'Graph view' })).toHaveCount(0);
+    await page.getByRole('tab', { name: 'Graph view' }).click();
+    await expect(page.getByRole('dialog').locator('.live-graph circle').first()).toBeVisible();
 });
 
 test('process table shows real resource fields and computes CPU only after a second sample', async ({
@@ -103,6 +115,28 @@ test('process table shows real resource fields and computes CPU only after a sec
         'aria-selected',
         'true',
     );
+    await dialog.getByRole('button', { name: 'Close dialog' }).click();
+    await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
+    await page.clock.runFor(1000);
+    await page.getByRole('button', { name: 'Connect device', exact: true }).click();
+    await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
+    await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Processes', exact: true }).click();
+    await page.locator('.probe-card').click();
+    await dialog.getByRole('tab', { name: 'Table view' }).click();
+    // Retained samples must not become a CPU baseline for a new SSH connection.
+    await expect(row.locator('td').last()).toHaveText('');
+    await dialog.getByRole('tab', { name: 'Graph view' }).click();
+    await expect(dialog.locator('.live-graph circle')).toHaveCount(3);
+    await expect(dialog.getByLabel('Graph reading').locator('option[value$=":cpu"]')).toHaveCount(
+        0,
+    );
+    await page.clock.runFor(5100);
+    await expect(dialog.getByLabel('Graph reading').locator('option[value$=":cpu"]')).toHaveCount(
+        1,
+    );
+    await dialog.getByLabel('Graph reading').selectOption('process:42:200:cpu');
+    await expect(dialog.locator('.graph-summary')).toContainText('10 %');
 });
 
 test('ranked search supports exact names, aliases and typos while sticky header and page buttons remain accessible', async ({
@@ -188,7 +222,12 @@ test('process graphs expose memory then CPU, highlight hovered samples and scrol
     const box = (await svg.boundingBox())!;
     await page.mouse.move(box.x + 710, box.y + 260);
     await expect(dialog.locator('.graph-hover-values time')).toBeVisible();
-    for (let i = 0; i < 35; i++) await page.clock.runFor(5100);
+    for (let i = 0; i < 35; i++) {
+        const count = await svg.locator('circle').count();
+        await page.clock.runFor(5100);
+        // Worker preparation runs independently of the mocked page clock.
+        await expect.poll(() => svg.locator('circle').count()).toBeGreaterThan(count);
+    }
     const viewport = dialog.locator('.graph-viewport');
     expect(await viewport.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
     await viewport.evaluate((el) => {
@@ -292,7 +331,7 @@ test('fixed computer and chip transfer bits smoothly from the chip and finish in
             .locator('.transfer-bit')
             .first()
             .evaluate((el) => getComputedStyle(el).animationName),
-    ).toBe('none');
+    ).toBe('chip-bits-transfer');
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.screenshot({ path: 'validation/2026-10-06/transfer-artwork/collecting.png' });
     // Hold launched bits halfway through their trips and leave the last bit unlaunched.

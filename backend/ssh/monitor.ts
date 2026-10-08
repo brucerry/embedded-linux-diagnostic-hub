@@ -14,6 +14,10 @@ export class DeviceMonitor {
         return this.running;
     }
 
+    get isConnected(): boolean {
+        return this.session.isConnected;
+    }
+
     async configure(
         options: ConnectOptions,
         verify: (key: string) => Promise<boolean>,

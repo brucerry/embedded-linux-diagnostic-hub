@@ -153,9 +153,19 @@ test('live tree updates retain expansion, focus and scroll positions', async ({ 
     await page.addInitScript((data) => {
         let count = 0;
         window.diagnosticHub = {
+            checkUpdates: async () => ({
+                currentVersion: '0.1.0',
+                installable: true,
+                release: null,
+            }),
+            startUpdate: async () => {},
+            readUpdateReport: async () => null,
+            acknowledgeUpdateReport: async () => {},
+            clearSessionData: async () => {},
             connect: async () => {},
             disconnect: async () => {},
             pickKey: async () => null,
+            openReleases: async () => {},
             openRepository: async () => {},
             copyText: async () => {},
             exportReport: async () => true,
@@ -220,11 +230,21 @@ test('header repository link and computer/chip artwork stay clear at desktop siz
     await page.addInitScript((data) => {
         (window as any).repositoryClicks = 0;
         window.diagnosticHub = {
+            checkUpdates: async () => ({
+                currentVersion: '0.1.0',
+                installable: true,
+                release: null,
+            }),
+            startUpdate: async () => {},
+            readUpdateReport: async () => null,
+            acknowledgeUpdateReport: async () => {},
+            clearSessionData: async () => {},
             connect: async () => {},
             disconnect: async () => {},
             collect: async () => ({ ...data, mode: 'ssh' }),
             pickKey: async () => null,
             copyText: async () => {},
+            openReleases: async () => {},
             openRepository: async () => {
                 (window as any).repositoryClicks++;
             },
@@ -279,11 +299,21 @@ test('LAN warnings retain valid interfaces, parsed table, live graph and raw dia
     );
     await page.addInitScript((data) => {
         window.diagnosticHub = {
+            checkUpdates: async () => ({
+                currentVersion: '0.1.0',
+                installable: true,
+                release: null,
+            }),
+            startUpdate: async () => {},
+            readUpdateReport: async () => null,
+            acknowledgeUpdateReport: async () => {},
+            clearSessionData: async () => {},
             connect: async () => {},
             disconnect: async () => {},
             collect: async () => ({ ...data, mode: 'ssh' }),
             pickKey: async () => null,
             copyText: async () => {},
+            openReleases: async () => {},
             openRepository: async () => {},
             exportReport: async () => true,
             onDisconnected: () => () => {},

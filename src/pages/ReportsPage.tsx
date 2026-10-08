@@ -7,7 +7,7 @@ export function Reports({
     onExport,
     onImport,
 }: {
-    snapshot: Snapshot;
+    snapshot: Snapshot | null;
     imported: boolean;
     onExport: () => void;
     onImport: () => void;
@@ -18,11 +18,13 @@ export function Reports({
                 <FileJson size={48} strokeWidth={1.4} />
             </div>
             <span className="subtle-badge">
-                {imported
-                    ? 'IMPORTED EVIDENCE'
-                    : snapshot.mode === 'demo'
-                      ? 'DEMO EVIDENCE'
-                      : 'SSH EVIDENCE'}
+                {!snapshot
+                    ? 'NO CURRENT SNAPSHOT'
+                    : imported
+                      ? 'IMPORTED EVIDENCE'
+                      : snapshot?.mode === 'demo'
+                        ? 'DEMO EVIDENCE'
+                        : 'SSH EVIDENCE'}
             </span>
             <h2>One snapshot. All the context.</h2>
             <p>
@@ -34,16 +36,20 @@ export function Reports({
                 <div>
                     <span>Source</span>
                     <strong>
-                        {snapshot.mode === 'demo' ? 'Simulated device data' : snapshot.endpoint}
+                        {snapshot?.mode === 'demo'
+                            ? 'Simulated device data'
+                            : (snapshot?.endpoint ?? '—')}
                     </strong>
                 </div>
                 <div>
                     <span>Captured</span>
-                    <strong>{new Date(snapshot.capturedAt).toLocaleString()}</strong>
+                    <strong>
+                        {snapshot ? new Date(snapshot.capturedAt).toLocaleString() : '—'}
+                    </strong>
                 </div>
                 <div>
                     <span>Diagnostics</span>
-                    <strong>{snapshot.results.length} results</strong>
+                    <strong>{snapshot ? `${snapshot.results.length} results` : '—'}</strong>
                 </div>
                 <div>
                     <span>Format</span>
@@ -55,7 +61,7 @@ export function Reports({
                     <FileInput size={17} />
                     Import report
                 </button>
-                <button className="button primary" onClick={onExport}>
+                <button className="button primary" onClick={onExport} disabled={!snapshot}>
                     <FileOutput size={17} />
                     Export diagnostic report
                 </button>
