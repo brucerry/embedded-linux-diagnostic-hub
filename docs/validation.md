@@ -99,3 +99,85 @@ timing race under build load without changing application behavior.
 The updated Windows/Linux desktop packages and portable website retain the shared layout and generic
 hardware note. Temporary build/test output was removed after validation; current release files and
 checksums remain. No physical device was accessed or changed for this cleanup.
+
+## Collection responsiveness (2026-10-08)
+
+Formatting/types, 69 unit tests and 40 Chromium UI tests passed. A 1,500-process fixture (about 213
+KiB of process output) confirmed that numeric history runs in a background worker while bits and
+card hover animations remain active. Worker-restricted collection also passed using the yielding
+fallback. Existing checks cover bit arrival/draining, reduced motion, copy feedback, paired graph
+hover, dense-history scrolling and stable focus/scroll positions during live updates.
+
+Native and packaged Linux Electron loopback SSH checks confirmed background workers load on
+`app://`, along with the existing connection, reset, report and update behavior. The portable
+production website and its worker loaded from an arbitrary nested URL in Chromium. These are
+software regression checks; native Windows GPU performance and physical-PC qualification remain
+separate. No animation styling was removed or changed for this performance fix.
+
+A follow-up native Windows check, made directly through CDP without Playwright media emulation,
+reported `prefers-reduced-motion: reduce` and `animation-name: none`. Earlier automation had masked
+the disabled-motion behavior. Desktop and web now always enable the original effects, independent of
+OS motion preferences. There is no animation selector or stored display choice; values saved by the
+temporary selector are ignored. The host's accessibility settings remain unchanged.
+
+Regression checks cover full-motion hover/page transitions under system reduced motion, ignored
+legacy preferences, animated collection and bit draining. Packaged Linux loopback SSH/report/update
+checks and the nested production website check passed. Native Windows 10 and physical Ubuntu/Debian
+acceptance remain separate from these software regression checks.
+
+The final fixed-motion build passed 69 unit checks and all 42 UI checks. Three UI checks were rerun
+separately after correcting a navigation selector and avoiding concurrent suites sharing the trace
+directory. Raw CDP against the rebuilt Windows portable executable confirmed page animation and
+brand hover on the host's actual reduced-motion setting, with no selector. Reloading with the old
+saved reduced preference left animation enabled. Current Windows/Linux package and icon checks
+confirmed matching desktop/web assets; the OS settings were not changed.
+
+## Reset progress and release link (2026-10-08)
+
+Formatting/types, 69 unit checks and the full 46-test UI suite passed. Reset now preserves the
+current page and live-update setting, uses a blocking progress dialog for collection draining and
+RAM cleanup and first fresh snapshot preparation. Tests cover a held collection, keyboard/scroll
+blocking, a slow first post-reset snapshot, fresh graph history, failed cleanup, collection failure
+without an automatic retry, and paused/imported sessions. The reset control uses a circular arrow.
+The update note exposes a fixed GitHub releases link with an external-window icon; native IPC opens
+only that destination.
+
+The development Electron loopback SSH/report/reset test and nested production website check passed.
+Clean-machine acceptance and physical-device timing remain separate from these regression checks.
+
+Packaged Windows and Linux loopback SSH/report/reset/update checks also passed, including the new
+fixed releases IPC link. Windows ran from an isolated local temporary folder with a private test
+profile. Native/renderer/icon bundle checks confirmed desktop and website assets match. Temporary
+applications and development servers were stopped after verification.
+
+## Reset cover completion (2026-10-08)
+
+The reset cover now remains through collection draining, RAM cleanup and preparation of the first
+fresh live snapshot. A fast paused reset paints the cover for at least 300 ms. The current overview
+and report components remain mounted with cleared fields; reset does not substitute a connection or
+fresh-record guide. Snapshot/history references are cleared before fresh collection starts.
+
+Formatting/types and 70 unit checks passed. All 48 UI checks passed, including retained card DOM
+identity, a held fresh collection, paused cleanup with unavailable values, keyboard blocking,
+collection failures, graph recovery and unchanged initial connection guidance. The cover was also
+visually inspected from a test screenshot. The development Electron SSH/report/reset smoke and
+nested production website check passed. Physical-device timing remains a separate qualification.
+
+Packaged Windows and Linux smoke checks passed with explicit assertions for the visible reset cover,
+retained overview cards and absence of the connection/fresh-record section. Current Windows/Linux
+bundle/icon verification confirmed matching desktop/web assets. Tests used private loopback SSH
+profiles and did not access or modify a physical target device.
+
+## Graph retention across reconnects (2026-10-08)
+
+Formatting/types and 71 unit checks passed. All 66 UI checks passed across targeted suites and a
+rerun with a 60-second overall limit for the longer workflows. Repeated reconnects with Live updates
+On or Off append real samples instead of replacing history. Failed connection attempts and report
+imports preserve earlier samples. Different endpoints remain selectable as separate graph sources;
+new connections break graph lines and restart process CPU sampling. Explicit reset clears all
+retained history, within the existing 120-sample window limit.
+
+Packaged Windows and Linux preload/IPC/loopback SSH/report/reset/update smoke checks passed with
+explicit reconnect point-count assertions. The nested portable production website check passed, and
+bundle/icon verification confirmed matching desktop/web assets. Tests used isolated profiles and
+private loopback SSH fixtures. Clean-machine and physical-device qualification remain separate.

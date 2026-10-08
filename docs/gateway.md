@@ -15,8 +15,8 @@ flowchart LR
 ## Package installation
 
 The source build command `npm run package:gateway` creates
-`release/Diagnostic-Hub-Gateway-0.1.0.tar.gz`. The Pages workflow also uploads this package as a
-build artifact. It contains compiled gateway code, a minimal npm manifest/lock, license,
+`release/Diagnostic-Hub-Gateway-0.2.0-rc.1.tar.gz`. The Pages workflow also uploads this package as
+a build artifact. It contains compiled gateway code, a minimal npm manifest/lock, license,
 configuration example and this guide. Node.js 24 is required on the **lab server**, not on desktop
 users' PCs.
 
@@ -24,7 +24,7 @@ On the server:
 
 ```sh
 mkdir diagnostic-hub-gateway
-tar -xzf Diagnostic-Hub-Gateway-0.1.0.tar.gz -C diagnostic-hub-gateway
+tar -xzf Diagnostic-Hub-Gateway-0.2.0-rc.1.tar.gz -C diagnostic-hub-gateway
 cd diagnostic-hub-gateway
 npm ci --omit=optional --ignore-scripts
 cp .env.gateway.example .env.gateway
@@ -115,8 +115,8 @@ Docker image builds have not replaced an actual deployment test on your server.
 ## Browser workflow
 
 1. Open the published website and choose **Connect device**.
-2. Enter the gateway HTTPS URL, access token, allowlisted target address/port, SSH username and
-   password.
+2. Enter the gateway HTTPS URL, access token, allowlisted target address/port, SSH username, and
+   either a password or a selected SSH private-key file (with its passphrase if encrypted).
 3. Choose **Read fingerprint**. The gateway obtains the key before authentication and requires it to
    match its configured pin.
 4. Compare with a trusted source and check the fingerprint verification box.
@@ -128,10 +128,21 @@ Docker image builds have not replaced an actual deployment test on your server.
    idle expiry. See
    [fetch keepalive](https://developer.mozilla.org/en-US/docs/Web/API/Request/keepalive).
 
-Website gateway authentication currently uses a shared team bearer token and password-based device
-SSH. Desktop private-key authentication is already available. Per-user SSO/RBAC, gateway private-key
-provisioning, session audit records and token rotation workflows are future production milestones.
-The gateway is a lab service, rather than a public multi-tenant SSH proxy.
+Website gateway authentication uses a shared team bearer token. Device SSH supports passwords and
+private keys, including encrypted PEM/OpenSSH keys supported by the SSH library. Private-key files
+are capped at 64 KiB. The browser sends the selected key and optional passphrase to the trusted
+HTTPS gateway only when connecting; discovery sends no device credentials. The gateway keeps
+credentials in memory during authentication, clears its key buffer afterward, and stores neither
+keys nor passphrases in session records, reports, or configuration. Use your established HTTPS
+reverse proxy without request-body logging.
+
+The verification checkbox becomes available after **Read fingerprint** succeeds. Compare the
+displayed fingerprint with a trusted source before checking it. Editing the target, gateway address
+or token clears verification. Browser confirmation cannot override the gateway's configured pin.
+
+Per-user SSO/RBAC, server-managed key provisioning, session audit records and token rotation
+workflows are future production milestones. The gateway is a lab service, rather than a public
+multi-tenant SSH proxy.
 
 ## Validation and API contract
 
@@ -143,7 +154,8 @@ intended Linux target on your lab server before claiming deployment completion.
 All API routes require an allowed `Origin` and `Authorization: Bearer <token>` except an
 allowed-origin CORS preflight. Routes are `GET /api/health`, `POST /api/fingerprint`,
 `POST /api/sessions`, `POST /api/sessions/<id>/snapshot`, `POST /api/sessions/<id>/heartbeat`, and
-`DELETE /api/sessions/<id>`. Connection requests use the GUI's address/port/username/password and
-`expectedFingerprint`. Requests are capped at 512 KiB, authenticated calls at 120/minute for the
-team token, and active/connecting sessions at eight. Responses and reports omit SSH authentication
-secrets.
+`DELETE /api/sessions/<id>`. Connection requests use `host`, `port`, `username`, `auth` and
+`expectedFingerprint`. For `auth: password`, supply `password`; for `auth: key`, supply the
+private-key text as `privateKey` and an optional `passphrase`. Requests are capped at 512 KiB,
+authenticated calls at 120/minute for the team token, and active/connecting sessions at eight.
+Responses and reports omit SSH authentication secrets.

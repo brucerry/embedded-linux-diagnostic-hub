@@ -12,6 +12,17 @@ connection dialog, evidence tables/trees/graphs and animated transfer artwork. C
 provide modal focus/scroll management, status badges, copy feedback and rounded icons. Preserve
 component identity during live updates so focus, expanded trees and scroll positions remain stable.
 
+`src/services/history.ts` prepares numeric history in a short-lived Web Worker to keep collection
+parsing off the UI thread. Each worker receives evidence and the previous numeric sample, then
+terminates after returning its result. Restricted browsers and portable `file://` pages use a
+fallback that yields between diagnostics. Collection stays busy through preparation so disconnect,
+RAM reset and updates cannot race an unfinished snapshot. Graph geometry is cached between pointer
+events; a hover changes the highlighted sample only when the nearest sample changes.
+
+Desktop and web always use full motion for transfers, hover feedback, page transitions and smooth
+scrolling. There is no motion setting or saved motion preference. Regression checks must exercise
+these effects with the OS reduced-motion preference enabled as well.
+
 `shared/diagnostics/` contains the fixed command catalogue, parsers, summary findings, process
 sampling and history presentation. These modules must not import Electron, React or browser globals.
 `shared/types.ts` describes transport/result contracts; `shared/report.ts` validates saved reports.
@@ -71,8 +82,11 @@ npm run test:portability
 
 On Linux without a display, run the desktop test under Xvfb. WSL can use WSLg. Only the Linux test
 harness normally passes Electron's `--no-sandbox`; set `HUB_TEST_SANDBOX=1` to test normal
-production sandbox behavior. Linux package CI sets this option and exercises both AppRun and
-AppImage extraction without FUSE. Production launchers never add `--no-sandbox` automatically.
+production sandbox behavior. After Linux packaging, `npm run test:desktop-update` verifies a real
+AppImage download and quit/relaunch using a local future-release fixture, preserving the private
+test profile and trusted loopback SSH. It does not publish or modify GitHub releases. Linux package
+CI sets this option and exercises both AppRun and AppImage extraction without FUSE. Production
+launchers never add `--no-sandbox` automatically.
 
 Windows packaged checks use temporary profiles and loopback SSH, without touching saved user keys or
 connected boards:
@@ -117,3 +131,31 @@ gateway can diagnose the same Linux host if its SSH server is reachable from the
 The unit, desktop and website gateway tests use temporary SSH servers bound to loopback ports. They
 exercise real SSH authentication and collection against synthetic evidence without requiring a
 system SSH service or changing the host's configuration.
+
+## Update and reset verification
+
+The native update coordinator owns collection draining, SSH disconnection, report backups, verified
+downloads and relaunch. Its lock prevents new SSH connections or collections until the restart, and
+releases on failure without reconnecting. `UpdateReports` keeps durable JSON backups separate from
+the acknowledged recovery marker. The shared renderer owns RAM reset and graph history; reset keeps
+the existing transport open.
+
+`tests/update-coordinator.test.ts` covers all modes, active collection, overlapping requests,
+backup/download/relaunch failures and bounded recovery. The browser update/reset tests cover
+cancellation, report restoration, collection pause/resume and fresh graph history. The native
+AppImage test performs a real coordinated smart update from a connected loopback device and checks
+the imported report with SSH disconnected after restart. Release-note tests use an isolated Git
+repository to cover direct and merged commits between published version tags.
+
+Reset scheduling is paused by its internal lock without changing the user's live-update setting. The
+progress dialog is rendered outside the inert app shell, so keyboard focus and scrolling stay inside
+the overlay. Reset waits for collection to finish, clears renderer/native RAM, retains the current
+page, and keeps the overlay up until the first fresh live snapshot is ready. Failed cleanup releases
+the lock and preserves evidence. A collection failure during the wait remains paused. `openReleases`
+opens one fixed GitHub releases URL through the trusted native bridge.
+
+Once a workspace has displayed evidence, reset preserves its page components when data is cleared.
+Overview/report fields become unavailable without substituting a connection or fresh-record guide.
+The cover paints for at least 300 ms for fast RAM-only cleanup, blocks interaction throughout fresh
+snapshot/history preparation, and is released on success or failure. Failure leaves cleared values
+and an actionable error rather than stale readings.

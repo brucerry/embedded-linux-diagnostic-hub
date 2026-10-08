@@ -17,7 +17,9 @@ previews until platform and hardware qualification is complete.
   without FUSE or an application installer. Missing system libraries trigger a prerequisite prompt;
   installing packages may require `sudo`. Download and normal launch remain unelevated.
 - Windows/Linux 32-bit and ARM desktop binaries are not shipped. See [downloads.md](downloads.md).
-- Release updates are replacement executables; automatic updates are not implemented.
+- Release updates use manually checked, SHA-256-verified replacement executables with explicit
+  restart; unattended updates are not enabled. Qualify update/relaunch on clean Windows/Linux
+  machines alongside cold launch.
 - Native Windows builds apply product metadata and release signing. Unsigned cross-builds are for
   engineering evaluation.
 

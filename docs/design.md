@@ -31,9 +31,8 @@ The layout reflows for compact windows and mobile browsers, with a scrollable ca
 stacked cards. Thin rounded scrollbars cover the workspace and nested evidence areas. Dialogs lock
 background scrolling, focus their first control only on opening, and restore focus without scrolling
 on exit. Live snapshots preserve focused controls and scroll positions. Keyboard focus containment
-and reduced-motion preferences remain supported. Test screenshots are generated under ignored test
-output directories; real Windows scaling and accessibility qualification remain part of the
-production checklist.
+remains supported. Test screenshots are generated under ignored test output directories; real
+Windows scaling and accessibility qualification remain part of the production checklist.
 
 Startup displays a connection guide without any device readings, presets, collection counts, or
 findings. Diagnostics remain a browseable catalogue with “Not collected” labels until evidence is
@@ -47,12 +46,18 @@ disconnected states use an unplugged icon. Disconnect is disabled during collect
 collection is disabled while live updates are enabled. Report actions use import/export document
 icons and the Import report label. Evidence dialogs have bordered, collapsed command details and
 animated icon-only copy actions at the top right of the command, stdout and stderr snippets, raw
-output/error tabs, suitable table/tree views and numeric history graphs available only during live
-updates. History is bounded to 120 numeric samples per target/window, without retaining past raw
-outputs. Unsupported or unavailable readings have no graph tab. Tables and trees are offered for
-recognized structures; unstructured output stays in Standard output. Parsed memory/filesystem, log
-and sysfs data have meaningful fields. Hover effects use small icon enlargement/rotation and subtle
-card lifts; page and evidence transitions respect reduced-motion preferences.
+output/error tabs, suitable table/tree views and numeric graphs available whenever supported data is
+retained in RAM. Pausing live updates or disconnecting stops collection without hiding graphs.
+Reconnecting appends to retained history, even when Live updates is off or an earlier connection
+attempt failed. A new connection starts a separate process CPU baseline and graph line segment. When
+collecting from different endpoints, graphs offer a Collection source selector rather than joining
+values from different targets. Importing a report preserves the existing numeric history and adds
+its single snapshot. Reset clears all retained sources. History is bounded to the latest 120 numeric
+samples per window, without retaining past raw outputs. Checks with no supported numeric data have
+no graph tab. Tables and trees are offered for recognized structures; unstructured output stays in
+Standard output. Parsed memory/filesystem, log and sysfs data have meaningful fields. Hover effects
+use small icon enlargement/rotation and subtle card lifts. Desktop and web always use full motion
+for these effects and page/evidence transitions, without a selectable motion preference.
 
 Sensor graph scaling follows the Linux
 [hwmon ABI](https://github.com/torvalds/linux/blob/master/Documentation/hwmon/sysfs-interface.rst)
@@ -67,8 +72,9 @@ Detail dialogs always open on Standard output, including when reopening a differ
 switching pages. A selected table/tree/graph stays selected during live updates. A structured view
 is offered only when its parser recognizes the collected output; unavailable/error results and
 unsupported formats remain raw text. No generic line-number/sentence table is generated. Live graphs
-remain available only for supported numeric readings while live updates are enabled. Raw evidence
-and recorded commands remain available in reports.
+remain available for supported numeric data independently of live updates and connection state. When
+the latest reading is unavailable, retained samples remain visible and are labeled historical. Reset
+clears retained samples. Raw evidence and recorded commands remain available in reports.
 
 | Diagnostic                | Preferred structured presentation | Recognized format or fallback                                                                                                                          |
 | ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -126,11 +132,10 @@ handling follow the
 quality units are retained as raw rather than inferred.
 
 Each snippet copy icon displays a green upward “Copied!” animation for one second without changing
-layout height. Reduced motion shows the same timed feedback without movement. Copy failures show
-brief actionable feedback. The command frame has a contrasting border. The header retains its
-platform icon and version, removes the desktop/offline wording, and includes a GitHub link that uses
-one fixed repository destination through the native bridge. The artwork caption has a separate area
-below the orbit icons.
+layout height. Copy failures show brief actionable feedback. The command frame has a contrasting
+border. The header retains its platform icon and version, removes the desktop/offline wording, and
+includes a GitHub link that uses one fixed repository destination through the native bridge. The
+artwork caption has a separate area below the orbit icons.
 
 ## Resource graphs and navigation
 
@@ -161,9 +166,8 @@ Equal relevance keeps catalogue order. Match labels explain the ranking, and emp
 the category's original catalogue.
 
 The header stays visible while scrolling, above page content and below dialogs. Fixed bottom-right
-arrows place top above bottom, support keyboard focus, use smooth scrolling except under reduced
-motion, and disable while a dialog is open. Footer padding keeps its content clear of those
-controls.
+arrows place top above bottom, support keyboard focus, use smooth scrolling and disable while a
+dialog is open. Footer padding keeps its content clear of those controls.
 
 `public/app-icon.svg` is the common brand source for the header and website favicon.
 `npm run generate:icons` rasterizes it into a PNG for the desktop window and a seven-resolution ICO
@@ -188,7 +192,7 @@ left continuously at varied constant speeds. The fastest digit crosses the entir
 after collection, pending launches are cancelled and in-flight digits finish their current trip at
 the same speed before disappearing. A new collection starts a fresh stream at the chip, even if the
 previous stream was still draining; both endpoints remain static. There are no visible status
-captions. Reduced-motion settings replace movement with static binary digits only during collection.
+captions. The bit stream stays animated regardless of the OS motion preference.
 
 The sticky header uses an 82% opaque soft-dark background, 20px backdrop blur and gentle saturation
 to reveal scrolled content without fading its text or controls. A subtle border/shadow separates it
@@ -204,3 +208,11 @@ permission/runtime failures remain errors. A down interface alone is not a hardw
 The overview load card displays task-count averages over 1/5/15-minute windows, not elapsed times or
 CPU percentages. Its caption and tooltip explain runnable tasks and uninterruptible waits (often
 I/O).
+
+RAM reset uses a circular reset-arrow icon. A blocking progress overlay shows when it is waiting for
+an active collection and when it is clearing the snapshot and numeric history. The underlying
+workspace is inert and cannot scroll or accept clicks/keyboard focus. Cleanup keeps the current page
+and live-update preference; its cover remains through the first fresh snapshot if live updates are
+enabled. With live updates off, the existing cards retain their layout with unavailable readings.
+Graph views become available again when fresh measurements arrive. The update note links GitHub to
+the releases page with an external-window icon.

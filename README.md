@@ -53,8 +53,20 @@ npm run desktop:dev
 
 Connect once to collect evidence. Live updates reuse the SSH connection; switching them off enables
 manual snapshots. **Disconnect device** retains the displayed evidence. **Import report** and
-**Export report** work locally in both editions. Running snapshots and graph history stay in RAM;
-only explicit report exports and trusted desktop SSH fingerprints are saved to disk.
+**Export report** work locally in both editions. Running snapshots and graph history stay in RAM.
+Reconnecting appends to the retained graph history, which holds the latest 120 samples per window.
+Graphs separate different endpoints with a **Collection source** selector. Explicit report exports,
+update report backups and trusted desktop SSH fingerprints are saved to disk. The red **Reset
+session data** button clears the current snapshot and graph history from RAM, shows a blocking cover
+while cleanup runs and the first fresh live snapshot is prepared. With live updates off, the
+existing cards remain with cleared readings. It keeps the current page, SSH connection and saved
+report files.
+
+The desktop header offers **Check for updates**, including prereleases. Choose **Update without
+saving**, **Save report & update**, or **Save, update & reopen report**, or cancel. Updates wait for
+active collection, disconnect SSH, verify the download and restart without reconnecting. Saved
+reports remain in the user's application data folder under `update-reports`. Clean update keeps
+existing backups and trusted SSH fingerprints.
 
 ---
 
@@ -121,7 +133,7 @@ builds may show Windows publisher warnings; trusted signing requires a code-sign
 
 Set **Settings → Pages → Source → GitHub Actions** once. The expected website address is
 [brucerry.github.io/embedded-linux-diagnostic-hub](https://brucerry.github.io/embedded-linux-diagnostic-hub/).
-Version `0.x` and versions with suffixes are published as prereleases. Optional repository secrets
+Versions with prerelease suffixes are published as prereleases. Optional repository secrets
 `WINDOWS_CSC_LINK` and `WINDOWS_CSC_KEY_PASSWORD` enable Windows signing. The gateway is deployed
 separately on your lab server; GitHub Pages hosts the GUI only.
 
