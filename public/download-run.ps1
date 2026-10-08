@@ -20,7 +20,8 @@ if ([Environment]::OSVersion.Version.Major -lt 10) {
 if ($Version) {
     if ($Version -notmatch '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$') { throw 'Use a release tag such as v0.1.0.' }
 } else {
-    $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=100")
+    # Assign directly so PowerShell 5.1 enumerates the API's returned array in the pipeline.
+    $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=100"
     $release = $releases | Where-Object {
         -not $_.draft -and $_.tag_name -match '^v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?$' -and
         $_.assets.name -contains $asset -and $_.assets.name -contains "$asset.sha256"

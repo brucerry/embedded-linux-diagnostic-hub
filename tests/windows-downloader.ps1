@@ -4,6 +4,7 @@ $originalArchitecture = $env:PROCESSOR_ARCHITECTURE
 $originalWowArchitecture = $env:PROCESSOR_ARCHITEW6432
 $global:HubDownloaderTestLaunches = 0
 $global:HubDownloaderTestRequests = 0
+$global:HubDownloaderTestDownloadUris = @()
 $global:HubDownloaderTestCorrupt = $false
 $global:HubDownloaderTestPayload = [Text.Encoding]::UTF8.GetBytes('test-only-executable')
 $sha = [Security.Cryptography.SHA256]::Create()
@@ -14,16 +15,25 @@ $sha.Dispose()
 function Invoke-RestMethod {
     param($Uri)
     $global:HubDownloaderTestRequests++
-    return @([PSCustomObject]@{
-        draft = $false
-        prerelease = $true
-        tag_name = 'v0.1.0'
-        assets = @(@{ name = 'Diagnostic-Hub.exe' }, @{ name = 'Diagnostic-Hub.exe.sha256' })
-    })
+    $assets = @(@{ name = 'Diagnostic-Hub.exe' }, @{ name = 'Diagnostic-Hub.exe.sha256' })
+    $releases = @(
+        [PSCustomObject]@{ draft = $true; tag_name = 'v0.3.0'; assets = $assets },
+        [PSCustomObject]@{ draft = $false; tag_name = 'v0.2.0'; assets = @() },
+        [PSCustomObject]@{
+            draft = $false
+            prerelease = $true
+            tag_name = 'v0.2.0-rc.1'
+            assets = $assets
+        },
+        [PSCustomObject]@{ draft = $false; tag_name = 'v0.1.0'; assets = $assets }
+    )
+    # Match Invoke-RestMethod: its JSON array is emitted as one pipeline object.
+    Write-Output -NoEnumerate $releases
 }
 function Invoke-WebRequest {
     param([switch]$UseBasicParsing, $Uri, $OutFile)
     $global:HubDownloaderTestRequests++
+    $global:HubDownloaderTestDownloadUris += $Uri
     if ($Uri.EndsWith('.sha256')) {
         $digest = if ($global:HubDownloaderTestCorrupt) { '0' * 64 } else { $global:HubDownloaderTestHash }
         [IO.File]::WriteAllText($OutFile, "$digest  Diagnostic-Hub.exe`n")
@@ -42,6 +52,9 @@ try {
     $launcher = Join-Path $PSScriptRoot '../public/download-run.ps1'
     & $launcher -Directory $temporary
     if ($global:HubDownloaderTestLaunches -ne 1 -or $global:HubDownloaderTestRequests -ne 3) { throw 'Expected verified preview discovery and one unelevated launch.' }
+    if (@($global:HubDownloaderTestDownloadUris | Where-Object { $_ -notlike '*/v0.2.0-rc.1/*' }).Count -ne 0) {
+        throw 'Discovery did not select the newest published release with executable and checksum assets.'
+    }
     $verified = Join-Path $temporary 'Diagnostic-Hub.exe'
     $global:HubDownloaderTestCorrupt = $true
     $rejected = $false
