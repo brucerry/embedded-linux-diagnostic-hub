@@ -9,7 +9,7 @@ test('large process snapshots are prepared in a worker while the original animat
     await installDesktop(page);
     await page.addInitScript(() => {
         const NativeWorker = window.Worker;
-        const state = { workers: 0, hold: false, release: () => {}, bytes: 0 };
+        const state = { workers: 0, hold: false, pending: false, release: () => {}, bytes: 0 };
         (window as any).historyTest = state;
         window.Worker = class extends NativeWorker {
             constructor(url: string | URL, options?: WorkerOptions) {
@@ -19,8 +19,10 @@ test('large process snapshots are prepared in a worker while the original animat
                 this.addEventListener('message', (event) => {
                     if (!state.hold) return;
                     event.stopImmediatePropagation();
+                    state.pending = true;
                     state.release = () => {
                         state.hold = false;
+                        state.pending = false;
                         this.dispatchEvent(new MessageEvent('message', { data: event.data }));
                     };
                 });
@@ -69,6 +71,7 @@ test('large process snapshots are prepared in a worker while the original animat
             tile.evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m42),
         )
         .toBeLessThan(-2);
+    await expect.poll(() => page.evaluate(() => (window as any).historyTest.pending)).toBe(true);
     await page.evaluate(() => (window as any).historyTest.release());
     await expect(page.getByRole('button', { name: 'Refresh snapshot' })).toBeEnabled();
     await expect(page.locator('.bits-art')).toHaveAttribute('data-transfer', 'idle');
