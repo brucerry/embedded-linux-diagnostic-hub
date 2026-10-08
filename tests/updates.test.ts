@@ -116,7 +116,8 @@ test('verified portable download is staged in a user directory and checked again
         const file = await updater.download();
         assert.ok(file.startsWith(directory + path.sep));
         assert.deepEqual(await readFile(file), binary);
-        assert.equal((await stat(file)).mode & 0o777, 0o700);
+        // Windows exposes only writable/read-only modes, not POSIX ownership permissions.
+        if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o700);
         assert.equal(await updater.executable(), file);
         assert.equal(
             (await updater.check(true)).readyPath,
