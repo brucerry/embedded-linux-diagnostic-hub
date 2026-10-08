@@ -45,6 +45,7 @@ test('large process snapshots are prepared in a worker while the original animat
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('switch', { name: 'Live updates' }).click();
     await page.evaluate(() => {
         (window as any).historyTest.hold = true;
@@ -94,6 +95,7 @@ test('worker restrictions use the yielding fallback without disabling collection
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Diagnostics 36' }).click();
     await page
         .locator('.probe-card')

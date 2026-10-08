@@ -121,6 +121,7 @@ test('process table shows real resource fields and computes CPU only after a sec
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Processes', exact: true }).click();
     await page.locator('.probe-card').click();
     await dialog.getByRole('tab', { name: 'Table view' }).click();

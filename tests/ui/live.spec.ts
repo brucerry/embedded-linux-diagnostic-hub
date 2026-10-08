@@ -42,6 +42,7 @@ test('failed live update pauses polling and retains the last snapshot without re
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     const identity = await page.locator('.device-hero h2').textContent();
     await page.getByRole('button', { name: 'Memory', exact: true }).click();
     await page.locator('.probe-card').first().click();
@@ -77,6 +78,9 @@ for (const enabled of [true, false]) {
         await page.getByRole('button', { name: 'Connect device', exact: true }).click();
         await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
         await page.getByRole('button', { name: 'Reset session data', exact: true }).click();
         await expect(
             page.getByRole('dialog', { name: 'Resetting session data' }),
@@ -103,6 +107,9 @@ for (const enabled of [true, false]) {
         await page.getByRole('button', { name: 'Connect device', exact: true }).click();
         await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
         await expect(liveSwitch).toBeChecked({ checked: enabled });
         const reconnectedCount = await page.evaluate(() => window.desktopTest.collects);
         await page.clock.runFor(5100);
@@ -122,6 +129,9 @@ for (const enabled of [true, false]) {
         await page.getByRole('button', { name: 'Connect device', exact: true }).click();
         await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
         await page.evaluate(() => window.desktopTest.closeConnection!());
         await expect(
             page.getByRole('button', { name: 'Connect device', exact: true }),
@@ -130,6 +140,9 @@ for (const enabled of [true, false]) {
         await page.getByRole('button', { name: 'Connect device', exact: true }).click();
         await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
         await expect(liveSwitch).toBeChecked({ checked: enabled });
     });
 }
@@ -144,6 +157,7 @@ test('reconnecting after a collection failure restores the last user selection',
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.evaluate(() => {
         const collect = window.diagnosticHub!.collect;
         window.diagnosticHub!.collect = async () => {
@@ -158,6 +172,7 @@ test('reconnecting after a collection failure restores the last user selection',
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await expect(liveSwitch).toBeChecked();
     const collections = await page.evaluate(() => window.desktopTest.collects);
     await page.clock.runFor(5100);

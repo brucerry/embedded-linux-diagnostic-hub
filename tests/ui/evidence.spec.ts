@@ -52,6 +52,7 @@ test('board and logs use parsed columns while prose keeps only raw tabs', async 
         mimeType: 'application/json',
         buffer: Buffer.from(JSON.stringify(createReport(fixtures()))),
     });
+    await expect(page.getByText('IMPORTED REPORT', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Diagnostics 36' }).click();
     const open = async (title: string) => {
         await page
@@ -105,6 +106,7 @@ test('service and interface trees expand/collapse without sentence tables', asyn
         mimeType: 'application/json',
         buffer: Buffer.from(JSON.stringify(createReport(fixtures()))),
     });
+    await expect(page.getByText('IMPORTED REPORT', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Diagnostics 36' }).click();
     const open = async (title: string) => {
         await page
@@ -197,6 +199,7 @@ test('live tree updates retain expansion, focus and scroll positions', async ({ 
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Services', exact: true }).click();
     await page.locator('.probe-card').click();
     const dialog = page.getByRole('dialog');
@@ -323,6 +326,7 @@ test('LAN warnings retain valid interfaces, parsed table, live graph and raw dia
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     const load = page.locator('.metric-card').filter({ hasText: 'System load' });
     await expect(load).toContainText('Average task count');
     await expect(load.locator('.load-description')).toHaveAttribute('title', /averaging windows/);

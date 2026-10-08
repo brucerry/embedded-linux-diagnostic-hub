@@ -85,6 +85,9 @@ test('website heartbeat preserves paused sessions and page exit releases SSH', a
         await modal.getByLabel('I verified this fingerprint with a trusted source.').check();
         await modal.getByRole('button', { name: 'Connect via SSH' }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
         await page.getByRole('switch', { name: 'Live updates' }).click();
         const authenticationCount = gateway.authentications();
         const heartbeat = page.waitForRequest(
@@ -187,6 +190,9 @@ for (const enabled of [true, false]) {
                     .check();
                 await modal.getByRole('button', { name: 'Connect via SSH' }).click();
                 await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+                await expect(
+                    page.getByRole('dialog', { name: 'Connect a Linux device' }),
+                ).not.toBeVisible();
             };
             await connect();
             await page.getByRole('button', { name: 'Reset session data', exact: true }).click();

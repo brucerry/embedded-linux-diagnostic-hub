@@ -15,6 +15,9 @@ for (const [mode, label] of [
         await page.getByRole('button', { name: 'Connect device', exact: true }).click();
         await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
         await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
         const modal = page.getByRole('dialog', { name: 'Application updates' });
         await expect(modal.getByLabel('Include prereleases')).toBeChecked();
@@ -35,10 +38,12 @@ test('cancel leaves the connection, live updates and report intact', async ({ pa
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Cancel update' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await expect(page.getByRole('switch', { name: 'Live updates' })).toBeChecked();
     expect(await page.evaluate(() => window.desktopTest.requests.length)).toBe(0);
     expect(await page.evaluate(() => window.desktopTest.disconnects)).toBe(0);

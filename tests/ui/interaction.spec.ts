@@ -59,6 +59,7 @@ async function connectFixture(page: Page) {
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     return fixture;
 }
 

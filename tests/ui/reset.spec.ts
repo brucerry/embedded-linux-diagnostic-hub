@@ -12,6 +12,7 @@ test('RAM reset drains active collection, resumes live updates and keeps one SSH
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.evaluate(() => {
         window.desktopTest.holdNextCollection = true;
     });
@@ -80,6 +81,7 @@ test('paused reset keeps the overview cards, clears readings and does not insert
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('switch', { name: 'Live updates' }).click();
     await page.evaluate(() => {
         window.diagnosticHub!.clearSessionData = () =>
@@ -112,6 +114,7 @@ test('reset cover remains through fresh collection while keeping the current pag
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Memory', exact: true }).click();
     await page.evaluate(() => {
         window.desktopTest.holdNextCollection = true;
@@ -157,6 +160,7 @@ test('failed reset releases the overlay, retains evidence and restores normal co
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.evaluate(() => {
         window.diagnosticHub!.clearSessionData = async () => {
             throw Error('Test reset failure');
@@ -188,6 +192,7 @@ test('collection failure during reset stays paused instead of immediately retryi
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.evaluate(() => {
         window.desktopTest.holdNextCollection = true;
     });
@@ -212,6 +217,7 @@ test('overview stays mounted beneath the cover until fresh readings replace the 
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     // SSH can become connected before the first snapshot finishes rendering.
     await expect(page.locator('.metric-card')).toHaveCount(4);
     await page.evaluate(() => {
@@ -254,6 +260,7 @@ test('fresh collection failure releases the cover with cleared cards instead of 
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Reset session data' }).click();
     await expect(page.getByRole('dialog', { name: 'Resetting session data' })).not.toBeVisible();
     await expect(page.getByRole('alert')).toContainText('Fresh collection failed');
@@ -272,6 +279,7 @@ test('cleared disconnected cards guide connection consistently in overview and d
     await page.getByRole('button', { name: 'Connect device', exact: true }).click();
     await page.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
     await page.getByRole('button', { name: 'Reset session data', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Resetting session data' })).not.toBeVisible();
