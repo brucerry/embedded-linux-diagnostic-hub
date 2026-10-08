@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { Client } from 'ssh2';
 import { probes } from '../../shared/diagnostics/probes';
 import type { ConnectOptions, ProbeResult, Snapshot } from '../../shared/types';
@@ -166,7 +167,7 @@ export class SshSession {
     }
 
     private execute(client: Client, id: string, command: string): Promise<ProbeResult> {
-        const started = Date.now();
+        const started = performance.now();
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
@@ -186,7 +187,7 @@ export class SshSession {
                     stderr,
                     status: classifyExit(code),
                     exitCode: code,
-                    durationMs: Date.now() - started,
+                    durationMs: Math.round(performance.now() - started),
                     collectedAt: new Date().toISOString(),
                     truncated,
                 });

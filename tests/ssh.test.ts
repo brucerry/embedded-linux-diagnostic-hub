@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { Server, utils } from 'ssh2';
 import { fingerprint, MAX_OUTPUT_BYTES, SshSession } from '../backend/ssh/session';
 import { probes } from '../shared/diagnostics/probes';
+import { validateSnapshot } from '../shared/report';
 
 const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
     format: 'pem',
@@ -195,6 +196,25 @@ test('encrypted private-key authentication verifies signatures and rejects a wro
         assert.ok(!JSON.stringify(snapshot).includes(passphrase));
         assert.ok(!JSON.stringify(snapshot).includes('PRIVATE KEY'));
     } finally {
+        session.disconnect();
+        await server.close();
+    }
+});
+
+test('SSH durations remain valid when the wall clock moves backward during collection', async (context) => {
+    const server = await fixture();
+    const session = new SshSession();
+    try {
+        await session.connect({ ...options, port: server.port }, async () => true);
+        let wallTime = Date.now();
+        context.mock.method(Date, 'now', () => (wallTime -= 1000));
+        const before = Date.now();
+        const snapshot = await session.collect();
+        assert.ok(Date.now() < before);
+        assert.ok(snapshot.results.every((result) => result.durationMs >= 0));
+        assert.doesNotThrow(() => validateSnapshot(snapshot, true));
+    } finally {
+        context.mock.restoreAll();
         session.disconnect();
         await server.close();
     }
