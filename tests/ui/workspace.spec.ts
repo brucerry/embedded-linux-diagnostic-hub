@@ -11,6 +11,7 @@ async function openFixture(page: Page, id = 'openwrt') {
         mimeType: 'application/json',
         buffer: Buffer.from(JSON.stringify(createReport(demoSnapshot(id)))),
     });
+    await expect(page.getByText('IMPORTED REPORT', { exact: true })).toBeVisible();
 }
 
 test('first launch guides connection without fabricated readings or exports', async ({ page }) => {
