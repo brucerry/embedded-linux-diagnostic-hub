@@ -46,6 +46,11 @@ jobs:
                   CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
                   CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
             - run: npm run verify:package
+            - name: Verify packaged SSH, RAM reset and update report handling
+              run: npx tsx tests/desktop-smoke.ts
+              env:
+                  HUB_TEST_EXECUTABLE:
+                      ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
             - name: Test packaged Windows application
               shell: pwsh
               run: |

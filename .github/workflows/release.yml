@@ -37,8 +37,13 @@ jobs:
         timeout-minutes: 10
         permissions:
             contents: write
+        concurrency:
+            group: release-publication
+            cancel-in-progress: false
         steps:
             - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
             - uses: actions/setup-node@v7
               with:
                   node-version: '24'
@@ -47,13 +52,17 @@ jobs:
                   pattern: Diagnostic-Hub-*
                   merge-multiple: true
                   path: release
-            - name: Check assets and prepare release notes
+            - name: Check release assets
               run: node scripts/verify-release.mjs --assets
+            - name: Summarize every commit since the previous published release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: node scripts/release-notes.mjs
             - name: Publish tested assets
               env:
                   GH_TOKEN: ${{ github.token }}
                   RELEASE_TAG: ${{ github.ref_name }}
               run: |
                   flags=()
-                  if [[ "$RELEASE_TAG" == v0.* || "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+                  if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
                   gh release create "$RELEASE_TAG" release/Diagnostic-Hub.exe release/*.AppImage release/*.tar.gz release/*.zip release/*.sha256 release/download-run.ps1 release/download-run.sh release/build-info.json release/linux-build-info.json --verify-tag --title "Diagnostic Hub $RELEASE_TAG" --notes-file release/notes.md "${flags[@]}"

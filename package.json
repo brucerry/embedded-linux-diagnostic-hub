@@ -22,6 +22,7 @@
         "test": "tsx --test tests/*.test.ts",
         "test:e2e": "playwright test",
         "test:desktop": "npm run build && tsx tests/desktop-smoke.ts",
+        "test:desktop-update": "tsx tests/desktop-update-smoke.ts",
         "package:win": "npm run build && electron-builder --win portable --x64 --publish never",
         "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --x64 --publish never",
         "preview": "vite preview --host 127.0.0.1",

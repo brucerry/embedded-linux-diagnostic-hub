@@ -1,9 +1,10 @@
 import { _electron as electron, expect } from '@playwright/test';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Server } from 'ssh2';
+import { inc } from 'semver';
 import { probes } from '../shared/diagnostics/probes';
 import { demoSnapshot } from './fixtures/snapshots';
 
@@ -71,6 +72,7 @@ async function main() {
             executablePath: process.env.HUB_TEST_EXECUTABLE,
             args: [
                 ...(process.env.HUB_TEST_EXECUTABLE ? [] : ['.']),
+                `--user-data-dir=${temporary}`,
                 ...(process.env.HUB_TEST_APPIMAGE ? ['--appimage-extract-and-run'] : []),
                 ...(process.platform === 'linux' && !process.env.HUB_TEST_SANDBOX
                     ? ['--no-sandbox']
@@ -107,7 +109,54 @@ async function main() {
             },
             { temporary, reportFile },
         );
+        const updateVersion = inc(await desktop.evaluate(({ app }) => app.getVersion()), 'minor')!;
+        const updateBinary =
+            process.platform === 'win32'
+                ? Buffer.from('MZnative-update-fixture')
+                : Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 0, 0, 0, 0x41, 0x49, 0x02, 0]);
+        await desktop.evaluate(
+            (_electron, data) => {
+                const filename =
+                    process.platform === 'win32'
+                        ? 'Diagnostic-Hub.exe'
+                        : 'Diagnostic-Hub-linux-x64.AppImage';
+                const base = `https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/download/v${data.version}/`;
+                globalThis.fetch = async (url) => {
+                    if (String(url).includes('/repos/'))
+                        return Response.json([
+                            {
+                                tag_name: `v${data.version}`,
+                                prerelease: true,
+                                draft: false,
+                                body: 'Native update fixture',
+                                assets: [
+                                    {
+                                        name: filename,
+                                        size: data.bytes.length,
+                                        browser_download_url: base + filename,
+                                    },
+                                    {
+                                        name: filename + '.sha256',
+                                        size: 100,
+                                        browser_download_url: base + filename + '.sha256',
+                                    },
+                                ],
+                            },
+                        ]);
+                    if (String(url).endsWith('.sha256'))
+                        return new Response(`${data.hash}  ${filename}`);
+                    return new Response(new Uint8Array(data.bytes));
+                };
+            },
+            {
+                version: updateVersion,
+                bytes: [...updateBinary],
+                hash: createHash('sha256').update(updateBinary).digest('hex'),
+            },
+        );
         const page = await desktop.firstWindow();
+        let historyWorkers = 0;
+        page.on('worker', () => historyWorkers++);
         await expect(page.getByRole('heading', { name: 'Device overview' })).toBeVisible();
         await expect(page.getByText('NOT CONNECTED', { exact: true })).toBeVisible();
         await expect(page.locator('.metric-card, .hardware-tile')).toHaveCount(0);
@@ -147,6 +196,23 @@ async function main() {
             ),
         ).toBe('https://github.com/brucerry/embedded-linux-diagnostic-hub');
         await expect(page.getByText('Desktop · Offline ready', { exact: true })).toHaveCount(0);
+        const packaged = await desktop.evaluate(({ app }) => app.isPackaged);
+        await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
+        const updateDialog = page.getByRole('dialog', { name: 'Application updates' });
+        await expect(updateDialog).toContainText(`v${updateVersion}`);
+        await expect(updateDialog.getByRole('button', { name: 'Start update' })).toBeVisible();
+        await updateDialog
+            .getByRole('link', { name: 'GitHub releases (opens in your browser)' })
+            .click();
+        expect(
+            await desktop.evaluate(
+                ({ shell }) =>
+                    (shell as typeof shell & { openedRepository?: string }).openedRepository,
+            ),
+        ).toBe('https://github.com/brucerry/embedded-linux-diagnostic-hub/releases');
+        if (!packaged)
+            await expect(updateDialog.getByRole('button', { name: 'Start update' })).toBeDisabled();
+        await updateDialog.getByRole('button', { name: 'Close dialog' }).click();
         await page.context().setOffline(true);
         await expect(page.getByRole('switch', { name: 'Live updates' })).toBeChecked();
         await expect(page.getByLabel('Live update interval')).toHaveValue('30');
@@ -177,6 +243,28 @@ async function main() {
         await modal.getByRole('button', { name: 'Connect via SSH' }).click();
         await expect(modal).not.toBeVisible({ timeout: 20_000 });
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+        expect(
+            historyWorkers,
+            'Native app:// collection uses the background history worker',
+        ).toBeGreaterThan(0);
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await expect(page.getByLabel('Animations', { exact: true })).toHaveCount(0);
+        expect(
+            await page.locator('main').evaluate((el) => getComputedStyle(el).animationName),
+        ).toBe('page-enter');
+        expect(
+            await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches),
+        ).toBe(true);
+        const animatedTile = page.locator('.hardware-tile').first();
+        await animatedTile.hover();
+        await expect
+            .poll(() =>
+                animatedTile.evaluate(
+                    (element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).m42,
+                ),
+            )
+            .toBeLessThan(-2);
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
         await expect(
             page.getByText(
                 `${fixture.results.filter((item) => item.status === 'collected').length} of ${probes.length} checks collected`,
@@ -264,7 +352,8 @@ async function main() {
             .locator('.probe-card')
             .filter({ has: page.getByRole('heading', { name: 'Memory overview', exact: true }) })
             .click();
-        await expect(page.getByRole('tab', { name: 'Graph view' })).toHaveCount(0);
+        await page.getByRole('tab', { name: 'Graph view' }).click();
+        await expect(page.getByRole('dialog').locator('.live-graph circle').first()).toBeVisible();
         await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
         await page.getByRole('button', { name: 'Overview', exact: true }).click();
         await page.getByRole('button', { name: 'Export report', exact: true }).click();
@@ -276,9 +365,42 @@ async function main() {
         expect(JSON.stringify(report)).not.toContain('test-only-secret');
         const hosts = JSON.parse(await readFile(path.join(temporary, 'known-hosts.json'), 'utf8'));
         expect(hosts[`127.0.0.1:${port}`]).toMatch(/^SHA256:/);
+        // A paused reset clears evidence while preserving this authenticated SSH session.
+        const authenticationsBeforeReset = readyConnections;
+        await page.getByRole('button', { name: 'Reset session data', exact: true }).click();
+        await expect(
+            page.getByRole('dialog', { name: 'Resetting session data' }),
+        ).not.toBeVisible();
+        await page.locator('.hardware-tile').first().click();
+        await expect(
+            page.getByRole('dialog').getByRole('tab', { name: 'Standard output' }),
+        ).toBeVisible();
+        await expect(
+            page.getByRole('dialog', { name: 'Connect a Linux device' }),
+        ).not.toBeVisible();
+        expect(readyConnections).toBe(authenticationsBeforeReset);
+        expect(openConnections).toBe(1);
+        await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
+        await expect(page.getByRole('switch', { name: 'Live updates' })).not.toBeChecked();
+        await page.getByRole('switch', { name: 'Live updates' }).click();
         await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
         await expect(page.getByText('SAVED SNAPSHOT', { exact: true })).toBeVisible();
+        await expect(page.getByRole('switch', { name: 'Live updates' })).toBeChecked();
         await expect(page.getByRole('button', { name: 'Refresh snapshot' })).toBeDisabled();
+        await page.getByRole('button', { name: 'Memory', exact: true }).click();
+        await page
+            .locator('.probe-card')
+            .filter({ has: page.getByRole('heading', { name: 'Memory overview', exact: true }) })
+            .click();
+        await page.getByRole('dialog').getByRole('tab', { name: 'Graph view' }).click();
+        await expect(page.getByRole('dialog').locator('.live-graph circle').first()).toBeVisible();
+        const retainedBeforeReconnect = await page
+            .getByRole('dialog')
+            .locator('.live-graph circle')
+            .count();
+        await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
+        await page.getByRole('switch', { name: 'Live updates' }).click();
+        await page.getByRole('button', { name: 'Overview', exact: true }).click();
         await expect.poll(() => openConnections).toBe(0);
         await desktop.evaluate(({ BrowserWindow }) =>
             BrowserWindow.getAllWindows()[0].setSize(1000, 720),
@@ -343,12 +465,21 @@ async function main() {
         await verification.getByRole('button', { name: 'Trust replacement device' }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
         expect(openConnections).toBe(1);
+        await expect(page.getByRole('switch', { name: 'Live updates' })).not.toBeChecked();
         const renewed = JSON.parse(
             await readFile(path.join(temporary, 'known-hosts.json'), 'utf8'),
         );
         expect(renewed[`127.0.0.1:${port}`]).toBe(hosts[`127.0.0.1:${port}`]);
         expect(renewed[otherEndpoint]).toBe(staleFingerprint);
         await expect(page.getByRole('alertdialog')).toHaveCount(0);
+        await page.getByRole('button', { name: 'Memory', exact: true }).click();
+        await page.locator('.probe-card').first().click();
+        await page.getByRole('dialog').getByRole('tab', { name: 'Graph view' }).click();
+        await expect(page.getByRole('dialog').locator('.live-graph circle')).toHaveCount(
+            retainedBeforeReconnect + 2,
+        );
+        await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
+        await page.getByRole('button', { name: 'Overview', exact: true }).click();
         await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
         await expect.poll(() => openConnections).toBe(0);
         await page.evaluate(
@@ -365,6 +496,92 @@ async function main() {
         );
         expect(openConnections).toBe(1);
         await expect(page.getByRole('alertdialog')).toHaveCount(0);
+        await page.evaluate(() => window.diagnosticHub!.collect());
+        await page.getByRole('button', { name: 'Reset session data', exact: true }).click();
+        const resetCover = page.getByRole('dialog', { name: 'Resetting session data' });
+        await expect(resetCover).toBeVisible();
+        await expect(page.locator('.connection-start')).toHaveCount(0);
+        await expect(page.locator('.metric-card')).toHaveCount(4);
+        await expect(resetCover).not.toBeVisible();
+        await expect(
+            page.getByRole('button', { name: 'Reset session data', exact: true }),
+        ).toBeDisabled();
+        await expect(page.evaluate(() => window.diagnosticHub!.exportReport())).rejects.toThrow(
+            /Collect a diagnostic snapshot/,
+        );
+        expect(openConnections).toBe(1);
+        await page.evaluate(() => window.diagnosticHub!.collect());
+        if (!packaged) {
+            await expect(
+                page.evaluate(() => window.diagnosticHub!.startUpdate({ mode: 'clean' })),
+            ).rejects.toThrow(/packaged application/);
+            expect(openConnections).toBe(1);
+        }
+        if (packaged) {
+            await desktop.evaluate(({ app }) => {
+                const testingApp = app as typeof app & {
+                    realQuit?: typeof app.quit;
+                    updateRestart?: unknown;
+                    updateQuit?: boolean;
+                };
+                testingApp.realQuit = app.quit;
+                app.relaunch = (options) => {
+                    testingApp.updateRestart = options;
+                };
+                app.quit = () => {
+                    testingApp.updateQuit = true;
+                };
+            });
+            await page.evaluate(() => window.diagnosticHub!.startUpdate({ mode: 'smart' }));
+            await expect.poll(() => openConnections).toBe(0);
+            await expect(page.getByRole('switch', { name: 'Live updates' })).not.toBeChecked();
+            const recovered = await page.evaluate(() => window.diagnosticHub!.readUpdateReport());
+            expect(recovered?.mode).toBe('smart');
+            expect(recovered?.snapshot?.endpoint).toBe(`127.0.0.1:${port}`);
+            expect(
+                await page.evaluate(async () => {
+                    try {
+                        await window.diagnosticHub!.connect({
+                            host: '127.0.0.1',
+                            port: 22,
+                            username: 'root',
+                            auth: 'password',
+                        });
+                        return false;
+                    } catch (error) {
+                        return String(error).includes('update is in progress');
+                    }
+                }),
+            ).toBe(true);
+            const restart = await desktop.evaluate(
+                ({ app }) =>
+                    (
+                        app as typeof app & {
+                            updateRestart: { execPath: string; args: string[] };
+                        }
+                    ).updateRestart,
+            );
+            expect(restart.execPath).toContain(path.join(temporary, 'updates', updateVersion));
+            expect(restart.args).toContain(`--user-data-dir=${temporary}`);
+            if (process.platform === 'linux')
+                expect(restart.args).toContain('--appimage-extract-and-run');
+            await expect
+                .poll(() =>
+                    desktop.evaluate(
+                        ({ app }) => (app as typeof app & { updateQuit?: boolean }).updateQuit,
+                    ),
+                )
+                .toBe(true);
+            await desktop.evaluate(({ app }) => {
+                app.quit = (app as typeof app & { realQuit: typeof app.quit }).realQuit;
+            });
+        }
+        console.log(
+            'Native update smoke passed: trusted IPC, release check, restart guards' +
+                (packaged
+                    ? ', verified download and portable relaunch arguments.'
+                    : ' and development-build install restriction.'),
+        );
         console.log(
             'Desktop smoke passed: packaged UI, isolated bridge, SSH collection, trusted-key replacement/cancel/reuse, native report export and disconnect.',
         );
@@ -372,7 +589,7 @@ async function main() {
         await desktop.close();
         await expect.poll(() => openConnections).toBe(0);
         await new Promise<void>((resolve) => server.close(() => resolve()));
-        await rm(temporary, { recursive: true, force: true });
+        await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 }
 
