@@ -1,3 +1,4 @@
+import { APP_VERSION } from '../shared/project';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { SshSession, validateConnection } from '../backend/ssh/session';
@@ -158,7 +159,7 @@ export function createGateway(config: GatewayConfig) {
             throw new ApiError(429, 'Gateway request limit reached. Try again in a minute.');
         const url = new URL(req.url || '/', 'http://gateway.local');
         if (req.method === 'GET' && url.pathname === '/api/health') {
-            send(res, 200, { version: '0.1.0', activeSessions: sessions.size });
+            send(res, 200, { version: APP_VERSION, activeSessions: sessions.size });
             return;
         }
 

@@ -1,11 +1,12 @@
 import { summarize } from './diagnostics/metrics';
 import { probes } from './diagnostics/probes';
 import type { Snapshot } from './types';
+import { APP_VERSION } from './project';
 
 export function createReport(snapshot: Snapshot) {
     return {
         application: 'Diagnostic Hub',
-        applicationVersion: '0.1.0',
+        applicationVersion: APP_VERSION,
         ...snapshot,
         summary: summarize(snapshot),
         diagnostics: snapshot.results.map((result) => ({

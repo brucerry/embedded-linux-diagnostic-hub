@@ -1,7 +1,7 @@
 {
     "name": "embedded-linux-diagnostic-hub",
     "productName": "Diagnostic Hub",
-    "version": "0.1.0",
+    "version": "0.2.0-rc.1",
     "private": true,
     "description": "A portable SSH diagnostic workbench for embedded Linux",
     "author": "Diagnostic Hub contributors",
@@ -40,6 +40,7 @@
         "lucide-react": "^0.577.0",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
+        "semver": "^7.8.5",
         "ssh2": "^1.17.0"
     },
     "devDependencies": {
@@ -47,6 +48,7 @@
         "@types/node": "^24.0.0",
         "@types/react": "^19.2.0",
         "@types/react-dom": "^19.2.0",
+        "@types/semver": "^7.8.0",
         "@types/ssh2": "^1.15.5",
         "@vitejs/plugin-react": "^6.0.0",
         "concurrently": "^9.2.1",

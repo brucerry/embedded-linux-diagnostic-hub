@@ -62,6 +62,32 @@ export interface DesktopBridge {
     onDisconnected(callback: () => void): () => void;
 }
 
+export type UpdateMode = 'clean' | 'preserve' | 'smart';
+
+export interface UpdateRequest {
+    mode: UpdateMode;
+    snapshot?: Snapshot;
+}
+
+export interface UpdateRecovery {
+    id: string;
+    mode: 'preserve' | 'smart';
+    reportPath: string;
+    snapshot?: Snapshot;
+}
+
+export interface UpdateStatus {
+    currentVersion: string;
+    installable: boolean;
+    readyPath?: string;
+    release: {
+        version: string;
+        prerelease: boolean;
+        publishedAt: string;
+        notes: string;
+    } | null;
+}
+
 declare global {
     interface Window {
         diagnosticHub?: DesktopBridge;
