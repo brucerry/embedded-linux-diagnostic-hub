@@ -27,15 +27,17 @@ these effects with the OS reduced-motion preference enabled as well.
 sampling and history presentation. These modules must not import Electron, React or browser globals.
 `shared/types.ts` describes transport/result contracts; `shared/report.ts` validates saved reports.
 
-`backend/ssh/session.ts` performs SSH authentication and bounded read-only collection. It is shared
-by Electron and the gateway, without importing either platform. `backend/ssh/monitor.ts` owns
-desktop collection serialization. Native IPC, host-key prompts and report dialogs stay under
-`electron/`; HTTP authentication, origins, target allowlists and session expiry stay under
-`gateway/`.
+`backend/ssh/session.ts` performs SSH authentication, bounded read-only collection and remote
+terminal channel ownership. `backend/ssh/terminal.ts` handles PTY input/output and backpressure.
+They are shared by Electron and the gateway, without importing either platform.
+`backend/ssh/monitor.ts` owns desktop collection serialization. Native IPC, host-key prompts and
+report dialogs stay under `electron/`; HTTP authentication, origins, target allowlists and session
+expiry stay under `gateway/`.
 
 Sample snapshots are **test fixtures only**, under `tests/fixtures/snapshots.ts`, with generic
 hardware identities and distribution-specific output formats. The app exposes only the fixed
-diagnostics, with no board profile, arbitrary device-file or shell-command API.
+diagnostics, with no board profile or arbitrary diagnostic exec/file API. Terminal is a separate
+interactive PTY; its user-entered commands are not diagnostic evidence.
 
 ## Formatting
 
@@ -146,6 +148,29 @@ cancellation, report restoration, collection pause/resume and fresh graph histor
 AppImage test performs a real coordinated smart update from a connected loopback device and checks
 the imported report with SSH disconnected after restart. Release-note tests use an isolated Git
 repository to cover direct and merged commits between published version tags.
+
+Terminal verification lives in `tests/terminal*.test.ts`, `tests/ui/terminal.spec.ts`, and the
+native smoke suite. Browser interaction cases also cover automatic startup before tab selection,
+clipboard shortcuts/menu/feedback, representative xterm keys, prompt-preserving clear, pixel
+animation, mobile layout and connection-form drag dismissal. Shell key bindings remain device-owned;
+see [xterm's terminal API](https://xtermjs.org/docs/api/terminal/classes/terminal/) and
+[GNU Readline](https://www.gnu.org/software/bash/manual/html_node/Command-Line-Editing.html).
+Additional transport checks live in the native desktop smoke test. Loopback PTY fixtures cover byte
+input, shell state, Unicode, resize, concurrent diagnostics, host API validation, bounded output,
+gateway authentication, rate limits and cleanup. The terminal remains mounted during page
+transitions. Reset clears its local display history but keeps the remote shell open; report and
+update backup schemas remain diagnostic-only. For an isolated browser test port, set
+`HUB_TEST_ORIGIN` to the test server origin when using a local Playwright configuration; the default
+remains `http://127.0.0.1:5173`.
+
+Terminal regression checks fill scrollback to test the bottom prompt and wheel containment, verify
+Clear terminal focus, right-click selection menus and synchronized sprite kicks. An opt-in
+`HUB_BASH_PTY_TEST=1` browser qualification uses the local ignored `.codex/bash-shell.cjs` adapter
+when installed to exercise actual interactive Bash continuations, subshells, loops, editing,
+interrupts and Ctrl+L redraw through SSH/gateway/xterm. The ordinary fixture deliberately imitates
+only a few commands and cannot qualify shell syntax. This PC's local demo supports `--bash` for Git
+Bash through a real Windows PTY; commands then run on the developer's PC, with diagnostic readings
+still synthetic. Production always runs the connected device's shell.
 
 Reset scheduling is paused by its internal lock without changing the user's live-update setting. The
 progress dialog is rendered outside the inert app shell, so keyboard focus and scrolling stay inside

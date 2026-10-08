@@ -87,6 +87,30 @@ headers, keep SSH devices on the intended private network, and allow enough prox
 complete snapshot. The collector runs at most three checks at a time; 36 checks can take up to about
 144 seconds if every command reaches its 12-second timeout.
 
+## Terminal streaming
+
+Deploy the updated gateway together with a website build that provides Terminal. A terminal reuses
+the authenticated SSH session and its pinned host key. Commands run with the connected account's
+permissions; the gateway's automatic diagnostic probes remain read-only.
+
+`POST /api/sessions/<session>/terminal` opens one PTY and returns a streamed `application/x-ndjson`
+response. The request contains a terminal ID and rows/columns. Input and resize use authenticated
+POST routes under `terminal/<id>/input` and `terminal/<id>/resize`; DELETE of `terminal/<id>` closes
+only the shell. All routes require the bearer header and an allowed Origin. No token is placed in a
+URL. Stream abort, session expiry/deletion and gateway shutdown release the PTY. Output keepalives
+do not extend abandoned sessions; the existing browser heartbeat does.
+
+Preserve Origin/Authorization headers, disable proxy response buffering and allow long-lived
+responses. For Caddy, add `flush_interval -1` inside `reverse_proxy`; for nginx, configure
+`proxy_buffering off` and an idle read timeout longer than the 15-second stream keepalive interval.
+The gateway also returns no-store/no-transform and `X-Accel-Buffering: no` headers.
+
+Terminal input/resize has its own per-session limit of 60 requests/second with a burst of 120 and a
+256 KiB/second input ceiling. Input frames are limited to 16 KiB; dimensions are 2–500 columns and
+1–300 rows. Pending output is bounded to 256 KiB with a 30-second stalled-consumer timeout. Capacity
+errors close only the terminal and are shown in the workspace. The existing 120/minute control-route
+budget still applies to session management and diagnostic operations.
+
 The Node service binds loopback by default and provides HTTP behind the HTTPS proxy. The website
 rejects an HTTP gateway in production. HTTP loopback is permitted for local development only.
 

@@ -25,6 +25,13 @@ previews until platform and hardware qualification is complete.
 
 ## Runtime matrix
 
+Terminal qualification also requires PTY/shell permission checks, Unicode/ANSI output, multiline
+paste, Ctrl+C, resize, tab retention, concurrent diagnostics, outer-shell recovery after
+exit/logout/Ctrl+D, nested-shell exit, bounded recovery failures, and cleanup on
+reconnect/import/update. Exercise OpenSSH and firmware-provided Dropbear on actual nominated
+devices. Automated loopback SSH fixtures verify protocol and application behavior; they do not
+establish real-board compatibility.
+
 | Environment                        | Required checks                                                                                                  |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Windows 10 22H2 x64, standard user | Cold launch on a clean PC, password/key authentication, native dialogs, export, restart, close while connected   |

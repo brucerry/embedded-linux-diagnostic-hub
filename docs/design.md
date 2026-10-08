@@ -216,3 +216,62 @@ and live-update preference; its cover remains through the first fresh snapshot i
 enabled. With live updates off, the existing cards retain their layout with unavailable readings.
 Graph views become available again when fresh measurements arrive. The update note links GitHub to
 the releases page with an external-window icon.
+
+## Connected device terminal
+
+Terminal is a shared workspace tab backed by xterm.js and a remote SSH PTY. Its header identifies
+the live username and endpoint, with Ready/Preparing shell/Unavailable status, a Clear terminal
+control and a copy button in the terminal area's top-right corner. One PTY starts automatically for
+each device connection; there are no manual shell lifecycle controls. The display fits its container
+and preserves the shell while other workspace tabs are active. Commands run with the SSH user's
+permissions and can change the target; automatic diagnostic collection remains read-only on
+independent channels.
+
+When the outer shell exits through `exit`, `logout` or Ctrl+D, start a fresh shell on the same SSH
+connection. Keep the local transcript, restore normal terminal modes, discard pending input and show
+`Shell restarted.` before the new prompt. Restore focus only when Terminal is visible and unblocked.
+Nested shells retain normal exit behavior. A new shell starts with its default working directory and
+environment; this does not preserve jobs or variables from the exited shell. Allow at most three
+automatic restarts in ten seconds and show Unavailable on refusal, stream failure or exhausted
+recovery. Disconnect cancels pending recovery.
+
+Keyboard input reaches the device only while terminal input owns focus. Ctrl+Shift+Escape returns
+focus to the Clear terminal control. Blocking modals and RAM reset disable input. Device output
+cannot execute page code, write the clipboard or automatically open links. RAM reset clears local
+terminal history without sending a command or closing the shell. Transcripts are excluded from
+diagnostic reports and update backups.
+
+Left-button drags only highlight text; right-click reveals a Copy/Paste menu while preserving
+selection. Ctrl+C copies selected text and retains the normal interrupt when there is no selection.
+Ctrl+V pastes through xterm, including bracketed paste when enabled by the device. Clear terminal
+discards scrollback, retains the current prompt/input line and restores input focus. Ctrl+L reaches
+the remote shell without a competing local clear, preserving Readline's cursor coordinates during
+redraw. The padding-free inner container determines the fitted rows, and wheel events remain inside
+the frame even at scrollback boundaries when history or interactive programs consume wheel input.
+With no normal-buffer history or mouse tracking, wheel input scrolls the page without generating
+remote keys. Continuations, subshells and loops remain shell-owned; navigation, editing, history and
+function keys use xterm's normal translation. Recognizable uncolored prompts receive a local mint
+decoration refreshed after redraw, clear, resize and scroll; remote ANSI colors are retained and no
+shell configuration is changed. A transparent terminal renderer reveals a subtle pixel-art duck/pig
+ball game with trees behind the animals and a small tilted Earth at the upper right. Its pixel
+continents rotate once per second inside a clipped globe. Animation pauses when hidden or blocked.
+The ball reaches each character's front foot on the synchronized kick frames. Overview transfer bits
+finish their current trips after collection; a collection ending before the first launch shows one
+finite trip in the draining state without extending the collection's busy status.
+
+Backdrop dismissal requires a left-button press that begins on the backdrop. Selecting input text
+inside any modal and releasing outside it preserves the dialog; a direct outside click still closes
+it.
+
+### Terminal output ownership
+
+Diagnostic commands use independent SSH exec channels; their stdout/stderr are snapshot evidence.
+Only the active interactive PTY emits terminal data through native IPC or the gateway stream.
+Concurrent collection and kernel-log probes must not alter the terminal display or copied history.
+The SSH connection is shared; channel output is not.
+
+PTY bytes do not identify which remote process produced them. Login banners, shell job notices,
+background commands and logging/broadcast services writing directly to the PTY remain visible, as in
+an ordinary SSH terminal. Filtering by text or whether input was recently sent would lose legitimate
+command output, including requested logs and interactive programs. The application does not silently
+alter device logging or terminal permissions.

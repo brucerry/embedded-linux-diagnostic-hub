@@ -53,6 +53,22 @@ loopback gateways for local tests. Production builds permit HTTPS gateway reques
 
 ## Reports and source labels
 
+The **Terminal** tab uses a shell created automatically on the existing gateway-backed SSH
+connection; commands run with the SSH account's permissions. A matching updated gateway is required.
+An older gateway produces a terminal-unavailable message while existing diagnostic collection
+remains usable. The output uses authenticated HTTPS streaming, so the reverse proxy must forward
+streaming responses without buffering. See [gateway setup](gateway.md).
+
+Terminal scrollback stays in RAM and is excluded from reports. Tab changes retain the shell;
+disconnect, report import and leaving the page release it. A normal outer-shell exit starts a fresh
+shell on the same SSH connection, retaining local history and discarding queued input. Refusal,
+stream failures or repeated rapid exits require reconnecting; input is never replayed. Copy uses the
+highlighted selection or local history. Clipboard paste requires browser permission on HTTPS or
+local loopback; Ctrl+C copies a selection or interrupts, and Ctrl+V pastes. Left-drag selects text
+and right-click opens Copy/Paste. Clear terminal keeps the current prompt/input and restores input
+focus; Ctrl+L uses the device's redraw behavior. The terminal contains its own scrolling and fitted
+rows.
+
 **Import report** reads the selected JSON file locally using the browser File API, in either
 edition. Report parsing validates schema version, IDs, statuses/exit codes, timestamps and output
 bounds. Files above 16 MiB are rejected. Reports from an earlier catalogue remain readable; checks

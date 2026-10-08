@@ -8,13 +8,15 @@
 
 A shared desktop and web workbench for developers and test engineers diagnosing embedded Linux over
 SSH. Inspect real device identity, system resources, interfaces, hardware discovery and logs through
-read-only checks, structured evidence views, live graphs and local JSON reports.
+read-only checks, structured evidence views, live graphs, local JSON reports and an embedded SSH
+terminal.
 
 The desktop ships as **one portable Windows x64 `.exe`** for Windows 10/11 and a **Linux x86_64
 AppImage**, with a portable Linux archive alternative. It works over a local network without
 internet, an installed JavaScript runtime or a device agent. The portable website works on static
-HTTP(S) hosts and uses a separately hosted HTTPS lab gateway for live SSH. Neither edition changes
-device configuration or provides arbitrary device-file access.
+HTTP(S) hosts and uses a separately hosted HTTPS lab gateway for live SSH. Automatic diagnostics are
+read-only; commands typed into Terminal run with the connected SSH user's permissions and can change
+the device.
 
 Current releases are engineering previews. Windows/Linux 32-bit desktop binaries are unsupported;
 use the website on those clients.
@@ -55,12 +57,30 @@ Connect once to collect evidence. Live updates reuse the SSH connection; switchi
 manual snapshots. **Disconnect device** retains the displayed evidence. **Import report** and
 **Export report** work locally in both editions. Running snapshots and graph history stay in RAM.
 Reconnecting appends to the retained graph history, which holds the latest 120 samples per window.
-Graphs separate different endpoints with a **Collection source** selector. Explicit report exports,
-update report backups and trusted desktop SSH fingerprints are saved to disk. The red **Reset
-session data** button clears the current snapshot and graph history from RAM, shows a blocking cover
-while cleanup runs and the first fresh live snapshot is prepared. With live updates off, the
-existing cards remain with cleared readings. It keeps the current page, SSH connection and saved
-report files.
+The **Terminal** shell starts automatically on connection and stays available across workspace tabs.
+Live collection output, including collected system/kernel logs, stays in diagnostic evidence and
+never enters the terminal. The terminal displays the remote PTY: command output, prompts and any
+login banners, background jobs or device-configured broadcasts written directly to that PTY. The
+top-right copy button copies selected text or the terminal history with the same copy feedback as
+diagnostic snippets. Drag to highlight text; right-click for the Copy/Paste menu. Ctrl+C copies a
+selection, or interrupts the device when nothing is selected; Ctrl+V pastes. Other terminal keys
+follow xterm and the remote shell's keymap. **Clear terminal** removes history while retaining the
+current prompt/input line and returns focus to input; Ctrl+L uses the shell's normal redraw key.
+Scrolling stays inside the terminal, and multiline syntax is interpreted by the device's shell.
+Recognizable prompts are mint, including after redraws. Wheel input scrolls the page when the normal
+terminal has no scrollback; otherwise it stays within the terminal. Pixel trees and a tilted Earth
+rotating once per second sit behind the duck and pig playing beneath the text. Disconnect releases
+the shell. Ending the outer shell with `exit`, `logout` (where supported) or Ctrl+D automatically
+starts a fresh shell on the same SSH connection, retains local history and restores input focus. The
+fresh shell returns to its default directory/environment; nested-shell exits behave normally.
+Refused shells, transport failures or repeated rapid exits require reconnecting. RAM reset erases
+local terminal history without sending commands. Transcripts remain in bounded RAM and are excluded
+from reports. Ctrl+Shift+Escape returns focus to **Clear terminal**. Graphs separate different
+endpoints with a **Collection source** selector. Explicit report exports, update report backups and
+trusted desktop SSH fingerprints are saved to disk. The red **Reset session data** button clears the
+current snapshot and graph history from RAM, shows a blocking cover while cleanup runs and the first
+fresh live snapshot is prepared. With live updates off, the existing cards remain with cleared
+readings. It keeps the current page, SSH connection and saved report files.
 
 The desktop header offers **Check for updates**, including prereleases. Choose **Update without
 saving**, **Save report & update**, or **Save, update & reopen report**, or cancel. Updates wait for

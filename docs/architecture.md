@@ -33,9 +33,22 @@ The SSH session authenticates with an in-memory password or a key chosen through
 picker. The desktop reuses one authenticated SSH connection until explicit disconnect or app
 closure; Disconnect, target replacement, report import and app closure clear the configured target.
 Pausing live updates retains the target for manual refresh or resume. The backend chooses commands
-from the fixed catalogue in `shared/diagnostics/probes.ts`; the renderer cannot send arbitrary shell
-commands. Commands use a non-interactive shell, C locale and standard system utility paths. Output
-is bounded and rendered as text.
+from the fixed catalogue in `shared/diagnostics/probes.ts`. Diagnostic commands use a
+non-interactive shell, C locale and standard system utility paths. Output is bounded and rendered as
+text.
+
+Terminal opens a separate PTY channel on that same authenticated connection. Its narrow API accepts
+validated terminal IDs, bounded byte input, dimensions and output acknowledgments; it does not
+expose local shell execution or arbitrary diagnostic exec commands. Commands typed into Terminal use
+the connected SSH user's permissions and can modify the target. The shell survives workspace tab
+changes and closes on disconnect, target replacement, report import, app exit or update disconnect.
+Normal shell exit creates a fresh PTY on the same SSH connection, preserving local history and
+discarding queued input. Recovery is scoped to the current connection generation and allows at most
+three restarts per ten seconds; PTY refusal and stream errors are not retried. Pending recovery
+pauses while input is blocked and is cancelled on disconnect. The fresh shell does not retain its
+predecessor's directory, variables or jobs. Terminal-only close and shell-open failure leave SSH
+diagnostics usable. Scrollback is limited to 5,000 lines and pending transport data to 256 KiB.
+Transcripts are not stored or exported.
 
 Reports include a schema version, source mode, endpoint, username, timestamps, command catalogue,
 results and derived findings. The native export uses the backend's collected snapshot. Demo reports
@@ -63,8 +76,9 @@ another tool may exist.
 The browser uses an HTTPS lab gateway instead of native IPC. The gateway reuses the fixed SSH
 collector, requires an in-memory bearer token, enforces exact website origins and allowed targets,
 and checks administrator-configured host fingerprints. GitHub Pages hosts only the static UI. The
-desktop remains independent of the gateway and internet. See [website modes](website.md) and
-[gateway deployment](gateway.md).
+desktop remains independent of the gateway and internet. Website terminal output streams over
+authenticated HTTPS with bounded input/resize operations on the existing session and no second SSH
+login. See [website modes](website.md) and [gateway deployment](gateway.md).
 
 Hardware discovery uses read-only procfs/sysfs and optional inventory tools, without board profiles.
 Functional hardware testing requires separately qualified fixtures and procedures. See
@@ -82,8 +96,8 @@ Functional hardware testing requires separately qualified fixtures and procedure
 | v1.0 — Qualified portable release            | Signed single-file executable, accessibility/readability polish, qualification matrix, dependency/license manifest, operator guide                           | Windows 10/11 clean-machine and real-device qualification completed                                                |
 
 Serial/UART console and boot-log capture are a later transport milestone after SSH workflows
-stabilize. File transfer and an interactive terminal can be added with dedicated session and
-privilege models. Arbitrary terminal commands are outside the v0.1 read-only guarantee.
+stabilize. File transfer remains a future feature. Interactive terminal commands are separate from
+the read-only diagnostic catalogue and use the existing SSH account's permissions.
 
 Optional features must report their prerequisites: an unavailable `iperf3`, `tcpdump`, `iw`,
 `ethtool`, `smartctl`, `mmc`, `mtdinfo`, or vendor utility cannot be silently replaced with a
@@ -96,12 +110,12 @@ Only one desktop collection is active. Desktop SSH stays connected between snaps
 while live updates are paused. Disconnect or app closure releases it; a dropped connection requires
 explicit reconnection. Live updates default to 30 seconds after each completed collection, with
 5/15/30/60-second choices, no overlap, and pause on failure. There is no background retry after a
-failed update, transport cancellation, persistent report history, interactive shell, serial console,
-SFTP, functional hardware testing or automatic tool installation. A collection runs at most three
-probes concurrently and can take up to about 144 seconds after authentication if every command times
-out. The connection attempt allows 60 seconds for reachability, host-key confirmation and
-authentication. Very large logs can be truncated, and a successful journal query may still expose
-only the subset allowed to that account.
+failed update, transport cancellation, persistent report history, serial console, SFTP, functional
+hardware testing or automatic tool installation. A collection runs at most three probes concurrently
+and can take up to about 144 seconds after authentication if every command times out. The connection
+attempt allows 60 seconds for reachability, host-key confirmation and authentication. Very large
+logs can be truncated, and a successful journal query may still expose only the subset allowed to
+that account.
 
 Fingerprints are remembered using trust on first use with explicit confirmation. Changed keys are
 rejected; recovery requires the operator to verify the new identity and remove the specific trusted
