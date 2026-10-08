@@ -38,6 +38,7 @@ export interface ConnectOptions {
     auth: 'password' | 'key';
     password?: string;
     passphrase?: string;
+    privateKey?: string;
     expectedFingerprint?: string;
 }
 

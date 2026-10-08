@@ -13,6 +13,14 @@ export async function gatewayFixture() {
     const parsed = utils.parseKey(key);
     if (parsed instanceof Error || Array.isArray(parsed)) throw new Error('Invalid test key.');
     const pinned = fingerprint(parsed.getPublicSSH());
+    const clientKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
+    const allowedKey = utils.parseKey(clientKey.export({ format: 'pem', type: 'pkcs1' }));
+    if (allowedKey instanceof Error || Array.isArray(allowedKey))
+        throw new Error('Invalid client key.');
+    const passphrase = 'fixture-key-passphrase';
+    const privateKey = clientKey
+        .export({ format: 'pem', type: 'pkcs1', cipher: 'aes-256-cbc', passphrase })
+        .toString();
     const data = demoSnapshot();
     let authentications = 0;
     const sshServer = new Server({ hostKeys: [key] }, (client) => {
@@ -23,6 +31,14 @@ export async function gatewayFixture() {
                 auth.method === 'password' &&
                 auth.username === 'engineer' &&
                 auth.password === 'device-test-password'
+            )
+                auth.accept();
+            else if (
+                auth.method === 'publickey' &&
+                auth.username === 'engineer' &&
+                auth.key.data.equals(allowedKey.getPublicSSH()) &&
+                (!auth.signature ||
+                    (auth.blob && allowedKey.verify(auth.blob, auth.signature, auth.hashAlgo)))
             )
                 auth.accept();
             else auth.reject();
@@ -69,6 +85,8 @@ export async function gatewayFixture() {
         });
     return {
         token,
+        privateKey,
+        passphrase,
         pinned,
         url,
         options: {

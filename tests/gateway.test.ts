@@ -148,3 +148,50 @@ test('device-file routes are removed while fixed diagnostic collection still wor
         await fixture.close();
     }
 });
+
+test('gateway authenticates encrypted private keys, rejects bad credentials and never exports secrets', async () => {
+    const fixture = await gatewayFixture();
+    try {
+        const options = {
+            ...fixture.options,
+            auth: 'key',
+            password: undefined,
+            privateKey: fixture.privateKey,
+            passphrase: fixture.passphrase,
+        };
+        for (const privateKey of [undefined, '', 'x'.repeat(65537)]) {
+            assert.equal(
+                (await fixture.request('/api/sessions', 'POST', { ...options, privateKey })).status,
+                400,
+            );
+        }
+        assert.equal(fixture.authentications(), 0);
+        assert.equal(
+            (
+                await fixture.request('/api/sessions', 'POST', {
+                    ...options,
+                    expectedFingerprint: 'wrong',
+                })
+            ).status,
+            409,
+        );
+        assert.equal(fixture.authentications(), 0);
+        assert.equal(
+            (await fixture.request('/api/sessions', 'POST', { ...options, passphrase: 'wrong' }))
+                .status,
+            502,
+        );
+        const connection = await fixture.request('/api/sessions', 'POST', options);
+        assert.equal(connection.status, 201);
+        const { sessionId } = await connection.json();
+        const snapshot = await (
+            await fixture.request(`/api/sessions/${sessionId}/snapshot`, 'POST')
+        ).json();
+        assert.equal(snapshot.results.length, probes.length);
+        assert.ok(!JSON.stringify(snapshot).includes(fixture.passphrase));
+        assert.ok(!JSON.stringify(snapshot).includes('PRIVATE KEY'));
+        assert.equal((await fixture.request(`/api/sessions/${sessionId}`, 'DELETE')).status, 200);
+    } finally {
+        await fixture.close();
+    }
+});

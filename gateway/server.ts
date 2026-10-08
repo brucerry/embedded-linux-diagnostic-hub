@@ -181,11 +181,17 @@ export function createGateway(config: GatewayConfig) {
                     403,
                     'This device address and port are not in the gateway allowlist.',
                 );
-            if (options.auth !== 'password')
-                throw new ApiError(
-                    400,
-                    'The website gateway currently supports password authentication. Private keys are available in the desktop app.',
-                );
+            let privateKey: Buffer | undefined;
+            if (url.pathname === '/api/sessions' && options.auth === 'key') {
+                if (
+                    typeof payload.privateKey !== 'string' ||
+                    !payload.privateKey.trim() ||
+                    Buffer.byteLength(payload.privateKey, 'utf8') > 65536
+                )
+                    throw new ApiError(400, 'Select an SSH private key of at most 64 KiB.');
+                privateKey = Buffer.from(payload.privateKey, 'utf8');
+            }
+            delete payload.privateKey;
             if (
                 url.pathname === '/api/sessions' &&
                 payload.expectedFingerprint !== target.fingerprint
@@ -209,10 +215,13 @@ export function createGateway(config: GatewayConfig) {
             try {
                 if (url.pathname === '/api/fingerprint') {
                     try {
-                        await ssh.connect({ ...options, password: '' }, async (received) => {
-                            observed = received;
-                            return false;
-                        });
+                        await ssh.connect(
+                            { ...options, auth: 'password', password: '', passphrase: undefined },
+                            async (received) => {
+                                observed = received;
+                                return false;
+                            },
+                        );
                     } catch {
                         if (!observed)
                             throw new ApiError(
@@ -227,10 +236,14 @@ export function createGateway(config: GatewayConfig) {
                         );
                     send(res, 200, { fingerprint: observed });
                 } else {
-                    await ssh.connect(options, async (received) => {
-                        observed = received;
-                        return received === target.fingerprint;
-                    });
+                    await ssh.connect(
+                        options,
+                        async (received) => {
+                            observed = received;
+                            return received === target.fingerprint;
+                        },
+                        privateKey,
+                    );
                     if (stopping || res.destroyed) return;
                     sessions.set(id, { ssh, touched: Date.now(), busy: false });
                     accepted = true;
@@ -246,6 +259,7 @@ export function createGateway(config: GatewayConfig) {
                 inFlight.delete(ssh);
                 options.password = undefined;
                 options.passphrase = undefined;
+                privateKey?.fill(0);
                 if (!accepted) ssh.disconnect();
             }
             return;

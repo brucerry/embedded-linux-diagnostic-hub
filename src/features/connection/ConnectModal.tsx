@@ -27,6 +27,7 @@ export function ConnectModal({
     onPickKey,
 }: ConnectModalProps) {
     const cancelVerification = useRef<HTMLButtonElement>(null);
+    const browserKeyInput = useRef<HTMLInputElement>(null);
     useEffect(() => {
         if (hostVerification) cancelVerification.current?.focus({ preventScroll: true });
     }, [hostVerification]);
@@ -36,6 +37,7 @@ export function ConnectModal({
     const [auth, setAuth] = useState<'password' | 'key'>('password');
     const [secret, setSecret] = useState('');
     const [keyName, setKeyName] = useState('');
+    const [privateKey, setPrivateKey] = useState('');
     const [keyError, setKeyError] = useState('');
     const [gatewayUrl, setGatewayUrl] = useState('');
     const [gatewayToken, setGatewayToken] = useState('');
@@ -45,7 +47,7 @@ export function ConnectModal({
     useEffect(() => {
         setHostFingerprint('');
         setVerified(false);
-    }, [host, port, gatewayUrl]);
+    }, [host, port, gatewayUrl, gatewayToken]);
     return (
         <Modal title="Connect a Linux device" onClose={onClose} busy={busy || discovering}>
             <div className="modal-intro">
@@ -69,12 +71,19 @@ export function ConnectModal({
                         username: username.trim(),
                         auth,
                         expectedFingerprint: hostFingerprint,
-                        ...(auth === 'password' ? { password: secret } : { passphrase: secret }),
+                        ...(auth === 'password'
+                            ? { password: secret }
+                            : { passphrase: secret, ...(!native ? { privateKey } : {}) }),
                     };
                     const settings = native
                         ? undefined
                         : { url: gatewayUrl.trim(), token: gatewayToken };
                     setSecret('');
+                    setPrivateKey('');
+                    if (!native) {
+                        setKeyName('');
+                        if (browserKeyInput.current) browserKeyInput.current.value = '';
+                    }
                     void onConnect(options, settings);
                 }}
             >
@@ -139,19 +148,21 @@ export function ConnectModal({
                     <label>
                         Authentication
                         <select
+                            aria-label="Authentication"
                             value={auth}
                             onChange={(event) => {
                                 setAuth(event.target.value as 'password' | 'key');
                                 setSecret('');
+                                setPrivateKey('');
+                                setKeyName('');
+                                setKeyError('');
                             }}
                         >
                             <option value="password">Password</option>
-                            <option value="key" disabled={!native}>
-                                Private key {native ? '' : '(desktop)'}
-                            </option>
+                            <option value="key">Private key</option>
                         </select>
                     </label>
-                    {auth === 'key' && (
+                    {auth === 'key' && native && (
                         <div className="key-picker">
                             <span>{keyName || 'No private key selected'}</span>
                             <button
@@ -169,6 +180,40 @@ export function ConnectModal({
                                 Choose key
                             </button>
                         </div>
+                    )}
+                    {auth === 'key' && !native && (
+                        <label>
+                            SSH private key file
+                            <input
+                                ref={browserKeyInput}
+                                type="file"
+                                onChange={async (event) => {
+                                    const file = event.target.files?.[0];
+                                    setPrivateKey('');
+                                    setKeyName('');
+                                    setKeyError('');
+                                    if (!file) return;
+                                    try {
+                                        if (file.size > 65536)
+                                            throw new Error(
+                                                'Choose a private key smaller than 64 KiB.',
+                                            );
+                                        const value = await file.text();
+                                        if (!value.trim())
+                                            throw new Error('The selected key file is empty.');
+                                        setPrivateKey(value);
+                                        setKeyName(file.name);
+                                    } catch (err) {
+                                        setKeyError(message(err));
+                                    }
+                                }}
+                            />
+                            <span className="field-help">
+                                Only choose a gateway you trust: this key and its passphrase are
+                                sent over HTTPS to authenticate SSH. They are kept in memory, never
+                                saved to disk.
+                            </span>
+                        </label>
                     )}
                     <label>
                         {auth === 'password' ? 'Password' : 'Key passphrase (optional)'}
@@ -195,6 +240,7 @@ export function ConnectModal({
                                         setDiscovering(true);
                                         setKeyError('');
                                         setVerified(false);
+                                        setHostFingerprint('');
                                         try {
                                             setHostFingerprint(
                                                 await new GatewayClient({
@@ -220,10 +266,16 @@ export function ConnectModal({
                                 </button>
                             </div>
                             <code>{hostFingerprint || 'Read the host key before connecting.'}</code>
+                            <p id="fingerprint-help" className="field-help">
+                                {hostFingerprint
+                                    ? 'Compare this fingerprint with the device console or a trusted record, then check the box below.'
+                                    : 'First enter your gateway address and token, then click Read fingerprint to enable verification.'}
+                            </p>
                             <label className="checkbox-label">
                                 <input
                                     type="checkbox"
                                     checked={verified}
+                                    aria-describedby="fingerprint-help"
                                     disabled={!hostFingerprint}
                                     onChange={(event) => setVerified(event.target.checked)}
                                 />
