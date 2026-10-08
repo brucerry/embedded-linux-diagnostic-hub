@@ -1,4 +1,4 @@
-import { _electron as electron, chromium, expect } from '@playwright/test';
+import { _electron as electron, chromium, expect, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -20,6 +20,8 @@ async function main() {
     const checksum = `${hash.digest('hex')}  Diagnostic-Hub-linux-x64.AppImage\n`;
     const temporary = await mkdtemp(path.join(tmpdir(), 'hub-native-update-'));
     const profile = path.join(temporary, 'profile');
+    const relaunchLog = path.join(temporary, 'relaunch.log');
+    const diagnostics: string[] = [];
     const fixture = await gatewayFixture();
     const server = http.createServer((req, res) => {
         if (req.url?.endsWith('.sha256')) res.end(checksum);
@@ -33,6 +35,7 @@ async function main() {
     await new Promise<void>((resolve) => debug.close(() => resolve()));
     let desktop: Awaited<ReturnType<typeof electron.launch>> | undefined;
     let receiver: Awaited<ReturnType<typeof chromium.connectOverCDP>> | undefined;
+    let updatePage: Page | undefined;
     try {
         await mkdir(profile);
         await writeFile(
@@ -57,6 +60,10 @@ async function main() {
                 ),
             ),
             timeout: 30000,
+        });
+        desktop.process().stderr?.on('data', (chunk: Buffer) => {
+            diagnostics.push(chunk.toString());
+            if (diagnostics.length > 100) diagnostics.shift();
         });
         const current = await desktop.evaluate(({ app }) => app.getVersion());
         const version = inc(current, 'minor')!;
@@ -90,13 +97,16 @@ async function main() {
                         args: [
                             ...(options?.args ?? []),
                             `--remote-debugging-port=${data.debugPort}`,
+                            '--enable-logging=file',
+                            `--log-file=${data.relaunchLog}`,
                             ...(!data.sandbox ? ['--no-sandbox'] : []),
                         ],
                     });
             },
-            { endpoint, size, version, debugPort, sandbox },
+            { endpoint, size, version, debugPort, sandbox, relaunchLog },
         );
         const page = await desktop.firstWindow();
+        updatePage = page;
         await page.evaluate(
             async (options) => {
                 await window.diagnosticHub!.connect(options);
@@ -163,6 +173,23 @@ async function main() {
         console.log(
             'Actual portable update passed: real AppImage download, SHA-256 verification, native quit/relaunch, preserved profile and trusted loopback SSH.',
         );
+    } catch (error) {
+        console.error('Original AppImage process exit code:', desktop?.process().exitCode);
+        console.error('Original AppImage stderr:', diagnostics.join(''));
+        console.error(
+            'Update dialog:',
+            await updatePage
+                ?.getByRole('dialog', { name: 'Application updates' })
+                .innerText({ timeout: 1000 })
+                .catch(() => 'The original update dialog is no longer available.'),
+        );
+        console.error(
+            'Relaunch Chromium log:',
+            await readFile(relaunchLog, 'utf8')
+                .then((log) => log.slice(-24000))
+                .catch(() => 'No relaunch log was created.'),
+        );
+        throw error;
     } finally {
         await receiver?.close().catch(() => {});
         await desktop?.close().catch(() => {});
