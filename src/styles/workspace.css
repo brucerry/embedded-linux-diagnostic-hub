@@ -20,6 +20,215 @@
     --peach: #403a2c;
     --sky: #2a3a50;
 }
+.terminal-panel[hidden] {
+    display: none;
+}
+.terminal-panel {
+    padding: 24px;
+}
+.terminal-toolbar,
+.terminal-toolbar > div,
+.terminal-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.terminal-toolbar {
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+.terminal-toolbar strong {
+    overflow-wrap: anywhere;
+}
+.terminal-state {
+    color: var(--muted);
+}
+.terminal-state.open {
+    color: var(--green);
+}
+.terminal-description {
+    color: var(--muted);
+    margin: 12px 0 18px;
+}
+.terminal-actions {
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+.terminal-screen {
+    position: relative;
+    z-index: 1;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: auto;
+    background: transparent;
+    cursor: text;
+}
+.terminal-screen:focus-within {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+}
+.terminal-error {
+    color: var(--coral);
+}
+.terminal-frame {
+    position: relative;
+    isolation: isolate;
+    height: clamp(340px, 55vh, 720px);
+    padding: 50px 12px 12px;
+    overflow: hidden;
+    overscroll-behavior: auto;
+    background: #151c24;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+.terminal-screen .xterm-viewport {
+    background: transparent !important;
+}
+.terminal-screen .xterm,
+.terminal-screen .xterm-viewport,
+.terminal-screen .xterm-scrollable-element {
+    overscroll-behavior: auto;
+}
+.terminal-copy-control {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 4;
+}
+.terminal-copy-control .snippet-copy-area {
+    top: 9px;
+    right: 10px;
+}
+.terminal-context-menu {
+    position: absolute;
+    z-index: 5;
+    min-width: 140px;
+    padding: 5px;
+    border: 1px solid #62778c;
+    border-radius: 10px;
+    background: #263342;
+    box-shadow: 0 8px 24px #0008;
+}
+.terminal-context-menu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #e7edf4;
+    padding: 9px 12px;
+    text-align: left;
+}
+.terminal-context-menu button:hover,
+.terminal-context-menu button:focus-visible {
+    background: #405773;
+}
+.terminal-playground {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 0;
+}
+.terminal-landscape {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: min(100%, 680px);
+    opacity: 0.42;
+    image-rendering: pixelated;
+}
+.terminal-earth {
+    position: absolute;
+    top: 56px;
+    right: 32px;
+    width: clamp(48px, 7vw, 76px);
+    opacity: 0.42;
+    image-rendering: pixelated;
+}
+.terminal-earth-continents {
+    animation: earth-turn 1s linear infinite;
+}
+@keyframes earth-turn {
+    to {
+        transform: translateX(-64px);
+    }
+}
+.terminal-duck {
+    animation: duck-play 7s linear infinite;
+    transform-origin: 20px 30px;
+}
+.terminal-pig {
+    animation: pig-play 7s linear infinite;
+    transform-origin: 20px 30px;
+}
+.terminal-play-ball {
+    animation: ball-play 7s linear infinite;
+    transform-origin: 160px 118px;
+}
+.terminal-play-heart {
+    animation: heart-play 7s ease-in-out infinite;
+}
+.terminal-playground.paused * {
+    animation-play-state: paused;
+}
+@keyframes duck-play {
+    0%,
+    100% {
+        transform: translate(0, 0);
+    }
+    8%,
+    92% {
+        transform: translate(4px, -3px);
+    }
+    50% {
+        transform: translate(0, 0);
+    }
+}
+@keyframes pig-play {
+    0%,
+    100% {
+        transform: translate(0, 0);
+    }
+    42%,
+    58% {
+        transform: translate(-4px, -3px);
+    }
+    50% {
+        transform: translate(0, 0);
+    }
+}
+@keyframes ball-play {
+    0%,
+    100% {
+        transform: translate(-47px, 0) rotate(0);
+    }
+    25% {
+        transform: translate(0, -16px) rotate(180deg);
+    }
+    50% {
+        transform: translate(45px, 0) rotate(360deg);
+    }
+    75% {
+        transform: translate(0, -16px) rotate(180deg);
+    }
+}
+@keyframes heart-play {
+    0%,
+    50%,
+    100% {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    65%,
+    80% {
+        opacity: 0.9;
+        transform: translateY(-5px);
+    }
+}
 * {
     box-sizing: border-box;
 }

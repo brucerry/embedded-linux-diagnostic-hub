@@ -97,10 +97,14 @@ test('website heartbeat preserves paused sessions and page exit releases SSH', a
         await heartbeat;
         expect((await (await gateway.request('/api/health')).json()).activeSessions).toBe(1);
         expect(gateway.authentications()).toBe(authenticationCount);
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+        await page.clock.runFor(1000);
+        await expect(page.getByText('Ready', { exact: true })).toBeVisible();
         await page.goto('about:blank');
         await expect
             .poll(async () => (await (await gateway.request('/api/health')).json()).activeSessions)
             .toBe(0);
+        await expect.poll(() => gateway.terminal.closes).toBe(1);
     } finally {
         await gateway.close();
     }

@@ -7,6 +7,7 @@ import { Server } from 'ssh2';
 import { inc } from 'semver';
 import { probes } from '../shared/diagnostics/probes';
 import { demoSnapshot } from './fixtures/snapshots';
+import { attachTerminalFixture, terminalFixtureState } from './fixtures/terminal';
 
 async function main() {
     const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-smoke-'));
@@ -16,6 +17,7 @@ async function main() {
         type: 'pkcs1',
     });
     const fixture = demoSnapshot();
+    const terminalState = terminalFixtureState();
     fixture.results.find((r) => r.id === 'memory')!.stderr = 'Read-only diagnostic note\n';
     let openConnections = 0,
         readyConnections = 0,
@@ -40,7 +42,9 @@ async function main() {
             openConnections++;
             readyConnections++;
             client.on('session', (accept) => {
-                accept().on('exec', (acceptExec, _reject, info) => {
+                const session = accept();
+                attachTerminalFixture(session, terminalState);
+                session.on('exec', (acceptExec, _reject, info) => {
                     const stream = acceptExec();
                     const probe = probes.find((item) => info.command.endsWith(item.command));
                     if (probe?.id === 'fans') completedCollections++;
@@ -95,6 +99,9 @@ async function main() {
                 shell.openExternal = async (url) => {
                     (shell as typeof shell & { openedRepository?: string }).openedRepository = url;
                 };
+                (
+                    clipboard as typeof clipboard & { nativeWriteText?: typeof clipboard.writeText }
+                ).nativeWriteText = clipboard.writeText.bind(clipboard);
                 clipboard.writeText = async (text: string) => {
                     (clipboard as typeof clipboard & { copiedCommand?: string }).copiedCommand =
                         text;
@@ -197,6 +204,16 @@ async function main() {
         ).toBe('https://github.com/brucerry/embedded-linux-diagnostic-hub');
         await expect(page.getByText('Desktop · Offline ready', { exact: true })).toHaveCount(0);
         const packaged = await desktop.evaluate(({ app }) => app.isPackaged);
+        await page.evaluate(() => {
+            const testing = window as unknown as {
+                terminalSmoke: { id: string; stop: () => void };
+            };
+            testing.terminalSmoke = { id: '', stop() {} };
+            testing.terminalSmoke.stop = window.diagnosticHub!.onTerminalEvent!((event) => {
+                if (event.type === 'state' && event.state === 'open')
+                    testing.terminalSmoke.id = event.id;
+            });
+        });
         await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
         const updateDialog = page.getByRole('dialog', { name: 'Application updates' });
         await expect(updateDialog).toContainText(`v${updateVersion}`);
@@ -348,6 +365,156 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 6000));
         expect(completedCollections).toBe(pausedCollections);
         expect(openConnections).toBe(1);
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+        const terminalPanel = page.getByRole('region', { name: 'Connected device terminal' });
+
+        await expect(terminalPanel.getByText('Ready', { exact: true })).toBeVisible();
+        const terminalInput = page.getByLabel('Device terminal input');
+        await desktop.evaluate(({ clipboard }) => {
+            clipboard.writeText = (
+                clipboard as typeof clipboard & { nativeWriteText: typeof clipboard.writeText }
+            ).nativeWriteText;
+        });
+        const savedClipboard = await page.evaluate(() => window.diagnosticHub!.readClipboard!());
+        try {
+            await page.evaluate(() => window.diagnosticHub!.copyText('echo NATIVE_CLIPBOARD_OK'));
+            expect(await page.evaluate(() => window.diagnosticHub!.readClipboard!())).toBe(
+                'echo NATIVE_CLIPBOARD_OK',
+            );
+            await terminalInput.focus();
+            await page.keyboard.press('Control+v');
+            await page.keyboard.press('Enter');
+            await expect(terminalPanel.locator('.terminal-screen')).toContainText(
+                'NATIVE_CLIPBOARD_OK',
+            );
+            expect(
+                await desktop.evaluate(({ ipcMain }) => {
+                    try {
+                        (
+                            ipcMain as unknown as {
+                                _invokeHandlers: Map<string, (event: unknown) => unknown>;
+                            }
+                        )._invokeHandlers.get('hub:read-clipboard')!({
+                            sender: null,
+                            senderFrame: null,
+                        });
+                        return false;
+                    } catch (error) {
+                        return (error as Error).message === 'Untrusted application frame.';
+                    }
+                }),
+            ).toBe(true);
+        } finally {
+            await page.evaluate((text) => window.diagnosticHub!.copyText(text), savedClipboard);
+        }
+        await terminalInput.focus();
+        await page.keyboard.type('cd /tmp');
+        await page.keyboard.press('Enter');
+        await page.keyboard.type('unicode');
+        await page.keyboard.press('Enter');
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText('裝置✓');
+        await page.keyboard.type('watch');
+        await page.keyboard.press('Enter');
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText('watching');
+        await page.keyboard.press('Control+c');
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText('^C');
+        await desktop.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows()[0].setSize(1100, 850),
+        );
+        await expect.poll(() => terminalState.sizes.length).toBeGreaterThan(1);
+        expect(readyConnections).toBe(1);
+        expect(
+            await page.evaluate(async () => {
+                const id = (window as unknown as { terminalSmoke: { id: string } }).terminalSmoke
+                    .id;
+                const bridge = window.diagnosticHub!;
+                const operations = [
+                    () => bridge.writeTerminal!(id, 'invalid!'),
+                    () => bridge.resizeTerminal!(id, { cols: 501, rows: 24 }),
+                    () => bridge.acknowledgeTerminal!(id, 999999),
+                    () => bridge.writeTerminal!('terminal-stale-0001', 'YQ=='),
+                ];
+                return Promise.all(
+                    operations.map(async (operation) => {
+                        try {
+                            await operation();
+                            return false;
+                        } catch {
+                            return true;
+                        }
+                    }),
+                );
+            }),
+        ).toEqual([true, true, true, true]);
+        expect(
+            await desktop.evaluate(({ ipcMain }) => {
+                const handlers = (
+                    ipcMain as unknown as {
+                        _invokeHandlers: Map<
+                            string,
+                            (event: unknown, ...args: unknown[]) => unknown
+                        >;
+                    }
+                )._invokeHandlers;
+                return ['open', 'input', 'resize', 'ack', 'close'].every((operation) => {
+                    try {
+                        handlers.get(`hub:terminal-${operation}`)!(
+                            { sender: null, senderFrame: null },
+                            {},
+                        );
+                        return false;
+                    } catch (error) {
+                        return (error as Error).message === 'Untrusted application frame.';
+                    }
+                });
+            }),
+        ).toBe(true);
+        await page.getByRole('button', { name: 'Overview', exact: true }).click();
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+        await terminalInput.focus();
+        await page.keyboard.type('pwd');
+        await page.keyboard.press('Enter');
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText('/tmp');
+        expect(terminalState.opens).toBe(1);
+        await terminalPanel.getByRole('button', { name: 'Clear terminal' }).click();
+        await expect(terminalInput).toBeFocused();
+        await expect(terminalPanel.locator('.xterm-accessibility-tree')).not.toContainText(
+            'watching',
+        );
+        await expect(terminalPanel.locator('.xterm-accessibility-tree')).toContainText('/tmp $');
+        await terminalInput.focus();
+        await page.keyboard.press('Control+l');
+        await expect.poll(() => Buffer.concat(terminalState.inputs).toString()).toContain('\x0c');
+        await expect(terminalPanel.locator('.xterm-cursor').locator('..')).toContainText('/tmp $');
+        const terminalBounds = await terminalPanel.locator('.terminal-frame').boundingBox();
+        const terminalScreen = await terminalPanel.locator('.xterm-screen').boundingBox();
+        expect(terminalScreen!.y + terminalScreen!.height).toBeLessThanOrEqual(
+            terminalBounds!.y + terminalBounds!.height - 8,
+        );
+        await page.keyboard.type('echo NATIVE_HISTORY_BEFORE_EXIT');
+        await page.keyboard.press('Enter');
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText(
+            'NATIVE_HISTORY_BEFORE_EXIT',
+        );
+        await page.keyboard.type('exit');
+        await page.keyboard.press('Enter');
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText('Shell restarted.');
+        await expect(terminalPanel.getByText('Ready', { exact: true })).toBeVisible();
+        await expect(terminalInput).toBeFocused();
+        await expect(terminalPanel.locator('.xterm-cursor').locator('..')).toContainText(
+            '/home/engineer $',
+        );
+        await expect(terminalPanel.locator('.terminal-screen')).toContainText(
+            'NATIVE_HISTORY_BEFORE_EXIT',
+        );
+        expect(terminalState.opens).toBe(2);
+        expect(readyConnections).toBe(1);
+        expect(openConnections).toBe(1);
+        await page.screenshot({ path: 'test-results/desktop-terminal.png', fullPage: true });
+        await page.evaluate(() =>
+            (window as unknown as { terminalSmoke: { stop: () => void } }).terminalSmoke.stop(),
+        );
+        await page.getByRole('button', { name: 'Memory', exact: true }).click();
         await page
             .locator('.probe-card')
             .filter({ has: page.getByRole('heading', { name: 'Memory overview', exact: true }) })
@@ -363,6 +530,8 @@ async function main() {
         expect(report.endpoint).toBe(`127.0.0.1:${port}`);
         expect(report.diagnostics).toHaveLength(probes.length);
         expect(JSON.stringify(report)).not.toContain('test-only-secret');
+        expect(JSON.stringify(report)).not.toContain('watching');
+        expect(JSON.stringify(report)).not.toContain('NATIVE_CLIPBOARD_OK');
         const hosts = JSON.parse(await readFile(path.join(temporary, 'known-hosts.json'), 'utf8'));
         expect(hosts[`127.0.0.1:${port}`]).toMatch(/^SHA256:/);
         // A paused reset clears evidence while preserving this authenticated SSH session.
@@ -384,6 +553,7 @@ async function main() {
         await expect(page.getByRole('switch', { name: 'Live updates' })).not.toBeChecked();
         await page.getByRole('switch', { name: 'Live updates' }).click();
         await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
+        await expect.poll(() => terminalState.closes).toBe(2);
         await expect(page.getByText('SAVED SNAPSHOT', { exact: true })).toBeVisible();
         await expect(page.getByRole('switch', { name: 'Live updates' })).toBeChecked();
         await expect(page.getByRole('button', { name: 'Refresh snapshot' })).toBeDisabled();
@@ -511,6 +681,19 @@ async function main() {
         );
         expect(openConnections).toBe(1);
         await page.evaluate(() => window.diagnosticHub!.collect());
+        await page.evaluate(async () => {
+            const bridge = window.diagnosticHub!;
+            bridge.onTerminalEvent!(async (event) => {
+                if (event.id === 'terminal-update-0001' && event.type === 'data')
+                    await bridge.acknowledgeTerminal!(event.id, event.sequence).catch(() => {});
+            });
+            await bridge.openTerminal!({ id: 'terminal-update-0001', cols: 80, rows: 24 });
+            await bridge.writeTerminal!(
+                'terminal-update-0001',
+                btoa('echo UPDATE_TERMINAL_ONLY_MARKER\r'),
+            );
+        });
+        const finalShells = terminalState.opens;
         if (!packaged) {
             await expect(
                 page.evaluate(() => window.diagnosticHub!.startUpdate({ mode: 'clean' })),
@@ -534,10 +717,17 @@ async function main() {
             });
             await page.evaluate(() => window.diagnosticHub!.startUpdate({ mode: 'smart' }));
             await expect.poll(() => openConnections).toBe(0);
+            await expect.poll(() => terminalState.closes).toBe(finalShells);
+            await expect(
+                page.evaluate(() =>
+                    window.diagnosticHub!.writeTerminal!('terminal-update-0001', 'YQ=='),
+                ),
+            ).rejects.toThrow(/paused/);
             await expect(page.getByRole('switch', { name: 'Live updates' })).not.toBeChecked();
             const recovered = await page.evaluate(() => window.diagnosticHub!.readUpdateReport());
             expect(recovered?.mode).toBe('smart');
             expect(recovered?.snapshot?.endpoint).toBe(`127.0.0.1:${port}`);
+            expect(JSON.stringify(recovered)).not.toContain('UPDATE_TERMINAL_ONLY_MARKER');
             expect(
                 await page.evaluate(async () => {
                     try {
@@ -588,6 +778,7 @@ async function main() {
     } finally {
         await desktop.close();
         await expect.poll(() => openConnections).toBe(0);
+        await expect.poll(() => terminalState.closes).toBe(terminalState.opens);
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }

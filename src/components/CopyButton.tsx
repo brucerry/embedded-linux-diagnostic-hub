@@ -5,10 +5,14 @@ export function CopyButton({
     text,
     label,
     onCopy,
+    buttonRef,
+    disabled = false,
 }: {
-    text: string;
+    text: string | (() => string);
     label: string;
     onCopy: (text: string) => Promise<void>;
+    buttonRef?: React.Ref<HTMLButtonElement>;
+    disabled?: boolean;
 }) {
     const [feedback, setFeedback] = useState<{ id: number; success: boolean } | null>(null);
     const [pending, setPending] = useState(false);
@@ -26,7 +30,7 @@ export function CopyButton({
         setPending(true);
         let success = true;
         try {
-            await onCopy(text);
+            await onCopy(typeof text === 'function' ? text() : text);
         } catch {
             success = false;
         }
@@ -48,7 +52,8 @@ export function CopyButton({
                 className="snippet-copy"
                 aria-label={label}
                 title={label}
-                disabled={pending}
+                ref={buttonRef}
+                disabled={pending || disabled}
                 onClick={() => void copy()}
             >
                 <Copy size={17} />

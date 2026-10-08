@@ -15,6 +15,7 @@ export function Modal({
     wide?: boolean;
 }) {
     const ref = useRef<HTMLDivElement>(null);
+    const backdropPress = useRef(false);
     const actions = useRef({ busy, onClose });
     actions.current = { busy, onClose };
     useEffect(() => {
@@ -59,8 +60,16 @@ export function Modal({
     return (
         <div
             className="modal-backdrop"
+            onPointerDown={(event) => {
+                backdropPress.current = event.button === 0 && event.target === event.currentTarget;
+            }}
+            onPointerCancel={() => {
+                backdropPress.current = false;
+            }}
             onClick={(event) => {
-                if (event.target === event.currentTarget && !busy) onClose();
+                if (backdropPress.current && event.target === event.currentTarget && !busy)
+                    onClose();
+                backdropPress.current = false;
             }}
         >
             <div

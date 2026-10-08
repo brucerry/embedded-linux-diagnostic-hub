@@ -17,8 +17,9 @@ import {
     Plug,
     Unplug,
     X,
+    TerminalSquare,
 } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState, useRef, useLayoutEffect } from 'react';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
 import { APP_VERSION, REPOSITORY_URL } from '../../shared/project';
 import type { Category, Probe } from '../../shared/types';
@@ -37,12 +38,26 @@ import { OverviewPage } from '../pages/OverviewPage';
 import { Reports } from '../pages/ReportsPage';
 import { message } from '../services/errors';
 import type { View } from './view';
+const TerminalPage = lazy(() => import('../features/terminal/TerminalPage'));
 function App() {
+    const [terminalSeen, setTerminalSeen] = useState(false);
     const [showUpdates, setShowUpdates] = useState(false);
     const [view, setView] = useState<View>('overview');
+    const workspaceMain = useRef<HTMLElement>(null);
+    useLayoutEffect(() => {
+        // Replay the page transition without remounting a live terminal channel.
+        const main = workspaceMain.current;
+        if (!main) return;
+        main.style.animation = 'none';
+        void main.offsetWidth;
+        main.style.animation = '';
+    }, [view]);
     const [query, setQuery] = useState('');
     const [selectedProbe, setSelectedProbe] = useState<Probe | null>(null);
     const {
+        activeDevice,
+        terminalReset,
+        transport,
         snapshot,
         workspaceReady,
         connected,
@@ -93,7 +108,9 @@ function App() {
               ? 'Diagnostic workbench'
               : view === 'reports'
                 ? 'Reports & evidence'
-                : categoryLabels[view];
+                : view === 'terminal'
+                  ? 'Device terminal'
+                  : categoryLabels[view];
     return (
         <div className="app-shell" inert={resetting}>
             <header className="site-header">
@@ -128,6 +145,15 @@ function App() {
                         label="Reports & evidence"
                         active={view === 'reports'}
                         onClick={() => setView('reports')}
+                    />
+                    <Nav
+                        icon={TerminalSquare}
+                        label="Terminal"
+                        active={view === 'terminal'}
+                        onClick={() => {
+                            setTerminalSeen(true);
+                            setView('terminal');
+                        }}
                     />
                 </nav>
                 <span className="edition-label">
@@ -182,7 +208,7 @@ function App() {
                         </button>
                     ))}
                 </nav>
-                <main key={view}>
+                <main ref={workspaceMain}>
                     <div className="page-heading">
                         <div>
                             <div className="eyebrow">
@@ -195,7 +221,9 @@ function App() {
                                     ? 'Every interface. Every insight. One connected workspace.'
                                     : view === 'reports'
                                       ? 'Keep the context. Share the evidence. Make issues reproducible.'
-                                      : 'Inspect system capabilities and the evidence behind every result.'}
+                                      : view === 'terminal'
+                                        ? 'Run commands on your connected device through SSH.'
+                                        : 'Inspect system capabilities and the evidence behind every result.'}
                             </p>
                         </div>
                         <div className="heading-actions">
@@ -357,7 +385,34 @@ function App() {
                         </div>
                     )}
 
-                    {view === 'overview' ? (
+                    {(terminalSeen || connected) && (
+                        <Suspense
+                            fallback={
+                                view === 'terminal' ? <p role="status">Loading terminal…</p> : null
+                            }
+                        >
+                            <TerminalPage
+                                transport={transport}
+                                connected={connected}
+                                device={activeDevice}
+                                visible={view === 'terminal'}
+                                blocked={
+                                    resetting ||
+                                    connecting ||
+                                    disconnecting ||
+                                    showConnect ||
+                                    showUpdates ||
+                                    Boolean(selectedProbe)
+                                }
+                                reset={terminalReset}
+                                onConnect={() => {
+                                    setError('');
+                                    setShowConnect(true);
+                                }}
+                            />
+                        </Suspense>
+                    )}
+                    {view === 'terminal' ? null : view === 'overview' ? (
                         snapshot || workspaceReady ? (
                             <OverviewPage
                                 snapshot={snapshot}

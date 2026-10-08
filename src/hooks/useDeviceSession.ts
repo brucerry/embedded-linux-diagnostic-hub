@@ -17,6 +17,12 @@ export function useDeviceSession(onResetView: () => void) {
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
     const [workspaceReady, setWorkspaceReady] = useState(false);
     const [connected, setConnected] = useState(false);
+    const [activeDevice, setActiveDevice] = useState<{
+        username: string;
+        endpoint: string;
+        generation: number;
+    } | null>(null);
+    const [terminalReset, setTerminalReset] = useState(0);
     const connectedRef = useRef(false);
     connectedRef.current = connected;
     const [live, setLiveState] = useState(true);
@@ -90,6 +96,7 @@ export function useDeviceSession(onResetView: () => void) {
     useEffect(
         () =>
             transport?.onDisconnected((reason?: 'update') => {
+                setActiveDevice(null);
                 connectedRef.current = false;
                 if (reason === 'update') {
                     setConnected(false);
@@ -190,6 +197,7 @@ export function useDeviceSession(onResetView: () => void) {
         collectingRef.current = true;
         dataGeneration.current++;
         setConnecting(true);
+        setActiveDevice(null);
         setError('');
         try {
             if (connected && transport) await transport.disconnect();
@@ -200,6 +208,11 @@ export function useDeviceSession(onResetView: () => void) {
             await active.connect(options);
             setConnected(true);
             connectionGeneration.current++;
+            setActiveDevice({
+                username: options.username,
+                endpoint: `${options.host}:${options.port}`,
+                generation: connectionGeneration.current,
+            });
             try {
                 const data = await active.collect();
                 // A new SSH connection starts a CPU baseline, but retains earlier graph samples.
@@ -214,6 +227,7 @@ export function useDeviceSession(onResetView: () => void) {
             } catch (err) {
                 await active.disconnect().catch(() => {});
                 setConnected(false);
+                setActiveDevice(null);
                 throw err;
             }
         } catch (err) {
@@ -237,6 +251,7 @@ export function useDeviceSession(onResetView: () => void) {
             setError(message(err));
         } finally {
             setConnected(false);
+            setActiveDevice(null);
             setGateway(null);
             disconnectingRef.current = false;
             setDisconnecting(false);
@@ -264,6 +279,7 @@ export function useDeviceSession(onResetView: () => void) {
             setSnapshot(null);
             previousFrame.current = undefined;
             setHistory([]);
+            setTerminalReset((value) => value + 1);
             setImported(false);
             if (!resume || liveRef.current) setError('');
             setUpdateReport(null);
@@ -336,6 +352,7 @@ export function useDeviceSession(onResetView: () => void) {
             if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
             if (connected && transport) await transport.disconnect();
             setConnected(false);
+            setActiveDevice(null);
             setLiveState(false);
             previousFrame.current = undefined;
             const connection = ++connectionGeneration.current;
@@ -364,6 +381,9 @@ export function useDeviceSession(onResetView: () => void) {
     }
 
     return {
+        activeDevice,
+        terminalReset,
+        transport,
         snapshot,
         workspaceReady,
         connected,

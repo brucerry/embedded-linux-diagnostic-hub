@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import type { Snapshot, UpdateRecovery, UpdateRequest } from '../../../shared/types';
 import { demoSnapshot } from '../../fixtures/snapshots';
+import type { TerminalEvent } from '../../../shared/terminal';
 
 export interface DesktopTestState {
     requests: UpdateRequest[];
@@ -9,9 +10,20 @@ export interface DesktopTestState {
     collects: number;
     releasesOpened: number;
     acknowledgements: string[];
+    clipboard?: string;
     releaseCollection?: () => void;
     holdNextCollection?: boolean;
     closeConnection?: () => void;
+    terminal?: {
+        id: string;
+        opens: number;
+        closes: number;
+        inputs: string[];
+        sizes: { cols: number; rows: number }[];
+        emit(data: string): Promise<void>;
+        end(state?: 'closed' | 'error', id?: string): Promise<void>;
+        refuseNextOpen?: boolean;
+    };
 }
 
 declare global {
@@ -32,8 +44,76 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 acknowledgements: [],
             };
             let closed: ((reason?: 'update') => void) | undefined;
+            let terminalListener: ((event: TerminalEvent) => void | Promise<void>) | undefined;
+            let terminalSequence = 0;
+            window.desktopTest.terminal = {
+                id: '',
+                opens: 0,
+                closes: 0,
+                inputs: [],
+                sizes: [],
+                end: async (state = 'closed', id = window.desktopTest.terminal!.id) => {
+                    const terminal = window.desktopTest.terminal!;
+                    if (id === terminal.id) {
+                        terminal.id = '';
+                        terminal.closes++;
+                    }
+                    await terminalListener?.({ id, type: 'state', state });
+                },
+                emit: async (data) => {
+                    const encoded = btoa(
+                        Array.from(new TextEncoder().encode(data), (byte) =>
+                            String.fromCharCode(byte),
+                        ).join(''),
+                    );
+                    await terminalListener?.({
+                        id: window.desktopTest.terminal!.id,
+                        type: 'data',
+                        sequence: ++terminalSequence,
+                        data: encoded,
+                    });
+                },
+            };
             window.desktopTest.closeConnection = () => closed?.();
             window.diagnosticHub = {
+                openTerminal: async (request) => {
+                    const terminal = window.desktopTest.terminal!;
+                    terminal.id = request.id;
+                    terminal.opens++;
+                    if (terminal.refuseNextOpen) {
+                        terminal.refuseNextOpen = false;
+                        throw Error('The device refused the terminal.');
+                    }
+                    terminal.sizes.push(request);
+                    await terminalListener?.({ id: request.id, type: 'state', state: 'open' });
+                    await terminal.emit('/home/engineer $ ');
+                },
+                writeTerminal: async (id, data) => {
+                    const terminal = window.desktopTest.terminal!;
+                    if (id !== terminal.id) throw Error('stale terminal');
+                    const text = new TextDecoder().decode(
+                        Uint8Array.from(atob(data), (char) => char.charCodeAt(0)),
+                    );
+                    terminal.inputs.push(text);
+                    await terminal.emit(text);
+                },
+                resizeTerminal: async (_id, size) => {
+                    window.desktopTest.terminal!.sizes.push(size);
+                },
+                closeTerminal: async (id) => {
+                    const terminal = window.desktopTest.terminal!;
+                    if (terminal.id !== id) return;
+                    terminal.id = '';
+                    terminal.closes++;
+                    await terminalListener?.({ id, type: 'state', state: 'closed' });
+                },
+                acknowledgeTerminal: async () => {},
+                onTerminalEvent: (callback) => {
+                    terminalListener = callback;
+                    return () => {
+                        terminalListener = undefined;
+                    };
+                },
                 checkUpdates: async (include) => ({
                     currentVersion: '0.2.0-rc.1',
                     installable: true,
@@ -71,7 +151,10 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                     return { ...snapshot, capturedAt: new Date().toISOString() };
                 },
                 pickKey: async () => null,
-                copyText: async () => {},
+                copyText: async (text) => {
+                    window.desktopTest.clipboard = text;
+                },
+                readClipboard: async () => window.desktopTest.clipboard ?? '',
                 openRepository: async () => {},
                 openReleases: async () => {
                     window.desktopTest.releasesOpened++;

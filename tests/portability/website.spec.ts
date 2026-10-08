@@ -98,6 +98,14 @@ test('portable production website works at a nested URL on desktop and mobile', 
         expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
         ).toBe(true);
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+        await expect(page.getByRole('region', { name: 'Connected device terminal' })).toBeVisible();
+        await expect(
+            page.getByRole('button', { name: 'Clear terminal', exact: true }),
+        ).toBeDisabled();
+        expect(
+            await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+        ).toBe(true);
         expect(errors).toEqual([]);
     } finally {
         await new Promise<void>((resolve, reject) =>
