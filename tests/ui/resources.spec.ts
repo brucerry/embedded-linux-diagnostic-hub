@@ -431,6 +431,17 @@ test('fixed computer and chip transfer bits smoothly from the chip and finish in
         expect(bit.position).toBe(0);
     });
     await page.evaluate(() => (window as any).finishCollection());
+    await expect(art).toHaveAttribute('data-transfer', 'draining');
+    // A collection completing before any trip launches still shows one complete finite transfer.
+    const fastTrips = await art.locator('.transfer-bit').evaluateAll((bits) =>
+        bits.map((bit) => {
+            const animation = bit.getAnimations()[0];
+            const iterations = animation.effect!.getTiming().iterations;
+            animation.finish();
+            return iterations;
+        }),
+    );
+    expect(fastTrips).toEqual([1, 1, 1, 1, 1, 1]);
     await expect(art).toHaveAttribute('data-transfer', 'idle');
 });
 

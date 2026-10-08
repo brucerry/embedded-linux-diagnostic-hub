@@ -25,19 +25,26 @@ export function BitsArtwork({ collecting }: { collecting: boolean }) {
         if (collecting || !visible) return;
         let cancelled = false;
         const arrivals: Promise<unknown>[] = [];
-        for (const bit of stream.current?.children ?? []) {
-            for (const animation of bit.getAnimations()) {
-                const timing = animation.effect!.getTiming();
-                const elapsed = Number(animation.currentTime ?? 0) - Number(timing.delay ?? 0);
-                if (elapsed <= 0) {
-                    animation.cancel();
-                    continue;
-                }
-                // Finish the current trip without changing its position or speed.
-                const iterations = Math.floor(elapsed / Number(timing.duration)) + 1;
-                animation.effect!.updateTiming({ iterations });
-                arrivals.push(animation.finished.catch(() => {}));
+        const animations = [...(stream.current?.children ?? [])].flatMap((bit) =>
+            bit.getAnimations(),
+        );
+        const launched = animations.some((animation) => {
+            const timing = animation.effect!.getTiming();
+            return Number(animation.currentTime ?? 0) > Number(timing.delay ?? 0);
+        });
+        for (const animation of animations) {
+            const timing = animation.effect!.getTiming();
+            const elapsed = Number(animation.currentTime ?? 0) - Number(timing.delay ?? 0);
+            if (launched && elapsed <= 0) {
+                animation.cancel();
+                continue;
             }
+            // Finish the current trip without changing its position or speed.
+            // Very short collections can finish before the first animation frame. Allow one
+            // finite trip in the draining state instead of flashing and immediately removing it.
+            const iterations = Math.max(1, Math.floor(elapsed / Number(timing.duration)) + 1);
+            animation.effect!.updateTiming({ iterations });
+            arrivals.push(animation.finished.catch(() => {}));
         }
         Promise.all(arrivals).then(() => {
             if (!cancelled) setVisible(false);
