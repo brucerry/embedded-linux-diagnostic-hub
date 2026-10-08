@@ -17,6 +17,7 @@ import { validateConnection } from '../backend/ssh/session';
 import { RELEASES_URL, REPOSITORY_URL } from '../shared/project';
 import { createReport, validateSnapshot } from '../shared/report';
 import type { Snapshot } from '../shared/types';
+import type { TerminalOpen } from '../shared/terminal';
 import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
 import { UpdateCoordinator } from './update-coordinator';
@@ -191,6 +192,23 @@ app.whenReady().then(async () => {
             throw new Error('Wait for the current connection or collection to finish.');
         ssh.clear();
     });
+    registerHandler('hub:terminal-open', (request) => {
+        if (update.active || connecting)
+            throw Error('Wait for the current connection or update to finish.');
+        return ssh.openTerminal(request as TerminalOpen, (event) => {
+            if (!window.isDestroyed()) window.webContents.send('hub:terminal-event', event);
+        });
+    });
+    registerHandler('hub:terminal-input', (id, data) => {
+        if (update.active || connecting)
+            throw Error('Terminal input is paused for the connection or update.');
+        return ssh.getTerminal(id).write(data);
+    });
+    registerHandler('hub:terminal-resize', (id, size) => ssh.getTerminal(id).resize(size));
+    registerHandler('hub:terminal-ack', (id, sequence) =>
+        ssh.getTerminal(id).acknowledge(sequence),
+    );
+    registerHandler('hub:terminal-close', (id) => ssh.getTerminal(id).close());
     registerHandler('hub:collect', async () => {
         if (update.active) throw new Error('Live collection is paused for the update.');
         if (collectionTask) throw new Error('A collection is already running.');
@@ -236,6 +254,11 @@ app.whenReady().then(async () => {
         if (typeof command !== 'string' || command.length > 262144)
             throw new Error('Diagnostic text exceeds the clipboard limit.');
         return clipboard.writeText(command);
+    });
+    registerHandler('hub:read-clipboard', async () => {
+        const text = await clipboard.readText();
+        if (text.length > 262144) throw Error('Clipboard text exceeds the terminal paste limit.');
+        return text;
     });
     registerHandler('hub:export', async (importedData) => {
         const snapshot = importedData !== undefined ? validateSnapshot(importedData) : lastSnapshot;

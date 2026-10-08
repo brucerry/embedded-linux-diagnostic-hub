@@ -1,11 +1,19 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { Server, utils } from 'ssh2';
+import { Server, utils, type Session } from 'ssh2';
 import { fingerprint } from '../../backend/ssh/session';
 import { createGateway } from '../../gateway/server';
 import { probes } from '../../shared/diagnostics/probes';
 import { demoSnapshot } from './snapshots';
+import { attachTerminalFixture, terminalFixtureState } from './terminal';
 
-export async function gatewayFixture() {
+export async function gatewayFixture(
+    idleMs?: number,
+    options: {
+        attachShell?: (session: Session) => void;
+        probeDelayMs?: number;
+        probeOutput?: { stdout: string; stderr: string };
+    } = {},
+) {
     const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
         format: 'pem',
         type: 'pkcs1',
@@ -23,6 +31,8 @@ export async function gatewayFixture() {
         .toString();
     const data = demoSnapshot();
     let authentications = 0;
+    let probeExecutions = 0;
+    const terminal = terminalFixtureState();
     const sshServer = new Server({ hostKeys: [key] }, (client) => {
         client.on('error', () => {});
         client.on('authentication', (auth) => {
@@ -45,16 +55,24 @@ export async function gatewayFixture() {
         });
         client.on('ready', () =>
             client.on('session', (accept) => {
-                accept().on('exec', (acceptExec, _reject, info) => {
+                const session = accept();
+                if (options.attachShell) options.attachShell(session);
+                else attachTerminalFixture(session, terminal);
+                session.on('exec', (acceptExec, _reject, info) => {
+                    probeExecutions++;
                     const channel = acceptExec();
                     const probe = probes.find((item) => info.command.endsWith(item.command));
                     const result = data.results.find((item) => item.id === probe?.id);
-                    if (result) {
-                        channel.write(result.stdout);
-                        channel.stderr.write(result.stderr);
-                        channel.exit(result.exitCode ?? 1);
-                    } else channel.exit(127);
-                    channel.end();
+                    const respond = () => {
+                        if (result) {
+                            channel.write(options.probeOutput?.stdout ?? result.stdout);
+                            channel.stderr.write(options.probeOutput?.stderr ?? result.stderr);
+                            channel.exit(result.exitCode ?? 1);
+                        } else channel.exit(127);
+                        channel.end();
+                    };
+                    if (options.probeDelayMs) setTimeout(respond, options.probeDelayMs);
+                    else respond();
                 });
             }),
         );
@@ -62,9 +80,9 @@ export async function gatewayFixture() {
     await new Promise<void>((resolve) => sshServer.listen(0, '127.0.0.1', resolve));
     const sshPort = (sshServer.address() as { port: number }).port;
     const token = 'test-gateway-token-32-characters-minimum';
-    const origins = ['http://127.0.0.1:5173'];
+    const origins = [process.env.HUB_TEST_ORIGIN ?? 'http://127.0.0.1:5173'];
     const targets = [{ host: '127.0.0.1', port: sshPort, fingerprint: pinned }];
-    const gateway = createGateway({ token, origins, targets });
+    const gateway = createGateway({ token, origins, targets, idleMs });
     await new Promise<void>((resolve) => gateway.server.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${(gateway.server.address() as { port: number }).port}`;
     const request = async (
@@ -84,6 +102,7 @@ export async function gatewayFixture() {
             ...(body ? { body: JSON.stringify(body) } : {}),
         });
     return {
+        terminal,
         token,
         privateKey,
         passphrase,
@@ -99,6 +118,7 @@ export async function gatewayFixture() {
         },
         request,
         authentications: () => authentications,
+        probeExecutions: () => probeExecutions,
         close: async () => {
             await gateway.close();
             await new Promise<void>((resolve) => sshServer.close(() => resolve()));

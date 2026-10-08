@@ -49,7 +49,7 @@ export interface HostKeyVerification {
     saved?: string;
 }
 
-export interface DesktopBridge {
+export interface DesktopBridge extends Partial<import('./terminal').TerminalTransport> {
     checkUpdates(includePrereleases: boolean): Promise<UpdateStatus>;
     startUpdate(request: UpdateRequest): Promise<void>;
     readUpdateReport(): Promise<UpdateRecovery | null>;
@@ -63,6 +63,7 @@ export interface DesktopBridge {
     collect(): Promise<Snapshot>;
     pickKey(): Promise<string | null>;
     copyText(command: string): Promise<void>;
+    readClipboard?(): Promise<string>;
     openRepository(): Promise<void>;
     openReleases(): Promise<void>;
     exportReport(importedSnapshot?: Snapshot): Promise<boolean>;

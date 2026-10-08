@@ -1,7 +1,20 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ConnectOptions, DesktopBridge, HostKeyVerification, Snapshot } from '../shared/types';
+import type { TerminalEvent } from '../shared/terminal';
 
 const bridge: DesktopBridge = {
+    openTerminal: (request) => ipcRenderer.invoke('hub:terminal-open', request),
+    writeTerminal: (id, data) => ipcRenderer.invoke('hub:terminal-input', id, data),
+    resizeTerminal: (id, size) => ipcRenderer.invoke('hub:terminal-resize', id, size),
+    closeTerminal: (id) => ipcRenderer.invoke('hub:terminal-close', id),
+    acknowledgeTerminal: (id, sequence) => ipcRenderer.invoke('hub:terminal-ack', id, sequence),
+    onTerminalEvent: (callback) => {
+        const listener = (_event: unknown, event: TerminalEvent) => {
+            void callback(event);
+        };
+        ipcRenderer.on('hub:terminal-event', listener);
+        return () => ipcRenderer.removeListener('hub:terminal-event', listener);
+    },
     checkUpdates: (includePrereleases) =>
         ipcRenderer.invoke('hub:check-updates', includePrereleases),
     startUpdate: (request) => ipcRenderer.invoke('hub:start-update', request),
@@ -24,6 +37,7 @@ const bridge: DesktopBridge = {
     disconnect: () => ipcRenderer.invoke('hub:disconnect'),
     collect: () => ipcRenderer.invoke('hub:collect'),
     copyText: (command: string) => ipcRenderer.invoke('hub:copy-text', command),
+    readClipboard: () => ipcRenderer.invoke('hub:read-clipboard'),
     openRepository: () => ipcRenderer.invoke('hub:open-repository'),
     openReleases: () => ipcRenderer.invoke('hub:open-releases'),
     pickKey: () => ipcRenderer.invoke('hub:pick-key'),

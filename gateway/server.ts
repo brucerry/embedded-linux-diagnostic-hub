@@ -2,6 +2,7 @@ import { APP_VERSION } from '../shared/project';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { SshSession, validateConnection } from '../backend/ssh/session';
+import { GatewayTerminal, TerminalHttpError } from './terminal';
 
 export interface GatewayTarget {
     host: string;
@@ -53,7 +54,10 @@ export function validateGatewayConfig(config: GatewayConfig) {
 export function createGateway(config: GatewayConfig) {
     validateGatewayConfig(config);
     const tokenHash = createHash('sha256').update(config.token).digest();
-    const sessions = new Map<string, { ssh: SshSession; touched: number; busy: boolean }>();
+    const sessions = new Map<
+        string,
+        { ssh: SshSession; terminal: GatewayTerminal; touched: number; busy: boolean }
+    >();
     const maxSessions = config.maxSessions ?? 8;
     let pending = 0;
     let stopping = false;
@@ -117,9 +121,15 @@ export function createGateway(config: GatewayConfig) {
 
     const server = http.createServer((req, res) => {
         void handle(req, res).catch((error: unknown) =>
-            send(res, error instanceof ApiError ? error.status : 502, {
-                error: error instanceof Error ? error.message : 'Gateway request failed.',
-            }),
+            send(
+                res,
+                error instanceof ApiError || error instanceof TerminalHttpError
+                    ? error.status
+                    : 502,
+                {
+                    error: error instanceof Error ? error.message : 'Gateway request failed.',
+                },
+            ),
         );
     });
     server.requestTimeout = 30_000;
@@ -155,9 +165,14 @@ export function createGateway(config: GatewayConfig) {
             requests = 0;
             rateWindow = Date.now();
         }
-        if (++requests > 120)
-            throw new ApiError(429, 'Gateway request limit reached. Try again in a minute.');
         const url = new URL(req.url || '/', 'http://gateway.local');
+        const terminalTraffic =
+            req.method === 'POST' &&
+            /^\/api\/sessions\/[A-Za-z0-9_-]{32}\/terminal\/[A-Za-z0-9_-]{16,64}\/(input|resize)$/.test(
+                url.pathname,
+            );
+        if (!terminalTraffic && ++requests > 120)
+            throw new ApiError(429, 'Gateway request limit reached. Try again in a minute.');
         if (req.method === 'GET' && url.pathname === '/api/health') {
             send(res, 200, { version: APP_VERSION, activeSessions: sessions.size });
             return;
@@ -246,7 +261,12 @@ export function createGateway(config: GatewayConfig) {
                         privateKey,
                     );
                     if (stopping || res.destroyed) return;
-                    sessions.set(id, { ssh, touched: Date.now(), busy: false });
+                    sessions.set(id, {
+                        ssh,
+                        terminal: new GatewayTerminal(ssh),
+                        touched: Date.now(),
+                        busy: false,
+                    });
                     accepted = true;
                     send(res, 201, { sessionId: id });
                 }
@@ -267,7 +287,7 @@ export function createGateway(config: GatewayConfig) {
         }
 
         const match = url.pathname.match(
-            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:snapshot|heartbeat))?$/,
+            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:snapshot|heartbeat|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
         );
         if (match) {
             const active = sessions.get(match[1]);
@@ -277,6 +297,17 @@ export function createGateway(config: GatewayConfig) {
                     'Session expired or the device disconnected. Reconnect to collect.',
                 );
             active.touched = Date.now();
+            if (
+                match[2]?.startsWith('/terminal') &&
+                (await active.terminal.handle(
+                    req,
+                    res,
+                    match[2],
+                    () => body(req),
+                    (status, payload) => send(res, status, payload),
+                ))
+            )
+                return;
             if (req.method === 'DELETE' && !match[2]) {
                 if (active.busy)
                     throw new ApiError(409, 'Wait for the current device operation to finish.');

@@ -1,5 +1,6 @@
 import type { ConnectOptions, Snapshot } from '../../shared/types';
 import { SshSession } from './session';
+import type { TerminalEvent, TerminalOpen } from '../../shared/terminal';
 
 // Reuse one authenticated SSH connection until explicit disconnect or app closure.
 export class DeviceMonitor {
@@ -41,5 +42,13 @@ export class DeviceMonitor {
 
     clear(): void {
         this.session.disconnect();
+    }
+
+    openTerminal(request: TerminalOpen, emit: (event: TerminalEvent) => void) {
+        return this.session.openTerminal(request, emit);
+    }
+
+    getTerminal(id: unknown) {
+        return this.session.getTerminal(id);
     }
 }

@@ -4,6 +4,13 @@ import { performance } from 'node:perf_hooks';
 import { Client } from 'ssh2';
 import { probes } from '../../shared/diagnostics/probes';
 import type { ConnectOptions, ProbeResult, Snapshot } from '../../shared/types';
+import {
+    terminalId,
+    terminalSize,
+    type TerminalEvent,
+    type TerminalOpen,
+} from '../../shared/terminal';
+import { SshTerminal } from './terminal';
 
 export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const PROBE_TIMEOUT_MS = 12_000;
@@ -49,6 +56,8 @@ export class SshSession {
     private client: Client | null = null;
     private options: ConnectOptions | null = null;
     private collecting = false;
+    private ready = false;
+    private terminal: SshTerminal | null = null;
 
     constructor(private readonly onDisconnected: () => void = () => {}) {}
 
@@ -83,7 +92,15 @@ export class SshSession {
                 60_000,
             );
             client.on('ready', () => {
+                if (this.client !== client) {
+                    finish(
+                        new Error('SSH connection was replaced before authentication completed.'),
+                    );
+                    client.destroy();
+                    return;
+                }
                 ready = true;
+                this.ready = true;
                 finish();
             });
             client.on('error', (error) => {
@@ -93,6 +110,8 @@ export class SshSession {
                 if (!ready)
                     finish(new Error('SSH connection closed before authentication completed.'));
                 if (this.client === client) {
+                    this.terminal?.close();
+                    this.ready = false;
                     this.client = null;
                     this.options = null;
                     this.onDisconnected();
@@ -120,6 +139,8 @@ export class SshSession {
     }
 
     disconnect(): void {
+        this.terminal?.close();
+        this.ready = false;
         const client = this.client;
         this.client = null;
         this.options = null;
@@ -127,7 +148,25 @@ export class SshSession {
     }
 
     get isConnected(): boolean {
-        return this.client !== null && this.options !== null;
+        return this.ready && this.client !== null && this.options !== null;
+    }
+
+    async openTerminal(input: TerminalOpen, emit: (event: TerminalEvent) => void): Promise<void> {
+        const id = terminalId(input?.id);
+        const size = terminalSize(input);
+        if (!this.isConnected || !this.client) throw Error('Connect to a device first.');
+        if (this.terminal) throw Error('A terminal is already active for this device.');
+        const terminal = new SshTerminal({ id, ...size }, emit, () => {
+            if (this.terminal === terminal) this.terminal = null;
+        });
+        this.terminal = terminal;
+        await terminal.open(this.client, size);
+    }
+
+    getTerminal(id: unknown): SshTerminal {
+        if (!this.terminal || this.terminal.id !== terminalId(id))
+            throw Error('This terminal is closed or belongs to an earlier connection.');
+        return this.terminal;
     }
 
     async collect(): Promise<Snapshot> {
