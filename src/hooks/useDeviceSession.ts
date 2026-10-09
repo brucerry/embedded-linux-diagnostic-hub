@@ -43,6 +43,15 @@ export function useDeviceSession(onResetView: () => void) {
     const [resetProgress, setResetProgress] = useState('');
     const [updateReport, setUpdateReport] = useState<UpdateRecovery | null>(null);
     const [busy, setBusy] = useState(false);
+    const [testing, setTesting] = useState(false);
+    const testingRef = useRef(false);
+    function setTestingActivity(active: boolean): boolean {
+        if (active && (collectingRef.current || resettingRef.current || disconnectingRef.current))
+            return false;
+        testingRef.current = active;
+        setTesting(active);
+        return true;
+    }
     const [connecting, setConnecting] = useState(false);
     const [disconnecting, setDisconnecting] = useState(false);
     const disconnectingRef = useRef(false);
@@ -113,7 +122,16 @@ export function useDeviceSession(onResetView: () => void) {
         [transport, connected],
     );
     useEffect(() => {
-        if (!live || !connected || imported || busy || connecting || resetting || showConnect)
+        if (
+            !live ||
+            !connected ||
+            imported ||
+            busy ||
+            connecting ||
+            resetting ||
+            showConnect ||
+            testing
+        )
             return;
         const timer = setTimeout(() => {
             void refresh(true);
@@ -124,6 +142,7 @@ export function useDeviceSession(onResetView: () => void) {
         connected,
         imported,
         busy,
+        testing,
         connecting,
         resetting,
         showConnect,
@@ -164,6 +183,7 @@ export function useDeviceSession(onResetView: () => void) {
     async function refresh(automatic = false): Promise<boolean> {
         if (
             resettingRef.current ||
+            testingRef.current ||
             collectingRef.current ||
             disconnectingRef.current ||
             (!automatic && live)
@@ -194,6 +214,10 @@ export function useDeviceSession(onResetView: () => void) {
     }
 
     async function connect(options: ConnectOptions, settings?: GatewaySettings) {
+        if (testingRef.current) {
+            setError('Cancel testing and wait for cleanup before connecting another target.');
+            return;
+        }
         if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
         collectingRef.current = true;
         dataGeneration.current++;
@@ -260,6 +284,10 @@ export function useDeviceSession(onResetView: () => void) {
     }
 
     async function resetData() {
+        if (testingRef.current) {
+            setError('Cancel testing and wait for cleanup before resetting session data.');
+            return;
+        }
         if (resettingRef.current || connecting || disconnectingRef.current) return;
         resettingRef.current = true;
         dataGeneration.current++;
@@ -275,6 +303,7 @@ export function useDeviceSession(onResetView: () => void) {
             if (collectingRef.current)
                 await new Promise<void>((resolve) => idleWaiters.current.add(resolve));
             setResetProgress('Clearing the snapshot and graph history…');
+            await transport?.clearTests?.();
             await bridge?.clearSessionData();
             setWorkspaceReady(true);
             setSnapshot(null);
@@ -342,6 +371,10 @@ export function useDeviceSession(onResetView: () => void) {
     }
 
     async function importReport(file: File) {
+        if (testingRef.current) {
+            setError('Cancel testing and wait for cleanup before importing diagnostic evidence.');
+            return;
+        }
         if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
         setError('');
         const generation = dataGeneration.current;
@@ -351,7 +384,13 @@ export function useDeviceSession(onResetView: () => void) {
             const data = parseReport(await file.text());
             const frame = await prepareHistory(data);
             if (generation !== dataGeneration.current) return;
-            if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
+            if (
+                resettingRef.current ||
+                collectingRef.current ||
+                disconnectingRef.current ||
+                testingRef.current
+            )
+                return;
             if (connected && transport) await transport.disconnect();
             setConnected(false);
             setActiveDevice(null);
@@ -383,6 +422,8 @@ export function useDeviceSession(onResetView: () => void) {
     }
 
     return {
+        testing,
+        setTestingActivity,
         activeDevice,
         terminalReset,
         clockReset,

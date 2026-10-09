@@ -185,6 +185,10 @@ test('website terminal uses real gateway PTY, keeps shell state, clears display 
         await expect(panel.locator('.terminal-screen')).toContainText('/tmp');
         expect(gateway.terminal.opens).toBe(1);
         expect(gateway.authentications()).toBe(attempts);
+        await expect(page.getByRole('button', { name: 'Export report', exact: true })).toHaveCount(
+            0,
+        );
+        await page.getByRole('button', { name: 'Overview', exact: true }).click();
         const downloadPromise = page.waitForEvent('download');
         await page.getByRole('button', { name: 'Export report', exact: true }).click();
         const file = await downloadPromise;
@@ -195,6 +199,7 @@ test('website terminal uses real gateway PTY, keeps shell state, clears display 
         expect(exported).not.toContain('watching');
         expect(exported).toContain('DIAGNOSTIC_KERNEL_ONLY');
         expect(exported).toContain('DIAGNOSTIC_STDERR_ONLY');
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
         await panel.getByRole('button', { name: 'Clear terminal', exact: true }).click();
         await expect(panel.locator('.terminal-screen')).not.toContainText('裝置✓');
         await expect(panel.locator('.xterm-accessibility-tree')).toContainText('/tmp $');

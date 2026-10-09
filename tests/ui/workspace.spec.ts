@@ -14,6 +14,50 @@ async function openFixture(page: Page, id = 'openwrt') {
     await expect(page.getByText('IMPORTED REPORT', { exact: true })).toBeVisible();
 }
 
+test('diagnostic report controls appear only on diagnostic pages and tests retain their own reports', async ({
+    page,
+}) => {
+    await page.goto('/');
+    await openFixture(page);
+    const nav = page.locator('.primary-nav');
+    await expect(nav.getByRole('button', { name: 'Reports & evidence', exact: true })).toHaveCount(
+        0,
+    );
+    for (const name of ['Terminal', 'Tests']) {
+        await nav.getByRole('button', { name, exact: true }).click();
+        await expect(page.getByRole('button', { name: 'Import report', exact: true })).toHaveCount(
+            0,
+        );
+        await expect(page.getByRole('button', { name: 'Export report', exact: true })).toHaveCount(
+            0,
+        );
+    }
+    await expect(
+        page.getByRole('heading', { name: 'Manufactural tests', exact: true }),
+    ).toBeVisible();
+    await expect(
+        page.getByRole('button', { name: 'Import test report', exact: true }),
+    ).toBeVisible();
+    for (const name of ['Overview', `Diagnostics ${probes.length}`]) {
+        await nav.getByRole('button', { name, exact: true }).click();
+        await expect(
+            page.getByRole('button', { name: 'Import report', exact: true }),
+        ).toBeVisible();
+        await expect(
+            page.getByRole('button', { name: 'Export report', exact: true }),
+        ).toBeEnabled();
+    }
+    for (const item of await page.locator('.insight-nav button').all()) {
+        await item.click();
+        await expect(
+            page.getByRole('button', { name: 'Import report', exact: true }),
+        ).toBeVisible();
+        await expect(
+            page.getByRole('button', { name: 'Export report', exact: true }),
+        ).toBeEnabled();
+    }
+});
+
 test('first launch guides connection without fabricated readings or exports', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByText('NOT CONNECTED', { exact: true })).toBeVisible();
@@ -26,8 +70,9 @@ test('first launch guides connection without fabricated readings or exports', as
     await expect(page.getByText('DEMO MODE', { exact: true })).toHaveCount(0);
     await expect(page.getByLabel('Sample device')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Export report', exact: true })).toBeDisabled();
-    await page.getByRole('button', { name: 'Reports & evidence', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'No diagnostic report yet' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reports & evidence', exact: true })).toHaveCount(
+        0,
+    );
     await page.getByRole('button', { name: 'Overview', exact: true }).click();
     await page.getByRole('button', { name: 'Connect target device', exact: true }).click();
     await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).toBeVisible();
@@ -97,9 +142,8 @@ test('report export requires evidence and website requires verified gateway conf
     await modal.getByRole('button', { name: 'Cancel' }).click();
     await expect(page.getByRole('button', { name: 'Export report', exact: true })).toBeDisabled();
     await openFixture(page);
-    await page.getByRole('button', { name: 'Reports & evidence', exact: true }).click();
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Export diagnostic report', exact: true }).click();
+    await page.getByRole('button', { name: 'Export report', exact: true }).click();
     const download = await downloadPromise;
     const stream = await download.createReadStream();
     const chunks = [];

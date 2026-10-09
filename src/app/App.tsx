@@ -6,9 +6,7 @@ import {
     CircleCheck,
     Command,
     FileInput,
-    FileJson,
     FileOutput,
-    FileText,
     Github,
     Globe,
     Monitor,
@@ -18,6 +16,7 @@ import {
     Unplug,
     X,
     TerminalSquare,
+    FlaskConical,
 } from 'lucide-react';
 import { lazy, Suspense, useState, useRef, useLayoutEffect } from 'react';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
@@ -27,6 +26,8 @@ import { RoundedIcon } from '../components/RoundedIcon';
 import { useDeviceSession } from '../hooks/useDeviceSession';
 import { useDeviceClock } from '../hooks/useDeviceClock';
 import { DeviceClock } from '../components/DeviceClock';
+import { useBoardTests } from '../features/testing/useBoardTests';
+import { TestsPage } from '../features/testing/TestsPage';
 
 import { Nav } from '../components/Nav';
 import { CopyButton } from '../components/CopyButton';
@@ -37,7 +38,6 @@ import { EvidenceModal } from '../features/evidence/EvidenceModal';
 import { DiagnosticsPage } from '../pages/DiagnosticsPage';
 import { EmptyOverview } from '../pages/EmptyOverview';
 import { OverviewPage } from '../pages/OverviewPage';
-import { Reports } from '../pages/ReportsPage';
 import { message } from '../services/errors';
 import type { View } from './view';
 const TerminalPage = lazy(() => import('../features/terminal/TerminalPage'));
@@ -71,6 +71,8 @@ function App() {
         setInterval,
         history,
         busy,
+        testing,
+        setTestingActivity,
         connecting,
         disconnecting,
         resetting,
@@ -92,6 +94,15 @@ function App() {
         exportReport,
         importReport,
     } = useDeviceSession(() => setView('overview'));
+    const boardTests = useBoardTests({
+        transport,
+        generation: activeDevice?.generation,
+        connected,
+        blocked: resetting || connecting || disconnecting || showConnect || showUpdates,
+        collecting: busy,
+        reset: terminalReset,
+        activity: setTestingActivity,
+    });
     const uptimeResult = snapshot?.results.find((result) => result.id === 'uptime');
     const uptimeValue =
         uptimeResult?.status === 'collected'
@@ -121,10 +132,10 @@ function App() {
             ? 'Device overview'
             : view === 'diagnostics'
               ? 'Diagnostic workbench'
-              : view === 'reports'
-                ? 'Reports & evidence'
-                : view === 'terminal'
-                  ? 'Device terminal'
+              : view === 'terminal'
+                ? 'Device terminal'
+                : view === 'tests'
+                  ? 'Manufactural tests'
                   : categoryLabels[view];
     return (
         <div className="app-shell" inert={resetting}>
@@ -156,12 +167,6 @@ function App() {
                         suffix={String(probes.length)}
                     />
                     <Nav
-                        icon={FileText}
-                        label="Reports & evidence"
-                        active={view === 'reports'}
-                        onClick={() => setView('reports')}
-                    />
-                    <Nav
                         icon={TerminalSquare}
                         label="Terminal"
                         active={view === 'terminal'}
@@ -169,6 +174,12 @@ function App() {
                             setTerminalSeen(true);
                             setView('terminal');
                         }}
+                    />
+                    <Nav
+                        icon={FlaskConical}
+                        label="Tests"
+                        active={view === 'tests'}
+                        onClick={() => setView('tests')}
                     />
                 </nav>
                 <DeviceClock {...clock} />
@@ -201,7 +212,11 @@ function App() {
                             aria-label="Check for updates"
                             title="Check for updates"
                             disabled={
-                                resetting || showConnect || showUpdates || Boolean(selectedProbe)
+                                resetting ||
+                                testing ||
+                                showConnect ||
+                                showUpdates ||
+                                Boolean(selectedProbe)
                             }
                             onClick={() => setShowUpdates(true)}
                         >
@@ -235,32 +250,46 @@ function App() {
                             <p>
                                 {view === 'overview'
                                     ? 'Every interface. Every insight. One connected workspace.'
-                                    : view === 'reports'
-                                      ? 'Keep the context. Share the evidence. Make issues reproducible.'
-                                      : view === 'terminal'
-                                        ? 'Run commands on your connected device through SSH.'
+                                    : view === 'terminal'
+                                      ? 'Run commands on your connected device through SSH.'
+                                      : view === 'tests'
+                                        ? 'Reusable tests. Explicit expectations. Evidence you can share.'
                                         : 'Inspect system capabilities and the evidence behind every result.'}
                             </p>
                         </div>
                         <div className="heading-actions">
-                            <button
-                                className="button secondary"
-                                onClick={() => importInput.current?.click()}
-                                disabled={busy || resetting || connecting || disconnecting}
-                            >
-                                <FileInput size={16} />
-                                Import report
-                            </button>
-                            <button
-                                className="button secondary"
-                                onClick={exportReport}
-                                disabled={
-                                    !snapshot || busy || resetting || connecting || disconnecting
-                                }
-                            >
-                                <FileOutput size={16} />
-                                Export report
-                            </button>
+                            {view !== 'terminal' && view !== 'tests' && (
+                                <>
+                                    <button
+                                        className="button secondary"
+                                        onClick={() => importInput.current?.click()}
+                                        disabled={
+                                            busy ||
+                                            testing ||
+                                            resetting ||
+                                            connecting ||
+                                            disconnecting
+                                        }
+                                    >
+                                        <FileInput size={16} />
+                                        Import report
+                                    </button>
+                                    <button
+                                        className="button secondary"
+                                        onClick={exportReport}
+                                        disabled={
+                                            !snapshot ||
+                                            busy ||
+                                            resetting ||
+                                            connecting ||
+                                            disconnecting
+                                        }
+                                    >
+                                        <FileOutput size={16} />
+                                        Export report
+                                    </button>
+                                </>
+                            )}
                             <button
                                 className={`button primary connection-button ${connected ? 'connected' : 'disconnected'}`}
                                 data-connection={connected ? 'connected' : 'disconnected'}
@@ -371,7 +400,9 @@ function App() {
                         </label>
                         <button
                             className="button danger"
-                            disabled={!snapshot || resetting || connecting || disconnecting}
+                            disabled={
+                                !snapshot || testing || resetting || connecting || disconnecting
+                            }
                             onClick={() => void resetData()}
                             title="Clear the current snapshot and graph history from RAM. Saved reports remain on disk."
                         >
@@ -381,13 +412,15 @@ function App() {
                         <span>
                             {resetting
                                 ? 'Resetting session data · live updates paused'
-                                : !connected
-                                  ? 'Connect a target to start updates.'
-                                  : busy || connecting
-                                    ? 'Collecting · next update waits for completion'
-                                    : live
-                                      ? `Next collection in ${interval}s`
-                                      : 'Manual refresh available'}
+                                : testing
+                                  ? 'Functional testing · collection and new terminal input paused'
+                                  : !connected
+                                    ? 'Connect a target to start updates.'
+                                    : busy || connecting
+                                      ? 'Collecting · next update waits for completion'
+                                      : live
+                                        ? `Next collection in ${interval}s`
+                                        : 'Manual refresh available'}
                         </span>
                     </div>
 
@@ -414,6 +447,7 @@ function App() {
                                 visible={view === 'terminal'}
                                 blocked={
                                     resetting ||
+                                    testing ||
                                     connecting ||
                                     disconnecting ||
                                     showConnect ||
@@ -428,14 +462,31 @@ function App() {
                             />
                         </Suspense>
                     )}
-                    {view === 'terminal' ? null : view === 'overview' ? (
+                    {view === 'terminal' && testing && (
+                        <p className="test-notice" role="status">
+                            Terminal input is paused during board testing. Existing remote programs
+                            can still run.
+                        </p>
+                    )}
+                    {view === 'tests' ? (
+                        <TestsPage
+                            key={boardTests.simulated ? 'simulated' : 'connected'}
+                            tests={boardTests}
+                            connected={connected}
+                            collecting={busy}
+                            onConnect={() => {
+                                setError('');
+                                setShowConnect(true);
+                            }}
+                        />
+                    ) : view === 'terminal' ? null : view === 'overview' ? (
                         snapshot || workspaceReady ? (
                             <OverviewPage
                                 snapshot={snapshot}
                                 imported={imported}
                                 connected={connected}
                                 native={Boolean(bridge)}
-                                busy={busy}
+                                busy={busy || testing}
                                 connecting={connecting}
                                 disconnecting={disconnecting}
                                 live={live}
@@ -451,34 +502,6 @@ function App() {
                                 }}
                                 onImport={() => importInput.current?.click()}
                             />
-                        )
-                    ) : view === 'reports' ? (
-                        snapshot || workspaceReady ? (
-                            <Reports
-                                snapshot={snapshot}
-                                imported={imported}
-                                onExport={exportReport}
-                                onImport={() => importInput.current?.click()}
-                            />
-                        ) : (
-                            <section className="panel reports-panel">
-                                <span className="report-illustration">
-                                    <FileJson size={48} />
-                                </span>
-                                <h2>No diagnostic report yet</h2>
-                                <p>
-                                    Connect a target device to collect a snapshot, or import a
-                                    previously saved report. Export becomes available when there is
-                                    evidence to save.
-                                </p>
-                                <button
-                                    className="button secondary"
-                                    onClick={() => importInput.current?.click()}
-                                >
-                                    <FileInput size={17} />
-                                    Import report
-                                </button>
-                            </section>
                         )
                     ) : (
                         <DiagnosticsPage

@@ -1478,70 +1478,6 @@ h1 {
     font-size: 20px;
     overflow-wrap: anywhere;
 }
-.reports-panel {
-    padding: 48px 35px;
-    display: flex;
-    align-items: center;
-    flex-direction: column;
-    text-align: center;
-}
-.report-illustration {
-    display: grid;
-    place-items: center;
-    background: #d6c7f5;
-    color: #483363;
-    width: 100px;
-    height: 110px;
-    border-radius: 28px;
-    margin-bottom: 28px;
-    transform: rotate(-8deg);
-}
-.reports-panel h2 {
-    font-size: 34px;
-    letter-spacing: -1px;
-    font-weight: 500;
-    margin-top: 24px;
-}
-.reports-panel > p {
-    max-width: 520px;
-    color: #b5c0d1;
-    font-size: 13px;
-    line-height: 1.9;
-    margin-top: 18px;
-}
-.report-details {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    text-align: left;
-    gap: 23px 30px;
-    background: #222732;
-    padding: 25px 30px;
-    border-radius: 20px;
-    margin: 30px 0;
-    width: 100%;
-    max-width: 570px;
-}
-.report-details span {
-    color: #acb9ce;
-    font-size: 13px;
-    display: block;
-    margin-bottom: 8px;
-}
-.report-details strong {
-    font-size: 13px;
-    color: #e0e9f8;
-    font-weight: 550;
-    overflow-wrap: anywhere;
-}
-.report-note {
-    margin-top: 24px;
-    display: flex;
-    gap: 7px;
-    align-items: center;
-    color: #aab8cc;
-    font-size: 13px;
-    line-height: 1.8;
-}
 .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -2229,19 +2165,6 @@ h1 {
     }
     .probe-grid {
         grid-template-columns: 1fr;
-    }
-    .reports-panel {
-        padding: 35px 22px;
-    }
-    .reports-panel h2 {
-        font-size: 28px;
-    }
-    .report-details {
-        grid-template-columns: 1fr;
-        padding: 22px;
-    }
-    .report-note {
-        font-size: 13px;
     }
     .modal-backdrop {
         padding: 13px;

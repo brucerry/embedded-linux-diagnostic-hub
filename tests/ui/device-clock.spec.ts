@@ -48,7 +48,7 @@ test('device clock is global, accessible and responsive independently of browser
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: '.codex/device-clock-compact-design-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 950 });
-    for (const name of ['Diagnostics 36', 'Reports & evidence', 'Terminal', 'Overview']) {
+    for (const name of ['Diagnostics 36', 'Tests', 'Terminal', 'Overview']) {
         await page.locator('.primary-nav').getByRole('button', { name, exact: true }).click();
         await expect(clock(page)).toBeVisible();
     }
