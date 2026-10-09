@@ -54,7 +54,7 @@ jobs:
                   path: release
             - name: Check release assets
               run: node scripts/verify-release.mjs --assets
-            - name: Summarize every commit since the previous published release
+            - name: Prepare concise release notes and link the full comparison
               env:
                   GH_TOKEN: ${{ github.token }}
               run: node scripts/release-notes.mjs

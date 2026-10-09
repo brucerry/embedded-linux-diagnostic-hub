@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { previousRelease, commitNotes } from '../scripts/lib/release-notes.mjs';
+import { previousRelease, commitNotes, releasePageNotes } from '../scripts/lib/release-notes.mjs';
 
 test('release baseline includes published prereleases and excludes drafts/current/unreleased tags', () => {
     assert.equal(
@@ -66,6 +66,36 @@ test('release notes include all commits after the published baseline, including 
         assert.ok(notes.includes('compare/v0.1.0...v0.2.0-rc.1'));
         assert.match(notes, /Features/);
         assert.match(notes, /Fixes/);
+        const page = releasePageNotes({
+            repository: 'owner/repository',
+            currentTag: 'v0.2.0-rc.1',
+            previousTag: 'v0.1.0',
+            cwd: root,
+            highlights: '- Important update.\n\n[Guide](https://example.invalid/guide)',
+            packageNotes: 'Long package explanation that belongs in the download guide.',
+        });
+        assert.match(page, /Important update/);
+        assert.match(page, /\[Guide\]/);
+        assert.match(page, /compare\/v0.1.0\.\.\.v0.2.0-rc.1/);
+        assert.doesNotMatch(page, /Long package explanation|commits included|### Features/);
+        assert.ok(!page.includes(`/commit/${first}`));
+        const fallback = releasePageNotes({
+            repository: 'owner/repository',
+            currentTag: 'v0.1.0',
+            previousTag: null,
+            cwd: root,
+            packageNotes: 'Portable engineering preview.',
+        });
+        assert.match(fallback, /Portable engineering preview/);
+        assert.match(fallback, /tree\/v0.1.0/);
+        assert.throws(() =>
+            releasePageNotes({
+                repository: 'owner/repository',
+                currentTag: 'v0.1.0',
+                previousTag: null,
+                cwd: root,
+            }),
+        );
         const initial = commitNotes({
             repository: 'owner/repository',
             currentTag: 'v0.1.0',

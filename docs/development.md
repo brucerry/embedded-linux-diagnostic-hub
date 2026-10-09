@@ -161,7 +161,9 @@ backup/download/relaunch failures and bounded recovery. The browser update/reset
 cancellation, report restoration, collection pause/resume and fresh graph history. The native
 AppImage test performs a real coordinated smart update from a connected loopback device and checks
 the imported report with SSH disconnected after restart. Release-note tests use an isolated Git
-repository to cover direct and merged commits between published version tags.
+repository to cover direct and merged commits between published version tags. Keep public release
+notes in `docs/releases/<tag>.md` to a few important changes and links to detailed guides. The
+release page uses those notes and links the full comparison against the previous published release.
 
 Terminal verification lives in `tests/terminal*.test.ts`, `tests/ui/terminal.spec.ts`, and the
 native smoke suite. Browser interaction cases also cover automatic startup before tab selection,

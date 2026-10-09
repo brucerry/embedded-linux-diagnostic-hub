@@ -36,7 +36,7 @@ if (process.argv.includes('--assets')) {
             : 'Unsigned engineering preview. Windows may show an unknown-publisher warning.';
     await writeFile(
         'release/notes.md',
-        `Portable Windows 10/11 x64 and Linux x64 desktop applications, relocatable static website, and lab SSH gateway package.\n\n${signing}\n\nDownload Diagnostic-Hub.exe on Windows, or Diagnostic-Hub-linux-x64.AppImage on Linux. Download-and-run commands require no administrator privileges; see docs/downloads.md. Linux PC acceptance is still pending. Windows/Linux 32-bit desktops are not supported by this Electron runtime. The desktop connects over SSH without internet; the website needs a separately deployed HTTPS gateway. See the repository README for setup and validation limits.\n\nCommit: ${info.commit}\n`,
+        `Portable Windows and Linux x64 apps, website, and SSH gateway.\n\n${signing}\n\n[Downloads and setup](https://github.com/${process.env.GITHUB_REPOSITORY ?? 'brucerry/embedded-linux-diagnostic-hub'}/blob/v${version}/docs/downloads.md). Commit: ${info.commit}\n`,
     );
 }
 console.log(`Release version verified: v${version}`);

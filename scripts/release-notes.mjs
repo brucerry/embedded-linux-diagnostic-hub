@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { previousRelease, commitNotes } from './lib/release-notes.mjs';
+import { previousRelease, releasePageNotes } from './lib/release-notes.mjs';
 
 const repository = process.env.GITHUB_REPOSITORY;
 const currentTag = process.env.GITHUB_REF_NAME;
@@ -36,6 +36,6 @@ try {
 const packageNotes = await readFile('release/notes.md', 'utf8');
 await writeFile(
     'release/notes.md',
-    `${highlights ? `${highlights.trim()}\n\n` : ''}${packageNotes.trim()}\n\n${commitNotes({ repository, currentTag, previousTag })}`,
+    releasePageNotes({ repository, currentTag, previousTag, highlights, packageNotes }),
 );
 console.log(`Release notes prepared: ${previousTag ?? 'repository start'} -> ${currentTag}`);

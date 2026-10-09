@@ -21,7 +21,7 @@ function escape(value) {
     return value.replace(/[\\`*_[\]<>]/g, '\\$&').replace(/[\r\n]+/g, ' ');
 }
 
-export function commitNotes({ repository, currentTag, previousTag, cwd = process.cwd() }) {
+function releaseRange({ repository, currentTag, previousTag, cwd = process.cwd() }) {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw Error('Invalid GitHub repository.');
     for (const tag of [currentTag, previousTag].filter(Boolean)) {
         if (!/^v\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(tag)) throw Error(`Invalid release tag: ${tag}`);
@@ -34,9 +34,13 @@ export function commitNotes({ repository, currentTag, previousTag, cwd = process
             cwd,
         );
     }
-    const range = previousTag
+    return previousTag
         ? `refs/tags/${previousTag}..refs/tags/${currentTag}`
         : `refs/tags/${currentTag}`;
+}
+
+export function commitNotes({ repository, currentTag, previousTag, cwd = process.cwd() }) {
+    const range = releaseRange({ repository, currentTag, previousTag, cwd });
     const fields = git(['log', '--reverse', '--format=%H%x00%s%x00%an%x00', range], cwd).split(
         '\0',
     );
@@ -69,4 +73,21 @@ export function commitNotes({ repository, currentTag, previousTag, cwd = process
         ? `\n[Full comparison](https://github.com/${repository}/compare/${previousTag}...${currentTag})\n`
         : '';
     return `## ${heading}\n\n${count} commit${count === 1 ? '' : 's'} included. Draft releases and unreleased tags are not used as the baseline.\n${compare}\n${[...groups].map(([title, lines]) => `### ${title}\n\n${lines.join('\n')}`).join('\n\n')}\n`;
+}
+
+export function releasePageNotes({
+    repository,
+    currentTag,
+    previousTag,
+    highlights = '',
+    packageNotes = '',
+    cwd = process.cwd(),
+}) {
+    releaseRange({ repository, currentTag, previousTag, cwd });
+    const body = highlights.trim() || packageNotes.trim();
+    if (!body) throw Error('Release notes cannot be empty.');
+    const changes = previousTag
+        ? `[Full changes](https://github.com/${repository}/compare/${previousTag}...${currentTag})`
+        : `[Source](https://github.com/${repository}/tree/${currentTag})`;
+    return `${body}\n\n${changes}\n`;
 }
