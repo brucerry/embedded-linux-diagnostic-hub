@@ -7,10 +7,17 @@ owns connection state, periodic scheduling, snapshots, graph history and report 
 editions use these same modules. The hook selects the native preload bridge on desktop or
 `src/services/GatewayClient.ts` in the browser.
 
-Page modules render overview, diagnostic search/cards and reports. Feature modules implement the
-connection dialog, evidence tables/trees/graphs and animated transfer artwork. Common components
-provide modal focus/scroll management, status badges, copy feedback and rounded icons. Preserve
-component identity during live updates so focus, expanded trees and scroll positions remain stable.
+Page modules render overview and diagnostic search/cards. Feature modules implement the connection
+dialog, evidence tables/trees/graphs, terminal, test workspace and animated transfer artwork. Common
+components provide modal focus/scroll management, status badges, copy feedback and rounded icons.
+Preserve component identity during live updates so focus, expanded trees and scroll positions remain
+stable.
+
+`src/features/testing/useBoardTests.ts` maintains independent connected and simulated workspaces.
+Switching sources preserves only that source's settings; connection generation changes invalidate
+connected setup and ignore late replies. The test page remounts on source changes to clear temporary
+copy feedback, while modes and editor state live in the corresponding source hook. Diagnostic report
+actions belong to diagnostic pages; Tests owns its separate test-report import and export controls.
 
 `src/services/history.ts` prepares numeric history in a short-lived Web Worker to keep collection
 parsing off the UI thread. Each worker receives evidence and the previous numeric sample, then

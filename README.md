@@ -8,7 +8,8 @@
 
 A desktop and web workbench for diagnosing embedded Linux devices over SSH. Inspect system
 resources, interfaces, hardware and logs with read-only checks, live graphs and local JSON reports.
-Use the embedded terminal for interactive device commands.
+Use the embedded terminal for interactive device commands. The **Tests** workspace runs reviewed
+board profiles and exports separate test evidence.
 
 [Download a release](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases) ·
 [Open the website](https://brucerry.github.io/embedded-linux-diagnostic-hub/)
@@ -47,6 +48,7 @@ substantial changes, open an issue describing the problem and affected environme
 ## Guides
 
 - [Using the app](docs/usage.md): snapshots, reports, terminal shortcuts and updates.
+- [Board testing](docs/board-testing.md): profiles, fixtures, simulation and optional PDF reports.
 - [Website setup](docs/website.md) and [gateway deployment](docs/gateway.md).
 - [Architecture](docs/architecture.md), [design](docs/design.md) and
   [hardware coverage](docs/hardware.md).

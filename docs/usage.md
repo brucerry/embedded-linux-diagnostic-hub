@@ -36,9 +36,11 @@ that shell and does not change the header's source.
 
 ## Reports and session data
 
-**Import report** and **Export report** work locally in both editions. Imported reports are labeled
-as historical evidence and do not execute their recorded commands. Connect a device to collect new
-readings. Report files contain diagnostic evidence, not credentials or terminal transcripts.
+**Import report** and **Export report** work locally on diagnostic pages in both editions. Terminal
+and Tests omit these diagnostic actions; Tests has [separate test reports](board-test-reports.md).
+Imported diagnostic reports are labeled as historical evidence and do not execute their recorded
+commands. Connect a device to collect new readings. Report files contain diagnostic evidence, not
+credentials or terminal transcripts.
 
 Snapshots, graph history and terminal history stay in RAM. Explicit report exports, desktop update
 report backups and trusted desktop SSH fingerprints are saved to disk.
