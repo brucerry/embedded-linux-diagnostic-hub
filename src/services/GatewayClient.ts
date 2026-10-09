@@ -4,6 +4,16 @@ import {
     type DeviceClockResponse,
 } from '../../shared/diagnostics/device-clock';
 import type { ConnectOptions, Snapshot } from '../../shared/types';
+import { validateInventory } from '../../shared/testing/inventory';
+import { preparePlan, validateProfile } from '../../shared/testing/profile';
+import { validateRun } from '../../shared/testing/report';
+import {
+    REPORT_BYTES,
+    type BoardProfile,
+    type StartTests,
+    type TestingTransport,
+    type TestRun,
+} from '../../shared/testing/types';
 import {
     terminalEvent,
     terminalId,
@@ -20,7 +30,7 @@ export interface GatewaySettings {
     token: string;
 }
 
-export class GatewayClient implements TerminalTransport {
+export class GatewayClient implements TerminalTransport, TestingTransport {
     readonly url: string;
     private sessionId = '';
     private listeners = new Set<() => void>();
@@ -81,7 +91,7 @@ export class GatewayClient implements TerminalTransport {
         route: string,
         method = 'GET',
         data?: unknown,
-        options?: { signal?: AbortSignal; clock?: boolean },
+        options?: { signal?: AbortSignal; clock?: boolean; testing?: boolean },
     ): Promise<Record<string, unknown>> {
         const sessionAtStart = this.sessionId;
         let response: Response;
@@ -104,7 +114,29 @@ export class GatewayClient implements TerminalTransport {
         }
         let payload: Record<string, unknown>;
         try {
-            payload = await response.json();
+            if (options?.testing) {
+                const reader = response.body?.getReader();
+                if (!reader) throw Error('Missing testing response.');
+                let bytes = 0,
+                    content = '';
+                const decoder = new TextDecoder();
+                try {
+                    while (true) {
+                        const part = await reader.read();
+                        if (part.done) break;
+                        bytes += part.value.byteLength;
+                        if (bytes > REPORT_BYTES) {
+                            await reader.cancel();
+                            throw Error('Testing response exceeds limits.');
+                        }
+                        content += decoder.decode(part.value, { stream: true });
+                    }
+                    content += decoder.decode();
+                    payload = JSON.parse(content);
+                } finally {
+                    reader.releaseLock();
+                }
+            } else payload = await response.json();
         } catch {
             throw new Error('The gateway returned an invalid response.');
         }
@@ -114,7 +146,12 @@ export class GatewayClient implements TerminalTransport {
                 this.sessionId === sessionAtStart &&
                 [401, 404].includes(response.status) &&
                 !route.includes('/terminal') &&
-                !(options?.clock && response.status === 404)
+                !(options?.clock && response.status === 404) &&
+                !(
+                    options?.testing &&
+                    response.status === 404 &&
+                    payload.error === 'Unknown gateway route.'
+                )
             ) {
                 this.sessionId = '';
                 this.stopLifecycle();
@@ -122,6 +159,14 @@ export class GatewayClient implements TerminalTransport {
             }
             if (options?.clock && response.status === 404)
                 return { status: 'unavailable', reason: 'unsupported' };
+            if (
+                options?.testing &&
+                response.status === 404 &&
+                payload.error === 'Unknown gateway route.'
+            )
+                throw Error(
+                    'This gateway does not support board testing. Update the gateway to use Tests.',
+                );
             throw new Error(
                 typeof payload.error === 'string'
                     ? payload.error
@@ -164,6 +209,46 @@ export class GatewayClient implements TerminalTransport {
             await this.request(`/api/sessions/${this.sessionId}/snapshot`, 'POST'),
             true,
         );
+    }
+
+    private async testRequest(route: string, method: string, data?: unknown) {
+        const session = this.sessionId;
+        if (!session) throw Error('Connect through a gateway first.');
+        const result = await this.request(`/api/sessions/${session}/tests/${route}`, method, data, {
+            testing: true,
+            signal: AbortSignal.timeout(65000),
+        });
+        if (session !== this.sessionId) throw Error('Device connection changed.');
+        return result;
+    }
+    async discoverTests() {
+        return validateInventory(await this.testRequest('inventory', 'POST'));
+    }
+    async clearTests() {
+        await this.testRequest('clear', 'POST', {});
+    }
+    async prepareTests(profile: BoardProfile) {
+        const result = await this.testRequest('prepare', 'POST', {
+            profile: validateProfile(profile),
+        });
+        return preparePlan(validateProfile(result.profile), validateInventory(result.inventory));
+    }
+    async startTests(request: StartTests) {
+        return validateRun(await this.testRequest('start', 'POST', request));
+    }
+    async readTestRun(): Promise<TestRun | null> {
+        const response = await this.testRequest('run', 'GET');
+        return response.run === null ? null : validateRun(response.run);
+    }
+    async cancelTests(id: string) {
+        return validateRun(await this.testRequest('cancel', 'POST', { id }));
+    }
+    async confirmTest(request: {
+        runId: string;
+        testId: string;
+        value: 'yes' | 'no' | 'unobserved';
+    }) {
+        return validateRun(await this.testRequest('confirm', 'POST', request));
     }
 
     async readDeviceClock(): Promise<DeviceClockResponse> {

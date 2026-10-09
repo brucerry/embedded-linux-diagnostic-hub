@@ -49,7 +49,14 @@ export interface HostKeyVerification {
     saved?: string;
 }
 
-export interface DesktopBridge extends Partial<import('./terminal').TerminalTransport> {
+export interface DesktopBridge
+    extends
+        Partial<import('./terminal').TerminalTransport>,
+        Partial<import('./testing/types').TestingTransport> {
+    exportTestReport?(
+        format: import('./testing/types').ReportFormat,
+        report?: import('./testing/types').TestReport,
+    ): Promise<boolean>;
     checkUpdates(includePrereleases: boolean): Promise<UpdateStatus>;
     startUpdate(request: UpdateRequest): Promise<void>;
     readUpdateReport(): Promise<UpdateRecovery | null>;

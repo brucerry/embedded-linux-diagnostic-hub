@@ -22,6 +22,8 @@ import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
 import { UpdateCoordinator } from './update-coordinator';
 import { UpdateReports } from './update-reports';
+import { createTestReport, validateTestReport, reportHtml } from '../shared/testing/report';
+import { renderTestPdf } from './test-documents';
 
 const development = process.argv.includes('--dev') && !app.isPackaged;
 const appUrl = development ? 'http://127.0.0.1:5173/' : 'app://bundle/index.html';
@@ -187,9 +189,10 @@ app.whenReady().then(async () => {
             connecting = false;
         }
     });
-    registerHandler('hub:disconnect', () => {
+    registerHandler('hub:disconnect', async () => {
         if (connecting || ssh.isCollecting)
             throw new Error('Wait for the current connection or collection to finish.');
+        await ssh.cancelTestWork();
         ssh.clear();
     });
     registerHandler('hub:terminal-open', (request) => {
@@ -241,13 +244,74 @@ app.whenReady().then(async () => {
         if (update.active) throw new Error('An update is already in progress.');
         return updater.check(includePrereleases as boolean);
     });
-    registerHandler('hub:start-update', (request) => update.start(request));
+    registerHandler('hub:start-update', (request) => {
+        if (ssh.isTesting) throw Error('Cancel testing and wait for cleanup before updating.');
+        return update.start(request);
+    });
     registerHandler('hub:read-update-report', () => reports.read());
     registerHandler('hub:clear-session-data', () => {
         if (update.active) throw new Error('Wait for the update to finish before resetting data.');
         if (connecting || collectionTask || ssh.isCollecting)
             throw new Error('Wait for the current connection or collection to finish.');
+        ssh.clearTestData();
         lastSnapshot = null;
+    });
+    const allowTesting = () => {
+        if (connecting || update.active) throw Error('Testing is paused for connection or update.');
+    };
+    registerHandler('hub:tests-discover', () => {
+        allowTesting();
+        return ssh.discoverTests();
+    });
+    registerHandler('hub:tests-prepare', (profile) => {
+        allowTesting();
+        return ssh.prepareTests(profile);
+    });
+    registerHandler('hub:tests-start', (request) => {
+        allowTesting();
+        return ssh.startTests(request);
+    });
+    registerHandler('hub:tests-run', () => ssh.readTestRun());
+    registerHandler('hub:tests-clear', () => {
+        allowTesting();
+        ssh.clearTestData();
+    });
+    registerHandler('hub:tests-cancel', (id) => ssh.cancelTests(id));
+    registerHandler('hub:tests-confirm', (request) => {
+        allowTesting();
+        return ssh.confirmTest(request);
+    });
+    registerHandler('hub:tests-export', async (format, supplied) => {
+        if (!['json', 'html', 'pdf'].includes(String(format)))
+            throw Error('Unsupported test report format.');
+        let report;
+        if (supplied !== undefined) {
+            report = await validateTestReport(supplied);
+            if (report.run.mode === 'ssh') report.imported = true;
+        } else {
+            const run = ssh.readTestRun();
+            if (!run) throw Error('Run or import board tests before exporting.');
+            report = createTestReport(run);
+        }
+        const choice = await dialog.showSaveDialog(window, {
+            title: 'Export board test report',
+            defaultPath: `board-test-${report.run.mode}-${report.run.id}.${format}`,
+            filters: [
+                {
+                    name: `${String(format).toUpperCase()} test report`,
+                    extensions: [String(format)],
+                },
+            ],
+        });
+        if (choice.canceled || !choice.filePath) return false;
+        const content =
+            format === 'pdf'
+                ? await renderTestPdf(report)
+                : format === 'html'
+                  ? reportHtml(report)
+                  : JSON.stringify(report, null, 4);
+        await writeFile(choice.filePath, content);
+        return true;
     });
     registerHandler('hub:acknowledge-update-report', (id) => {
         if (typeof id !== 'string') throw new Error('Invalid saved update report.');

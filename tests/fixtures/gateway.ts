@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { Server, utils, type Session } from 'ssh2';
+import { Server, utils, type Session, type ServerChannel } from 'ssh2';
 import { fingerprint } from '../../backend/ssh/session';
 import { createGateway } from '../../gateway/server';
 import { probes } from '../../shared/diagnostics/probes';
@@ -15,6 +15,7 @@ export async function gatewayFixture(
         probeDelayMs?: number;
         probeOutput?: { stdout: string; stderr: string };
         origin?: string;
+        exec?: (command: string, channel: ServerChannel) => boolean;
     } = {},
 ) {
     const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -73,6 +74,7 @@ export async function gatewayFixture(
                 else attachTerminalFixture(session, terminal);
                 session.on('exec', (acceptExec, _reject, info) => {
                     const channel = acceptExec();
+                    if (options.exec?.(info.command, channel)) return;
                     if (info.command.endsWith(DEVICE_CLOCK_COMMAND)) {
                         channel.resume();
                         channel.on('end', () => channel.close());
@@ -153,7 +155,7 @@ export async function gatewayFixture(
             host: '127.0.0.1',
             port: sshPort,
             username: 'engineer',
-            auth: 'password',
+            auth: 'password' as const,
             password: 'device-test-password',
             expectedFingerprint: pinned,
         },

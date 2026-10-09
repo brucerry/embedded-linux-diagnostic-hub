@@ -19,12 +19,45 @@ export class DeviceMonitor {
         return this.session.isConnected;
     }
 
+    get isTesting() {
+        return this.session.isTesting;
+    }
+    discoverTests() {
+        return this.session.discoverTests();
+    }
+    prepareTests(profile: unknown) {
+        return this.session.prepareTests(profile);
+    }
+    startTests(request: unknown) {
+        if (this.running) throw Error('Wait for collection to finish.');
+        return this.session.startTests(request);
+    }
+    readTestRun() {
+        return this.session.readTestRun();
+    }
+    cancelTests(id: unknown) {
+        return this.session.cancelTests(id);
+    }
+    cancelTestWork() {
+        return this.session.cancelTestWork();
+    }
+    confirmTest(request: unknown) {
+        return this.session.confirmTest(request);
+    }
+    clearTestData() {
+        this.session.clearTestData();
+    }
+
     async configure(
         options: ConnectOptions,
         verify: (key: string) => Promise<boolean>,
         key?: Buffer,
     ): Promise<void> {
         if (this.running) throw new Error('Wait for the current collection to finish.');
+        if (this.isTesting)
+            throw Error(
+                'Cancel the active tests and wait for cleanup before connecting another target.',
+            );
         this.clear();
         await this.session.connect(options, verify, key);
     }

@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { SshSession, validateConnection } from '../backend/ssh/session';
 import { GatewayTerminal, TerminalHttpError } from './terminal';
+import { object } from '../shared/testing/validation';
 
 export interface GatewayTarget {
     host: string;
@@ -56,7 +57,14 @@ export function createGateway(config: GatewayConfig) {
     const tokenHash = createHash('sha256').update(config.token).digest();
     const sessions = new Map<
         string,
-        { ssh: SshSession; terminal: GatewayTerminal; touched: number; busy: boolean }
+        {
+            ssh: SshSession;
+            terminal: GatewayTerminal;
+            touched: number;
+            busy: boolean;
+            testWindow?: number;
+            testRequests?: number;
+        }
     >();
     const maxSessions = config.maxSessions ?? 8;
     let pending = 0;
@@ -67,7 +75,7 @@ export function createGateway(config: GatewayConfig) {
     const idleMs = config.idleMs ?? 10 * 60_000;
     const cleanup = setInterval(() => {
         for (const [id, session] of sessions) {
-            if (!session.busy && Date.now() - session.touched > idleMs) {
+            if (!session.busy && !session.ssh.isTesting && Date.now() - session.touched > idleMs) {
                 session.ssh.disconnect();
                 sessions.delete(id);
             }
@@ -171,7 +179,8 @@ export function createGateway(config: GatewayConfig) {
             /^\/api\/sessions\/[A-Za-z0-9_-]{32}\/terminal\/[A-Za-z0-9_-]{16,64}\/(input|resize)$/.test(
                 url.pathname,
             );
-        if (!terminalTraffic && ++requests > 120)
+        const testTraffic = /^\/api\/sessions\/[A-Za-z0-9_-]{32}\/tests\//.test(url.pathname);
+        if (!terminalTraffic && !testTraffic && ++requests > 120)
             throw new ApiError(429, 'Gateway request limit reached. Try again in a minute.');
         if (req.method === 'GET' && url.pathname === '/api/health') {
             send(res, 200, { version: APP_VERSION, activeSessions: sessions.size });
@@ -287,7 +296,7 @@ export function createGateway(config: GatewayConfig) {
         }
 
         const match = url.pathname.match(
-            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:clock|snapshot|heartbeat|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
+            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:clock|snapshot|heartbeat|tests\/(?:inventory|prepare|start|run|cancel|confirm|clear)|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
         );
         if (match) {
             const active = sessions.get(match[1]);
@@ -297,6 +306,58 @@ export function createGateway(config: GatewayConfig) {
                     'Session expired or the device disconnected. Reconnect to collect.',
                 );
             active.touched = Date.now();
+            if (match[2]?.startsWith('/tests/')) {
+                if (Date.now() - (active.testWindow ?? 0) > 60000) {
+                    active.testWindow = Date.now();
+                    active.testRequests = 0;
+                }
+                active.testRequests = (active.testRequests ?? 0) + 1;
+                if (active.testRequests > 120)
+                    throw new ApiError(429, 'Testing request rate exceeded. Wait before retrying.');
+                if (req.method === 'GET' && match[2] === '/tests/run') {
+                    send(res, 200, { run: active.ssh.readTestRun() });
+                    return;
+                }
+                if (req.method === 'POST' && match[2] === '/tests/inventory') {
+                    if (
+                        Number(req.headers['content-length'] ?? 0) > 0 ||
+                        req.headers['transfer-encoding']
+                    )
+                        throw new ApiError(400, 'Discovery accepts no command or request data.');
+                    send(res, 200, await active.ssh.discoverTests());
+                    return;
+                }
+                if (req.method === 'POST') {
+                    const payload = await body(req);
+                    if (match[2] === '/tests/clear') {
+                        object(payload, [], 'Clear tests');
+                        active.ssh.clearTestData();
+                        send(res, 200, { cleared: true });
+                        return;
+                    }
+                    if (match[2] === '/tests/prepare') {
+                        object(payload, ['profile'], 'Preparation');
+                        send(res, 200, await active.ssh.prepareTests(payload.profile));
+                        return;
+                    }
+                    if (match[2] === '/tests/start') {
+                        if (active.busy)
+                            throw new ApiError(409, 'Wait for the current collection to finish.');
+                        send(res, 202, await active.ssh.startTests(payload));
+                        return;
+                    }
+                    if (match[2] === '/tests/cancel') {
+                        object(payload, ['id'], 'Cancellation');
+                        send(res, 200, await active.ssh.cancelTests(payload.id));
+                        return;
+                    }
+                    if (match[2] === '/tests/confirm') {
+                        send(res, 200, active.ssh.confirmTest(payload));
+                        return;
+                    }
+                }
+                throw new ApiError(405, 'Unsupported testing operation.');
+            }
             if (
                 match[2]?.startsWith('/terminal') &&
                 (await active.terminal.handle(
@@ -311,6 +372,7 @@ export function createGateway(config: GatewayConfig) {
             if (req.method === 'DELETE' && !match[2]) {
                 if (active.busy)
                     throw new ApiError(409, 'Wait for the current device operation to finish.');
+                await active.ssh.cancelTestWork();
                 active.ssh.disconnect();
                 sessions.delete(match[1]);
                 send(res, 200, { disconnected: true });
@@ -343,7 +405,8 @@ export function createGateway(config: GatewayConfig) {
                 return;
             }
             if (req.method === 'POST' && match[2] === '/snapshot') {
-                if (active.busy) throw new ApiError(409, 'A collection is already running.');
+                if (active.busy || active.ssh.isTesting)
+                    throw new ApiError(409, 'Collection is paused while device work is running.');
                 active.busy = true;
                 const aborted = () => {
                     if (!res.writableEnded) {

@@ -18,6 +18,12 @@ import {
     type TerminalOpen,
 } from '../../shared/terminal';
 import { SshTerminal } from './terminal';
+import { TestController } from '../../shared/testing/runner';
+import { activeRun, INVENTORY_BYTES } from '../../shared/testing/types';
+import { parseDiscovery } from '../../shared/testing/inventory';
+import { DISCOVERY_COMMAND } from '../testing/discovery';
+import { executeBounded } from '../testing/executor';
+import { executeAdapter } from '../testing/adapters';
 
 export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const PROBE_TIMEOUT_MS = 12_000;
@@ -66,6 +72,8 @@ export class SshSession {
     private ready = false;
     private terminal: SshTerminal | null = null;
     private cancelClock?: () => void;
+    private tests: TestController | null = null;
+    private testDiscoveryAbort?: AbortController;
 
     constructor(private readonly onDisconnected: () => void = () => {}) {}
 
@@ -109,6 +117,43 @@ export class SshSession {
                 }
                 ready = true;
                 this.ready = true;
+                this.tests = new TestController(
+                    async () => {
+                        if (this.client !== client || !this.ready)
+                            throw Error('Connect to a device first.');
+                        if (this.testDiscoveryAbort)
+                            throw Error('A test discovery is already running.');
+                        const controller = new AbortController();
+                        this.testDiscoveryAbort = controller;
+                        try {
+                            const output = await executeBounded(
+                                client,
+                                DISCOVERY_COMMAND,
+                                controller.signal,
+                                45000,
+                                INVENTORY_BYTES,
+                            );
+                            if (
+                                this.client !== client ||
+                                output.exitCode !== 0 ||
+                                output.truncated ||
+                                output.interrupted
+                            )
+                                throw Error(
+                                    'Device discovery failed or exceeded its limits. Check device access and supported utilities.',
+                                );
+                            return parseDiscovery(
+                                output.stdout,
+                                `${options.host}:${options.port}`,
+                                options.username,
+                            );
+                        } finally {
+                            if (this.testDiscoveryAbort === controller)
+                                this.testDiscoveryAbort = undefined;
+                        }
+                    },
+                    (request, signal) => executeAdapter(client, request, signal),
+                );
                 finish();
             });
             client.on('error', (error) => {
@@ -118,6 +163,8 @@ export class SshSession {
                 if (!ready)
                     finish(new Error('SSH connection closed before authentication completed.'));
                 if (this.client === client) {
+                    this.tests?.interrupt('Device disconnected before the run finished.');
+                    this.testDiscoveryAbort?.abort();
                     this.cancelClock?.();
                     this.terminal?.close();
                     this.ready = false;
@@ -148,6 +195,9 @@ export class SshSession {
     }
 
     disconnect(): void {
+        this.tests?.interrupt('Device connection ended.');
+        this.testDiscoveryAbort?.abort();
+        this.testDiscoveryAbort = undefined;
         this.cancelClock?.();
         this.terminal?.close();
         this.ready = false;
@@ -159,6 +209,42 @@ export class SshSession {
 
     get isConnected(): boolean {
         return this.ready && this.client !== null && this.options !== null;
+    }
+
+    get isTesting(): boolean {
+        return this.tests?.busy ?? false;
+    }
+    private testController(): TestController {
+        if (!this.isConnected || !this.tests) throw Error('Connect to a device first.');
+        return this.tests;
+    }
+    discoverTests() {
+        return this.testController().discoverInventory();
+    }
+    prepareTests(profile: unknown) {
+        return this.testController().prepare(profile);
+    }
+    startTests(request: unknown) {
+        if (this.collecting)
+            throw Error('Wait for the current collection to finish before testing.');
+        return this.testController().start(request);
+    }
+    readTestRun() {
+        return this.tests?.readProgress() ?? null;
+    }
+    async cancelTestWork() {
+        this.testDiscoveryAbort?.abort();
+        const run = this.tests?.read();
+        if (activeRun(run ?? null)) await this.tests!.cancel(run!.id);
+    }
+    cancelTests(id: unknown) {
+        return this.testController().cancel(id);
+    }
+    confirmTest(request: unknown) {
+        return this.testController().confirm(request);
+    }
+    clearTestData() {
+        this.tests?.clear();
     }
 
     async readClock(signal?: AbortSignal): Promise<DeviceClockResponse> {
@@ -235,9 +321,15 @@ export class SshSession {
         const size = terminalSize(input);
         if (!this.isConnected || !this.client) throw Error('Connect to a device first.');
         if (this.terminal) throw Error('A terminal is already active for this device.');
-        const terminal = new SshTerminal({ id, ...size }, emit, () => {
-            if (this.terminal === terminal) this.terminal = null;
-        });
+        const terminal = new SshTerminal(
+            { id, ...size },
+            emit,
+            () => {
+                if (this.terminal === terminal) this.terminal = null;
+            },
+            undefined,
+            () => this.isTesting,
+        );
         this.terminal = terminal;
         await terminal.open(this.client, size);
     }
@@ -252,6 +344,8 @@ export class SshSession {
         const client = this.client;
         const options = this.options;
         if (!client || !options) throw new Error('Connect to a device first.');
+        if (this.isTesting)
+            throw Error('Diagnostic collection is paused during functional testing.');
         if (this.collecting) throw new Error('A collection is already running.');
         this.collecting = true;
         try {

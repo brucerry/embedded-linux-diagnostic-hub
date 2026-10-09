@@ -3,6 +3,14 @@ import type { ConnectOptions, DesktopBridge, HostKeyVerification, Snapshot } fro
 import type { TerminalEvent } from '../shared/terminal';
 
 const bridge: DesktopBridge = {
+    discoverTests: () => ipcRenderer.invoke('hub:tests-discover'),
+    clearTests: () => ipcRenderer.invoke('hub:tests-clear'),
+    prepareTests: (profile) => ipcRenderer.invoke('hub:tests-prepare', profile),
+    startTests: (request) => ipcRenderer.invoke('hub:tests-start', request),
+    readTestRun: () => ipcRenderer.invoke('hub:tests-run'),
+    cancelTests: (id) => ipcRenderer.invoke('hub:tests-cancel', id),
+    confirmTest: (request) => ipcRenderer.invoke('hub:tests-confirm', request),
+    exportTestReport: (format, report) => ipcRenderer.invoke('hub:tests-export', format, report),
     openTerminal: (request) => ipcRenderer.invoke('hub:terminal-open', request),
     writeTerminal: (id, data) => ipcRenderer.invoke('hub:terminal-input', id, data),
     resizeTerminal: (id, size) => ipcRenderer.invoke('hub:terminal-resize', id, size),
