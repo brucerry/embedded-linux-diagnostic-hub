@@ -540,6 +540,46 @@ test('connection form drag selection released on backdrop stays open; direct bac
     await expect(dialog).not.toBeVisible();
 });
 
+test('terminal shows a scrollbar only for real scrollback, including startup and clear', async ({
+    page,
+}) => {
+    await installDesktop(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+    const panel = page.getByRole('region', { name: 'Connected device terminal' });
+    const viewport = panel.locator('.xterm-viewport');
+    const scrollbar = panel.locator('.xterm-scrollable-element > .scrollbar.vertical');
+    const nativeGutter = () =>
+        viewport.evaluate((element) => (element as HTMLElement).offsetWidth - element.clientWidth);
+    await expect(viewport).not.toHaveCSS('overflow-y', 'scroll');
+    await expect.poll(nativeGutter).toBe(0);
+    await panel.locator('.xterm-screen').hover();
+    await expect(scrollbar).toHaveCSS('opacity', '0');
+    await connectDesktop(page);
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+    await expect(panel.getByText('Ready', { exact: true })).toBeVisible();
+    await expect(panel.locator('.xterm-rows')).toContainText('/home/engineer $');
+    await panel.locator('.xterm-screen').hover();
+    await expect.poll(nativeGutter).toBe(0);
+    await expect(scrollbar).toHaveCSS('opacity', '0');
+    await page.evaluate(() =>
+        window.desktopTest.terminal!.emit(
+            '\r\n' +
+                Array.from({ length: 400 }, (_, i) => `scrollbar-output-${i}\r\n`).join('') +
+                '/home/engineer $ ',
+        ),
+    );
+    await expect(panel.locator('.xterm-rows')).toContainText('scrollbar-output-399');
+    await panel.locator('.xterm-screen').hover();
+    await expect(scrollbar).toHaveCSS('opacity', '1');
+    await expect.poll(nativeGutter).toBe(0);
+    await panel.getByRole('button', { name: 'Clear terminal', exact: true }).click();
+    await expect(page.getByLabel('Device terminal input')).toBeFocused();
+    await panel.locator('.xterm-screen').hover();
+    await expect(scrollbar).toHaveCSS('opacity', '0');
+    await expect.poll(nativeGutter).toBe(0);
+});
+
 test('full terminal viewport contains the last prompt and wheel input at both scrollback boundaries', async ({
     page,
 }) => {

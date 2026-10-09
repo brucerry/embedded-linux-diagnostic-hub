@@ -67,8 +67,9 @@ working directory, interactive programs and shell key bindings are handled by th
 
 Other terminal keys follow xterm and the remote shell's keymap. Scrolling remains inside the
 terminal when it has scrollback or an interactive program consumes wheel input. A short normal
-terminal without scrollback allows the page to scroll. Recognizable uncolored prompts receive a
-local mint color; the device's own colors remain intact.
+terminal without scrollback allows the page to scroll. Its scrollbar appears only when history
+extends beyond the fitted screen and disappears after clearing that history. Recognizable uncolored
+prompts receive a local mint color; the device's own colors remain intact.
 
 Ending the outer shell with `exit`, `logout` where supported, or Ctrl+D starts a fresh shell on the
 same healthy SSH connection. Local history remains, queued input is discarded and input is never

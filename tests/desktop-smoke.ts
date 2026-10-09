@@ -401,6 +401,14 @@ async function main() {
         const terminalPanel = page.getByRole('region', { name: 'Connected device terminal' });
 
         await expect(terminalPanel.getByText('Ready', { exact: true })).toBeVisible();
+        await expect(terminalPanel.locator('.xterm-viewport')).not.toHaveCSS(
+            'overflow-y',
+            'scroll',
+        );
+        await terminalPanel.locator('.xterm-screen').hover();
+        await expect(
+            terminalPanel.locator('.xterm-scrollable-element > .scrollbar.vertical'),
+        ).toHaveCSS('opacity', '0');
         const terminalInput = page.getByLabel('Device terminal input');
         await desktop.evaluate(({ clipboard }) => {
             clipboard.writeText = (

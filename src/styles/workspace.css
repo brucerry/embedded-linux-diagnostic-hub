@@ -81,8 +81,15 @@
     border: 1px solid var(--line);
     border-radius: 12px;
 }
-.terminal-screen .xterm-viewport {
+.terminal-screen .xterm .xterm-viewport {
     background: transparent !important;
+    /* xterm manages scrollback with its own scrollbar; avoid a forced native duplicate. */
+    overflow-y: hidden;
+}
+.terminal-screen:not(.terminal-has-scrollback) .xterm-scrollable-element > .scrollbar.vertical {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
 }
 .terminal-screen .xterm,
 .terminal-screen .xterm-viewport,

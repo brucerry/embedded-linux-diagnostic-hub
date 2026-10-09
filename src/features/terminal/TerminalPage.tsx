@@ -121,6 +121,15 @@ export default function TerminalPage(props: Props) {
         term.loadAddon(addon);
         term.open(container.current!);
         const boundary = frame.current!;
+        // Pixel-based viewport sizing can report overflow even with no buffer history.
+        // The buffer owns scrollback; update the scrollbar after writes, clears and resizes render.
+        const updateScrollback = () =>
+            container.current?.classList.toggle(
+                'terminal-has-scrollback',
+                term.buffer.active.baseY > 0,
+            );
+        updateScrollback();
+        const rendered = term.onRender(updateScrollback);
         const ownsWheel = () =>
             term.buffer.active.type === 'alternate' ||
             term.buffer.active.baseY > 0 ||
@@ -217,6 +226,7 @@ export default function TerminalPage(props: Props) {
             data.dispose();
             binary.dispose();
             resize.dispose();
+            rendered.dispose();
             prompts.dispose();
             promptColors.current = null;
             denied.forEach((handler) => handler.dispose());
