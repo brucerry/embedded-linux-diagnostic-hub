@@ -1,4 +1,8 @@
 import { validateSnapshot } from '../../shared/report';
+import {
+    validateDeviceClock,
+    type DeviceClockResponse,
+} from '../../shared/diagnostics/device-clock';
 import type { ConnectOptions, Snapshot } from '../../shared/types';
 import {
     terminalEvent,
@@ -24,9 +28,12 @@ export class GatewayClient implements TerminalTransport {
     private heartbeat: ReturnType<typeof setInterval> | null = null;
     private readonly onPageHide = () => this.releaseOnPageExit();
     private terminalAbort?: AbortController;
+    private clockAbort?: AbortController;
     private terminalListeners = new Set<(event: TerminalEvent) => void | Promise<void>>();
 
     private stopLifecycle(): void {
+        this.clockAbort?.abort();
+        this.clockAbort = undefined;
         this.terminalAbort?.abort();
         this.terminalAbort = undefined;
         if (this.heartbeat) clearInterval(this.heartbeat);
@@ -74,6 +81,7 @@ export class GatewayClient implements TerminalTransport {
         route: string,
         method = 'GET',
         data?: unknown,
+        options?: { signal?: AbortSignal; clock?: boolean },
     ): Promise<Record<string, unknown>> {
         const sessionAtStart = this.sessionId;
         let response: Response;
@@ -87,7 +95,7 @@ export class GatewayClient implements TerminalTransport {
                 body: data === undefined ? undefined : JSON.stringify(data),
                 credentials: 'omit',
                 cache: 'no-store',
-                signal: AbortSignal.timeout(180_000),
+                signal: options?.signal ?? AbortSignal.timeout(180_000),
             });
         } catch {
             throw new Error(
@@ -105,12 +113,15 @@ export class GatewayClient implements TerminalTransport {
                 this.sessionId &&
                 this.sessionId === sessionAtStart &&
                 [401, 404].includes(response.status) &&
-                !route.includes('/terminal')
+                !route.includes('/terminal') &&
+                !(options?.clock && response.status === 404)
             ) {
                 this.sessionId = '';
                 this.stopLifecycle();
                 for (const listener of this.listeners) listener();
             }
+            if (options?.clock && response.status === 404)
+                return { status: 'unavailable', reason: 'unsupported' };
             throw new Error(
                 typeof payload.error === 'string'
                     ? payload.error
@@ -153,6 +164,26 @@ export class GatewayClient implements TerminalTransport {
             await this.request(`/api/sessions/${this.sessionId}/snapshot`, 'POST'),
             true,
         );
+    }
+
+    async readDeviceClock(): Promise<DeviceClockResponse> {
+        if (!this.sessionId) throw Error('Connect through a gateway first.');
+        if (this.clockAbort) throw Error('A device clock read is already running.');
+        const session = this.sessionId;
+        const controller = new AbortController();
+        this.clockAbort = controller;
+        const timer = setTimeout(() => controller.abort(), 10_000);
+        try {
+            const result = await this.request(`/api/sessions/${session}/clock`, 'POST', undefined, {
+                clock: true,
+                signal: controller.signal,
+            });
+            if (this.sessionId !== session) throw Error('The device connection changed.');
+            return validateDeviceClock(result);
+        } finally {
+            clearTimeout(timer);
+            if (this.clockAbort === controller) this.clockAbort = undefined;
+        }
     }
 
     async disconnect(): Promise<void> {

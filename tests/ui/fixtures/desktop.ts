@@ -2,6 +2,11 @@ import type { Page } from '@playwright/test';
 import type { Snapshot, UpdateRecovery, UpdateRequest } from '../../../shared/types';
 import { demoSnapshot } from '../../fixtures/snapshots';
 import type { TerminalEvent } from '../../../shared/terminal';
+import {
+    parseDeviceClock,
+    type DeviceClockResponse,
+} from '../../../shared/diagnostics/device-clock';
+import { clockOutput } from '../../fixtures/device-clock';
 
 export interface DesktopTestState {
     requests: UpdateRequest[];
@@ -14,6 +19,14 @@ export interface DesktopTestState {
     releaseCollection?: () => void;
     holdNextCollection?: boolean;
     closeConnection?: () => void;
+    clock: {
+        calls: number;
+        response: DeviceClockResponse;
+        fail: boolean;
+        hold: boolean;
+        release?: () => void;
+    };
+    snapshot?: Snapshot;
     terminal?: {
         id: string;
         opens: number;
@@ -34,7 +47,7 @@ declare global {
 
 export async function installDesktop(page: Page, recovery: UpdateRecovery | null = null) {
     await page.addInitScript(
-        ({ snapshot, recovery }) => {
+        ({ snapshot, recovery, clockSample }) => {
             window.desktopTest = {
                 requests: [],
                 connects: 0,
@@ -42,6 +55,13 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 collects: 0,
                 releasesOpened: 0,
                 acknowledgements: [],
+                clock: {
+                    calls: 0,
+                    response: { status: 'available', sample: clockSample },
+                    fail: false,
+                    hold: false,
+                },
+                snapshot,
             };
             let closed: ((reason?: 'update') => void) | undefined;
             let terminalListener: ((event: TerminalEvent) => void | Promise<void>) | undefined;
@@ -148,7 +168,23 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                             window.desktopTest.releaseCollection = resolve;
                         });
                     }
-                    return { ...snapshot, capturedAt: new Date().toISOString() };
+                    return {
+                        ...window.desktopTest.snapshot!,
+                        capturedAt: new Date().toISOString(),
+                    };
+                },
+                readDeviceClock: async () => {
+                    const clock = window.desktopTest.clock;
+                    clock.calls++;
+                    const response = structuredClone(clock.response);
+                    if (clock.hold) {
+                        clock.hold = false;
+                        await new Promise<void>((resolve) => {
+                            clock.release = resolve;
+                        });
+                    }
+                    if (clock.fail) throw Error('Clock read failed.');
+                    return response;
                 },
                 pickKey: async () => null,
                 copyText: async (text) => {
@@ -168,6 +204,10 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 },
             };
         },
-        { snapshot: { ...demoSnapshot(), mode: 'ssh' as const } as Snapshot, recovery },
+        {
+            snapshot: { ...demoSnapshot(), mode: 'ssh' as const } as Snapshot,
+            recovery,
+            clockSample: parseDeviceClock(clockOutput()),
+        },
     );
 }

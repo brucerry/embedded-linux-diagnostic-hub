@@ -287,7 +287,7 @@ export function createGateway(config: GatewayConfig) {
         }
 
         const match = url.pathname.match(
-            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:snapshot|heartbeat|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
+            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:clock|snapshot|heartbeat|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
         );
         if (match) {
             const active = sessions.get(match[1]);
@@ -318,6 +318,28 @@ export function createGateway(config: GatewayConfig) {
             }
             if (req.method === 'POST' && match[2] === '/heartbeat') {
                 send(res, 200, { connected: true });
+                return;
+            }
+            if (req.method === 'POST' && match[2] === '/clock') {
+                if (
+                    req.headers['transfer-encoding'] ||
+                    Number(req.headers['content-length'] ?? 0) > 0
+                ) {
+                    req.resume();
+                    throw new ApiError(400, 'Device clock reads do not accept request data.');
+                }
+                const controller = new AbortController();
+                const aborted = () => {
+                    if (!res.writableEnded) controller.abort();
+                };
+                res.on('close', aborted);
+                try {
+                    const result = await active.ssh.readClock(controller.signal);
+                    if (!controller.signal.aborted) send(res, 200, result);
+                } finally {
+                    active.touched = Date.now();
+                    res.removeListener('close', aborted);
+                }
                 return;
             }
             if (req.method === 'POST' && match[2] === '/snapshot') {

@@ -414,6 +414,113 @@ pre {
     color: #b7bbc4;
     white-space: nowrap;
 }
+.device-clock {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: 7px 12px;
+    border: 1px solid #73928533;
+    background: linear-gradient(#83d9b006, #83d9b006), var(--surface);
+    border-radius: 12px;
+    color: #e7edf4;
+    font-variant-numeric: tabular-nums;
+    max-width: 100%;
+}
+.device-clock + .edition-label {
+    margin-left: 0;
+}
+.device-clock-art {
+    width: 32px;
+    height: 32px;
+    color: var(--mint);
+    flex-shrink: 0;
+}
+.device-clock-face {
+    fill: var(--surface);
+}
+.device-clock-content {
+    display: grid;
+    line-height: 1.3;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    min-width: 0;
+    max-width: 250px;
+}
+.device-clock-label {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.device-clock-date {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.device-clock-time {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    display: inline-flex;
+    align-self: center;
+    position: relative;
+    color: var(--mint);
+}
+.device-clock-time svg {
+    width: 56px;
+    height: 18px;
+    display: block;
+    stroke: currentColor;
+    stroke-width: 0.6;
+    stroke-linejoin: round;
+}
+.device-clock-zone,
+.device-clock-status {
+    font-size: 11px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+.device-clock-zone {
+    grid-column: 1;
+    grid-row: 2;
+}
+.device-clock-status {
+    grid-column: 1 / -1;
+}
+.device-clock-stale {
+    color: #ffe09c;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+}
+.device-clock-disconnected,
+.device-clock-unavailable,
+.device-clock-loading {
+    color: var(--muted);
+}
+@media (max-width: 1350px) {
+    .site-header {
+        flex-wrap: wrap;
+    }
+    .device-clock {
+        order: 4;
+        flex-basis: 100%;
+        margin-left: 0;
+    }
+    .device-clock + .edition-label {
+        margin-left: auto;
+    }
+}
 .version-label {
     color: #b1bdcd;
     margin-left: 5px;
@@ -527,11 +634,11 @@ h1 {
     background: #b4d0ff;
 }
 .button.primary.connection-button.connected {
-    background: var(--green);
-    color: #14372b;
+    background: #f4a553;
+    color: #3a210b;
 }
 .button.primary.connection-button.connected:hover:not(:disabled) {
-    background: #ace9cc;
+    background: #ffc17a;
 }
 .button.secondary {
     background: transparent;

@@ -51,4 +51,8 @@ export class DeviceMonitor {
     getTerminal(id: unknown) {
         return this.session.getTerminal(id);
     }
+
+    readClock(signal?: AbortSignal) {
+        return this.session.readClock(signal);
+    }
 }

@@ -34,6 +34,13 @@ They are shared by Electron and the gateway, without importing either platform.
 report dialogs stay under `electron/`; HTTP authentication, origins, target allowlists and session
 expiry stay under `gateway/`.
 
+`shared/diagnostics/device-clock.ts` defines the fixed device clock command, parser and transport
+validation. `useDeviceClock` owns one independent minute schedule and transient availability state;
+`DeviceClock` renders it in the shared header. Clock queries reuse the authenticated connection
+through a non-PTY exec channel with a five-second deadline and 8 KiB output limit. Cancellation
+closes only that query. The display uses the device's calendar and effective offset directly,
+without PC timezone conversion, systemd, a device agent or report-schema changes.
+
 Sample snapshots are **test fixtures only**, under `tests/fixtures/snapshots.ts`, with generic
 hardware identities and distribution-specific output formats. The app exposes only the fixed
 diagnostics, with no board profile or arbitrary diagnostic exec/file API. Terminal is a separate
@@ -171,6 +178,13 @@ interrupts and Ctrl+L redraw through SSH/gateway/xterm. The ordinary fixture del
 only a few commands and cannot qualify shell syntax. This PC's local demo supports `--bash` for Git
 Bash through a real Windows PTY; commands then run on the developer's PC, with diagnostic readings
 still synthetic. Production always runs the connected device's shell.
+
+Clock coverage lives in `tests/device-clock*.test.ts`, `tests/ui/device-clock.spec.ts`, the native
+smoke suite and production website portability tests. It covers minimal GNU/BusyBox output,
+authenticated access, time/output bounds, query cancellation, terminal/report isolation, older
+gateways, independent minute polling, resume/reset/reload/reboot activity and late session replies.
+Use the existing Linux SSH qualification environment when available; record unavailable tool/server
+combinations explicitly rather than claiming they passed.
 
 Reset scheduling is paused by its internal lock without changing the user's live-update setting. The
 progress dialog is rendered outside the inert app shell, so keyboard focus and scrolling stay inside

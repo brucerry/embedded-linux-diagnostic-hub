@@ -23,6 +23,7 @@ export function useDeviceSession(onResetView: () => void) {
         generation: number;
     } | null>(null);
     const [terminalReset, setTerminalReset] = useState(0);
+    const [clockReset, setClockReset] = useState(0);
     const connectedRef = useRef(false);
     connectedRef.current = connected;
     const [live, setLiveState] = useState(true);
@@ -313,6 +314,7 @@ export function useDeviceSession(onResetView: () => void) {
             resettingRef.current = false;
             setResetting(false);
             setResetProgress('');
+            setClockReset((value) => value + 1);
         }
     }
 
@@ -383,6 +385,7 @@ export function useDeviceSession(onResetView: () => void) {
     return {
         activeDevice,
         terminalReset,
+        clockReset,
         transport,
         snapshot,
         workspaceReady,

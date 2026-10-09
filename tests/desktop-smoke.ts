@@ -8,6 +8,8 @@ import { inc } from 'semver';
 import { probes } from '../shared/diagnostics/probes';
 import { demoSnapshot } from './fixtures/snapshots';
 import { attachTerminalFixture, terminalFixtureState } from './fixtures/terminal';
+import { DEVICE_CLOCK_COMMAND } from '../shared/diagnostics/device-clock';
+import { clockOutput } from './fixtures/device-clock';
 
 async function main() {
     const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-smoke-'));
@@ -46,6 +48,12 @@ async function main() {
                 attachTerminalFixture(session, terminalState);
                 session.on('exec', (acceptExec, _reject, info) => {
                     const stream = acceptExec();
+                    if (info.command.endsWith(DEVICE_CLOCK_COMMAND)) {
+                        stream.write(clockOutput());
+                        stream.exit(0);
+                        stream.end();
+                        return;
+                    }
                     const probe = probes.find((item) => info.command.endsWith(item.command));
                     if (probe?.id === 'fans') completedCollections++;
                     const result = fixture.results.find((item) => item.id === probe?.id);
@@ -244,6 +252,9 @@ async function main() {
         await expect(
             page.getByRole('alertdialog', { name: 'Verify SSH device identity' }),
         ).toBeVisible();
+        await expect(page.evaluate(() => window.diagnosticHub!.readDeviceClock!())).rejects.toThrow(
+            'current connection',
+        );
         expect(
             await desktop.evaluate(({ BrowserWindow }) =>
                 BrowserWindow.getAllWindows()[0].isEnabled(),
@@ -292,6 +303,27 @@ async function main() {
             .poll(() => completedCollections, { timeout: 15_000 })
             .toBeGreaterThanOrEqual(2);
         expect(readyConnections).toBe(1);
+        await expect(page.getByRole('region', { name: 'Device time', exact: true })).toContainText(
+            '2026-10-09',
+        );
+        const nativeClock = await page.evaluate(() => window.diagnosticHub!.readDeviceClock!());
+        expect(nativeClock.status).toBe('available');
+        expect(
+            await desktop.evaluate(({ ipcMain }) => {
+                const handler = (
+                    ipcMain as unknown as {
+                        _invokeHandlers: Map<string, (event: unknown) => unknown>;
+                    }
+                )._invokeHandlers.get('hub:device-clock')!;
+                try {
+                    handler({ sender: null, senderFrame: null });
+                    return false;
+                } catch (error) {
+                    return (error as Error).message === 'Untrusted application frame.';
+                }
+            }),
+        ).toBe(true);
+        await expect(page.locator('.terminal-screen')).not.toContainText('DIAGNOSTIC_HUB_CLOCK');
         expect(openConnections).toBe(1);
         await page.getByRole('button', { name: 'Memory', exact: true }).click();
         await page
@@ -743,6 +775,9 @@ async function main() {
                     }
                 }),
             ).toBe(true);
+            await expect(
+                page.evaluate(() => window.diagnosticHub!.readDeviceClock!()),
+            ).rejects.toThrow('update');
             const restart = await desktop.evaluate(
                 ({ app }) =>
                     (

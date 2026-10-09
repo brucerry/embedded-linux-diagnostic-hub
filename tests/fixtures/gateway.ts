@@ -5,6 +5,8 @@ import { createGateway } from '../../gateway/server';
 import { probes } from '../../shared/diagnostics/probes';
 import { demoSnapshot } from './snapshots';
 import { attachTerminalFixture, terminalFixtureState } from './terminal';
+import { DEVICE_CLOCK_COMMAND } from '../../shared/diagnostics/device-clock';
+import { clockOutput } from './device-clock';
 
 export async function gatewayFixture(
     idleMs?: number,
@@ -12,6 +14,7 @@ export async function gatewayFixture(
         attachShell?: (session: Session) => void;
         probeDelayMs?: number;
         probeOutput?: { stdout: string; stderr: string };
+        origin?: string;
     } = {},
 ) {
     const key = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -32,6 +35,16 @@ export async function gatewayFixture(
     const data = demoSnapshot();
     let authentications = 0;
     let probeExecutions = 0;
+    const clock = {
+        output: clockOutput(),
+        stderr: '',
+        exitCode: 0,
+        delayMs: 0,
+        stall: false,
+        calls: 0,
+        active: 0,
+        closed: 0,
+    };
     const terminal = terminalFixtureState();
     const sshServer = new Server({ hostKeys: [key] }, (client) => {
         client.on('error', () => {});
@@ -59,8 +72,35 @@ export async function gatewayFixture(
                 if (options.attachShell) options.attachShell(session);
                 else attachTerminalFixture(session, terminal);
                 session.on('exec', (acceptExec, _reject, info) => {
-                    probeExecutions++;
                     const channel = acceptExec();
+                    if (info.command.endsWith(DEVICE_CLOCK_COMMAND)) {
+                        channel.resume();
+                        channel.on('end', () => channel.close());
+                        clock.calls++;
+                        clock.active++;
+                        channel.on('close', () => {
+                            clock.active--;
+                            clock.closed++;
+                        });
+                        if (clock.stall) return;
+                        const reply = {
+                            output: clock.output,
+                            stderr: clock.stderr,
+                            exitCode: clock.exitCode,
+                        };
+                        const respondClock = () => {
+                            if (channel.destroyed) return;
+                            channel.write(reply.output);
+                            channel.stderr.write(reply.stderr);
+                            channel.exit(reply.exitCode);
+                            channel.end();
+                            channel.close();
+                        };
+                        if (clock.delayMs) setTimeout(respondClock, clock.delayMs);
+                        else respondClock();
+                        return;
+                    }
+                    probeExecutions++;
                     const probe = probes.find((item) => info.command.endsWith(item.command));
                     const result = data.results.find((item) => item.id === probe?.id);
                     const respond = () => {
@@ -80,7 +120,7 @@ export async function gatewayFixture(
     await new Promise<void>((resolve) => sshServer.listen(0, '127.0.0.1', resolve));
     const sshPort = (sshServer.address() as { port: number }).port;
     const token = 'test-gateway-token-32-characters-minimum';
-    const origins = [process.env.HUB_TEST_ORIGIN ?? 'http://127.0.0.1:5173'];
+    const origins = [options.origin ?? process.env.HUB_TEST_ORIGIN ?? 'http://127.0.0.1:5173'];
     const targets = [{ host: '127.0.0.1', port: sshPort, fingerprint: pinned }];
     const gateway = createGateway({ token, origins, targets, idleMs });
     await new Promise<void>((resolve) => gateway.server.listen(0, '127.0.0.1', resolve));
@@ -102,6 +142,7 @@ export async function gatewayFixture(
             ...(body ? { body: JSON.stringify(body) } : {}),
         });
     return {
+        clock,
         terminal,
         token,
         privateKey,

@@ -5,6 +5,13 @@ import { Client } from 'ssh2';
 import { probes } from '../../shared/diagnostics/probes';
 import type { ConnectOptions, ProbeResult, Snapshot } from '../../shared/types';
 import {
+    CLOCK_MAX_BYTES,
+    CLOCK_TIMEOUT_MS,
+    DEVICE_CLOCK_COMMAND,
+    parseDeviceClock,
+    type DeviceClockResponse,
+} from '../../shared/diagnostics/device-clock';
+import {
     terminalId,
     terminalSize,
     type TerminalEvent,
@@ -58,6 +65,7 @@ export class SshSession {
     private collecting = false;
     private ready = false;
     private terminal: SshTerminal | null = null;
+    private cancelClock?: () => void;
 
     constructor(private readonly onDisconnected: () => void = () => {}) {}
 
@@ -110,6 +118,7 @@ export class SshSession {
                 if (!ready)
                     finish(new Error('SSH connection closed before authentication completed.'));
                 if (this.client === client) {
+                    this.cancelClock?.();
                     this.terminal?.close();
                     this.ready = false;
                     this.client = null;
@@ -139,6 +148,7 @@ export class SshSession {
     }
 
     disconnect(): void {
+        this.cancelClock?.();
         this.terminal?.close();
         this.ready = false;
         const client = this.client;
@@ -149,6 +159,75 @@ export class SshSession {
 
     get isConnected(): boolean {
         return this.ready && this.client !== null && this.options !== null;
+    }
+
+    async readClock(signal?: AbortSignal): Promise<DeviceClockResponse> {
+        const client = this.client;
+        if (!this.isConnected || !client) throw Error('Connect to a device first.');
+        if (this.cancelClock) throw Error('A device clock read is already running.');
+        return new Promise((resolve) => {
+            let channel: import('ssh2').ClientChannel | undefined;
+            let output = '';
+            let bytes = 0;
+            let settled = false;
+            const finish = (result: DeviceClockResponse) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', cancel);
+                if (this.cancelClock === cancel) this.cancelClock = undefined;
+                channel?.removeListener('data', append);
+                channel?.stderr.removeListener('data', countError);
+                resolve(
+                    this.client === client ? result : { status: 'unavailable', reason: 'failed' },
+                );
+            };
+            const cancel = () => {
+                finish({ status: 'unavailable', reason: 'failed' });
+                channel?.close();
+            };
+            const append = (data: Buffer) => {
+                bytes += data.length;
+                if (bytes > CLOCK_MAX_BYTES) return cancel();
+                output += data.toString('utf8');
+            };
+            const countError = (data: Buffer) => {
+                bytes += data.length;
+                if (bytes > CLOCK_MAX_BYTES) cancel();
+            };
+            const timer = setTimeout(cancel, CLOCK_TIMEOUT_MS);
+            this.cancelClock = cancel;
+            signal?.addEventListener('abort', cancel, { once: true });
+            if (signal?.aborted) return cancel();
+            try {
+                client.exec(
+                    `export LC_ALL=C; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; ${DEVICE_CLOCK_COMMAND}`,
+                    (error, stream) => {
+                        if (error) return cancel();
+                        channel = stream;
+                        if (settled) return stream.close();
+                        stream.on('data', append);
+                        stream.stderr.on('data', countError);
+                        stream.on('error', cancel);
+                        stream.on('close', (code: number | null) => {
+                            if (settled) return;
+                            if (code !== 0)
+                                return finish({
+                                    status: 'unavailable',
+                                    reason: code === 127 ? 'unsupported' : 'failed',
+                                });
+                            try {
+                                finish({ status: 'available', sample: parseDeviceClock(output) });
+                            } catch {
+                                finish({ status: 'unavailable', reason: 'failed' });
+                            }
+                        });
+                    },
+                );
+            } catch {
+                cancel();
+            }
+        });
     }
 
     async openTerminal(input: TerminalOpen, emit: (event: TerminalEvent) => void): Promise<void> {

@@ -87,6 +87,18 @@ headers, keep SSH devices on the intended private network, and allow enough prox
 complete snapshot. The collector runs at most three checks at a time; 36 checks can take up to about
 144 seconds if every command reaches its 12-second timeout.
 
+## Device clock
+
+`POST /api/sessions/<id>/clock` reads system date/time, effective timezone and optional boot/uptime
+metadata on a separate SSH exec channel. It accepts no request body and requires the same bearer,
+Origin and pinned-session policy as diagnostics. A read is limited to five seconds and 8 KiB, with
+one in flight per session; cancellation closes only the clock query. The website requests it once
+per minute and on connection/resume/reset activity, independently of diagnostic collection.
+
+Minimal devices can return unavailable time or unknown timezone metadata. An older gateway without
+this route leaves the clock unavailable while diagnostics and the terminal remain usable. Clock
+responses are transient UI state and are excluded from diagnostic reports.
+
 ## Terminal streaming
 
 Deploy the updated gateway together with a website build that provides Terminal. A terminal reuses
@@ -177,9 +189,9 @@ intended Linux target on your lab server before claiming deployment completion.
 
 All API routes require an allowed `Origin` and `Authorization: Bearer <token>` except an
 allowed-origin CORS preflight. Routes are `GET /api/health`, `POST /api/fingerprint`,
-`POST /api/sessions`, `POST /api/sessions/<id>/snapshot`, `POST /api/sessions/<id>/heartbeat`, and
-`DELETE /api/sessions/<id>`. Connection requests use `host`, `port`, `username`, `auth` and
-`expectedFingerprint`. For `auth: password`, supply `password`; for `auth: key`, supply the
-private-key text as `privateKey` and an optional `passphrase`. Requests are capped at 512 KiB,
-authenticated calls at 120/minute for the team token, and active/connecting sessions at eight.
-Responses and reports omit SSH authentication secrets.
+`POST /api/sessions`, `POST /api/sessions/<id>/snapshot`, `POST /api/sessions/<id>/clock`,
+`POST /api/sessions/<id>/heartbeat`, and `DELETE /api/sessions/<id>`. Connection requests use
+`host`, `port`, `username`, `auth` and `expectedFingerprint`. For `auth: password`, supply
+`password`; for `auth: key`, supply the private-key text as `privateKey` and an optional
+`passphrase`. Requests are capped at 512 KiB, authenticated calls at 120/minute for the team token,
+and active/connecting sessions at eight. Responses and reports omit SSH authentication secrets.

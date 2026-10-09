@@ -16,6 +16,24 @@ The app starts without fabricated readings. Diagnostic checks are read-only and 
 capabilities or failed probes explicitly. Graphs show collected numeric evidence, rather than
 inventing values for missing readings.
 
+## Device time
+
+The green pixel clock in the header shows the connected device's system date, seven-segment 24-hour
+time, and effective timezone abbreviation and UTC offset on every page. It refreshes once per
+minute, even with live diagnostics paused, and after connection, reconnection, session reset, and
+return to the app. A detected reboot refreshes it at the next clock read or earlier uptime evidence.
+Reloading the app/page clears the old clock; reconnect to read fresh device time.
+
+The compact display places the pixel clock on the left, date above timezone in the middle, and
+seven-segment time on the right. The pixel clock hands follow the same device time. The orange
+**Disconnect device** button ends the SSH connection.
+
+Unavailable timezone details are labeled explicitly. A failed refresh retains the last reading with
+**Stale** until a successful retry. Disconnected and imported-report views show **No device
+connected**. Clock reads use a separate read-only SSH channel, leave device settings unchanged, and
+do not enter terminal output or report exports. A `TZ` override inside the user terminal is local to
+that shell and does not change the header's source.
+
 ## Reports and session data
 
 **Import report** and **Export report** work locally in both editions. Imported reports are labeled

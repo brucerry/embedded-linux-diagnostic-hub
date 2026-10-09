@@ -61,6 +61,7 @@ export interface DesktopBridge extends Partial<import('./terminal').TerminalTran
     connect(options: ConnectOptions): Promise<void>;
     disconnect(): Promise<void>;
     collect(): Promise<Snapshot>;
+    readDeviceClock?(): Promise<import('./diagnostics/device-clock').DeviceClockResponse>;
     pickKey(): Promise<string | null>;
     copyText(command: string): Promise<void>;
     readClipboard?(): Promise<string>;

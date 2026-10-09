@@ -25,6 +25,8 @@ import { APP_VERSION, REPOSITORY_URL } from '../../shared/project';
 import type { Category, Probe } from '../../shared/types';
 import { RoundedIcon } from '../components/RoundedIcon';
 import { useDeviceSession } from '../hooks/useDeviceSession';
+import { useDeviceClock } from '../hooks/useDeviceClock';
+import { DeviceClock } from '../components/DeviceClock';
 
 import { Nav } from '../components/Nav';
 import { CopyButton } from '../components/CopyButton';
@@ -57,6 +59,7 @@ function App() {
     const {
         activeDevice,
         terminalReset,
+        clockReset,
         transport,
         snapshot,
         workspaceReady,
@@ -89,6 +92,18 @@ function App() {
         exportReport,
         importReport,
     } = useDeviceSession(() => setView('overview'));
+    const uptimeResult = snapshot?.results.find((result) => result.id === 'uptime');
+    const uptimeValue =
+        uptimeResult?.status === 'collected'
+            ? Number(uptimeResult.stdout.trim().split(/\s+/)[0])
+            : NaN;
+    const clock = useDeviceClock({
+        transport,
+        generation: connected ? activeDevice?.generation : undefined,
+        reset: clockReset,
+        blocked: resetting || disconnecting,
+        uptime: Number.isFinite(uptimeValue) && uptimeValue >= 0 && !imported ? uptimeValue : null,
+    });
     const selectedResult = snapshot?.results.find((item) => item.id === selectedProbe?.id);
     async function inspectProbe(probe: Probe) {
         if (snapshot?.results.some((result) => result.id === probe.id)) {
@@ -156,6 +171,7 @@ function App() {
                         }}
                     />
                 </nav>
+                <DeviceClock {...clock} />
                 <span className="edition-label">
                     <a
                         className="repository-link"

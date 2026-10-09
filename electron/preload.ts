@@ -36,6 +36,7 @@ const bridge: DesktopBridge = {
     connect: (options: ConnectOptions) => ipcRenderer.invoke('hub:connect', options),
     disconnect: () => ipcRenderer.invoke('hub:disconnect'),
     collect: () => ipcRenderer.invoke('hub:collect'),
+    readDeviceClock: () => ipcRenderer.invoke('hub:device-clock'),
     copyText: (command: string) => ipcRenderer.invoke('hub:copy-text', command),
     readClipboard: () => ipcRenderer.invoke('hub:read-clipboard'),
     openRepository: () => ipcRenderer.invoke('hub:open-repository'),

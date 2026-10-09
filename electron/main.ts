@@ -209,6 +209,11 @@ app.whenReady().then(async () => {
         ssh.getTerminal(id).acknowledge(sequence),
     );
     registerHandler('hub:terminal-close', (id) => ssh.getTerminal(id).close());
+    registerHandler('hub:device-clock', () => {
+        if (update.active || connecting)
+            throw Error('Wait for the current connection or update to finish.');
+        return ssh.readClock();
+    });
     registerHandler('hub:collect', async () => {
         if (update.active) throw new Error('Live collection is paused for the update.');
         if (collectionTask) throw new Error('A collection is already running.');
