@@ -6,6 +6,9 @@ export interface TerminalFixtureState {
     inputs: Buffer[];
     sizes: { cols: number; rows: number }[];
     refuse?: boolean;
+    streamDurationMs?: number;
+    streamed?: number;
+    streamFinished?: boolean;
 }
 export function terminalFixtureState(): TerminalFixtureState {
     return { opens: 0, closes: 0, inputs: [], sizes: [] };
@@ -31,6 +34,8 @@ export function attachTerminalFixture(session: Session, state: TerminalFixtureSt
         let cwd = '/home/engineer';
         let line = '';
         let running = false;
+        let output: NodeJS.Timeout | undefined;
+        channel.on('close', () => clearInterval(output));
         const prompt = () => channel.write(`${cwd} $ `);
         prompt();
         channel.on('close', () => state.closes++);
@@ -69,6 +74,20 @@ export function attachTerminalFixture(session: Session, state: TerminalFixtureSt
                     else if (line === 'watch') {
                         running = true;
                         channel.write('watching\r\n');
+                    } else if (line === 'stream' && state.streamDurationMs) {
+                        running = true;
+                        const finish = Date.now() + state.streamDurationMs;
+                        output = setInterval(() => {
+                            state.streamed = (state.streamed ?? 0) + 1;
+                            channel.write('continuous terminal output '.repeat(8) + '\r\n');
+                            if (Date.now() >= finish) {
+                                clearInterval(output);
+                                state.streamFinished = true;
+                                running = false;
+                                channel.write('STREAM FINISHED\r\n');
+                                prompt();
+                            }
+                        }, 50);
                     } else if (line === 'unicode') {
                         const text = Buffer.from('裝置✓\r\n');
                         channel.write(text.subarray(0, 2));

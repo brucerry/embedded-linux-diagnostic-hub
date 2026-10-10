@@ -10,7 +10,7 @@
     "scripts": {
         "dev": "vite --host 127.0.0.1",
         "desktop:dev": "npm run build:desktop && concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
-        "build:desktop": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --out-extension:.js=.cjs --external:electron --external:ssh2",
+        "build:desktop": "node scripts/build-native-window.mjs && esbuild electron/main.ts electron/preload.ts electron/genie-preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --out-extension:.js=.cjs --external:electron --external:ssh2 --external:koffi && esbuild electron/genie-renderer.ts --bundle --platform=browser --format=esm --outfile=dist/genie-renderer.js && node scripts/copy-desktop-assets.mjs",
         "typecheck": "tsc --noEmit",
         "build": "npm run typecheck && vite build && npm run build:desktop",
         "build:web": "npm run typecheck && vite build --mode web",
@@ -22,6 +22,7 @@
         "test": "tsx --test tests/*.test.ts",
         "test:e2e": "playwright test",
         "test:desktop": "npm run build && tsx tests/desktop-smoke.ts",
+        "test:genie-desktop": "npm run build && tsx tests/genie-desktop-smoke.ts",
         "test:desktop-update": "tsx tests/desktop-update-smoke.ts",
         "test:board-desktop": "npm run build && tsx tests/testing-desktop-smoke.ts",
         "test:board-documents": "tsx tests/testing-documents-smoke.ts",
@@ -37,11 +38,14 @@
         "package:web": "node scripts/build-portable-web.mjs && node scripts/package-web.mjs",
         "verify:linux": "node scripts/verify-linux-package.mjs release",
         "package:launchers": "node scripts/package-launchers.mjs",
-        "test:portability": "node scripts/build-portable-web.mjs && playwright test --config playwright.portability.config.ts"
+        "test:portability": "node scripts/build-portable-web.mjs && playwright test --config playwright.portability.config.ts",
+        "test:genie-stress": "npm run build && tsx tests/genie-stress.ts",
+        "test:genie-latency": "npm run build && tsx tests/genie-latency.ts"
     },
     "dependencies": {
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
+        "koffi": "3.3.3",
         "lucide-react": "^0.577.0",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
@@ -71,6 +75,10 @@
         "appId": "dev.diagnostichub.desktop",
         "productName": "Diagnostic Hub",
         "asar": true,
+        "asarUnpack": [
+            "dist-electron/taskbar-query.ps1",
+            "dist-electron/native-window.dll"
+        ],
         "npmRebuild": false,
         "files": [
             "dist/**/*",

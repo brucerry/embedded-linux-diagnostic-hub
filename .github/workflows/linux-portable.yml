@@ -35,6 +35,11 @@ jobs:
               env:
                   HUB_TEST_SANDBOX: '1'
                   HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
+            - name: Verify native window fallback without Genie on Linux
+              run: xvfb-run -a npx tsx tests/genie-desktop-smoke.ts
+              env:
+                  HUB_TEST_SANDBOX: '1'
+                  HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
             - name: Run AppImage without FUSE
               run: xvfb-run -a npx tsx tests/desktop-smoke.ts
               env:

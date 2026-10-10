@@ -49,10 +49,12 @@ export function useDeviceClock({
         document.addEventListener('visibilitychange', visibility);
         window.addEventListener('pageshow', resume);
         window.addEventListener('focus', resume);
+        const unsubscribe = window.diagnosticHub?.onWindowRestored?.(resume);
         return () => {
             document.removeEventListener('visibilitychange', visibility);
             window.removeEventListener('pageshow', resume);
             window.removeEventListener('focus', resume);
+            unsubscribe?.();
         };
     }, []);
 

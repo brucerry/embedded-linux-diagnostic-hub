@@ -22,6 +22,10 @@ for (const file of ['Diagnostic-Hub.exe', 'win-unpacked/Diagnostic Hub.exe']) {
     console.log('Verified all seven brand icon resolutions in ' + file);
 }
 const archive = path.join(directory, 'win-unpacked/resources/app.asar');
+for (const name of ['genie.html', 'genie-renderer.js', 'genie-renderer.css']) {
+    if (!fs.readFileSync('dist/' + name).equals(extractFile(archive, 'dist/' + name)))
+        throw Error('Packaged transition bundle mismatch: ' + name);
+}
 for (const folder of ['dist/assets', 'dist-electron'])
     for (const file of fs.readdirSync(folder)) {
         if (

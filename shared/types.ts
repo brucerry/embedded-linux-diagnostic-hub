@@ -53,6 +53,7 @@ export interface DesktopBridge
     extends
         Partial<import('./terminal').TerminalTransport>,
         Partial<import('./testing/types').TestingTransport> {
+    onWindowRestored?(callback: () => void): () => void;
     exportTestReport?(
         format: import('./testing/types').ReportFormat,
         report?: import('./testing/types').TestReport,

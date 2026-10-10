@@ -24,10 +24,13 @@ import { UpdateCoordinator } from './update-coordinator';
 import { UpdateReports } from './update-reports';
 import { createTestReport, validateTestReport, reportHtml } from '../shared/testing/report';
 import { renderTestPdf } from './test-documents';
+import { WindowTransitions } from './window-transitions';
 
 const development = process.argv.includes('--dev') && !app.isPackaged;
 const appUrl = development ? 'http://127.0.0.1:5173/' : 'app://bundle/index.html';
 let window: BrowserWindow;
+let transitions: WindowTransitions | undefined;
+if (process.platform === 'win32') app.setAppUserModelId('dev.diagnostichub.desktop');
 let keyPath: string | null = null;
 let connecting = false;
 let lastSnapshot: Snapshot | null = null;
@@ -158,6 +161,11 @@ app.whenReady().then(async () => {
     window.webContents.on('will-navigate', (event, url) => {
         if (url !== appUrl) event.preventDefault();
     });
+    transitions = new WindowTransitions(
+        window,
+        development ? 'http://127.0.0.1:5173/genie.html' : 'app://bundle/genie.html',
+    );
+    registerHandler('hub:window-motion', () => transitions?.refreshMotion());
     window.on('closed', () => {
         hostVerification.clear();
         ssh.clear();
@@ -342,10 +350,12 @@ app.whenReady().then(async () => {
         return true;
     });
     await window.loadURL(appUrl);
+    void transitions.prime();
 });
 
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
+    transitions?.dispose();
     hostVerification.clear();
     ssh.clear();
 });

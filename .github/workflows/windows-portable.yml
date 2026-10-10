@@ -51,7 +51,18 @@ jobs:
               env:
                   HUB_TEST_EXECUTABLE:
                       ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
-            - name: Test packaged Windows application
+            - name: Verify packaged Genie security recovery and device continuity
+              run: npx tsx tests/genie-desktop-smoke.ts
+              env:
+                  HUB_TEST_EXECUTABLE:
+                      ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
+            - name: Stress packaged native transitions and resizing
+              shell: pwsh
+              run: npx tsx tests/genie-stress.ts
+              env:
+                  HUB_TEST_EXECUTABLE:
+                      ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
+            - name: Verify portable cold launch and host behavior
               shell: pwsh
               run: |
                   ./tests/windows-launch.ps1 -Executable "$PWD/release/Diagnostic-Hub.exe"

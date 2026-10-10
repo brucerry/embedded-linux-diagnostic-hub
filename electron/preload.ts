@@ -3,6 +3,11 @@ import type { ConnectOptions, DesktopBridge, HostKeyVerification, Snapshot } fro
 import type { TerminalEvent } from '../shared/terminal';
 
 const bridge: DesktopBridge = {
+    onWindowRestored: (callback) => {
+        const listener = () => callback();
+        ipcRenderer.on('hub:window-restored', listener);
+        return () => ipcRenderer.removeListener('hub:window-restored', listener);
+    },
     discoverTests: () => ipcRenderer.invoke('hub:tests-discover'),
     clearTests: () => ipcRenderer.invoke('hub:tests-clear'),
     prepareTests: (profile) => ipcRenderer.invoke('hub:tests-prepare', profile),
@@ -59,3 +64,8 @@ const bridge: DesktopBridge = {
     },
 };
 contextBridge.exposeInMainWorld('diagnosticHub', bridge);
+if (process.platform === 'win32') {
+    window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => {
+        void ipcRenderer.invoke('hub:window-motion').catch(() => {});
+    });
+}
