@@ -37,6 +37,7 @@ for (const enabled of [true, false]) {
         }
         await expect.poll(() => page.evaluate(() => window.desktopTest.collects)).toBe(2);
         let dialog = await inspectMemory(page);
+        await expect(dialog.locator('.live-graph circle')).toHaveCount(4);
         const originalPoints = await dialog.locator('.live-graph circle title').allTextContents();
         expect(originalPoints).toHaveLength(4);
         await dialog.getByRole('button', { name: 'Close dialog' }).click();
