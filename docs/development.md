@@ -82,6 +82,76 @@ contents are part of the collection/parser contract.
 
 ## Verification
 
+Windows window transitions are coordinated by `electron/window-transitions.ts`. The authoritative
+native frame is retained. `electron/native-window.c` attaches `SetWindowSubclass` to this window's
+HWND and intercepts `WM_SYSCOMMAND/SC_MINIMIZE` before the OS minimizes it. Ordinary messages,
+including resizing and destruction, stay on the native Windows stack. The handler posts a private
+notification to Electron's message hook; no window procedure calls JavaScript through FFI.
+`electron/native-window.ts` uses pinned Koffi only for ordinary native function calls and defers
+preparation until the caption handler returns. Per-window DWM transitions are suppressed only for
+the custom handoff and restored on completion/recovery. It installs no global hook and changes no
+system settings. Native state is released during shutdown or `WM_NCDESTROY`, and pending
+notifications cannot invoke a disposed controller. The renderer has no window-control API or
+Minimize button. Native paths bypassing the system command retain fallback. The authoritative main
+window keeps its bounds, identity and device resources. A separate sandboxed overlay with its own
+preload receives only a transient content snapshot and geometry; hub IPC continues to require the
+exact main frame and URL. Sender, frame, URL and generation checks protect overlay callbacks. A
+two-second watchdog handles cancellation, capture failure and renderer death.
+
+`electron/taskbar-query.ps1` is a fixed read-only Windows helper, bundled by the desktop build. It
+queries shell taskbar geometry and matches accessibility metadata to the app's AUMID; it does not
+click, focus or change shell settings. Physical rectangles become Electron DIP rectangles before
+selecting a monitor and button. An unavailable button uses the taskbar center; ambiguous placement
+uses native behavior. The helper warms once and is queried only for transitions, with bounded
+requests and shutdown cleanup. Geometry tests cover all edges, button centers, negative origins,
+image scaling and autohide clamping. No snapshots enter logs, reports or disk storage.
+
+Transition preparation overlaps the fresh taskbar query, snapshot capture/encoding and hidden
+renderer startup. The renderer waits for its authorized generation's payload before painting; a
+cancellation resolves that wait and destroys the surface. Taskbar accessibility properties are
+fetched in one fresh batch and matched in the helper's compiled code, without retaining old button
+positions or polling while idle. Each direction still creates and releases its own transient window.
+Window creation begins after the native restore callback returns. Generation guards after native
+creation, bounds and visibility changes discard reentrant cancellation instead of retaining an
+unloaded surface or delivering stale pixels to a newer transition.
+
+Run `npm run test:genie-desktop` on Windows for real Electron security, failure recovery, native and
+maximized paths, and sustained loopback SSH/PTY output while minimized beyond the consumer deadline.
+Use `HUB_TEST_EXECUTABLE` for a packaged executable. Manual compositor review should include actual
+taskbar clicks, Win+D, customized taskbar edges, autohide and mixed DPI. The Linux branch checks
+native fallback without an in-app Minimize action. The web build includes only its existing main
+HTML entry.
+
+Building the Windows desktop requires Visual Studio C++ Build Tools and an x64 Windows SDK.
+`scripts/build-native-window.mjs` discovers the installed compiler without changing machine PATH,
+compiles the small native message gate with a static runtime and bundles its DLL outside ASAR. Linux
+and web builds skip this compiler step; downloaded apps require no compiler installation. Close
+development instances before rebuilding their loaded DLL.
+
+Run `npm run test:genie-stress` on Windows for 100 native minimize/restore cycles, external-process
+resizes, resizing during restoration, interrupted transitions, forced garbage collection and native
+close with a zero exit code. `HUB_GENIE_CYCLES` sets the cycle count; `HUB_TEST_EXECUTABLE` selects
+the packaged runtime. Windows CI runs the same stress test against the packaged app.
+
+`npm run test:genie-latency` measures 12 native cycles with start-delay and frame-interval
+median/p95 statistics. Run it without other builds or tests for a useful timing comparison. The
+default p95 startup gate is 400 ms; `HUB_GENIE_MAX_START_MS` adjusts it for qualification hardware.
+
+### Genie qualification limits
+
+Windows qualification uses native system-command messages, packaged security/recovery checks,
+100-cycle resize stress, and sustained SSH/PTY and test-run continuity. Both installed displays were
+checked, including a negative origin and 125% scaling. Geometry tests cover all four taskbar edges,
+autohide and fresh button placement. Physical testing on this PC used top taskbars; the other edges
+and autohide were not physically configured. Automated checks do not establish compositor appearance
+or the behavior of every Windows shell path. The user reviewed the native animation on this PC.
+
+The early prototype did not receive a recorded visual acceptance check before native integration;
+that historical checkpoint remains unverified. Linux fallback is checked by packaged CI under Xvfb,
+but no Linux desktop environment was available for local compositor review. Performance measurements
+are observations on this PC and vary with background load. The helper retains initialized native
+metadata types in memory, with no idle polling; the effect does not imply zero idle memory use.
+
 ```sh
 npm run verify
 npx playwright install --with-deps chromium

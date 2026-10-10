@@ -1,5 +1,12 @@
 # Visual direction
 
+The Windows desktop's native minimize command starts a 500 ms Genie effect that folds a snapshot of
+app content toward the app's current taskbar button and expands from it on restore. It follows the
+detected taskbar edge and keeps text upright. A Windows subclass hooks the owned native window
+before minimization; the standard title bar and taskbar remain the controls. Other OS paths keep
+native fallback. The effect honors system reduced motion, an exception scoped to window transitions;
+existing page and hover effects retain their full-motion policy. No fake dock is shown.
+
 The shared desktop and website layout takes direction from
 [Google I/O 2026](https://io.google/2026/): rounded navigation, a multicolor brand accent, rounded
 actions, and spacious cards. The comfortable working theme uses a soft charcoal canvas, lighter
