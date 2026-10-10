@@ -75,6 +75,13 @@ export class TaskbarReader {
     private query(timeout: number, identity = true): Promise<TaskbarGeometry[]> {
         if (this.disposed) return Promise.resolve([]);
         if (this.pending) return this.flight!.then(() => this.query(timeout, identity));
+        if (!this.child && identity) {
+            // A replacement needs the same compiler/provider startup budget as the first helper.
+            // The window watchdog still recovers before a slow bootstrap can delay native access.
+            return this.query(5000, false).then(() =>
+                this.child && !this.disposed ? this.query(Math.max(5000, timeout)) : [],
+            );
+        }
         if (!this.child) {
             const child = spawn(
                 path.join(
