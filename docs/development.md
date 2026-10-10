@@ -106,6 +106,11 @@ uses native behavior. The helper warms once and is queried only for transitions,
 requests and shutdown cleanup. Geometry tests cover all edges, button centers, negative origins,
 image scaling and autohide clamping. No snapshots enter logs, reports or disk storage.
 
+A timed-out helper is discarded. Its replacement receives bounded compiler/provider startup time
+before ordinary lookup deadlines apply again; the two-second window watchdog remains active and
+recovers native access during slow startup. This avoids repeatedly killing an uninitialized helper
+and permanently losing precise app-button metadata after one timeout.
+
 Transition preparation overlaps the fresh taskbar query, snapshot capture/encoding and hidden
 renderer startup. The renderer waits for its authorized generation's payload before painting; a
 cancellation resolves that wait and destroys the surface. Taskbar accessibility properties are
@@ -132,6 +137,11 @@ Run `npm run test:genie-stress` on Windows for 100 native minimize/restore cycle
 resizes, resizing during restoration, interrupted transitions, forced garbage collection and native
 close with a zero exit code. `HUB_GENIE_CYCLES` sets the cycle count; `HUB_TEST_EXECUTABLE` selects
 the packaged runtime. Windows CI runs the same stress test against the packaged app.
+
+`HUB_TEST_GENIE_MOTION=1` selects normal motion inside the native test process, so hosted Windows
+runners with reduced motion can exercise the effect. It does not change Windows preferences or
+shipped app behavior. The smoke test separately injects reduced motion and verifies native fallback.
+Startup diagnostics record only motion preferences and display geometry, never snapshot pixels.
 
 `npm run test:genie-latency` measures 12 native cycles with start-delay and frame-interval
 median/p95 statistics. Run it without other builds or tests for a useful timing comparison. The

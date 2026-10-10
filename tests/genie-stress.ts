@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import koffi from 'koffi';
+import { configureGenieTest, diagnoseGenieTaskbar } from './fixtures/genie';
 
 async function main() {
     if (process.platform !== 'win32') return;
@@ -25,6 +26,7 @@ async function main() {
     try {
         const page = await desktop.firstWindow();
         await expect(page.getByRole('heading', { name: 'Device overview' })).toBeVisible();
+        await configureGenieTest(desktop);
         const id = await desktop.evaluate(
             ({ BrowserWindow }) =>
                 BrowserWindow.getAllWindows().find((w) =>
@@ -85,7 +87,10 @@ async function main() {
             await restore();
             await expect.poll(state).toMatchObject({ minimized: false, opacity: 1, windows: 1 });
             if (animated) break;
-            if (Date.now() > deadline) throw Error('Native adapter did not become ready.');
+            if (Date.now() > deadline) {
+                await diagnoseGenieTaskbar();
+                throw Error('Native adapter did not become ready.');
+            }
         }
         const cycles = Number(process.env.HUB_GENIE_CYCLES ?? 100);
         for (let cycle = 0; cycle < cycles; cycle++) {
