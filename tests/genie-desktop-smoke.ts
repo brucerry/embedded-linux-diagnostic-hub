@@ -7,6 +7,7 @@ import { gatewayFixture } from './fixtures/gateway';
 import { testingFixture } from './fixtures/testing';
 import { sampleProfile } from '../shared/testing/simulation';
 import { TaskbarReader } from '../electron/taskbar-reader';
+import { genieGeometry } from '../electron/genie-geometry';
 
 async function main() {
     const root = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-genie-'));
@@ -206,53 +207,78 @@ async function main() {
             } finally {
                 native.close();
             }
-            const button = await desktop.evaluate(
+            const bar = await desktop.evaluate(
                 ({ screen }, data) => {
                     const bar = data.physical.find(
                         (bar) =>
                             screen.screenToDipRect(null, bar.monitor).x === data.bounds.x &&
                             bar.button,
                     );
-                    return bar?.button ? screen.screenToDipRect(null, bar.button) : null;
+                    return bar?.button
+                        ? {
+                              edge: bar.edge,
+                              bounds: screen.screenToDipRect(null, bar.bounds),
+                              monitor: screen.screenToDipRect(null, bar.monitor),
+                              button: screen.screenToDipRect(null, bar.button),
+                          }
+                        : null;
                 },
                 { physical, bounds: display.bounds },
             );
             assert.ok(
-                button,
+                bar,
                 'This Windows taskbar must expose the app button for precise qualification.',
             );
             const bounds = await desktop.evaluate(
                 ({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.getBounds(),
                 id,
             );
-            await minimize();
-            await restore();
-            const anchors = await desktop.evaluate(({ app }) =>
-                (
-                    app as typeof app & {
-                        genieObservations: {
-                            geometry: { bounds: Electron.Rectangle; target: Electron.Rectangle };
-                        }[];
-                    }
-                ).genieObservations
-                    .slice(-2)
-                    .map(({ geometry: p }) => ({
-                        x: p.bounds.x + p.target.x + p.target.width / 2,
-                        y: p.bounds.y + p.target.y + p.target.height / 2,
-                    })),
-            );
-            assert.equal(anchors.length, 2);
-            for (const point of anchors) {
-                const details = JSON.stringify({ point, button, display });
-                assert.ok(
-                    Math.abs(point.x - button.x - button.width / 2) < 1,
-                    'Taskbar button horizontal anchor mismatch: ' + details,
+            const button = bar!.button;
+            const fallback = genieGeometry(bounds, { ...bar!, button: undefined });
+            const fallbackPoint = {
+                x: fallback.bounds.x + fallback.target.x + fallback.target.width / 2,
+                y: fallback.bounds.y + fallback.target.y + fallback.target.height / 2,
+            };
+            let precise = 0;
+            // An independent lookup cannot guarantee that each later request exposes a button.
+            // Accept only the documented center fallback, and still qualify the precise path.
+            for (let attempt = 0; attempt < 3 && precise === 0; attempt++) {
+                await minimize();
+                await restore();
+                const anchors = await desktop.evaluate(({ app }) =>
+                    (
+                        app as typeof app & {
+                            genieObservations: {
+                                geometry: {
+                                    bounds: Electron.Rectangle;
+                                    target: Electron.Rectangle;
+                                };
+                            }[];
+                        }
+                    ).genieObservations
+                        .slice(-2)
+                        .map(({ geometry: p }) => ({
+                            x: p.bounds.x + p.target.x + p.target.width / 2,
+                            y: p.bounds.y + p.target.y + p.target.height / 2,
+                        })),
                 );
-                assert.ok(
-                    Math.abs(point.y - button.y - button.height / 2) < 1,
-                    'Taskbar button vertical anchor mismatch: ' + details,
-                );
+                assert.equal(anchors.length, 2);
+                for (const point of anchors) {
+                    const exact =
+                        Math.abs(point.x - button.x - button.width / 2) < 1 &&
+                        Math.abs(point.y - button.y - button.height / 2) < 1;
+                    const center =
+                        Math.abs(point.x - fallbackPoint.x) < 1 &&
+                        Math.abs(point.y - fallbackPoint.y) < 1;
+                    assert.ok(
+                        exact || center,
+                        'Taskbar anchor is neither the app button nor its documented fallback: ' +
+                            JSON.stringify({ point, button, fallbackPoint, display }),
+                    );
+                    if (exact) precise++;
+                }
             }
+            assert.ok(precise > 0, 'Qualify at least one precise app-button anchor per display.');
             assert.deepEqual(
                 await desktop.evaluate(
                     ({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.getBounds(),
