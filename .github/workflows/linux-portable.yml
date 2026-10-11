@@ -110,15 +110,32 @@ jobs:
                   apt-get update -qq
                   audio_package=libasound2t64
                   if [ '${{ matrix.shell }}' = 42 ]; then audio_package=libasound2; fi
-                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl python3 dbus-x11 xvfb x11-utils x11-apps xdotool gnome-shell gjs gir1.2-gtk-4.0 pipewire openssh-server openssl util-linux libnss3 libatk-bridge2.0-0 libgbm1 "$audio_package"
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl python3 systemd dbus-x11 xvfb x11-utils x11-apps xdotool gnome-shell gjs gir1.2-gtk-4.0 pipewire openssh-server openssl util-linux libnss3 libatk-bridge2.0-0 libgbm1 "$audio_package"
                   if [ -f /etc/debian_version ] && ! grep -q '^ID=ubuntu' /etc/os-release; then
                       apt-get install -y --no-install-recommends gnome-shell-extension-dashtodock
                   else
                       apt-get install -y --no-install-recommends gnome-shell-extension-ubuntu-dock
                   fi
                   if [ "${{ matrix.shell }}" = 50 ]; then apt-get install -y --no-install-recommends mutter-dev-bin wireplumber; fi
-                  mkdir -p /run/dbus
+                  mkdir -p /run/dbus /run/systemd/seats /run/systemd/sessions /run/systemd/users /run/systemd/inhibit
                   dbus-daemon --system --fork
+                  # The job container does not boot systemd. D-Bus activation uses
+                  # Exec=/bin/false, so start the real login manager explicitly.
+                  SYSTEMD_LOG_TARGET=console /usr/lib/systemd/systemd-logind > /tmp/hub-ci-logind.log 2>&1 &
+                  logind_pid=$!
+                  login_ready=0
+                  for attempt in $(seq 1 100); do
+                      if gdbus call --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 --method org.freedesktop.DBus.Properties.Get org.freedesktop.login1.Manager PreparingForSleep > /tmp/hub-ci-login1-preflight.log 2>&1; then
+                          login_ready=1
+                          break
+                      fi
+                      if ! kill -0 "$logind_pid" 2>/dev/null; then break; fi
+                      sleep .2
+                  done
+                  if [ "$login_ready" != 1 ]; then
+                      cat /tmp/hub-ci-logind.log /tmp/hub-ci-login1-preflight.log
+                      exit 1
+                  fi
             - uses: actions/checkout@v6
             - uses: actions/setup-node@v7
               with:
@@ -134,6 +151,7 @@ jobs:
                   test "$(gnome-shell --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = '${{ matrix.shell }}'
                   bash tests/gnome-ssh-server.sh
                   mkdir -p validation/gnome
+                  cp /tmp/hub-ci-logind.log /tmp/hub-ci-login1-preflight.log validation/gnome/
                   chown -R hubengineer:hubengineer "$GITHUB_WORKSPACE"
                   chmod +x release/Diagnostic-Hub-linux-x64.AppImage
                   export HUB_TEST_EXECUTABLE="$GITHUB_WORKSPACE/release/Diagnostic-Hub-linux-x64.AppImage"
