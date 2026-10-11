@@ -48,6 +48,17 @@ export class WindowTransitions {
             process.platform === 'win32'
                 ? new TaskbarReader('dev.diagnostichub.desktop', () => main.getTitle())
                 : null;
+        if (!this.reader) {
+            // Linux's compositor owns its actor and geometry. The Windows adapter must not
+            // change opacity or create animation IPC on compositor-driven native events.
+            const restore = () => this.restored();
+            const close = () => this.dispose();
+            main.on('restore', restore);
+            main.on('closed', close);
+            this.listeners.push(() => main.removeListener('restore', restore));
+            this.listeners.push(() => main.removeListener('closed', close));
+            return;
+        }
         if (this.reader) {
             try {
                 this.native = new NativeWindow(main, () => this.minimize());
@@ -144,6 +155,7 @@ export class WindowTransitions {
         );
     }
     refreshMotion() {
+        if (!this.reader) return;
         this.native?.enable(this.supported());
         if (!this.supported()) this.cancel();
     }
@@ -323,7 +335,7 @@ export class WindowTransitions {
     dispose() {
         if (this.state === 'disposed') return;
         this.release();
-        if (!this.main.isDestroyed()) this.main.setOpacity(1);
+        if (this.reader && !this.main.isDestroyed()) this.main.setOpacity(1);
         this.state = 'disposed';
         this.reader?.close();
         this.native?.dispose();

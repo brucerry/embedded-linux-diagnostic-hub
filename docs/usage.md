@@ -1,5 +1,8 @@
 # Using Diagnostic Hub
 
+Supported Ubuntu/Debian GNOME desktops can animate native minimize/restore through the optional
+[Linux Genie companion](linux-genie.md). Setup and activation are separate from connecting a device.
+
 The desktop and website share the same workspace. The desktop connects directly over SSH; the
 website needs a matching [HTTPS lab gateway](gateway.md). Start with a reachable Linux SSH service
 and credentials, choose **Connect device**, and verify the device fingerprint before accepting it.

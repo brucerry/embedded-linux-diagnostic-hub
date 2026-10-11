@@ -8,6 +8,8 @@ export function releaseAssets(version) {
         WINDOWS_ASSET,
         LINUX_ASSET,
         LINUX_ARCHIVE,
+        `Diagnostic-Hub-Genie-${version}.zip`,
+        `Diagnostic-Hub-Genie-Legacy42-${version}.zip`,
         `Diagnostic-Hub-Gateway-${version}.tar.gz`,
         `Diagnostic-Hub-Web-${version}.zip`,
         ...LAUNCHERS,

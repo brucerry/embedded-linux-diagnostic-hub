@@ -78,6 +78,8 @@ async function main() {
                 entry[0] !== 'ELECTRON_RUN_AS_NODE' && entry[1] !== undefined,
         ),
     );
+    // Playwright prepends inspector arguments, so extraction cannot rely on the first CLI flag.
+    if (process.env.HUB_TEST_APPIMAGE) electronEnvironment.APPIMAGE_EXTRACT_AND_RUN = '1';
     const desktop = await electron
         .launch({
             chromiumSandbox: Boolean(process.env.HUB_TEST_SANDBOX),
@@ -85,7 +87,6 @@ async function main() {
             args: [
                 ...(process.env.HUB_TEST_EXECUTABLE ? [] : ['.']),
                 `--user-data-dir=${temporary}`,
-                ...(process.env.HUB_TEST_APPIMAGE ? ['--appimage-extract-and-run'] : []),
                 ...(process.platform === 'linux' && !process.env.HUB_TEST_SANDBOX
                     ? ['--no-sandbox']
                     : []),

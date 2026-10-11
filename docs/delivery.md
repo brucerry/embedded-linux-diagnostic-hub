@@ -11,6 +11,7 @@ npm run package:gateway
 npm run package:win
 npm run verify:package
 npm run package:linux
+npm run package:genie
 npm run verify:linux
 npm run package:web
 npm run package:launchers
@@ -25,6 +26,13 @@ Ubuntu/Debian libraries trigger an explicit prerequisite installation prompt, se
 execution; package installation can require `sudo`. See [download commands](downloads.md). Temporary
 extraction and per-user trusted SSH key storage still require writable host directories. Do not ship
 an old executable alongside the current one.
+
+Linux releases also include the versioned optional [GNOME companion](linux-genie.md). Package it
+from the same clean source commit as the app. `package:genie` creates the modern ZIP and a separate
+`Diagnostic-Hub-Genie-Legacy42-<version>.zip`, each with its own checksum; the release validator
+checks both identities and the Linux build manifest's asset hashes. The reusable Linux workflow
+includes the dedicated compositor matrix, so release publication waits for those jobs as well as the
+existing native fallback checks.
 
 Unsigned Linux/WSL cross-build:
 

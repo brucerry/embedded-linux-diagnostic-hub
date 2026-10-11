@@ -31,6 +31,7 @@ const appUrl = development ? 'http://127.0.0.1:5173/' : 'app://bundle/index.html
 let window: BrowserWindow;
 let transitions: WindowTransitions | undefined;
 if (process.platform === 'win32') app.setAppUserModelId('dev.diagnostichub.desktop');
+if (process.platform === 'linux') app.setDesktopName('diagnostic-hub.desktop');
 let keyPath: string | null = null;
 let connecting = false;
 let lastSnapshot: Snapshot | null = null;

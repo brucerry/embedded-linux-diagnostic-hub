@@ -29,6 +29,7 @@ jobs:
             - run: npx playwright install --with-deps chromium
             - run: npm run test:e2e
             - run: npm run package:linux
+            - run: npm run package:genie
             - run: npm run verify:linux
             - name: Run the packaged Linux application over loopback SSH
               run: xvfb-run -a npx tsx tests/desktop-smoke.ts
@@ -63,4 +64,85 @@ jobs:
                       release/Diagnostic-Hub-linux-x64.tar.gz
                       release/Diagnostic-Hub-linux-x64.tar.gz.sha256
                       release/linux-build-info.json
+                      release/Diagnostic-Hub-Genie-*.zip
+                      release/Diagnostic-Hub-Genie-*.zip.sha256
+                  if-no-files-found: error
+    gnome:
+        needs: build
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - image: ubuntu:22.04
+                      shell: 42
+                      backend: wayland
+                    - image: ubuntu:22.04
+                      shell: 42
+                      backend: x11
+                    - image: ubuntu:24.04
+                      shell: 46
+                      backend: wayland
+                    - image: ubuntu:24.04
+                      shell: 46
+                      backend: x11
+                    - image: ubuntu:26.04
+                      shell: 50
+                      backend: wayland
+                    - image: debian:13
+                      shell: 48
+                      backend: wayland
+                    - image: debian:13
+                      shell: 48
+                      backend: x11
+        container:
+            image: ${{ matrix.image }}
+            options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
+        env:
+            HUB_GNOME_ISOLATED: '1'
+            HUB_GNOME_BACKEND: ${{ matrix.backend }}
+            HUB_GNOME_STRESS: '1'
+            HUB_GNOME_TEST_GSK_RENDERER: gl
+        steps:
+            - name: Install isolated qualification prerequisites
+              run: |
+                  apt-get update -qq
+                  audio_package=libasound2t64
+                  if [ '${{ matrix.shell }}' = 42 ]; then audio_package=libasound2; fi
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl python3 dbus-x11 xvfb x11-utils x11-apps xdotool gnome-shell gjs gir1.2-gtk-4.0 pipewire openssh-server openssl util-linux libnss3 libatk-bridge2.0-0 libgbm1 "$audio_package"
+                  if [ -f /etc/debian_version ] && ! grep -q '^ID=ubuntu' /etc/os-release; then
+                      apt-get install -y --no-install-recommends gnome-shell-extension-dashtodock
+                  else
+                      apt-get install -y --no-install-recommends gnome-shell-extension-ubuntu-dock
+                  fi
+                  if [ "${{ matrix.shell }}" = 50 ]; then apt-get install -y --no-install-recommends mutter-dev-bin wireplumber; fi
+                  mkdir -p /run/dbus
+                  dbus-daemon --system --fork
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: npm
+            - uses: actions/download-artifact@v4
+              with:
+                  name: Diagnostic-Hub-linux-x64
+                  path: release
+            - run: npm ci
+            - name: Verify the actual targeted shell and run native qualification
+              run: |
+                  test "$(gnome-shell --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = '${{ matrix.shell }}'
+                  bash tests/gnome-ssh-server.sh
+                  mkdir -p validation/gnome
+                  chown -R hubengineer:hubengineer "$GITHUB_WORKSPACE"
+                  chmod +x release/Diagnostic-Hub-linux-x64.AppImage
+                  export HUB_TEST_EXECUTABLE="$GITHUB_WORKSPACE/release/Diagnostic-Hub-linux-x64.AppImage"
+                  export HUB_TEST_LINUX_CONNECTION="$(cat /tmp/hub-gnome-connection-path)"
+                  export HUB_GNOME_EVIDENCE="$GITHUB_WORKSPACE/validation/gnome"
+                  runuser -u hubengineer --preserve-environment -- bash tests/gnome-session.sh
+            - uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: gnome-evidence-${{ matrix.shell }}-${{ matrix.backend }}
+                  path: validation/gnome
                   if-no-files-found: error

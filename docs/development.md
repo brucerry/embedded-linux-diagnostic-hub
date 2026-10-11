@@ -1,5 +1,9 @@
 # Development and maintenance
 
+The optional GNOME companion and isolated native checks are described in
+[Linux Genie integration](linux-genie.md#development-and-qualification). Build the Linux app and
+`npm run package:genie` together; release validation requires matching source identities.
+
 ## Module boundaries
 
 `src/app/App.tsx` selects pages and assembles the application shell. `src/hooks/useDeviceSession.ts`

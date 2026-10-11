@@ -115,8 +115,17 @@ test('gateway terminal streams prompt/Unicode, preserves auth and diagnostic/rep
                 .status,
             200,
         );
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        assert.ok(fixture.terminal.sizes.some((size) => size.cols === 120 && size.rows === 40));
+        // HTTP acceptance precedes receipt of the SSH window-change packet. Observe
+        // the actual remote dimensions with a deadline instead of assuming 30 ms delivery.
+        const resized = () =>
+            fixture.terminal.sizes.some((size) => size.cols === 120 && size.rows === 40);
+        const resizeDeadline = performance.now() + 2000;
+        while (!resized() && performance.now() < resizeDeadline)
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.ok(
+            resized(),
+            'SSH fixture did not receive the exact 120x40 resize within 2 seconds',
+        );
         const snapshot = await fixture.request(`/api/sessions/${sessionId}/snapshot`, 'POST');
         assert.equal(snapshot.status, 200);
         assert.equal(JSON.stringify(await snapshot.json()).includes('裝置✓'), false);

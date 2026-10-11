@@ -1,7 +1,8 @@
 {
     "name": "embedded-linux-diagnostic-hub",
     "productName": "Diagnostic Hub",
-    "version": "0.2.0-rc.4",
+    "desktopName": "diagnostic-hub.desktop",
+    "version": "0.2.0-rc.5",
     "private": true,
     "description": "A portable SSH diagnostic workbench for embedded Linux",
     "author": "Diagnostic Hub contributors",
@@ -28,6 +29,7 @@
         "test:board-documents": "tsx tests/testing-documents-smoke.ts",
         "package:win": "npm run build && electron-builder --win portable --x64 --publish never",
         "package:linux": "npm run build && electron-builder --linux AppImage tar.gz --x64 --publish never",
+        "package:genie": "node scripts/package-genie.mjs",
         "preview": "vite preview --host 127.0.0.1",
         "generate:icons": "node scripts/generate-icons.mjs",
         "format": "prettier --write .",
@@ -106,6 +108,7 @@
             "requestExecutionLevel": "user"
         },
         "linux": {
+            "syncDesktopName": true,
             "target": [
                 {
                     "target": "AppImage",

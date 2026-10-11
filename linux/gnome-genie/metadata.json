@@ -1,0 +1,8 @@
+{
+    "uuid": "diagnostic-hub-genie@diagnostichub.desktop",
+    "name": "Diagnostic Hub Genie",
+    "description": "Native minimize and restore motion for Diagnostic Hub only",
+    "shell-version": ["46", "48", "50"],
+    "version": 1,
+    "version-name": "development"
+}

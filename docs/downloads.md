@@ -27,6 +27,11 @@ permissions. It removes that temporary extraction after the application closes. 
 AppImage remains available for later offline use. Downloads require internet; subsequent direct SSH
 sessions do not.
 
+Releases containing the optional Genie companion offer per-user setup on supported Ubuntu/Debian
+GNOME desktops through the same command. See [native Linux motion](linux-genie.md) for activation,
+fallback, space and removal. Use `--no-genie` to skip it; `--download-only` makes no integration
+changes.
+
 ## Missing prerequisites
 
 Windows packages include Electron and the application dependencies. Windows 10/11 supplies the
