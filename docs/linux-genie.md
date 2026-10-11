@@ -106,10 +106,10 @@ tracked sources and records the companion hash alongside Linux app assets. The r
 window-control method and disappears on disable.
 
 The Linux workflow retains Ubuntu 22.04 package/native fallback checks and adds isolated GNOME
-42/46/48/50 compositor sessions. The GNOME 42 harness has run locally in isolated WSL2 sessions; the
-workflow jobs have not been verified remotely. `tests/gnome-session.sh` uses private XDG directories
-and a separate session bus. Its test-only unsafe Shell evaluation is never distributed in the
-companion.
+42/46/48/50 compositor sessions. All seven hosted cases passed at the source recorded in the
+[RC7 qualification sign-off](releases/v0.2.0-rc.7-qualification.md). Each release must pass its own
+rebuilt matrix before publication. `tests/gnome-session.sh` uses private XDG directories and a
+separate session bus. Its test-only unsafe Shell evaluation is never distributed in the companion.
 
 The harness observes real native completion, 100 minimize/restore cycles, bounds, non-target
 isolation, reduced motion, route conflicts and disable recovery. An actual 42-second Bash PTY stream
@@ -119,11 +119,11 @@ unit fixtures; Xvfb alone does not qualify the animation.
 Physical GPU drivers, fractional-scale displays and physical multi-monitor docks require additional
 hardware acceptance. Virtual and logical-coordinate fixtures cannot establish physical coverage.
 
-The current development qualification is incomplete. GNOME 42.9 passed baseline Wayland and X11
-checks. GNOME 46.0 and GNOME 48.7 passed extended stress on both backends. A GNOME 48 Wayland rerun
-retained exact saved bounds after 400 resize requests and 200 native cycles, but an earlier
-saved-bounds mismatch remains unexplained. Ten separate enabled/disabled bounds comparisons also
-passed; these finite passes do not establish that the intermittent mismatch is fixed.
+The finite isolated software matrix passed 100 native cycles, 100 interrupted stress cycles, 400
+resize requests, exact saved bounds and balanced effect cleanup on all seven backends. Earlier GNOME
+42 and GNOME 48 saved-bounds mismatches remain unexplained. Representative full GNOME 42 controls
+passed with and without tracing, and a deliberate real mismatch failed the original assertion.
+Tracing can change scheduling; these finite passes do not establish a geometry cure.
 
 Independent real-app continuity passed on GNOME 42/46/48/50 with 42 ordered one-second PTY ticks,
 the same Bash process and PTY, one connection and terminal channel, continued collection and clock
@@ -131,9 +131,10 @@ refresh, distinct retained connected/simulated run identities, and eligible focu
 connected tests use a software inventory/read fixture over real loopback SSH. GNOME 50's continuity
 result does not qualify its visual motion.
 
-GNOME 50.1 now renders the app before motion and its outgoing effect texture contains actual app
-content, but the restore texture lacks the app body and target deformation is still unqualified.
-Changing desktop pixels or successful native callbacks alone cannot pass the visual gate.
+The current GNOME 50.1 actor-owned production path passed isolated visual, native lifecycle and
+stress checks at resource scale 1. Historical concurrent browser/build overload and cycle-31
+failures remain unconfirmed resolved under their original conditions. Changing desktop pixels or
+successful native callbacks alone cannot pass the visual gate; physical coverage remains separate.
 
 Genuine locally built second-version AppImage and archive updates on GNOME 42 passed pending
 activation in the cached session and active status in a fresh isolated session, without another

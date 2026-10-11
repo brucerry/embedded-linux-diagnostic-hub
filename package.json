@@ -2,7 +2,7 @@
     "name": "embedded-linux-diagnostic-hub",
     "productName": "Diagnostic Hub",
     "desktopName": "diagnostic-hub.desktop",
-    "version": "0.2.0-rc.6",
+    "version": "0.2.0-rc.7",
     "private": true,
     "description": "A portable SSH diagnostic workbench for embedded Linux",
     "author": "Diagnostic Hub contributors",
