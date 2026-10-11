@@ -186,12 +186,19 @@
         app: Shell.WindowTracker.get_default().get_window_app(a.meta_window)?.get_id(),
     }));
     const traceEnabled = '__TRACE_BOUNDS__' === '1';
+    let boundsPhase = 'native-cycles';
     const traceSignals = [];
     result.eventOrder = [];
     const trace = (event, requested = null) => {
         if (!traceEnabled) return;
         result.eventOrder.push({
             event,
+            phase: boundsPhase,
+            enabled: extension._enabled,
+            focus: global.display.focus_window?.get_wm_class(),
+            resizing: Main.wm._resizing?.has(actor),
+            resizePending: Main.wm._resizePending?.has(actor),
+            frozen: actor.__animationInfo?.frozen,
             requested,
             timeMs: GLib.get_monotonic_time() / 1000,
             frame: rect(actor.meta_window.get_frame_rect()),
@@ -204,6 +211,11 @@
             minimized: actor.meta_window.minimized,
         });
         if (result.eventOrder.length > 5000) result.eventOrder.shift();
+    };
+    const markBoundsPhase = (phase) => {
+        if (!traceEnabled) return;
+        boundsPhase = phase;
+        trace('phase-' + phase);
     };
     if (traceEnabled) {
         for (const signal of [
@@ -587,8 +599,10 @@
                 'target-isolation',
                 'idle-cleanup',
             );
+            markBoundsPhase('warmup-maximize');
             actor.meta_window.maximize(Meta.MaximizeFlags.BOTH);
             await wait(600);
+            markBoundsPhase('warmup-unmaximize');
             actor.meta_window.unmaximize(Meta.MaximizeFlags.BOTH);
             await wait(600);
             const geometry = (phase) => {
@@ -609,24 +623,31 @@
             // Control the same compositor remap without our effect: Wayland CSD extents may
             // appear only after a maximized surface has been remapped.
             extension._enabled = false;
+            markBoundsPhase('native-maximize');
             actor.meta_window.maximize(Meta.MaximizeFlags.BOTH);
             await wait(600);
+            markBoundsPhase('native-minimize');
             actor.meta_window.minimize();
             await wait(600);
+            markBoundsPhase('native-restore');
             actor.meta_window.activate(global.get_current_time());
             await wait(600);
+            markBoundsPhase('native-unmaximize');
             actor.meta_window.unmaximize(Meta.MaximizeFlags.BOTH);
             await wait(600);
             const nativeNormal = await stableBounds(actor.meta_window);
             geometry('after-native-normal');
             extension._enabled = true;
             result.nativeBounds = { beforeRemap: originalNormal, afterNativeRemap: nativeNormal };
+            markBoundsPhase('effect-maximize');
             actor.meta_window.maximize(Meta.MaximizeFlags.BOTH);
             await wait(600);
             geometry('effect-maximized');
             const maximizedBounds = rect(actor.meta_window.get_frame_rect());
+            markBoundsPhase('effect-minimize');
             actor.meta_window.minimize();
             await wait(580);
+            markBoundsPhase('effect-restore');
             actor.meta_window.activate(global.get_current_time());
             await wait(600);
             assert(
@@ -635,6 +656,7 @@
                     equal(rect(actor.meta_window.get_frame_rect()), maximizedBounds),
                 'maximized bounds changed',
             );
+            markBoundsPhase('effect-unmaximize');
             actor.meta_window.unmaximize(Meta.MaximizeFlags.BOTH);
             await wait(600);
             await stableBounds(actor.meta_window);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { StringDecoder } from 'node:string_decoder';
 import { _electron, expect } from '@playwright/test';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, statfsSync } from 'node:fs';
@@ -68,6 +69,8 @@ async function main() {
     const traceBounds = process.env.HUB_GNOME_TRACE_BOUNDS === '1';
     if (traceBounds) environment.WAYLAND_DEBUG = 'client';
     const protocol: Array<{ timeMs: number; line: string }> = [];
+    let flushProtocol = () => {};
+    let protocolTraceState: Record<string, number> = {};
     const resourceSamples: Array<unknown> = [];
     const runtimeEvents: Array<unknown> = [];
     const runtimeStderr: string[] = [];
@@ -139,18 +142,50 @@ async function main() {
     }
     desktop.process().stderr?.on('data', captureStderr);
     if (traceBounds) {
-        desktop.process().stderr?.on('data', (data: Buffer) => {
-            for (const line of data.toString().split('\n')) {
-                if (
-                    /xdg_(toplevel|surface).*?(configure|ack_configure|set_window_geometry|set_min_size)|wl_surface.*set_buffer_scale/.test(
-                        line,
-                    )
-                ) {
-                    protocol.push({ timeMs: Number(process.hrtime.bigint()) / 1e6, line });
-                    if (protocol.length > 5000) protocol.shift();
+        const decoder = new StringDecoder('utf8');
+        let pending = '';
+        let protocolDroppedRows = 0;
+        let truncatedPartialLines = 0;
+        const protocolLimitRows = 20000;
+        const recordProtocolLine = (line: string) => {
+            if (
+                /xdg_(toplevel|surface).*?(configure|ack_configure|set_window_geometry|set_min_size|set_maximized|unset_maximized|set_minimized)|wl_surface.*?(attach|commit|frame|set_buffer_scale)|wl_shm_pool.*create_buffer|zwp_linux_buffer_params.*create|wl_buffer.*destroy/.test(
+                    line,
+                )
+            ) {
+                protocol.push({ timeMs: Number(process.hrtime.bigint()) / 1e6, line });
+                if (protocol.length > protocolLimitRows) {
+                    protocol.splice(0, 500);
+                    protocolDroppedRows += 500;
                 }
             }
+        };
+        const consumeProtocol = (data: Buffer) => {
+            pending += decoder.write(data);
+            const lines = pending.split('\n');
+            pending = lines.pop()!;
+            if (pending.length > 65536) {
+                pending = pending.slice(-65536);
+                truncatedPartialLines++;
+            }
+            for (const line of lines) recordProtocolLine(line);
+        };
+        desktop.process().stderr?.on('data', consumeProtocol);
+        desktop.process().stderr?.once('end', () => {
+            pending += decoder.end();
+            if (pending) recordProtocolLine(pending);
+            pending = '';
         });
+        // Flush a final partial line at the evidence boundary, without timed-cycle I/O.
+        flushProtocol = () => {
+            if (pending) recordProtocolLine(pending);
+            protocolTraceState = {
+                droppedRows: protocolDroppedRows,
+                truncatedPartialLines,
+                pendingCharacters: pending.length,
+                limitRows: protocolLimitRows,
+            };
+        };
         await desktop
             .evaluate(({ BrowserWindow, app, screen }) => {
                 const rows: Array<unknown> = [];
@@ -745,12 +780,29 @@ async function main() {
             await writeFile(path.join(output, 'ipc-profile-error.txt'), String(error));
         }
         if (traceBounds) {
-            const client = await desktop.evaluate(
-                ({ app }) => (app as typeof app & { boundsTrace: Array<unknown> }).boundsTrace,
-            );
+            flushProtocol();
+            let client: unknown[] = [];
+            let clientError: string | undefined;
+            try {
+                client = await desktop.evaluate(
+                    ({ app }) => (app as typeof app & { boundsTrace: unknown[] }).boundsTrace,
+                );
+            } catch (error) {
+                clientError = String(error);
+            }
             await writeFile(
                 path.join(output, 'client-bounds-events.json'),
-                JSON.stringify({ clock: 'Linux CLOCK_MONOTONIC ms', client, protocol }, null, 2),
+                JSON.stringify(
+                    {
+                        clock: 'Linux CLOCK_MONOTONIC ms',
+                        client,
+                        clientError,
+                        protocol,
+                        protocolTraceState,
+                    },
+                    null,
+                    2,
+                ),
             );
         }
         control.kill('SIGTERM');

@@ -104,6 +104,8 @@ jobs:
             HUB_GNOME_BACKEND: ${{ matrix.backend }}
             HUB_GNOME_STRESS: '1'
             HUB_GNOME_TEST_GSK_RENDERER: gl
+            HUB_GNOME_TRACE_BOUNDS:
+                ${{ matrix.shell == 42 && matrix.backend == 'wayland' && '1' || '0' }}
         steps:
             - name: Install isolated qualification prerequisites
               run: |
