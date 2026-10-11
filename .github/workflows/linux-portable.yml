@@ -98,7 +98,7 @@ jobs:
                       backend: x11
         container:
             image: ${{ matrix.image }}
-            options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined
+            options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined --shm-size=1g
         env:
             HUB_GNOME_ISOLATED: '1'
             HUB_GNOME_BACKEND: ${{ matrix.backend }}
@@ -151,6 +151,10 @@ jobs:
                   test "$(gnome-shell --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = '${{ matrix.shell }}'
                   bash tests/gnome-ssh-server.sh
                   mkdir -p validation/gnome
+                  # Chromium and the real compositor share this private container budget.
+                  # Record and check capacity without sharing the host IPC namespace.
+                  df -B1 /dev/shm > validation/gnome/shared-memory-preflight.txt
+                  python3 -B -c 'import os; s = os.statvfs("/dev/shm"); assert s.f_blocks * s.f_frsize >= 1024 ** 3, "Private shared-memory budget is below 1 GiB"'
                   cp /tmp/hub-ci-logind.log /tmp/hub-ci-login1-preflight.log validation/gnome/
                   chown -R hubengineer:hubengineer "$GITHUB_WORKSPACE"
                   chmod +x release/Diagnostic-Hub-linux-x64.AppImage

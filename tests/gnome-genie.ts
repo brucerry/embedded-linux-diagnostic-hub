@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { _electron, expect } from '@playwright/test';
 import { execFileSync, spawn } from 'node:child_process';
+import { readFileSync, statfsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -67,7 +68,76 @@ async function main() {
     const traceBounds = process.env.HUB_GNOME_TRACE_BOUNDS === '1';
     if (traceBounds) environment.WAYLAND_DEBUG = 'client';
     const protocol: Array<{ timeMs: number; line: string }> = [];
-    const desktop = await launch(false);
+    const resourceSamples: Array<unknown> = [];
+    const runtimeEvents: Array<unknown> = [];
+    const runtimeStderr: string[] = [];
+    let stderrCharacters = 0;
+    const stderrLimit = 2 * 1024 * 1024;
+    const recordResources = () => {
+        const sample: Record<string, unknown> = { timeMs: Number(process.hrtime.bigint()) / 1e6 };
+        try {
+            const shared = statfsSync('/dev/shm');
+            sample.sharedMemory = {
+                capacityBytes: shared.bsize * shared.blocks,
+                availableBytes: shared.bsize * shared.bavail,
+                usedBytes: shared.bsize * (shared.blocks - shared.bfree),
+            };
+        } catch (error) {
+            sample.sharedMemoryError = String(error);
+        }
+        for (const name of ['memory.current', 'memory.max', 'memory.events']) {
+            try {
+                sample[name] = readFileSync('/sys/fs/cgroup/' + name, 'utf8')
+                    .slice(0, 2048)
+                    .trim();
+            } catch (error) {
+                sample[name] = String(error);
+            }
+        }
+        resourceSamples.push(sample);
+        if (resourceSamples.length > 600) resourceSamples.shift();
+    };
+    const captureStderr = (data: Buffer) => {
+        const text = data.toString().slice(-stderrLimit);
+        runtimeStderr.push(text);
+        stderrCharacters += text.length;
+        while (stderrCharacters > stderrLimit) stderrCharacters -= runtimeStderr.shift()!.length;
+    };
+    recordResources();
+    const resourceTimer = setInterval(recordResources, 1000);
+    resourceTimer.unref();
+    const saveRuntimeDiagnostics = async () => {
+        clearInterval(resourceTimer);
+        recordResources();
+        try {
+            await writeFile(
+                path.join(output, 'runtime-resource-profile.json'),
+                JSON.stringify(
+                    {
+                        clock: 'Linux CLOCK_MONOTONIC ms',
+                        resourceSamples,
+                        runtimeEvents,
+                        stderrRetainedCharacters: stderrCharacters,
+                        stderrLimitCharacters: stderrLimit,
+                    },
+                    null,
+                    2,
+                ),
+            );
+            await writeFile(path.join(output, 'runtime-stderr.log'), runtimeStderr.join(''));
+        } catch (error) {
+            console.error('Could not retain runtime diagnostics: ' + String(error));
+        }
+    };
+    let desktop: Awaited<ReturnType<typeof launch>>;
+    try {
+        desktop = await launch(false);
+    } catch (error) {
+        runtimeEvents.push({ type: 'launch-error', error: String(error) });
+        await saveRuntimeDiagnostics();
+        throw error;
+    }
+    desktop.process().stderr?.on('data', captureStderr);
     if (traceBounds) {
         desktop.process().stderr?.on('data', (data: Buffer) => {
             for (const line of data.toString().split('\n')) {
@@ -130,6 +200,9 @@ async function main() {
                 });
             })
             .catch(async (error: unknown) => {
+                runtimeEvents.push({ type: 'trace-setup-error', error: String(error) });
+                await saveRuntimeDiagnostics();
+                desktop.process().stderr?.off('data', captureStderr);
                 await desktop.close();
                 if (process.env.HUB_GNOME_PRESERVE_PROFILE !== '1')
                     await rm(root, { recursive: true, force: true });
@@ -145,17 +218,33 @@ async function main() {
         );
     }
     desktop.process().on('exit', (code, signal) => {
+        runtimeEvents.push({
+            type: 'process-exit',
+            timeMs: Number(process.hrtime.bigint()) / 1e6,
+            code,
+            signal,
+        });
         failures.push(`unexpected app exit ${code}/${signal}`);
     });
-    const title = await desktop.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0].getTitle(),
-    );
+    const title = await desktop
+        .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle())
+        .catch(async (error: unknown) => {
+            runtimeEvents.push({ type: 'window-setup-error', error: String(error) });
+            await saveRuntimeDiagnostics();
+            throw error;
+        });
     const control = spawn('gjs', ['-m', 'tests/fixtures/gnome-control.js', title], {
         env: environment,
         stdio: 'ignore',
     });
     try {
         const page = await desktop.firstWindow();
+        page.on('crash', () =>
+            runtimeEvents.push({
+                type: 'renderer-crash',
+                timeMs: Number(process.hrtime.bigint()) / 1e6,
+            }),
+        );
         await expect(page.getByRole('heading', { name: 'Device overview' })).toBeVisible();
         await desktop.evaluate(({ app, ipcMain }) => {
             const counts: Record<string, number> = {};
@@ -632,6 +721,8 @@ async function main() {
             `GNOME production companion passed ${native.cycles} native cycles and real Bash PTY/collection continuity.`,
         );
     } finally {
+        await saveRuntimeDiagnostics();
+        desktop.process().stderr?.off('data', captureStderr);
         // Stop owned asynchronous actor operations before closing their real windows.
         try {
             evaluate('void global.hubQualificationCancel?.()');

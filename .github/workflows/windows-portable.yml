@@ -88,3 +88,10 @@ jobs:
                       release/Diagnostic-Hub.exe.sha256
                       release/build-info.json
                   if-no-files-found: error
+            - name: Retain browser failure context and traces
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-browser-failure-${{ github.run_attempt }}
+                  path: test-results/
+                  if-no-files-found: warn
