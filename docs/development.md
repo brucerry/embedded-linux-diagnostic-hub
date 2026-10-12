@@ -138,3 +138,10 @@ Overview/report fields become unavailable without substituting a connection or f
 The cover paints for at least 300 ms for fast RAM-only cleanup, blocks interaction throughout fresh
 snapshot/history preparation, and is released on success or failure. Failure leaves cleared values
 and an actionable error rather than stale readings.
+
+Native-cycle qualification confirms each resize/maximize/unmaximize/minimize request before
+proceeding and records Electron events plus actual compositor states. Linux restoration is requested
+through the owned GNOME window manager, matching native desktop/window-switcher behavior; client
+`BrowserWindow.restore()` can leave the actual surface minimized even after its local flag clears.
+Both state assertions retain the five-second deadline. The app exposes no privileged restore control
+or workaround.
