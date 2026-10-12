@@ -1,5 +1,6 @@
 import { _electron as electron, expect } from '@playwright/test';
 import { createHash, generateKeyPairSync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -232,6 +233,33 @@ async function main() {
         ).toBe('https://github.com/brucerry/embedded-linux-diagnostic-hub');
         await expect(page.getByText('Desktop · Offline ready', { exact: true })).toHaveCount(0);
         const packaged = await desktop.evaluate(({ app }) => app.isPackaged);
+        if (process.env.HUB_GNOME_ISOLATED === '1') {
+            expect(
+                await desktop.evaluate(({ app }) => app.commandLine.getSwitchValue('class')),
+            ).toBe('diagnostic-hub-native');
+            const mainPid = await desktop.evaluate(() => process.pid);
+            const predicate = `(()=>{const windows=global.get_window_actors().map(actor=>actor.meta_window).filter(window=>window.get_pid()===${mainPid});return windows.length===1&&windows.every(window=>window.get_wm_class()?.toLowerCase()==='diagnostic-hub-native');})()`;
+            await expect
+                .poll(() =>
+                    execFileSync(
+                        'gdbus',
+                        [
+                            'call',
+                            '--session',
+                            '--dest',
+                            'org.gnome.Shell',
+                            '--object-path',
+                            '/org/gnome/Shell',
+                            '--method',
+                            'org.gnome.Shell.Eval',
+                            predicate,
+                        ],
+                        { encoding: 'utf8', timeout: 5000 },
+                    ).trim(),
+                )
+                .toMatch(/^\(true, ['"]true['"]\)$/);
+        }
+
         await page.evaluate(() => {
             const testing = window as unknown as {
                 terminalSmoke: { id: string; stop: () => void };
