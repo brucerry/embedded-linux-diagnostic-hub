@@ -75,13 +75,15 @@ try {
 "@
     $fixture = Evaluate $main $setup
     $fixtureJson = ConvertTo-Json -InputObject $fixture -Compress
-    Evaluate $renderer ('globalThis.fixtureSettings = ' + $fixtureJson) | Out-Null
+    $ready = Wait-RendererReady $renderer
+    Write-Output ('Committed renderer baseline: ' + ($ready | ConvertTo-Json -Compress))
+    # Keep fixture data local to one evaluation; a prior document cannot carry it forward.
     $exercise = @'
-(async () => {
+(async (fixtureSettings) => {
     const wait=async fn=>{const start=Date.now();while(!fn()){if(Date.now()-start>30000)throw Error('Fixture UI timed out');await new Promise(r=>setTimeout(r,50));}};
     const button=text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text || b.getAttribute('aria-label')===text);
     const fill=(label,value)=>{const el=[...document.querySelectorAll('label')].find(el=>el.textContent.startsWith(label)).querySelector('input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));};
-    await wait(()=>button('Connect device'));button('Connect device').click();await wait(()=>document.querySelector('.modal form'));
+    if(!button('Connect device'))throw Error('Committed renderer changed before fixture exercise');button('Connect device').click();await wait(()=>document.querySelector('.modal form'));
     fill('Hostname or IP address','127.0.0.1');fill('Port',String(fixtureSettings.port));fill('SSH username','engineer');fill('Password','test-only-secret');
     await new Promise(r=>setTimeout(r,0));document.querySelector('.modal form').requestSubmit();await wait(()=>document.querySelector('.host-verification'));
     if(document.querySelector('.host-verification h3').textContent!=='SSH host key changed')throw Error('Missing replacement prompt');
@@ -89,8 +91,9 @@ try {
     if(getComputedStyle(button('Trust replacement device')).cursor!=='pointer')throw Error('Wrong button cursor');
     if(getComputedStyle(document.querySelector('.host-fingerprint code')).cursor!=='text')throw Error('Fingerprint cursor is hidden');
     return {promptVisible:true,buttonCursor:'pointer',fingerprintCursor:'text'};
-})()
+})
 '@
+    $exercise += '(' + $fixtureJson + ')'
     Write-Output ('Windows inline prompt: ' + ((Evaluate $renderer $exercise) | ConvertTo-Json -Compress))
     if (-not (Evaluate $main "process.getBuiltinModule('module').createRequire(process.execPath)('electron').BrowserWindow.getAllWindows()[0].isEnabled()")) { throw 'The host prompt disabled the native app window.' }
     $handle = Evaluate $main "Number(process.getBuiltinModule('module').createRequire(process.execPath)('electron').BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE()).toString()"
@@ -147,5 +150,7 @@ try {
     if ($null -ne $originalCursor) { [HubCursorProbe]::SetCursorPos($originalCursor.X, $originalCursor.Y) | Out-Null }
     foreach ($socket in $sockets) { $socket.Dispose() }
     if ($launch -and -not $launch.HasExited) { & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null }
-    Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
+    $verifiedTemporary = [IO.Path]::GetFullPath($temporary)
+    if ([IO.Path]::GetDirectoryName($verifiedTemporary) -ne [IO.Path]::GetFullPath($env:TEMP) -or [IO.Path]::GetFileName($verifiedTemporary) -notmatch '^DiagnosticHub-host-check-[a-f0-9]{32}$') { throw 'Unexpected host-fixture cleanup path.' }
+    Remove-Item -LiteralPath $verifiedTemporary -Recurse -Force -ErrorAction SilentlyContinue
 }

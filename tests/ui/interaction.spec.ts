@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { demoSnapshot } from '../fixtures/snapshots';
+import { scrollGeometry, settlePageEntry } from './fixtures/layout';
 
 async function connectFixture(page: Page) {
     const clockTime = new Date('2026-10-06T00:00:00Z');
@@ -167,11 +168,13 @@ test('live graph and evidence updates preserve focus and every scroll position',
 }) => {
     await page.setViewportSize({ width: 1000, height: 650 });
     await connectFixture(page);
+    await settlePageEntry(page);
     await page.evaluate(() => window.scrollTo(0, 450));
     const mainY = await page.evaluate(() => window.scrollY);
     await page.clock.runFor(5100);
     expect(await page.evaluate(() => window.scrollY)).toBe(mainY);
     await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await settlePageEntry(page);
     await page
         .locator('.probe-card')
         .filter({ has: page.getByRole('heading', { name: 'Memory overview', exact: true }) })
@@ -193,10 +196,25 @@ test('live graph and evidence updates preserve focus and every scroll position',
             focus: document.activeElement?.id,
         }));
     const before = await position();
+    const baselineGeometry = await scrollGeometry(page);
     const samples = await dialog.locator('.live-graph circle').count();
     await page.clock.runFor(5100);
     await expect.poll(() => dialog.locator('.live-graph circle').count()).toBeGreaterThan(samples);
-    expect(await position()).toEqual(before);
+    const after = await position();
+    try {
+        expect(after).toEqual(before);
+    } catch (error) {
+        console.error(
+            'Scroll continuity geometry:',
+            JSON.stringify({
+                before,
+                after,
+                baseline: baselineGeometry,
+                current: await scrollGeometry(page),
+            }),
+        );
+        throw error;
+    }
     await dialog.getByRole('tab', { name: 'Standard output' }).click();
     await dialog.locator('.evidence-output').focus();
     await dialog.locator('.evidence-output').evaluate((el) => {
@@ -257,4 +275,67 @@ test('soft dark layout stays readable and animated on desktop/mobile under syste
         path: 'validation/2026-10-06/interactions/mobile-overview.png',
         fullPage: true,
     });
+});
+
+test('entry completion clamps the scroll range before updates and cannot be used as an unsettled baseline', async ({
+    page,
+}) => {
+    await page.setViewportSize({ width: 1000, height: 650 });
+    await connectFixture(page);
+    await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await settlePageEntry(page);
+    const before = await page.evaluate(() => {
+        const main = document.querySelector('main')!;
+        const entry = main.animate(
+            [{ transform: 'translateY(1px)' }, { transform: 'translateY(0px)' }],
+            { duration: 220, easing: 'ease-out' },
+        );
+        entry.pause();
+        entry.currentTime = 0;
+        const testing = window as unknown as {
+            entryFixture: { animation: Animation; probes: number; collections: number };
+            interaction: { collections: number };
+        };
+        testing.entryFixture = {
+            animation: entry,
+            probes: 0,
+            collections: testing.interaction.collections,
+        };
+        const original = main.getAnimations.bind(main);
+        main.getAnimations = (options) => {
+            testing.entryFixture.probes++;
+            return original(options);
+        };
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        return { y: window.scrollY, maximum: document.documentElement.scrollHeight - innerHeight };
+    });
+    let settled = false;
+    const readiness = settlePageEntry(page).then(() => {
+        settled = true;
+    });
+    await expect
+        .poll(() => page.evaluate(() => (window as any).entryFixture.probes))
+        .toBeGreaterThan(0);
+    expect(settled).toBe(false);
+    const after = await page.evaluate(() => {
+        const testing = window as any;
+        testing.entryFixture.animation.finish();
+        const main = document.querySelector('main')!;
+        main.getBoundingClientRect();
+        return {
+            y: window.scrollY,
+            maximum: document.documentElement.scrollHeight - innerHeight,
+            beforeCollections: testing.entryFixture.collections,
+            collections: testing.interaction.collections,
+        };
+    });
+    await readiness;
+    expect(before.y - after.y).toBe(1);
+    expect(before.maximum - after.maximum).toBe(1);
+    expect(after.collections).toBe(after.beforeCollections);
+    await page.clock.runFor(5100);
+    await expect
+        .poll(() => page.evaluate(() => (window as any).interaction.collections))
+        .toBeGreaterThan(after.collections);
+    expect(await page.evaluate(() => window.scrollY)).toBe(after.y);
 });
