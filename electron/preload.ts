@@ -38,7 +38,11 @@ const bridge: DesktopBridge = {
         ipcRenderer.on('hub:verify-host-key', listener);
         return () => ipcRenderer.removeListener('hub:verify-host-key', listener);
     },
-    connect: (options: ConnectOptions) => ipcRenderer.invoke('hub:connect', options),
+    connect: async (options: ConnectOptions, attemptId?: string) => {
+        const result = await ipcRenderer.invoke('hub:connect', options, attemptId);
+        if (result?.ok === false) throw new Error(`HUB_CONNECTION_FAILURE:${result.code}`);
+    },
+    cancelConnect: (attemptId) => ipcRenderer.invoke('hub:cancel-connect', attemptId),
     disconnect: () => ipcRenderer.invoke('hub:disconnect'),
     collect: () => ipcRenderer.invoke('hub:collect'),
     readDeviceClock: () => ipcRenderer.invoke('hub:device-clock'),

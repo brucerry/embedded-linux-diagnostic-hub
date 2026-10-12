@@ -84,6 +84,9 @@ export function UpdateModal({
                     <p>
                         Current version: <strong>v{status.currentVersion}</strong>
                     </p>
+                    {status.installationUnavailableReason && (
+                        <p role="status">{status.installationUnavailableReason}</p>
+                    )}
                     {status.release ? (
                         <>
                             <p>
@@ -100,7 +103,7 @@ export function UpdateModal({
                                 <p>Install updates from a packaged desktop application.</p>
                             )}
                         </>
-                    ) : (
+                    ) : status.installationUnavailableReason ? null : (
                         <p role="status">No newer compatible release is available.</p>
                     )}
                 </section>

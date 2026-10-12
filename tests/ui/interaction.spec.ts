@@ -27,6 +27,7 @@ async function connectFixture(page: Page) {
             readUpdateReport: async () => null,
             acknowledgeUpdateReport: async () => {},
             clearSessionData: async () => {},
+            cancelConnect: async () => {},
             connect: async () => {},
             disconnect: async () => {
                 state.disconnects++;

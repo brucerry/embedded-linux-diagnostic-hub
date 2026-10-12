@@ -294,8 +294,13 @@ async function main() {
         });
         await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
         const updateDialog = page.getByRole('dialog', { name: 'Application updates' });
-        await expect(updateDialog).toContainText(`v${updateVersion}`);
-        await expect(updateDialog.getByRole('button', { name: 'Start update' })).toBeVisible();
+        if (process.platform === 'darwin') {
+            await expect(updateDialog).toContainText('Automatic updates are unavailable');
+            await expect(updateDialog.getByRole('button', { name: 'Start update' })).toHaveCount(0);
+        } else {
+            await expect(updateDialog).toContainText(`v${updateVersion}`);
+            await expect(updateDialog.getByRole('button', { name: 'Start update' })).toBeVisible();
+        }
         await updateDialog
             .getByRole('link', { name: 'GitHub releases (opens in your browser)' })
             .click();
@@ -305,9 +310,16 @@ async function main() {
                     (shell as typeof shell & { openedRepository?: string }).openedRepository,
             ),
         ).toBe('https://github.com/brucerry/embedded-linux-diagnostic-hub/releases');
-        if (!packaged)
+        if (!packaged && process.platform !== 'darwin')
             await expect(updateDialog.getByRole('button', { name: 'Start update' })).toBeDisabled();
         await updateDialog.getByRole('button', { name: 'Close dialog' }).click();
+        await page.evaluate(() => {
+            const state = window as unknown as { cancelApprovalId: string };
+            state.cancelApprovalId = '';
+            window.diagnosticHub!.onHostKeyVerification!((request) => {
+                if (request) state.cancelApprovalId = request.id;
+            });
+        });
         await page.context().setOffline(true);
         await expect(page.getByRole('switch', { name: 'Live updates' })).toBeChecked();
         await expect(page.getByLabel('Live update interval')).toHaveValue('30');
@@ -330,6 +342,28 @@ async function main() {
                 BrowserWindow.getAllWindows()[0].isEnabled(),
             ),
         ).toBe(true);
+        const cancelledApproval = await page.evaluate(
+            () => (window as unknown as { cancelApprovalId: string }).cancelApprovalId,
+        );
+        await page.getByRole('button', { name: 'Cancel connection', exact: true }).focus();
+        await page.keyboard.press('Enter');
+        await expect(modal).not.toBeVisible();
+        expect(readyConnections).toBe(0);
+        expect(
+            await page.evaluate(
+                (id) => window.diagnosticHub!.confirmHostKey!(id, true),
+                cancelledApproval,
+            ),
+        ).toBe(false);
+        await page.getByRole('button', { name: 'Connect device', exact: true }).click();
+        await modal.getByLabel('Hostname or IP address').fill('127.0.0.1');
+        await modal.getByLabel('Port', { exact: true }).fill(String(port));
+        await modal.getByLabel('SSH username').fill('engineer');
+        await modal.getByLabel('Password', { exact: true }).fill('wrong-password');
+        await modal.getByRole('button', { name: 'Connect via SSH' }).click();
+        await expect(
+            page.getByRole('alertdialog', { name: 'Verify SSH device identity' }),
+        ).toBeVisible();
         await page.getByRole('button', { name: 'Trust device', exact: true }).click();
         await expect(modal.getByRole('alert')).toBeVisible({ timeout: 20_000 });
         await expect(page.getByText('NOT CONNECTED', { exact: true })).toBeVisible();
@@ -586,8 +620,35 @@ async function main() {
         await page.keyboard.press('Enter');
         await expect(terminalPanel.locator('.terminal-screen')).toContainText('/tmp');
         expect(terminalState.opens).toBe(1);
-        // Xvfb alone has no window manager; real native state is checked on Windows and the retained GNOME matrix.
-        if (process.platform === 'win32' || process.env.HUB_GNOME_ISOLATED === '1') {
+        const beforeCancelConnections = readyConnections;
+        await expect(
+            page.evaluate(() => window.diagnosticHub!.cancelConnect!('invalid')),
+        ).rejects.toThrow(/Invalid connection attempt/);
+        await page.evaluate(() => window.diagnosticHub!.cancelConnect!('f'.repeat(32)));
+        expect(readyConnections).toBe(beforeCancelConnections);
+        expect(
+            await desktop.evaluate(({ ipcMain }) => {
+                try {
+                    (
+                        ipcMain as unknown as {
+                            _invokeHandlers: Map<string, (event: unknown, id: string) => unknown>;
+                        }
+                    )._invokeHandlers.get('hub:cancel-connect')!(
+                        { sender: null, senderFrame: null },
+                        'f'.repeat(32),
+                    );
+                    return false;
+                } catch (error) {
+                    return (error as Error).message === 'Untrusted application frame.';
+                }
+            }),
+        ).toBe(true);
+        // Xvfb alone has no window manager; native state is checked on Windows, macOS and the retained GNOME matrix.
+        if (
+            process.platform === 'win32' ||
+            process.platform === 'darwin' ||
+            process.env.HUB_GNOME_ISOLATED === '1'
+        ) {
             const beforeNativeWindow = {
                 connections: readyConnections,
                 shells: terminalState.opens,
@@ -842,13 +903,18 @@ async function main() {
             );
         });
         const finalShells = terminalState.opens;
-        if (!packaged) {
+        if (process.platform === 'darwin') {
+            await expect(
+                page.evaluate(() => window.diagnosticHub!.startUpdate({ mode: 'clean' })),
+            ).rejects.toThrow(/Automatic updates are unavailable/);
+            expect(openConnections).toBe(1);
+        } else if (!packaged) {
             await expect(
                 page.evaluate(() => window.diagnosticHub!.startUpdate({ mode: 'clean' })),
             ).rejects.toThrow(/packaged application/);
             expect(openConnections).toBe(1);
         }
-        if (packaged) {
+        if (packaged && process.platform !== 'darwin') {
             await desktop.evaluate(({ app }) => {
                 const testingApp = app as typeof app & {
                     realQuit?: typeof app.quit;
@@ -919,9 +985,11 @@ async function main() {
         }
         console.log(
             'Native update smoke passed: trusted IPC, release check, restart guards' +
-                (packaged
-                    ? ', verified download and portable relaunch arguments.'
-                    : ' and development-build install restriction.'),
+                (process.platform === 'darwin'
+                    ? ', explicit macOS installation restriction.'
+                    : packaged
+                      ? ', verified download and portable relaunch arguments.'
+                      : ' and development-build install restriction.'),
         );
         console.log(
             'Desktop smoke passed: packaged UI, isolated bridge, SSH collection, trusted-key replacement/cancel/reuse, native report export and disconnect.',

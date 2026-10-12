@@ -50,15 +50,13 @@ for (const enabled of [true, false]) {
                     const original = window.diagnosticHub!.connect;
                     window.diagnosticHub!.connect = async (options) => {
                         window.diagnosticHub!.connect = original;
-                        throw new Error('Temporary authentication failure');
+                        throw new Error('HUB_CONNECTION_FAILURE:authentication');
                     };
                 });
                 await page.getByRole('button', { name: 'Connect device', exact: true }).click();
                 const login = page.getByRole('dialog', { name: 'Connect a Linux device' });
                 await login.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
-                await expect(login.getByRole('alert')).toContainText(
-                    'Temporary authentication failure',
-                );
+                await expect(login.getByRole('alert')).toContainText('SSH authentication failed');
                 await login.getByRole('button', { name: 'Close dialog' }).click();
                 dialog = await inspectMemory(page);
                 expect(await dialog.locator('.live-graph circle title').allTextContents()).toEqual(

@@ -2,6 +2,29 @@ import { expect, test } from '@playwright/test';
 import { demoSnapshot } from '../fixtures/snapshots';
 import { installDesktop } from './fixtures/desktop';
 
+test('unsupported-platform update UI keeps the release link and does not claim a compatible update or offer installation', async ({
+    page,
+}) => {
+    await installDesktop(page);
+    await page.goto('/');
+    await page.evaluate(() => {
+        window.diagnosticHub!.checkUpdates = async () => ({
+            currentVersion: '0.2.0',
+            installable: false,
+            release: null,
+            installationUnavailableReason:
+                'Automatic updates are unavailable on this platform. Check GitHub releases for manually supported downloads.',
+        });
+    });
+    await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
+    const modal = page.getByRole('dialog', { name: 'Application updates' });
+    await expect(modal).toContainText('Automatic updates are unavailable');
+    await expect(modal.getByText('No newer compatible release is available.')).toHaveCount(0);
+    await expect(modal.getByRole('button', { name: 'Start update' })).toHaveCount(0);
+    await modal.getByRole('link', { name: 'GitHub releases (opens in your browser)' }).click();
+    expect(await page.evaluate(() => window.desktopTest.releasesOpened)).toBe(1);
+});
+
 for (const [mode, label] of [
     ['clean', 'Update without saving'],
     ['preserve', 'Save report & update'],

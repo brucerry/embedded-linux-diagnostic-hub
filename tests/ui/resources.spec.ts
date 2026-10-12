@@ -22,6 +22,7 @@ async function connectFixture(page: import('@playwright/test').Page) {
             readUpdateReport: async () => null,
             acknowledgeUpdateReport: async () => {},
             clearSessionData: async () => {},
+            cancelConnect: async () => {},
             connect: async () => {},
             disconnect: async () => {},
             pickKey: async () => null,

@@ -154,6 +154,7 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                     window.desktopTest.acknowledgements.push(id);
                 },
                 clearSessionData: async () => {},
+                cancelConnect: async () => {},
                 connect: async () => {
                     window.desktopTest.connects++;
                 },

@@ -82,6 +82,14 @@ export class ReleaseUpdater {
     async check(includePrereleases: boolean): Promise<UpdateStatus> {
         if (typeof includePrereleases !== 'boolean') throw new Error('Invalid release selection.');
         if (this.busy) throw new Error('An update operation is already running.');
+        if (!this.assetName)
+            return {
+                currentVersion: this.currentVersion,
+                installable: false,
+                release: null,
+                installationUnavailableReason:
+                    'Automatic updates are unavailable on this platform. Check GitHub releases for manually supported downloads.',
+            };
         this.busy = true;
         this.candidate = null;
         this.ready = null;
@@ -155,6 +163,7 @@ export class ReleaseUpdater {
     }
 
     assertCanDownload(): void {
+        if (!this.assetName) throw new Error('Automatic updates are unavailable on this platform.');
         if (!this.packaged) throw new Error('Run a packaged application to install updates.');
         if (this.busy) throw new Error('An update operation is already running.');
         if (!this.candidate) throw new Error('Check for a newer compatible release first.');

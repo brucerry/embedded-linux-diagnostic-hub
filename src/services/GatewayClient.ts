@@ -1,5 +1,11 @@
 import { validateSnapshot } from '../../shared/report';
 import {
+    ConnectionFailure,
+    CONNECTION_FAILURE_MESSAGES,
+    connectionAttemptId,
+    type ConnectionFailureCode,
+} from '../../shared/connection';
+import {
     validateDeviceClock,
     type DeviceClockResponse,
 } from '../../shared/diagnostics/device-clock';
@@ -23,6 +29,7 @@ export interface GatewaySettings {
 export class GatewayClient implements TerminalTransport {
     readonly url: string;
     private sessionId = '';
+    private connectionAttempt?: { id: string; controller: AbortController; posted: boolean };
     private listeners = new Set<() => void>();
     private readonly token: string;
     private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -42,6 +49,21 @@ export class GatewayClient implements TerminalTransport {
     }
 
     private releaseOnPageExit(): void {
+        const attempt = this.connectionAttempt;
+        this.connectionAttempt = undefined;
+        attempt?.controller.abort();
+        if (attempt?.posted)
+            void fetch(`${this.url}/api/connection-attempts/cancel`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ attemptId: attempt.id }),
+                credentials: 'omit',
+                cache: 'no-store',
+                keepalive: true,
+            }).catch(() => {});
         const id = this.sessionId;
         this.sessionId = '';
         this.stopLifecycle();
@@ -98,7 +120,10 @@ export class GatewayClient implements TerminalTransport {
                 signal: options?.signal ?? AbortSignal.timeout(180_000),
             });
         } catch {
-            throw new Error(
+            if (options?.signal?.aborted && options.signal.reason?.name !== 'TimeoutError')
+                throw new ConnectionFailure('cancelled', 'Connection cancelled.');
+            throw new ConnectionFailure(
+                'network',
                 'Cannot reach the gateway. Check its HTTPS address, allowed website origin and network access.',
             );
         }
@@ -122,11 +147,14 @@ export class GatewayClient implements TerminalTransport {
             }
             if (options?.clock && response.status === 404)
                 return { status: 'unavailable', reason: 'unsupported' };
-            throw new Error(
-                typeof payload.error === 'string'
-                    ? payload.error
-                    : `Gateway request failed (${response.status}).`,
-            );
+            const code: ConnectionFailureCode =
+                typeof payload.code === 'string' &&
+                Object.hasOwn(CONNECTION_FAILURE_MESSAGES, payload.code)
+                    ? (payload.code as ConnectionFailureCode)
+                    : [400, 401, 403, 404, 409, 415].includes(response.status)
+                      ? 'policy'
+                      : 'network';
+            throw new ConnectionFailure(code, CONNECTION_FAILURE_MESSAGES[code]);
         }
         return payload;
     }
@@ -143,11 +171,33 @@ export class GatewayClient implements TerminalTransport {
         return data.fingerprint;
     }
 
-    async connect(options: ConnectOptions): Promise<void> {
+    async connect(options: ConnectOptions, requestedId?: string): Promise<void> {
         if (this.sessionId) await this.disconnect();
-        const data = await this.request('/api/sessions', 'POST', options);
+        const id = connectionAttemptId(requestedId ?? crypto.randomUUID().replaceAll('-', ''));
+        const attempt = { id, controller: new AbortController(), posted: false };
+        this.connectionAttempt = attempt;
+        window.addEventListener('pagehide', this.onPageHide);
+        const health = await this.request('/api/health', 'GET', undefined, {
+            signal: AbortSignal.any([attempt.controller.signal, AbortSignal.timeout(10_000)]),
+        });
+        if (health.connectionCancellation !== true)
+            throw new ConnectionFailure(
+                'policy',
+                'Update the gateway to enable reliable connection cancellation.',
+            );
+        if (attempt.controller.signal.aborted)
+            throw new ConnectionFailure('cancelled', 'Connection cancelled.');
+        attempt.posted = true;
+        const data = await this.request(
+            '/api/sessions',
+            'POST',
+            { ...options, attemptId: id },
+            { signal: AbortSignal.any([attempt.controller.signal, AbortSignal.timeout(180_000)]) },
+        );
         if (typeof data.sessionId !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(data.sessionId))
-            throw new Error('Gateway did not return a valid session.');
+            throw new ConnectionFailure('policy', 'The gateway returned an invalid session.');
+        if (this.connectionAttempt !== attempt || attempt.controller.signal.aborted)
+            throw new ConnectionFailure('cancelled', 'Connection cancelled.');
         this.sessionId = data.sessionId;
         window.addEventListener('pagehide', this.onPageHide);
         this.heartbeat = setInterval(() => {
@@ -156,6 +206,27 @@ export class GatewayClient implements TerminalTransport {
                     () => {},
                 );
         }, 60_000);
+    }
+
+    async cancelConnect(id: string): Promise<void> {
+        const attempt = this.connectionAttempt;
+        if (!attempt || attempt.id !== connectionAttemptId(id)) return;
+        attempt.controller.abort();
+        if (attempt.posted) {
+            const result = await this.request(
+                '/api/connection-attempts/cancel',
+                'POST',
+                { attemptId: id },
+                { signal: AbortSignal.timeout(10_000) },
+            );
+            if (result.cancelled !== true)
+                throw new ConnectionFailure('cleanup', CONNECTION_FAILURE_MESSAGES.cleanup);
+        }
+        if (this.connectionAttempt === attempt) {
+            this.connectionAttempt = undefined;
+            this.sessionId = '';
+            this.stopLifecycle();
+        }
     }
 
     async collect(): Promise<Snapshot> {

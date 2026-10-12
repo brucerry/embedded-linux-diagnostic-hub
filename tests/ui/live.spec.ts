@@ -21,6 +21,7 @@ test('failed live update pauses polling and retains the last snapshot without re
             readUpdateReport: async () => null,
             acknowledgeUpdateReport: async () => {},
             clearSessionData: async () => {},
+            cancelConnect: async () => {},
             connect: async () => {},
             disconnect: async () => {},
             pickKey: async () => null,

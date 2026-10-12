@@ -23,10 +23,11 @@ export class DeviceMonitor {
         options: ConnectOptions,
         verify: (key: string) => Promise<boolean>,
         key?: Buffer,
+        signal?: AbortSignal,
     ): Promise<void> {
         if (this.running) throw new Error('Wait for the current collection to finish.');
         this.clear();
-        await this.session.connect(options, verify, key);
+        await this.session.connect(options, verify, key, signal);
     }
 
     async collect(): Promise<Snapshot> {

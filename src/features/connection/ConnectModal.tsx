@@ -10,6 +10,7 @@ interface ConnectModalProps {
     onConfirmHostKey: (accepted: boolean) => Promise<void>;
     native: boolean;
     busy: boolean;
+    progress?: string;
     error: string;
     onClose: () => void;
     onConnect: (options: ConnectOptions, settings?: GatewaySettings) => Promise<void>;
@@ -21,6 +22,7 @@ export function ConnectModal({
     onConfirmHostKey,
     native,
     busy,
+    progress,
     error,
     onClose,
     onConnect,
@@ -330,6 +332,9 @@ export function ConnectModal({
                             >
                                 Cancel verification
                             </button>
+                            <button type="button" className="button secondary" onClick={onClose}>
+                                Cancel connection
+                            </button>
                             <button
                                 type="button"
                                 className="button primary"
@@ -342,6 +347,7 @@ export function ConnectModal({
                         </div>
                     </section>
                 )}
+                {busy && progress && <p role="status">{progress}</p>}
                 {(error || keyError) && (
                     <div className="form-error" role="alert">
                         {error || keyError}
@@ -366,7 +372,7 @@ export function ConnectModal({
                         type="button"
                         className="button secondary"
                         onClick={onClose}
-                        disabled={busy || discovering}
+                        disabled={discovering}
                     >
                         Cancel
                     </button>

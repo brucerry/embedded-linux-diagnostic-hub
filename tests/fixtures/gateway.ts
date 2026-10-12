@@ -13,6 +13,7 @@ export async function gatewayFixture(
     options: {
         attachShell?: (session: Session) => void;
         probeDelayMs?: number;
+        authenticationDelayMs?: number;
         probeOutput?: { stdout: string; stderr: string };
         origin?: string;
         exec?: (command: string, channel: ServerChannel) => boolean;
@@ -35,6 +36,7 @@ export async function gatewayFixture(
         .toString();
     const data = demoSnapshot();
     let authentications = 0;
+    let connectedSessions = 0;
     let probeExecutions = 0;
     const clock = {
         output: clockOutput(),
@@ -48,24 +50,38 @@ export async function gatewayFixture(
     };
     const terminal = terminalFixtureState();
     const sshServer = new Server({ hostKeys: [key] }, (client) => {
+        let connected = false;
+        client.on('ready', () => {
+            connected = true;
+            connectedSessions++;
+        });
+        client.on('close', () => {
+            if (connected) connectedSessions--;
+        });
         client.on('error', () => {});
         client.on('authentication', (auth) => {
             authentications++;
-            if (
-                auth.method === 'password' &&
-                auth.username === 'engineer' &&
-                auth.password === 'device-test-password'
-            )
-                auth.accept();
-            else if (
-                auth.method === 'publickey' &&
-                auth.username === 'engineer' &&
-                auth.key.data.equals(allowedKey.getPublicSSH()) &&
-                (!auth.signature ||
-                    (auth.blob && allowedKey.verify(auth.blob, auth.signature, auth.hashAlgo)))
-            )
-                auth.accept();
-            else auth.reject();
+            const finish = () => {
+                if (
+                    auth.method === 'password' &&
+                    auth.username === 'engineer' &&
+                    auth.password === 'device-test-password'
+                )
+                    auth.accept();
+                else if (
+                    auth.method === 'publickey' &&
+                    auth.username === 'engineer' &&
+                    auth.key.data.equals(allowedKey.getPublicSSH()) &&
+                    (!auth.signature ||
+                        (auth.blob && allowedKey.verify(auth.blob, auth.signature, auth.hashAlgo)))
+                )
+                    auth.accept();
+                else auth.reject();
+            };
+            if (options.authenticationDelayMs) {
+                const timer = setTimeout(finish, options.authenticationDelayMs);
+                client.once('close', () => clearTimeout(timer));
+            } else finish();
         });
         client.on('ready', () =>
             client.on('session', (accept) => {
@@ -161,6 +177,7 @@ export async function gatewayFixture(
         },
         request,
         authentications: () => authentications,
+        connectedSessions: () => connectedSessions,
         probeExecutions: () => probeExecutions,
         close: async () => {
             await gateway.close();

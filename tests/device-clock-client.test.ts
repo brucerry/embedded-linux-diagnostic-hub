@@ -27,6 +27,7 @@ test('gateway clock incompatibility and malformed samples preserve a session; ex
     client.onDisconnected(() => disconnected++);
     globalThis.fetch = async (input) => {
         const url = String(input);
+        if (url.endsWith('/api/health')) return Response.json({ connectionCancellation: true });
         if (url.endsWith('/clock'))
             return Response.json(
                 clockStatus === 200

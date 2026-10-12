@@ -47,6 +47,8 @@ substantial changes, open an issue describing the problem and affected environme
 ## Guides
 
 - [Using the app](docs/usage.md): snapshots, reports, terminal shortcuts and updates.
+- [Connection retries](docs/connection-retries.md) and
+  [macOS CI qualification limits](docs/macos-qualification.md).
 - [Website setup](docs/website.md) and [gateway deployment](docs/gateway.md).
 - [Architecture](docs/architecture.md), [design](docs/design.md) and
   [hardware coverage](docs/hardware.md).

@@ -3,6 +3,12 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { SshSession, validateConnection } from '../backend/ssh/session';
 import { GatewayTerminal, TerminalHttpError } from './terminal';
+import {
+    ConnectionFailure,
+    connectionAttemptId,
+    connectionFailure,
+    type ConnectionFailureCode,
+} from '../shared/connection';
 
 export interface GatewayTarget {
     host: string;
@@ -20,6 +26,9 @@ class ApiError extends Error {
     constructor(
         public status: number,
         message: string,
+        public code: ConnectionFailureCode = status === 429 || status === 503
+            ? 'network'
+            : 'policy',
     ) {
         super(message);
     }
@@ -63,6 +72,19 @@ export function createGateway(config: GatewayConfig) {
             busy: boolean;
         }
     >();
+    const attempts = new Map<
+        string,
+        {
+            origin: string;
+            ssh: SshSession;
+            controller: AbortController;
+            done: Promise<void>;
+            finish(): void;
+            sessionId?: string;
+            expires?: number;
+        }
+    >();
+    const cancelledAttempts = new Map<string, { origin: string; expires: number }>();
     const maxSessions = config.maxSessions ?? 8;
     let pending = 0;
     let stopping = false;
@@ -71,6 +93,16 @@ export function createGateway(config: GatewayConfig) {
     const inFlight = new Set<SshSession>();
     const idleMs = config.idleMs ?? 10 * 60_000;
     const cleanup = setInterval(() => {
+        for (const [id, entry] of cancelledAttempts)
+            if (entry.expires <= Date.now()) cancelledAttempts.delete(id);
+        for (const [id, entry] of attempts) {
+            if (
+                entry.expires
+                    ? entry.expires <= Date.now()
+                    : entry.sessionId && !sessions.has(entry.sessionId)
+            )
+                attempts.delete(id);
+        }
         for (const [id, session] of sessions) {
             if (!session.busy && Date.now() - session.touched > idleMs) {
                 session.ssh.disconnect();
@@ -130,9 +162,12 @@ export function createGateway(config: GatewayConfig) {
                 res,
                 error instanceof ApiError || error instanceof TerminalHttpError
                     ? error.status
-                    : 502,
+                    : error instanceof ConnectionFailure && error.code === 'policy'
+                      ? 400
+                      : 502,
                 {
                     error: error instanceof Error ? error.message : 'Gateway request failed.',
+                    code: error instanceof ApiError ? error.code : connectionFailure(error).code,
                 },
             ),
         );
@@ -176,10 +211,39 @@ export function createGateway(config: GatewayConfig) {
             /^\/api\/sessions\/[A-Za-z0-9_-]{32}\/terminal\/[A-Za-z0-9_-]{16,64}\/(input|resize)$/.test(
                 url.pathname,
             );
-        if (!terminalTraffic && ++requests > 120)
+        const cancellationTraffic =
+            req.method === 'POST' && url.pathname === '/api/connection-attempts/cancel';
+        if (!terminalTraffic && !cancellationTraffic && ++requests > 120)
             throw new ApiError(429, 'Gateway request limit reached. Try again in a minute.');
         if (req.method === 'GET' && url.pathname === '/api/health') {
-            send(res, 200, { version: APP_VERSION, activeSessions: sessions.size });
+            send(res, 200, {
+                version: APP_VERSION,
+                activeSessions: sessions.size,
+                connectionCancellation: true,
+            });
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/connection-attempts/cancel') {
+            const payload = await body(req);
+            const attemptId = connectionAttemptId(payload.attemptId);
+            const attempt = attempts.get(attemptId);
+            const old = cancelledAttempts.get(attemptId);
+            if ((attempt && attempt.origin !== origin) || (old && old.origin !== origin))
+                throw new ApiError(403, 'This connection attempt belongs to another origin.');
+            const retainAttempt = !old && cancelledAttempts.size >= 128;
+            if (retainAttempt && !attempt)
+                throw new ApiError(429, 'Connection cancellation capacity is temporarily full.');
+            if (retainAttempt && attempt) attempt.expires = Date.now() + 240_000;
+            else cancelledAttempts.set(attemptId, { origin, expires: Date.now() + 240_000 });
+            if (attempt) {
+                attempt.controller.abort();
+                attempt.ssh.disconnect();
+                await attempt.done;
+                if (attempt.sessionId) sessions.delete(attempt.sessionId);
+                if (!retainAttempt) attempts.delete(attemptId);
+            }
+            send(res, 200, { cancelled: true });
             return;
         }
 
@@ -223,9 +287,31 @@ export function createGateway(config: GatewayConfig) {
                 );
             if (sessions.size + pending >= maxSessions)
                 throw new ApiError(429, 'All gateway session slots are in use.');
+            const attemptId =
+                url.pathname === '/api/sessions' && payload.attemptId !== undefined
+                    ? connectionAttemptId(payload.attemptId)
+                    : undefined;
+            if (attemptId && (attempts.has(attemptId) || cancelledAttempts.has(attemptId)))
+                throw new ApiError(409, 'This connection attempt is no longer active.');
+            if (attemptId && attempts.size >= 128)
+                throw new ApiError(429, 'Connection attempt capacity is temporarily full.');
             pending++;
             const id = randomBytes(24).toString('base64url');
             const ssh = new SshSession(() => sessions.delete(id));
+            let finishAttempt!: () => void;
+            const attempt = attemptId
+                ? {
+                      origin,
+                      ssh,
+                      controller: new AbortController(),
+                      done: new Promise<void>((resolve) => {
+                          finishAttempt = resolve;
+                      }),
+                      finish: () => finishAttempt(),
+                      sessionId: undefined as string | undefined,
+                  }
+                : undefined;
+            if (attemptId && attempt) attempts.set(attemptId, attempt);
             inFlight.add(ssh);
             let accepted = false;
             let observed = '';
@@ -264,8 +350,9 @@ export function createGateway(config: GatewayConfig) {
                             return received === target.fingerprint;
                         },
                         privateKey,
+                        attempt?.controller.signal,
                     );
-                    if (stopping || res.destroyed) return;
+                    if (stopping || res.destroyed || attempt?.controller.signal.aborted) return;
                     sessions.set(id, {
                         ssh,
                         terminal: new GatewayTerminal(ssh),
@@ -273,6 +360,7 @@ export function createGateway(config: GatewayConfig) {
                         busy: false,
                     });
                     accepted = true;
+                    if (attempt) attempt.sessionId = id;
                     send(res, 201, { sessionId: id });
                 }
             } catch (error) {
@@ -286,7 +374,11 @@ export function createGateway(config: GatewayConfig) {
                 options.password = undefined;
                 options.passphrase = undefined;
                 privateKey?.fill(0);
-                if (!accepted) ssh.disconnect();
+                if (!accepted) {
+                    ssh.disconnect();
+                    if (attemptId && !attempts.get(attemptId)?.expires) attempts.delete(attemptId);
+                }
+                attempt?.finish();
             }
             return;
         }

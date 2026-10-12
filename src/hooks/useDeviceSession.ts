@@ -11,6 +11,7 @@ import { GatewayClient, type GatewaySettings } from '../services/GatewayClient';
 import { prepareHistory } from '../services/history';
 
 import { message } from '../services/errors';
+import { ConnectionOperation } from '../services/connection-operation';
 
 // Own the shared desktop/web session lifecycle and in-memory evidence.
 export function useDeviceSession(onResetView: () => void) {
@@ -44,6 +45,16 @@ export function useDeviceSession(onResetView: () => void) {
     const [updateReport, setUpdateReport] = useState<UpdateRecovery | null>(null);
     const [busy, setBusy] = useState(false);
     const [connecting, setConnecting] = useState(false);
+    const [connectionProgress, setConnectionProgress] = useState('');
+    const connectionOperation = useRef<ConnectionOperation | null>(null);
+    if (!connectionOperation.current) connectionOperation.current = new ConnectionOperation();
+    useEffect(
+        () => () => {
+            dataGeneration.current++;
+            void connectionOperation.current?.cancel().catch(() => {});
+        },
+        [],
+    );
     const [disconnecting, setDisconnecting] = useState(false);
     const disconnectingRef = useRef(false);
     const [showConnect, setShowConnect] = useState(false);
@@ -97,6 +108,7 @@ export function useDeviceSession(onResetView: () => void) {
     useEffect(
         () =>
             transport?.onDisconnected((reason?: 'update') => {
+                const wasConnected = connectedRef.current;
                 setActiveDevice(null);
                 connectedRef.current = false;
                 if (reason === 'update') {
@@ -105,7 +117,7 @@ export function useDeviceSession(onResetView: () => void) {
                     setError('');
                     return;
                 }
-                if (!connected || disconnectingRef.current) return;
+                if (!wasConnected || disconnectingRef.current) return;
                 setConnected(false);
                 setError('SSH closed unexpectedly. Reconnect to resume updates.');
                 void transport.disconnect().catch(() => {});
@@ -196,17 +208,31 @@ export function useDeviceSession(onResetView: () => void) {
     async function connect(options: ConnectOptions, settings?: GatewaySettings) {
         if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
         collectingRef.current = true;
-        dataGeneration.current++;
+        const generation = ++dataGeneration.current;
         setConnecting(true);
+        setConnectionProgress('');
         setActiveDevice(null);
         setError('');
         try {
+            connectedRef.current = false;
             if (connected && transport) await transport.disconnect();
             setConnected(false);
             const active = bridge ?? (settings ? new GatewayClient(settings) : null);
             if (!active) throw new Error('Enter your gateway address and access token.');
             if (active instanceof GatewayClient) setGateway(active);
-            await active.connect(options);
+            const authenticated = await connectionOperation.current!.connect(
+                active,
+                options,
+                (progress) => {
+                    if (generation === dataGeneration.current)
+                        setConnectionProgress(progress.message);
+                },
+            );
+            options.password = undefined;
+            options.passphrase = undefined;
+            options.privateKey = undefined;
+            if (!authenticated || generation !== dataGeneration.current) return;
+            connectedRef.current = true;
             setConnected(true);
             connectionGeneration.current++;
             setActiveDevice({
@@ -214,30 +240,55 @@ export function useDeviceSession(onResetView: () => void) {
                 endpoint: `${options.host}:${options.port}`,
                 generation: connectionGeneration.current,
             });
+            setImported(false);
+            setUpdateReport(null);
+            setConnecting(false);
+            setWorkspaceReady(true);
+            setBusy(true);
+            onResetView();
             try {
                 const data = await active.collect();
-                // A new SSH connection starts a CPU baseline, but retains earlier graph samples.
+                if (generation !== dataGeneration.current) return;
                 await retainSnapshot(data);
-                setImported(false);
                 liveRef.current = livePreference.current;
                 setLiveState(livePreference.current);
-                setUpdateReport(null);
-                setShowConnect(false);
-                onResetView();
-                setNotice('SSH connected · diagnostic snapshot collected');
+                setNotice('SSH connected — diagnostic snapshot collected');
             } catch (err) {
-                await active.disconnect().catch(() => {});
-                setConnected(false);
-                setActiveDevice(null);
-                throw err;
+                if (generation === dataGeneration.current) {
+                    pauseLiveUpdates();
+                    setError(
+                        `SSH is connected, but diagnostic collection failed: ${message(err)} The last snapshot is retained; collect again when ready.`,
+                    );
+                }
+            } finally {
+                if (generation === dataGeneration.current) setShowConnect(false);
             }
         } catch (err) {
-            setError(message(err));
+            if (generation === dataGeneration.current) setError(message(err));
         } finally {
+            options.password = undefined;
+            options.passphrase = undefined;
+            options.privateKey = undefined;
             collectingRef.current = false;
             setConnecting(false);
+            setBusy(false);
             idleWaiters.current.forEach((resolve) => resolve());
             idleWaiters.current.clear();
+        }
+    }
+
+    async function cancelConnection() {
+        if (!connectionOperation.current!.running) {
+            setShowConnect(false);
+            return;
+        }
+        dataGeneration.current++;
+        try {
+            await connectionOperation.current!.cancel();
+            setConnectionProgress('');
+            setShowConnect(false);
+        } catch (err) {
+            setError(message(err));
         }
     }
 
@@ -398,6 +449,7 @@ export function useDeviceSession(onResetView: () => void) {
         history,
         busy,
         connecting,
+        connectionProgress,
         disconnecting,
         resetting,
         resetProgress,
@@ -413,6 +465,7 @@ export function useDeviceSession(onResetView: () => void) {
         bridge,
         refresh,
         connect,
+        cancelConnection,
         disconnect,
         resetData,
         exportReport,

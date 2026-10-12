@@ -10,6 +10,8 @@ import {
     shell,
 } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { ConnectionFailure, connectionFailure, connectionAttemptId } from '../shared/connection';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DeviceMonitor } from '../backend/ssh/monitor';
@@ -31,6 +33,8 @@ if (process.platform === 'win32') app.setAppUserModelId('dev.diagnostichub.deskt
 if (process.platform === 'linux') app.setDesktopName(LINUX_DESKTOP_NAME);
 let keyPath: string | null = null;
 let connecting = false;
+let currentConnectionAttempt = '';
+let pendingConnection: { id: string; controller: AbortController; done: Promise<void> } | undefined;
 let lastSnapshot: Snapshot | null = null;
 let collectionTask: Promise<Snapshot> | null = null;
 const hostVerification = new HostVerification((request) => {
@@ -57,7 +61,11 @@ function registerHandler(name: string, handler: (...args: unknown[]) => unknown)
     });
 }
 
-async function verifyHost(endpoint: string, received: string): Promise<boolean> {
+async function verifyHost(
+    endpoint: string,
+    received: string,
+    signal?: AbortSignal,
+): Promise<boolean> {
     const file = path.join(app.getPath('userData'), 'known-hosts.json');
     let known: Record<string, string> = {};
     try {
@@ -76,12 +84,14 @@ async function verifyHost(endpoint: string, received: string): Promise<boolean> 
                 'Cannot read the trusted host-key store. Inspect known-hosts.json in the application data directory.',
             );
     }
+    if (signal?.aborted) return false;
     const changed = Object.hasOwn(known, endpoint);
     if (changed && known[endpoint] === received) return true;
     if (
         !(await hostVerification.request(endpoint, received, changed ? known[endpoint] : undefined))
     )
         return false;
+    if (signal?.aborted) return false;
     Object.defineProperty(known, endpoint, {
         value: received,
         enumerable: true,
@@ -172,29 +182,90 @@ app.whenReady().then(async () => {
     registerHandler('hub:confirm-host-key', (id, accepted) =>
         hostVerification.confirm(id, accepted),
     );
-    registerHandler('hub:connect', async (input) => {
-        if (update.active) throw new Error('An update is in progress. SSH remains disconnected.');
-        if (connecting) throw new Error('A connection is already in progress.');
-        const options = validateConnection(input);
-        connecting = true;
+    registerHandler('hub:connect', async (input, requestedId) => {
+        let id = '';
         try {
-            const privateKey =
-                options.auth === 'key'
-                    ? keyPath
-                        ? await readFile(keyPath)
-                        : undefined
-                    : undefined;
-            if (options.auth === 'key' && !privateKey)
-                throw new Error('Select a private key first.');
-            await ssh.configure(
-                options,
-                (key) => verifyHost(`${options.host}:${options.port}`, key),
-                privateKey,
-            );
-        } finally {
-            hostVerification.clear();
-            connecting = false;
+            if (update.active)
+                throw new ConnectionFailure(
+                    'policy',
+                    'An update is in progress. SSH remains disconnected.',
+                );
+            if (connecting)
+                throw new ConnectionFailure('policy', 'A connection is already in progress.');
+            id =
+                requestedId === undefined
+                    ? randomUUID().replaceAll('-', '')
+                    : connectionAttemptId(requestedId);
+            let options;
+            try {
+                options = validateConnection(input);
+            } catch {
+                throw new ConnectionFailure(
+                    'policy',
+                    'Invalid connection settings. Correct them and connect again.',
+                );
+            }
+            const controller = new AbortController();
+            connecting = true;
+            currentConnectionAttempt = id;
+            const done = (async () => {
+                let privateKey: Buffer | undefined;
+                try {
+                    if (options.auth === 'key') {
+                        if (!keyPath)
+                            throw new ConnectionFailure('policy', 'Select a private key first.');
+                        try {
+                            privateKey = await readFile(keyPath);
+                        } catch {
+                            throw new ConnectionFailure(
+                                'policy',
+                                'Cannot read the selected private key. Select it again.',
+                            );
+                        }
+                    }
+                    if (controller.signal.aborted)
+                        throw new ConnectionFailure('cancelled', 'Connection cancelled.');
+                    await ssh.configure(
+                        options,
+                        (key) =>
+                            verifyHost(`${options.host}:${options.port}`, key, controller.signal),
+                        privateKey,
+                        controller.signal,
+                    );
+                } finally {
+                    privateKey?.fill(0);
+                    options.password = undefined;
+                    options.passphrase = undefined;
+                }
+            })();
+            const pending = { id, controller, done };
+            pendingConnection = pending;
+            try {
+                await done;
+            } finally {
+                if (pendingConnection === pending) pendingConnection = undefined;
+                hostVerification.clear();
+                connecting = false;
+            }
+            return { ok: true };
+        } catch (error) {
+            if (currentConnectionAttempt === id) currentConnectionAttempt = '';
+            const failure = connectionFailure(error);
+            return { ok: false, code: failure.code, message: failure.message };
         }
+    });
+    registerHandler('hub:cancel-connect', async (input) => {
+        const id = connectionAttemptId(input);
+        const pending = pendingConnection?.id === id ? pendingConnection : undefined;
+        if (pending) {
+            pending.controller.abort();
+            hostVerification.clear();
+        }
+        if (currentConnectionAttempt === id) {
+            currentConnectionAttempt = '';
+            ssh.clear();
+        }
+        await pending?.done.catch(() => {});
     });
     registerHandler('hub:disconnect', async () => {
         if (connecting || ssh.isCollecting)

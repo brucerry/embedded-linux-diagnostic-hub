@@ -4,6 +4,8 @@ The desktop and website share the same workspace. The desktop connects directly 
 website needs a matching [HTTPS lab gateway](gateway.md). Start with a reachable Linux SSH service
 and credentials, choose **Connect device**, and verify the device fingerprint before accepting it.
 See [download and platform requirements](downloads.md) for installation and launch options.
+[Connection attempts and Cancel](connection-retries.md) explains three-second temporary retries,
+credential/trust correction and keeping healthy SSH when collection fails.
 
 ## Minimize and restore
 

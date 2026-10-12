@@ -59,7 +59,8 @@ export interface DesktopBridge extends Partial<import('./terminal').TerminalTran
     onUpdateProgress?(callback: (progress: string) => void): () => void;
     onHostKeyVerification?(callback: (request: HostKeyVerification | null) => void): () => void;
     confirmHostKey?(id: string, accepted: boolean): Promise<boolean>;
-    connect(options: ConnectOptions): Promise<void>;
+    connect(options: ConnectOptions, attemptId?: string): Promise<void>;
+    cancelConnect?(attemptId: string): Promise<void>;
     disconnect(): Promise<void>;
     collect(): Promise<Snapshot>;
     readDeviceClock?(): Promise<import('./diagnostics/device-clock').DeviceClockResponse>;
@@ -90,6 +91,7 @@ export interface UpdateStatus {
     currentVersion: string;
     installable: boolean;
     readyPath?: string;
+    installationUnavailableReason?: string;
     release: {
         version: string;
         prerelease: boolean;

@@ -69,6 +69,7 @@ function App() {
         history,
         busy,
         connecting,
+        connectionProgress,
         disconnecting,
         resetting,
         resetProgress,
@@ -84,6 +85,7 @@ function App() {
         bridge,
         refresh,
         connect,
+        cancelConnection,
         disconnect,
         resetData,
         exportReport,
@@ -502,11 +504,10 @@ function App() {
                             await bridge?.confirmHostKey?.(hostVerification.id, accepted);
                     }}
                     native={Boolean(bridge)}
-                    busy={connecting}
+                    busy={connecting || busy}
                     error={error}
-                    onClose={() => {
-                        if (!connecting) setShowConnect(false);
-                    }}
+                    progress={connectionProgress}
+                    onClose={() => void cancelConnection()}
                     onConnect={connect}
                     onPickKey={() => bridge?.pickKey() ?? Promise.resolve(null)}
                 />

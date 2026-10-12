@@ -18,6 +18,7 @@ import {
     type TerminalOpen,
 } from '../../shared/terminal';
 import { SshTerminal } from './terminal';
+import { ConnectionFailure, connectionFailure } from '../../shared/connection';
 
 export const MAX_OUTPUT_BYTES = 256 * 1024;
 export const PROBE_TIMEOUT_MS = 12_000;
@@ -73,7 +74,9 @@ export class SshSession {
         options: ConnectOptions,
         verify: (key: string) => Promise<boolean>,
         privateKey?: Buffer,
+        signal?: AbortSignal,
     ): Promise<void> {
+        if (signal?.aborted) throw new ConnectionFailure('cancelled', 'Connection cancelled.');
         this.disconnect();
         const client = new Client();
         this.client = client;
@@ -81,13 +84,29 @@ export class SshSession {
         return new Promise((resolve, reject) => {
             let ready = false;
             let settled = false;
+            let hostRejected = false;
+            const cancel = () =>
+                finish(new ConnectionFailure('cancelled', 'Connection cancelled.'));
             const finish = (error?: Error) => {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timer);
+                signal?.removeEventListener('abort', cancel);
                 if (error) {
                     client.destroy();
-                    reject(error);
+                    if (this.client === client) {
+                        this.client = null;
+                        this.options = null;
+                        this.ready = false;
+                    }
+                    reject(
+                        hostRejected
+                            ? new ConnectionFailure(
+                                  'host-key',
+                                  'SSH host identity was not approved. Verify the device and connect again.',
+                              )
+                            : connectionFailure(error),
+                    );
                 } else resolve();
             };
             const timer = setTimeout(
@@ -99,6 +118,7 @@ export class SshSession {
                     ),
                 60_000,
             );
+            signal?.addEventListener('abort', cancel, { once: true });
             client.on('ready', () => {
                 if (this.client !== client) {
                     finish(
@@ -138,11 +158,27 @@ export class SshSession {
                     keepaliveInterval: 10_000,
                     keepaliveCountMax: 3,
                     hostVerifier: (key: Buffer, callback: (valid: boolean) => void) => {
-                        void verify(fingerprint(key)).then(callback, () => callback(false));
+                        void verify(fingerprint(key)).then(
+                            (accepted) => {
+                                hostRejected = !accepted;
+                                callback(!signal?.aborted && accepted);
+                            },
+                            () => {
+                                hostRejected = true;
+                                callback(false);
+                            },
+                        );
                     },
                 });
             } catch (error) {
-                finish(error instanceof Error ? error : new Error('SSH connection failed.'));
+                finish(
+                    new ConnectionFailure(
+                        options.auth === 'key' ? 'authentication' : 'policy',
+                        options.auth === 'key'
+                            ? 'SSH authentication failed. Correct the key/passphrase and connect again.'
+                            : 'SSH connection settings are invalid. Correct them and connect again.',
+                    ),
+                );
             }
         });
     }
