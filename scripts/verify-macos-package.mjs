@@ -36,6 +36,21 @@ const identifier = execFileSync(
     { encoding: 'utf8' },
 ).trim();
 assert.equal(identifier, 'dev.diagnostichub.desktop');
+const iconName = execFileSync(
+    '/usr/libexec/PlistBuddy',
+    ['-c', 'Print :CFBundleIconFile', path.join(app, 'Contents/Info.plist')],
+    { encoding: 'utf8' },
+).trim();
+assert.ok(iconName && path.basename(iconName) === iconName, 'Expected a local bundle icon.');
+const icon = readFileSync(
+    path.join(
+        app,
+        'Contents/Resources',
+        iconName.endsWith('.icns') ? iconName : iconName + '.icns',
+    ),
+);
+assert.equal(icon.subarray(0, 4).toString(), 'icns');
+assert.equal(icon.readUInt32BE(4), icon.length);
 const archive = path.join(app, 'Contents/Resources/app.asar');
 assert.equal(
     listPackage(archive).some((file) => /(?:genie|native-window|taskbar-query|koffi)/i.test(file)),

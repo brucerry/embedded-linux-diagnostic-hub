@@ -90,15 +90,55 @@ export async function nativeWindowCycles(desktop: ElectronApplication, cycles: n
             BrowserWindow.getAllWindows()[0].unmaximize(),
         );
         await confirmed('normal-preflight', false, false);
+        const resizeTarget = await desktop.evaluate(({ BrowserWindow, screen }) => {
+            const window = BrowserWindow.getAllWindows()[0];
+            const display = screen.getDisplayMatching(window.getBounds());
+            const [minWidth, minHeight] = window.getMinimumSize();
+            const [maxWidth, maxHeight] = window.getMaximumSize();
+            // AppKit constrains windows to the display; the hosted Mac display can be shorter
+            // than the fixture's 900 DIP request. Keep an exact, independently selected target.
+            const size =
+                process.platform === 'darwin'
+                    ? {
+                          width: Math.max(minWidth, Math.min(1200, display.workArea.width)),
+                          height: Math.max(minHeight, Math.min(900, display.workArea.height)),
+                      }
+                    : { width: 1200, height: 900 };
+            return {
+                size,
+                workArea: display.workArea,
+                minimum: { minWidth, minHeight },
+                maximum: { maxWidth, maxHeight },
+            };
+        });
+        expect(resizeTarget.size.width).toBeGreaterThan(0);
+        expect(resizeTarget.size.height).toBeGreaterThan(0);
+        console.log('Native resize target:', JSON.stringify(resizeTarget));
+        const smallerMacSize = {
+            width: resizeTarget.minimum.minWidth,
+            height: resizeTarget.minimum.minHeight,
+        };
+        if (process.platform === 'darwin') expect(smallerMacSize).not.toEqual(resizeTarget.size);
         for (let cycle = 0; cycle < cycles; cycle++) {
             if (cycle % 10 === 0) {
-                await desktop.evaluate(({ BrowserWindow }) =>
-                    BrowserWindow.getAllWindows()[0].setSize(1200, 900),
+                const current = await state(`cycle-${cycle}:before-resize`);
+                const size =
+                    process.platform === 'darwin' &&
+                    current.bounds.width === resizeTarget.size.width &&
+                    current.bounds.height === resizeTarget.size.height
+                        ? smallerMacSize
+                        : resizeTarget.size;
+                if (process.platform === 'darwin')
+                    expect({
+                        width: current.bounds.width,
+                        height: current.bounds.height,
+                    }).not.toEqual(size);
+                await desktop.evaluate(
+                    ({ BrowserWindow }, size) =>
+                        BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+                    size,
                 );
-                await confirmed(`cycle-${cycle}:resized`, false, false, {
-                    width: 1200,
-                    height: 900,
-                });
+                await confirmed(`cycle-${cycle}:resized`, false, false, size);
                 await desktop.evaluate(({ BrowserWindow }) =>
                     BrowserWindow.getAllWindows()[0].maximize(),
                 );

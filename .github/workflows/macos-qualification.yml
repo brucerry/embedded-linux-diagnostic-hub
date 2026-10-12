@@ -51,11 +51,13 @@ jobs:
             - run: npm run test:e2e
             - name: Verify development SSH, trust, clock, reset and unsupported updates
               run: npx tsx tests/desktop-smoke.ts
+            - name: Generate full-resolution Mac icon from the shared SVG
+              run: node scripts/generate-macos-icon.mjs
             - name: Build ad-hoc app directory (no distribution)
               run:
                   npx electron-builder --mac dir --${{ matrix.arch }} --publish never
                   --config.mac.identity=- --config.mac.hardenedRuntime=false
-                  --config.mac.icon=public/app-icon.png
+                  --config.mac.icon=release/macos-icon.png
             - name: Verify architecture, bundle integrity and packaged source
               run:
                   node scripts/verify-macos-package.mjs "release/${{ matrix.appDir }}/Diagnostic
