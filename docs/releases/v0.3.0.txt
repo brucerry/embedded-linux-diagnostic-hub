@@ -8,7 +8,7 @@ Changes:
 - Add gateway cancellation and lost-response cleanup while retaining origin, token, allowlist, host-key and session-limit protections. Website users must deploy the matching v0.3.0 gateway; older gateways without cancellation support are rejected before SSH starts.
 - Preserve device-clock refresh when visibility events are batched.
 - Qualify both Mac architectures in free hosted CI with ad-hoc bundle integrity checks and 100 native-window/terminal cycles; automatic Mac installation remains unavailable, and downloaded-app Gatekeeper/notarization is not qualified.
-- Retain Windows, Linux base and all seven GNOME compositor checks. Strengthen test synchronization for native geometry, shell working-directory continuity, accessibility media preferences and retained history. Recover one specific screenshot-capture protocol failure only after native readiness checks, within the original deadline; keep every required screenshot and native assertion.
+- Retain Windows, Linux base and all seven GNOME compositor checks; run the full Windows browser suite with one worker to reduce concurrent runner resource pressure. Strengthen test synchronization for native geometry, shell working-directory continuity, accessibility media preferences and retained history. Recover one specific screenshot-capture protocol failure only after native readiness checks, within the original deadline; keep every required screenshot and native assertion.
 
 Commits:
 - The generator replaces this draft with the complete validated range since the prior published release.

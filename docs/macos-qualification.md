@@ -7,7 +7,9 @@ setup-node caching, uploads no binary artifacts and performs no publishing.
 Each architecture builds an ad-hoc signed app directory, verifies native executable/framework
 architecture, signature integrity and packaged-source bytes, then runs controlled
 SSH/PTY/clock/reset/trust/security and native-window/terminal checks including 100 cycles. Existing
-Windows and Linux workflows, including all seven GNOME cases, remain unchanged.
+Windows/Linux checks, including all seven GNOME cases, retain their coverage and deadlines. Mac and
+Windows browser CI use one worker to reduce concurrent runner resource pressure. This does not
+establish an upstream fix for the observed Windows ERR_NO_BUFFER_SPACE transport failure.
 
 Automatic installation through the existing Windows/Linux updater is explicitly unavailable on
 macOS. The release link remains available; this increment creates no public Mac download, Mac

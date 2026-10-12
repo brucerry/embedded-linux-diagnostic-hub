@@ -38,7 +38,8 @@ jobs:
             - run: npm run build
             - run: npm run build:web
             - run: npx playwright install chromium
-            - run: npm run test:e2e
+            - name: Run the full browser suite with one worker
+              run: npm run test:e2e -- --workers=1
             - run: npx tsx tests/desktop-smoke.ts
             - name: Build portable executable
               run: npx electron-builder --win portable --x64 --publish never
