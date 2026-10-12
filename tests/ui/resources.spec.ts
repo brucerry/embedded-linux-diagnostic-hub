@@ -454,7 +454,14 @@ test('device-file controls are absent from the diagnostic workspace', async ({ p
 test('glass header stays readable over scrolled cards and keeps the page stable', async ({
     page,
 }) => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-reduced-transparency', value: 'no-preference' }],
+    });
     await connectFixture(page);
+    expect(
+        await page.evaluate(() => matchMedia('(prefers-reduced-transparency: reduce)').matches),
+    ).toBe(false);
     await page.evaluate(() =>
         window.scrollTo(
             0,
@@ -497,10 +504,12 @@ test('glass header stays readable over scrolled cards and keeps the page stable'
     await expect(header.getByRole('button', { name: 'Diagnostic Hub home' })).toBeVisible();
     await expect(header.getByRole('button', { name: 'Overview', exact: true })).toBeVisible();
     await page.screenshot({ path: 'validation/2026-10-06/transfer-artwork/scrolled-header.png' });
-    const cdp = await page.context().newCDPSession(page);
     await cdp.send('Emulation.setEmulatedMedia', {
         features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }],
     });
+    expect(
+        await page.evaluate(() => matchMedia('(prefers-reduced-transparency: reduce)').matches),
+    ).toBe(true);
     expect(await header.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
         'rgb(29, 36, 45)',
     );
