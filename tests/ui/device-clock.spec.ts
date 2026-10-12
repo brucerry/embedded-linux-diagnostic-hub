@@ -273,6 +273,28 @@ test('resume, reset and reboot evidence refresh without duplicate minute loops',
     await expect.poll(() => calls(page)).toBe(7);
 });
 
+test('a batched hide and resume refreshes the clock once and retains stale evidence', async ({
+    page,
+}) => {
+    await paused(page);
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.desktopTest.clock.fail = true;
+        Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'visible',
+        });
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(() => calls(page)).toBe(2);
+    await expect(clock(page)).toContainText('Stale');
+    await expect(clock(page)).toContainText('16:35');
+    await page.clock.fastForward(60_000);
+    await expect.poll(() => calls(page)).toBe(3);
+    await expect(clock(page)).toContainText('Stale');
+});
+
 test('failed resume retains the last device sample as stale and reset discards a late read', async ({
     page,
 }) => {

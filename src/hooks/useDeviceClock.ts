@@ -26,7 +26,10 @@ export function useDeviceClock({
     blocked,
     uptime,
 }: ClockInputs): DeviceClockState {
-    const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden');
+    const [{ visible, resumeRevision }, setVisibility] = useState(() => ({
+        visible: document.visibilityState !== 'hidden',
+        resumeRevision: 0,
+    }));
     const [state, setState] = useState<DeviceClockState & { generation?: number; reset?: number }>({
         status: 'disconnected',
         sample: null,
@@ -42,7 +45,18 @@ export function useDeviceClock({
     }>({ sample: null });
 
     useEffect(() => {
-        const visibility = () => setVisible(document.visibilityState !== 'hidden');
+        const visibility = () => {
+            const next = document.visibilityState !== 'hidden';
+            setVisibility((current) =>
+                current.visible === next
+                    ? current
+                    : {
+                          visible: next,
+                          // Preserve a resume even if React batches hidden and visible together.
+                          resumeRevision: current.resumeRevision + (next ? 1 : 0),
+                      },
+            );
+        };
         const resume = () => {
             if (document.visibilityState !== 'hidden') refresh.current?.();
         };
@@ -119,7 +133,7 @@ export function useDeviceClock({
             if (refresh.current === run) refresh.current = null;
             if (queued.current === run) queued.current = null;
         };
-    }, [transport, generation, reset, blocked, visible]);
+    }, [transport, generation, reset, blocked, visible, resumeRevision]);
 
     useEffect(() => {
         const previous = observed.current;

@@ -942,21 +942,22 @@ async function main() {
             expect(recovered?.mode).toBe('smart');
             expect(recovered?.snapshot?.endpoint).toBe(`127.0.0.1:${port}`);
             expect(JSON.stringify(recovered)).not.toContain('UPDATE_TERMINAL_ONLY_MARKER');
-            expect(
-                await page.evaluate(async () => {
-                    try {
-                        await window.diagnosticHub!.connect({
+            const connectionsBeforeUpdateGuard = readyConnections;
+            await expect(
+                page.evaluate(
+                    (port) =>
+                        window.diagnosticHub!.connect({
                             host: '127.0.0.1',
-                            port: 22,
-                            username: 'root',
+                            port,
+                            username: 'engineer',
                             auth: 'password',
-                        });
-                        return false;
-                    } catch (error) {
-                        return String(error).includes('update is in progress');
-                    }
-                }),
-            ).toBe(true);
+                            password: 'test-only-secret',
+                        }),
+                    port,
+                ),
+            ).rejects.toThrow(/HUB_CONNECTION_FAILURE:policy/);
+            expect(readyConnections).toBe(connectionsBeforeUpdateGuard);
+            expect(openConnections).toBe(0);
             await expect(
                 page.evaluate(() => window.diagnosticHub!.readDeviceClock!()),
             ).rejects.toThrow('update');
@@ -994,7 +995,17 @@ async function main() {
         console.log(
             'Desktop smoke passed: packaged UI, isolated bridge, SSH collection, trusted-key replacement/cancel/reuse, native report export and disconnect.',
         );
+    } catch (error) {
+        console.error('Desktop smoke assertion failed:', error);
+        throw error;
     } finally {
+        // The update fixture stubs quit; restore it even if an assertion fails before its reset.
+        await desktop
+            .evaluate(({ app }) => {
+                const realQuit = (app as typeof app & { realQuit?: typeof app.quit }).realQuit;
+                if (realQuit) app.quit = realQuit;
+            })
+            .catch(() => {});
         await desktop.close();
         await expect.poll(() => openConnections).toBe(0);
         await expect.poll(() => terminalState.closes).toBe(terminalState.opens);
