@@ -28,10 +28,14 @@ for (let page = 1; ; page++) {
 }
 const previousTag = previousRelease(releases, currentTag);
 let highlights = '';
-try {
-    highlights = await readFile(`docs/releases/${currentTag}.md`, 'utf8');
-} catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+// Literal four-section drafts use .txt so formatters cannot join labels or wrap link lines.
+for (const extension of ['txt', 'md']) {
+    try {
+        highlights = await readFile(`docs/releases/${currentTag}.${extension}`, 'utf8');
+        break;
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
 }
 const packageNotes = await readFile('release/notes.md', 'utf8');
 await writeFile(

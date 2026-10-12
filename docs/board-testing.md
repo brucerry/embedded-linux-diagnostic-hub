@@ -1,3 +1,7 @@
+> Historical feature documentation: the user-facing Tests workspace and its remote execution paths
+> are retired in current source. This document preserves previous behavior/qualification evidence;
+> it is not a current setup guide. Saved reports are unchanged.
+
 # Board testing
 
 Open **Tests → Manufactural tests** to prepare repeatable checks for a connected board. No device

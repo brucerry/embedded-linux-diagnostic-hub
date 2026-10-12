@@ -87,6 +87,9 @@ async function main() {
             args: [
                 ...(process.env.HUB_TEST_EXECUTABLE ? [] : ['.']),
                 `--user-data-dir=${temporary}`,
+                ...(process.env.HUB_GNOME_BACKEND === 'wayland'
+                    ? ['--ozone-platform=wayland']
+                    : []),
                 ...(process.platform === 'linux' && !process.env.HUB_TEST_SANDBOX
                     ? ['--no-sandbox']
                     : []),
@@ -180,6 +183,22 @@ async function main() {
             page.getByRole('button', { name: 'Export report', exact: true }),
         ).toBeDisabled();
         expect(await page.evaluate(() => typeof window.diagnosticHub?.connect)).toBe('function');
+        await expect(page.getByRole('button', { name: 'Tests', exact: true })).toHaveCount(0);
+        expect(
+            await page.evaluate(() =>
+                Object.keys(window.diagnosticHub!).filter((key) => /test/i.test(key)),
+            ),
+        ).toEqual([]);
+        expect(
+            await desktop.evaluate(({ ipcMain }) =>
+                [
+                    ...(
+                        ipcMain as unknown as { _invokeHandlers: Map<string, unknown> }
+                    )._invokeHandlers.keys(),
+                ].filter((key) => key.startsWith('hub:tests-') || key === 'hub:window-motion'),
+            ),
+        ).toEqual([]);
+
         await expect(page.getByRole('button', { name: 'Device files', exact: true })).toHaveCount(
             0,
         );
@@ -517,6 +536,73 @@ async function main() {
         await page.keyboard.press('Enter');
         await expect(terminalPanel.locator('.terminal-screen')).toContainText('/tmp');
         expect(terminalState.opens).toBe(1);
+        // Xvfb alone has no window manager; real native state is checked on Windows and the retained GNOME matrix.
+        if (process.platform === 'win32' || process.env.HUB_GNOME_ISOLATED === '1') {
+            const beforeNativeWindow = {
+                connections: readyConnections,
+                shells: terminalState.opens,
+            };
+            await page.evaluate(() => {
+                (window as unknown as { nativeRestores: number }).nativeRestores = 0;
+                window.diagnosticHub!.onWindowRestored!(() => {
+                    (window as unknown as { nativeRestores: number }).nativeRestores++;
+                });
+            });
+            const nativeCycles = Number(process.env.HUB_NATIVE_CYCLES ?? 3);
+            expect(Number.isInteger(nativeCycles) && nativeCycles >= 3 && nativeCycles <= 100).toBe(
+                true,
+            );
+            const crashes: string[] = [];
+            page.on('crash', () => crashes.push('renderer crashed'));
+            for (let cycle = 0; cycle < nativeCycles; cycle++) {
+                if (cycle % 10 === 0) {
+                    await desktop.evaluate(({ BrowserWindow }) => {
+                        const window = BrowserWindow.getAllWindows()[0];
+                        window.setSize(1200, 900);
+                        window.maximize();
+                        window.unmaximize();
+                    });
+                }
+                await desktop.evaluate(({ BrowserWindow }) =>
+                    BrowserWindow.getAllWindows()[0].minimize(),
+                );
+                await expect
+                    .poll(() =>
+                        desktop.evaluate(({ BrowserWindow }) =>
+                            BrowserWindow.getAllWindows()[0].isMinimized(),
+                        ),
+                    )
+                    .toBe(true);
+                await desktop.evaluate(({ BrowserWindow }) =>
+                    BrowserWindow.getAllWindows()[0].restore(),
+                );
+                await expect
+                    .poll(() =>
+                        desktop.evaluate(({ BrowserWindow }) =>
+                            BrowserWindow.getAllWindows()[0].isMinimized(),
+                        ),
+                    )
+                    .toBe(false);
+            }
+            expect(
+                await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
+            ).toBe(1);
+            await expect
+                .poll(() =>
+                    page.evaluate(
+                        () => (window as unknown as { nativeRestores: number }).nativeRestores,
+                    ),
+                )
+                .toBe(nativeCycles);
+            expect(crashes).toEqual([]);
+            expect(await page.evaluate(() => document.querySelector('h1')?.textContent)).toBe(
+                'Device terminal',
+            );
+            expect(readyConnections).toBe(beforeNativeWindow.connections);
+            expect(terminalState.opens).toBe(beforeNativeWindow.shells);
+            await expect(page.locator('.xterm')).toBeVisible();
+        }
+
         await terminalPanel.getByRole('button', { name: 'Clear terminal' }).click();
         await expect(terminalInput).toBeFocused();
         await expect(terminalPanel.locator('.xterm-accessibility-tree')).not.toContainText(

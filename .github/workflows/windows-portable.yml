@@ -51,17 +51,9 @@ jobs:
               env:
                   HUB_TEST_EXECUTABLE:
                       ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
-            - name: Verify packaged Genie security recovery and device continuity
-              run: npx tsx tests/genie-desktop-smoke.ts
+            - name: Verify native windows and device continuity
+              run: npx tsx tests/native-window-smoke.ts
               env:
-                  HUB_TEST_GENIE_MOTION: '1'
-                  HUB_TEST_EXECUTABLE:
-                      ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
-            - name: Stress packaged native transitions and resizing
-              shell: pwsh
-              run: npx tsx tests/genie-stress.ts
-              env:
-                  HUB_TEST_GENIE_MOTION: '1'
                   HUB_TEST_EXECUTABLE:
                       ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
             - name: Verify portable cold launch and host behavior
@@ -69,6 +61,12 @@ jobs:
               run: |
                   ./tests/windows-launch.ps1 -Executable "$PWD/release/Diagnostic-Hub.exe"
                   ./tests/windows-host-verification.ps1 -Executable "$PWD/release/Diagnostic-Hub.exe"
+            - name: Stress packaged native windows and in-place terminal
+              run: npx tsx tests/native-window-smoke.ts
+              env:
+                  HUB_NATIVE_CYCLES: '100'
+                  HUB_TEST_EXECUTABLE:
+                      ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
             - run: npm run checksums
             - name: Record signing status
               shell: pwsh

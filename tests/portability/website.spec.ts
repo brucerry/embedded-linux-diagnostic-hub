@@ -172,32 +172,9 @@ test('portable production website works at a nested URL on desktop and mobile', 
             await gateway.close();
         }
         await page.goto(`http://127.0.0.1:${port}${prefix}`);
-        await page
-            .locator('.primary-nav')
-            .getByRole('button', { name: 'Tests', exact: true })
-            .click();
-        await page.getByRole('switch', { name: 'Simulation mode' }).click();
-        await page.getByRole('button', { name: 'Validate & prepare tests' }).click();
-        await page.getByRole('checkbox', { name: /I reviewed the mappings/ }).check();
-        await page.getByRole('button', { name: 'Run selected tests' }).click();
-        const results = page.getByRole('region', { name: 'Test run results' });
-        await expect(results).toContainText('Run review');
-        await results.getByRole('button', { name: 'Yes, expected pattern' }).click();
-        await expect(results).toContainText('Test results Pass');
-        await results.getByRole('button', { name: 'Print / Save PDF' }).click();
-        await expect(page.getByRole('dialog', { name: 'Test report preview' })).toBeVisible();
-        await expect(page.frameLocator('.test-report-preview').locator('h1')).toContainText(
-            'Engineering bench example',
-        );
-        await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
-        await page.getByRole('button', { name: 'JSON', exact: true }).click();
-        await page.getByRole('button', { name: 'Run JSON', exact: true }).click();
-        await expect(results).toContainText('Run complete');
-        await expect(results).toContainText('Test results Inconclusive');
-        const direct = JSON.parse(
-            await page.getByLabel('Result report JSON', { exact: true }).inputValue(),
-        );
-        expect(direct.run.cases[0].feedback.value).toBe('unobserved');
+        await expect(
+            page.locator('.primary-nav').getByRole('button', { name: 'Tests', exact: true }),
+        ).toHaveCount(0);
         expect(errors).toEqual([]);
     } finally {
         await new Promise<void>((resolve, reject) =>

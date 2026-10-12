@@ -11,7 +11,6 @@ npm run package:gateway
 npm run package:win
 npm run verify:package
 npm run package:linux
-npm run package:genie
 npm run verify:linux
 npm run package:web
 npm run package:launchers
@@ -27,12 +26,9 @@ execution; package installation can require `sudo`. See [download commands](down
 extraction and per-user trusted SSH key storage still require writable host directories. Do not ship
 an old executable alongside the current one.
 
-Linux releases also include the versioned optional [GNOME companion](linux-genie.md). Package it
-from the same clean source commit as the app. `package:genie` creates the modern ZIP and a separate
-`Diagnostic-Hub-Genie-Legacy42-<version>.zip`, each with its own checksum; the release validator
-checks both identities and the Linux build manifest's asset hashes. The reusable Linux workflow
-includes the dedicated compositor matrix, so release publication waits for those jobs as well as the
-existing native fallback checks.
+Release validation requires the app, gateway, web and launcher assets with matching checksums and
+source identity. Linux CI retains its native compositor matrix. Historical published releases may
+include retired companion ZIPs; they are not part of new builds.
 
 Unsigned Linux/WSL cross-build:
 
@@ -161,3 +157,7 @@ References:
 [GitHub custom Pages workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages),
 [reusable workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows),
 [GitHub CLI release creation](https://cli.github.com/manual/gh_release_create).
+
+Release pages follow [the four-section template](release-note-template.md). Names equal the tag; the
+generator includes every commit since the previous published release and preserves caveats within
+Description or Changes.

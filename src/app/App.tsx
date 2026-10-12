@@ -16,7 +16,6 @@ import {
     Unplug,
     X,
     TerminalSquare,
-    FlaskConical,
 } from 'lucide-react';
 import { lazy, Suspense, useState, useRef, useLayoutEffect } from 'react';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
@@ -26,8 +25,6 @@ import { RoundedIcon } from '../components/RoundedIcon';
 import { useDeviceSession } from '../hooks/useDeviceSession';
 import { useDeviceClock } from '../hooks/useDeviceClock';
 import { DeviceClock } from '../components/DeviceClock';
-import { useBoardTests } from '../features/testing/useBoardTests';
-import { TestsPage } from '../features/testing/TestsPage';
 
 import { Nav } from '../components/Nav';
 import { CopyButton } from '../components/CopyButton';
@@ -71,8 +68,6 @@ function App() {
         setInterval,
         history,
         busy,
-        testing,
-        setTestingActivity,
         connecting,
         disconnecting,
         resetting,
@@ -94,15 +89,6 @@ function App() {
         exportReport,
         importReport,
     } = useDeviceSession(() => setView('overview'));
-    const boardTests = useBoardTests({
-        transport,
-        generation: activeDevice?.generation,
-        connected,
-        blocked: resetting || connecting || disconnecting || showConnect || showUpdates,
-        collecting: busy,
-        reset: terminalReset,
-        activity: setTestingActivity,
-    });
     const uptimeResult = snapshot?.results.find((result) => result.id === 'uptime');
     const uptimeValue =
         uptimeResult?.status === 'collected'
@@ -134,9 +120,7 @@ function App() {
               ? 'Diagnostic workbench'
               : view === 'terminal'
                 ? 'Device terminal'
-                : view === 'tests'
-                  ? 'Manufactural tests'
-                  : categoryLabels[view];
+                : categoryLabels[view];
     return (
         <div className="app-shell" inert={resetting}>
             <header className="site-header">
@@ -175,12 +159,6 @@ function App() {
                             setView('terminal');
                         }}
                     />
-                    <Nav
-                        icon={FlaskConical}
-                        label="Tests"
-                        active={view === 'tests'}
-                        onClick={() => setView('tests')}
-                    />
                 </nav>
                 <DeviceClock {...clock} />
                 <span className="edition-label">
@@ -212,11 +190,7 @@ function App() {
                             aria-label="Check for updates"
                             title="Check for updates"
                             disabled={
-                                resetting ||
-                                testing ||
-                                showConnect ||
-                                showUpdates ||
-                                Boolean(selectedProbe)
+                                resetting || showConnect || showUpdates || Boolean(selectedProbe)
                             }
                             onClick={() => setShowUpdates(true)}
                         >
@@ -252,24 +226,16 @@ function App() {
                                     ? 'Every interface. Every insight. One connected workspace.'
                                     : view === 'terminal'
                                       ? 'Run commands on your connected device through SSH.'
-                                      : view === 'tests'
-                                        ? 'Reusable tests. Explicit expectations. Evidence you can share.'
-                                        : 'Inspect system capabilities and the evidence behind every result.'}
+                                      : 'Inspect system capabilities and the evidence behind every result.'}
                             </p>
                         </div>
                         <div className="heading-actions">
-                            {view !== 'terminal' && view !== 'tests' && (
+                            {view !== 'terminal' && (
                                 <>
                                     <button
                                         className="button secondary"
                                         onClick={() => importInput.current?.click()}
-                                        disabled={
-                                            busy ||
-                                            testing ||
-                                            resetting ||
-                                            connecting ||
-                                            disconnecting
-                                        }
+                                        disabled={busy || resetting || connecting || disconnecting}
                                     >
                                         <FileInput size={16} />
                                         Import report
@@ -400,9 +366,7 @@ function App() {
                         </label>
                         <button
                             className="button danger"
-                            disabled={
-                                !snapshot || testing || resetting || connecting || disconnecting
-                            }
+                            disabled={!snapshot || resetting || connecting || disconnecting}
                             onClick={() => void resetData()}
                             title="Clear the current snapshot and graph history from RAM. Saved reports remain on disk."
                         >
@@ -412,15 +376,13 @@ function App() {
                         <span>
                             {resetting
                                 ? 'Resetting session data · live updates paused'
-                                : testing
-                                  ? 'Functional testing · collection and new terminal input paused'
-                                  : !connected
-                                    ? 'Connect a target to start updates.'
-                                    : busy || connecting
-                                      ? 'Collecting · next update waits for completion'
-                                      : live
-                                        ? `Next collection in ${interval}s`
-                                        : 'Manual refresh available'}
+                                : !connected
+                                  ? 'Connect a target to start updates.'
+                                  : busy || connecting
+                                    ? 'Collecting · next update waits for completion'
+                                    : live
+                                      ? `Next collection in ${interval}s`
+                                      : 'Manual refresh available'}
                         </span>
                     </div>
 
@@ -447,7 +409,6 @@ function App() {
                                 visible={view === 'terminal'}
                                 blocked={
                                     resetting ||
-                                    testing ||
                                     connecting ||
                                     disconnecting ||
                                     showConnect ||
@@ -462,31 +423,14 @@ function App() {
                             />
                         </Suspense>
                     )}
-                    {view === 'terminal' && testing && (
-                        <p className="test-notice" role="status">
-                            Terminal input is paused during board testing. Existing remote programs
-                            can still run.
-                        </p>
-                    )}
-                    {view === 'tests' ? (
-                        <TestsPage
-                            key={boardTests.simulated ? 'simulated' : 'connected'}
-                            tests={boardTests}
-                            connected={connected}
-                            collecting={busy}
-                            onConnect={() => {
-                                setError('');
-                                setShowConnect(true);
-                            }}
-                        />
-                    ) : view === 'terminal' ? null : view === 'overview' ? (
+                    {view === 'terminal' ? null : view === 'overview' ? (
                         snapshot || workspaceReady ? (
                             <OverviewPage
                                 snapshot={snapshot}
                                 imported={imported}
                                 connected={connected}
                                 native={Boolean(bridge)}
-                                busy={busy || testing}
+                                busy={busy}
                                 connecting={connecting}
                                 disconnecting={disconnecting}
                                 live={live}

@@ -1,3 +1,7 @@
+> Historical feature documentation: the user-facing Tests workspace and its remote execution paths
+> are retired in current source. This document preserves previous behavior/qualification evidence;
+> it is not a current setup guide. Saved reports are unchanged.
+
 # Initial test fixtures
 
 These checks act with the connected SSH user's existing permissions. The application never installs

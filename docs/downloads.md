@@ -27,10 +27,8 @@ permissions. It removes that temporary extraction after the application closes. 
 AppImage remains available for later offline use. Downloads require internet; subsequent direct SSH
 sessions do not.
 
-Releases containing the optional Genie companion offer per-user setup on supported Ubuntu/Debian
-GNOME desktops through the same command. See [native Linux motion](linux-genie.md) for activation,
-fallback, space and removal. Use `--no-genie` to skip it; `--download-only` makes no integration
-changes.
+Current source uses native window behavior and requires no companion extension. The downloader
+verifies the selected app checksum before launch.
 
 ## Missing prerequisites
 

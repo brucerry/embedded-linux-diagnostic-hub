@@ -4,13 +4,6 @@ import { createReadStream } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { distributable, releaseAssets } from './lib/release-assets.mjs';
-import {
-    genieAsset,
-    validateGeniePackage,
-    GENIE_FORMATS,
-    createGeniePackage,
-} from './lib/genie-package.mjs';
-
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 assert.match(version, /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/, 'Use a semantic release version.');
 assert.equal(process.env.GITHUB_REF_NAME, `v${version}`, 'Tag must match package.json version.');
@@ -36,31 +29,12 @@ if (process.argv.includes('--assets')) {
     assert.equal(linux.commit, process.env.GITHUB_SHA);
     assert.equal(linux.platform, 'linux');
     assert.equal(linux.arch, 'x64');
-    for (const format of GENIE_FORMATS) {
-        const expected = await createGeniePackage(
-            path.resolve(import.meta.dirname, '..'),
-            version,
-            process.env.GITHUB_SHA,
-            format,
-        );
-        validateGeniePackage(
-            await readFile(`release/${genieAsset(version, format)}`),
-            version,
-            process.env.GITHUB_SHA,
-            expected.files,
-            format,
-        );
-    }
     for (const [name, checksum] of Object.entries(linux.assets)) {
         assert.equal((await readFile(`release/${name}.sha256`, 'utf8')).split('  ')[0], checksum);
     }
     assert.deepEqual(
         Object.keys(linux.assets).sort(),
-        [
-            'Diagnostic-Hub-linux-x64.AppImage',
-            'Diagnostic-Hub-linux-x64.tar.gz',
-            ...GENIE_FORMATS.map((format) => genieAsset(version, format)),
-        ].sort(),
+        ['Diagnostic-Hub-linux-x64.AppImage', 'Diagnostic-Hub-linux-x64.tar.gz'].sort(),
     );
     const signing =
         info.signature === 'Valid'

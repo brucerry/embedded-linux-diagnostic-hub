@@ -1,11 +1,18 @@
 import { execFileSync } from 'node:child_process';
 
 export function previousRelease(releases, currentTag) {
+    const current = releases.find(
+        (release) => release.tag_name === currentTag && !release.draft && release.published_at,
+    );
     return (
         releases
             .filter(
                 (release) =>
-                    !release.draft && release.published_at && release.tag_name !== currentTag,
+                    !release.draft &&
+                    release.published_at &&
+                    release.tag_name !== currentTag &&
+                    (!current ||
+                        Date.parse(release.published_at) < Date.parse(current.published_at)),
             )
             .sort(
                 (a, b) => Date.parse(b.published_at) - Date.parse(a.published_at) || b.id - a.id,
@@ -86,8 +93,62 @@ export function releasePageNotes({
     releaseRange({ repository, currentTag, previousTag, cwd });
     const body = highlights.trim() || packageNotes.trim();
     if (!body) throw Error('Release notes cannot be empty.');
-    const changes = previousTag
-        ? `[Full changes](https://github.com/${repository}/compare/${previousTag}...${currentTag})`
-        : `[Source](https://github.com/${repository}/tree/${currentTag})`;
-    return `${body}\n\n${changes}\n`;
+    const commits = commitNotes({ repository, currentTag, previousTag, cwd })
+        .split('\n')
+        .filter((line) => line.startsWith('- '));
+    const sourceLinks = [...body.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)].map(
+        (match) => `${match[1]} - ${match[2]}`,
+    );
+    const clean = (value) => value.replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1').trim();
+    const structured = /^(?:#{1,6} )?Description:\s*$/m.test(body);
+    let description, changes, links;
+    if (structured) {
+        const sections = body.split(/^(?:#{1,6} )?(Description|Changes|Commits|Links):\s*$/m);
+        const names = sections.filter((_value, index) => index % 2 === 1);
+        if (names.join(',') !== 'Description,Changes,Commits,Links')
+            throw Error(
+                'Release notes require exactly Description, Changes, Commits and Links in that order.',
+            );
+        description = clean(sections[2]);
+        changes = clean(sections[4]);
+        links = sections[8].trim().split('\n').filter(Boolean);
+        if (links.some((line) => !/^.+ - https?:\/\/\S+$/.test(line)))
+            throw Error('Release links must use name - URL.');
+    } else {
+        const paragraphs = body
+            .split(/\n\s*\n/)
+            .filter((paragraph) => !paragraph.trim().startsWith('- ') && !/^\s*\[/.test(paragraph));
+        description =
+            clean(paragraphs.join('\n\n').replace(/^#{1,6} .*$/gm, '')) ||
+            'Portable SSH diagnostics for embedded Linux on Windows, Linux and the web.';
+        const bullets = [];
+        for (const line of body.split('\n')) {
+            if (/^- /.test(line)) bullets.push(clean(line));
+            else if (/^\s+\S/.test(line) && bullets.length)
+                bullets[bullets.length - 1] += ' ' + clean(line);
+        }
+        changes = bullets.join('\n') || commits.join('\n') || '- Initial release.';
+        links = sourceLinks;
+    }
+    if (
+        !description ||
+        !changes ||
+        changes.split('\n').some((line) => line && !line.startsWith('- '))
+    )
+        throw Error('Description is required and changes must be bullet points.');
+    const signing = packageNotes.match(
+        /Windows Authenticode signature: valid\.|Unsigned engineering preview\. Windows may show an unknown-publisher warning\./,
+    )?.[0];
+    if (signing && !description.includes(signing)) description += '\n' + signing;
+    const comparison = previousTag
+        ? `Full comparison - https://github.com/${repository}/compare/${previousTag}...${currentTag}`
+        : `Source - https://github.com/${repository}/tree/${currentTag}`;
+    links = [
+        ...new Set([
+            ...links,
+            comparison,
+            `Downloads and setup - https://github.com/${repository}/blob/${currentTag}/docs/downloads.md`,
+        ]),
+    ];
+    return `Description:\n${description}\n\nChanges:\n${changes}\n\nCommits:\n${commits.join('\n') || '- No new commits.'}\n\nLinks:\n${links.join('\n')}\n`;
 }

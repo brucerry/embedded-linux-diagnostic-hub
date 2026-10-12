@@ -34,36 +34,11 @@ fi
 qualification=$2
 major=$(gnome-shell --version | sed -E 's/.* ([0-9]+)\..*/\1/')
 [[ $major == 42 || $major == 46 || $major == 48 || $major == 50 ]] || exit 1
-if [[ -d /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com ]]; then dock=ubuntu-dock@ubuntu.com; else dock=dash-to-dock@micxgx.gmail.com; fi
-if [[ ${HUB_GNOME_LOGIN_PHASE:-} != verify ]]; then
-    gsettings set org.gnome.shell enabled-extensions "['$dock']"
-fi
-gsettings set org.gnome.desktop.interface enable-animations true
-gsettings set org.gnome.desktop.wm.preferences button-layout ':minimize,maximize,close'
-gsettings set org.gnome.shell.extensions.dash-to-dock dock-fixed true
-gsettings set org.gnome.shell.extensions.dash-to-dock autohide false
-gsettings set org.gnome.shell.extensions.dash-to-dock intellihide false
-gsettings set org.gnome.shell.extensions.dash-to-dock show-trash false
-gsettings set org.gnome.shell.extensions.dash-to-dock show-mounts false
-version=$(node -p 'require("./package.json").version')
-commit=$(git rev-parse HEAD)
-companion_format=modern
-archive=$project/release/Diagnostic-Hub-Genie-$version.zip
-if [[ $major == 42 ]]; then
-    companion_format=legacy42
-    archive=$project/release/Diagnostic-Hub-Genie-Legacy42-$version.zip
-fi
-# The owned qualification launcher reuses the already verified AppImage.
-# This diagnostic is not a helper/package installation acceptance run.
 test -f "$HUB_TEST_EXECUTABLE" && test ! -L "$HUB_TEST_EXECUTABLE"
 sha256sum "$HUB_TEST_EXECUTABLE" > "$HUB_GNOME_EVIDENCE/current-runtime-appimage-sha256.txt"
 printf '#!/bin/bash\nexec "%s" --appimage-extract-and-run "$@"\n' "$HUB_TEST_EXECUTABLE" >"$qualification/launch-app"
 chmod 700 "$qualification/launch-app"
 export HUB_TEST_EXECUTABLE=$qualification/launch-app
-checksum=$(sha256sum "$HUB_TEST_EXECUTABLE"); checksum=${checksum%% *}
-if [[ ${HUB_GNOME_LOGIN_PHASE:-} != verify ]]; then
-    python3 -B linux/gnome-genie/setup.py --archive "$archive" --format "$companion_format" --version "$version" --commit "$commit" --app "$HUB_TEST_EXECUTABLE" --app-sha256 "$checksum"
-fi
 unset HUB_TEST_APPIMAGE
 export GNOME_SHELL_SESSION_MODE=user
 shell_args=(--unsafe-mode)
@@ -121,25 +96,5 @@ if [[ $major == 50 ]]; then
     printf '%s\n' "$stage_geometry" > "$HUB_GNOME_EVIDENCE/verified-stage-geometry.txt"
     [[ $stage_ready == 1 ]] || { echo 'Controlled 1590x944 stage did not settle before the workload.' >&2; exit 1; }
 fi
-for attempt in $(seq 1 100); do
-    status=$(gdbus call --session --dest org.gnome.Shell --object-path /dev/diagnostichub/Genie --method dev.diagnostichub.Genie1.GetStatus 2>/dev/null) || true
-    [[ $status == *'"active":true'* ]] && break
-    sleep .2
-done
-[[ $status == *'"active":true'* ]] || { tail -40 "$qualification/shell.log"; exit 1; }
 if [[ ${HUB_GNOME_BACKEND:-wayland} != x11 ]]; then export WAYLAND_DISPLAY=hub-qualification-0; fi
-api=$(gdbus introspect --session --dest org.gnome.Shell --object-path /dev/diagnostichub/Genie)
-[[ $api == *GetStatus* && $api != *Minimize* && $api != *Restore* ]] || exit 1
-if [[ ${HUB_GNOME_MESH_ONLY:-0} == 1 ]]; then
-    npx tsx tests/gnome-mesh.ts
-elif [[ ${HUB_GNOME_BOUNDS_ONLY:-0} == 1 ]]; then
-    npx tsx tests/gnome-bounds.ts
-elif [[ ${HUB_GNOME_CANCEL_ONLY:-0} == 1 ]]; then
-    npx tsx tests/gnome-cancellation.ts
-elif [[ ${HUB_GNOME_CAPTURE_ONLY:-0} == 1 ]]; then
-    npx tsx tests/gnome-render-probe.ts
-elif [[ ${HUB_GNOME_HELPER_ONLY:-0} == 1 ]]; then
-    npx tsx tests/gnome-helper-flows.ts
-else
-    npx tsx tests/gnome-genie.ts
-fi
+npx --no-install tsx tests/native-window-smoke.ts

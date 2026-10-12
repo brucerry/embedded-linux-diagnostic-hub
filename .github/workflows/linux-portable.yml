@@ -29,15 +29,14 @@ jobs:
             - run: npx playwright install --with-deps chromium
             - run: npm run test:e2e
             - run: npm run package:linux
-            - run: npm run package:genie
             - run: npm run verify:linux
             - name: Run the packaged Linux application over loopback SSH
               run: xvfb-run -a npx tsx tests/desktop-smoke.ts
               env:
                   HUB_TEST_SANDBOX: '1'
                   HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
-            - name: Verify native window fallback without Genie on Linux
-              run: xvfb-run -a npx tsx tests/genie-desktop-smoke.ts
+            - name: Verify native windows on Linux
+              run: xvfb-run -a npx tsx tests/native-window-smoke.ts
               env:
                   HUB_TEST_SANDBOX: '1'
                   HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
@@ -64,8 +63,6 @@ jobs:
                       release/Diagnostic-Hub-linux-x64.tar.gz
                       release/Diagnostic-Hub-linux-x64.tar.gz.sha256
                       release/linux-build-info.json
-                      release/Diagnostic-Hub-Genie-*.zip
-                      release/Diagnostic-Hub-Genie-*.zip.sha256
                   if-no-files-found: error
     gnome:
         needs: build
@@ -102,22 +99,13 @@ jobs:
         env:
             HUB_GNOME_ISOLATED: '1'
             HUB_GNOME_BACKEND: ${{ matrix.backend }}
-            HUB_GNOME_STRESS: '1'
-            HUB_GNOME_TEST_GSK_RENDERER: gl
-            HUB_GNOME_TRACE_BOUNDS:
-                ${{ matrix.shell == 42 && matrix.backend == 'wayland' && '1' || '0' }}
         steps:
             - name: Install isolated qualification prerequisites
               run: |
                   apt-get update -qq
                   audio_package=libasound2t64
                   if [ '${{ matrix.shell }}' = 42 ]; then audio_package=libasound2; fi
-                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl python3 systemd dbus-x11 xvfb x11-utils x11-apps xdotool gnome-shell gjs gir1.2-gtk-4.0 pipewire openssh-server openssl util-linux libnss3 libatk-bridge2.0-0 libgbm1 "$audio_package"
-                  if [ -f /etc/debian_version ] && ! grep -q '^ID=ubuntu' /etc/os-release; then
-                      apt-get install -y --no-install-recommends gnome-shell-extension-dashtodock
-                  else
-                      apt-get install -y --no-install-recommends gnome-shell-extension-ubuntu-dock
-                  fi
+                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl python3 systemd dbus-x11 xvfb x11-utils x11-apps xdotool gnome-shell pipewire openssh-server openssl util-linux libnss3 libatk-bridge2.0-0 libgbm1 "$audio_package"
                   if [ "${{ matrix.shell }}" = 50 ]; then apt-get install -y --no-install-recommends mutter-dev-bin wireplumber; fi
                   mkdir -p /run/dbus /run/systemd/seats /run/systemd/sessions /run/systemd/users /run/systemd/inhibit
                   dbus-daemon --system --fork

@@ -1,3 +1,7 @@
+> Historical feature documentation: the user-facing Tests workspace and its remote execution paths
+> are retired in current source. This document preserves previous behavior/qualification evidence;
+> it is not a current setup guide. Saved reports are unchanged.
+
 # Board testing software qualification
 
 The initial implementation is qualified as a software workflow. No physical embedded board, LED,

@@ -14,16 +14,17 @@ async function openFixture(page: Page, id = 'openwrt') {
     await expect(page.getByText('IMPORTED REPORT', { exact: true })).toBeVisible();
 }
 
-test('diagnostic report controls appear only on diagnostic pages and tests retain their own reports', async ({
+test('diagnostic report controls remain available and the Tests workspace is retired', async ({
     page,
 }) => {
     await page.goto('/');
     await openFixture(page);
     const nav = page.locator('.primary-nav');
-    await expect(nav.getByRole('button', { name: 'Reports & evidence', exact: true })).toHaveCount(
-        0,
-    );
-    for (const name of ['Terminal', 'Tests']) {
+    await expect(nav.getByRole('button', { name: 'Tests', exact: true })).toHaveCount(0);
+    for (const name of ['Reports & evidence', 'Report & Evidence', 'Reports & Evidence']) {
+        await expect(nav.getByRole('button', { name, exact: true })).toHaveCount(0);
+    }
+    for (const name of ['Terminal']) {
         await nav.getByRole('button', { name, exact: true }).click();
         await expect(page.getByRole('button', { name: 'Import report', exact: true })).toHaveCount(
             0,
@@ -32,12 +33,6 @@ test('diagnostic report controls appear only on diagnostic pages and tests retai
             0,
         );
     }
-    await expect(
-        page.getByRole('heading', { name: 'Manufactural tests', exact: true }),
-    ).toBeVisible();
-    await expect(
-        page.getByRole('button', { name: 'Import test report', exact: true }),
-    ).toBeVisible();
     for (const name of ['Overview', `Diagnostics ${probes.length}`]) {
         await nav.getByRole('button', { name, exact: true }).click();
         await expect(

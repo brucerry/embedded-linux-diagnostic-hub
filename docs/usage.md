@@ -1,8 +1,5 @@
 # Using Diagnostic Hub
 
-Supported Ubuntu/Debian GNOME desktops can animate native minimize/restore through the optional
-[Linux Genie companion](linux-genie.md). Setup and activation are separate from connecting a device.
-
 The desktop and website share the same workspace. The desktop connects directly over SSH; the
 website needs a matching [HTTPS lab gateway](gateway.md). Start with a reachable Linux SSH service
 and credentials, choose **Connect device**, and verify the device fingerprint before accepting it.
@@ -10,20 +7,9 @@ See [download and platform requirements](downloads.md) for installation and laun
 
 ## Minimize and restore
 
-On Windows, the native title-bar **Minimize** control folds the app content toward its current
-taskbar button with a short Genie effect. Restoring from the taskbar reverses it. It follows top,
-bottom, left and right taskbars, re-reads the button before each direction and accounts for display
-scaling. Grouped windows use their app group button. Shells that do not expose a unique button use
-the detected taskbar center as an approximation; unknown placement uses native behavior.
-
-The native system-menu minimize command uses the same effect. OS paths that bypass that command,
-such as Show Desktop, retain ordinary Windows transitions. There is no in-app motion button. Only
-app content is animated; the OS frame is not captured. System reduced motion also uses native
-transitions. Linux and browser editions keep their existing controls.
-
-Minimizing preserves SSH, the terminal, tests and edits. Snapshots remain in memory for one
-transition. Native behavior remains available while the animation adapter initializes. Capture or
-rendering failure recovers through native behavior within two seconds.
+Windows and Linux use standard native window controls. Minimizing preserves the authenticated SSH
+connection, terminal and current diagnostic evidence. No snapshots or companion extension are used.
+Existing saved reports remain on disk.
 
 ## Snapshots and live graphs
 
@@ -56,11 +42,10 @@ that shell and does not change the header's source.
 
 ## Reports and session data
 
-**Import report** and **Export report** work locally on diagnostic pages in both editions. Terminal
-and Tests omit these diagnostic actions; Tests has [separate test reports](board-test-reports.md).
-Imported diagnostic reports are labeled as historical evidence and do not execute their recorded
-commands. Connect a device to collect new readings. Report files contain diagnostic evidence, not
-credentials or terminal transcripts.
+**Import report** and **Export report** work locally on diagnostic pages in both editions. The
+Terminal page keeps its own interactive workspace. Imported diagnostic reports are labeled as
+historical evidence and do not execute their recorded commands. Connect a device to collect new
+readings. Report files contain diagnostic evidence, not credentials or terminal transcripts.
 
 Snapshots, graph history and terminal history stay in RAM. Explicit report exports, desktop update
 report backups and trusted desktop SSH fingerprints are saved to disk.

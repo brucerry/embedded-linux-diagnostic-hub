@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { extractFile } from '@electron/asar';
+import { listPackage, extractFile } from '@electron/asar';
 import { LINUX_ASSET, LINUX_ARCHIVE } from './lib/release-assets.mjs';
 
 const directory = path.resolve(process.argv[2] ?? 'release');
@@ -18,8 +18,15 @@ async function verifyBundle(root) {
         'Production launcher must match the reviewed source.',
     );
     const archive = path.join(root, 'resources/app.asar');
+    assert.ok(
+        !listPackage(archive).some((file) =>
+            /(?:genie|native-window|taskbar-query|koffi)/i.test(file),
+        ),
+        'Retired motion asset is packaged.',
+    );
     for (const folder of ['dist/assets', 'dist-electron']) {
         for (const file of await readdir(folder)) {
+            if (folder === 'dist-electron' && !['main.cjs', 'preload.cjs'].includes(file)) continue;
             assert.ok(
                 (await readFile(`${folder}/${file}`)).equals(
                     extractFile(archive, `${folder}/${file}`),

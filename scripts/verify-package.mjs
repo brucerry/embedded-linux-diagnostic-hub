@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NtExecutable, NtExecutableResource } from 'pe-library';
 import { Resource, Data } from 'resedit';
-import { extractFile } from '@electron/asar';
+import { listPackage, extractFile } from '@electron/asar';
 const directory = process.argv[2];
 if (!directory) throw Error('Usage: node scripts/verify-package.mjs /path/to/packaging-output');
 const expected = Data.IconFile.from(fs.readFileSync('public/app-icon.ico')).icons.map((item) =>
@@ -22,12 +22,11 @@ for (const file of ['Diagnostic-Hub.exe', 'win-unpacked/Diagnostic Hub.exe']) {
     console.log('Verified all seven brand icon resolutions in ' + file);
 }
 const archive = path.join(directory, 'win-unpacked/resources/app.asar');
-for (const name of ['genie.html', 'genie-renderer.js', 'genie-renderer.css']) {
-    if (!fs.readFileSync('dist/' + name).equals(extractFile(archive, 'dist/' + name)))
-        throw Error('Packaged transition bundle mismatch: ' + name);
-}
+if (listPackage(archive).some((file) => /(?:genie|native-window|taskbar-query|koffi)/i.test(file)))
+    throw Error('Retired motion asset is packaged.');
 for (const folder of ['dist/assets', 'dist-electron'])
     for (const file of fs.readdirSync(folder)) {
+        if (folder === 'dist-electron' && !['main.cjs', 'preload.cjs'].includes(file)) continue;
         if (
             !fs
                 .readFileSync(path.join(folder, file))

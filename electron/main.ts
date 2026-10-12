@@ -22,16 +22,16 @@ import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
 import { UpdateCoordinator } from './update-coordinator';
 import { UpdateReports } from './update-reports';
-import { createTestReport, validateTestReport, reportHtml } from '../shared/testing/report';
-import { renderTestPdf } from './test-documents';
-import { WindowTransitions } from './window-transitions';
 
 const development = process.argv.includes('--dev') && !app.isPackaged;
 const appUrl = development ? 'http://127.0.0.1:5173/' : 'app://bundle/index.html';
 let window: BrowserWindow;
-let transitions: WindowTransitions | undefined;
 if (process.platform === 'win32') app.setAppUserModelId('dev.diagnostichub.desktop');
-if (process.platform === 'linux') app.setDesktopName('diagnostic-hub.desktop');
+if (process.platform === 'linux') {
+    app.setDesktopName('diagnostic-hub.desktop');
+    // The retired extension requires the old exact class AND desktop ID.
+    app.commandLine.appendSwitch('class', 'diagnostic-hub-native');
+}
 let keyPath: string | null = null;
 let connecting = false;
 let lastSnapshot: Snapshot | null = null;
@@ -162,11 +162,7 @@ app.whenReady().then(async () => {
     window.webContents.on('will-navigate', (event, url) => {
         if (url !== appUrl) event.preventDefault();
     });
-    transitions = new WindowTransitions(
-        window,
-        development ? 'http://127.0.0.1:5173/genie.html' : 'app://bundle/genie.html',
-    );
-    registerHandler('hub:window-motion', () => transitions?.refreshMotion());
+    window.on('restore', () => window.webContents.send('hub:window-restored'));
     window.on('closed', () => {
         hostVerification.clear();
         ssh.clear();
@@ -201,7 +197,6 @@ app.whenReady().then(async () => {
     registerHandler('hub:disconnect', async () => {
         if (connecting || ssh.isCollecting)
             throw new Error('Wait for the current connection or collection to finish.');
-        await ssh.cancelTestWork();
         ssh.clear();
     });
     registerHandler('hub:terminal-open', (request) => {
@@ -254,7 +249,6 @@ app.whenReady().then(async () => {
         return updater.check(includePrereleases as boolean);
     });
     registerHandler('hub:start-update', (request) => {
-        if (ssh.isTesting) throw Error('Cancel testing and wait for cleanup before updating.');
         return update.start(request);
     });
     registerHandler('hub:read-update-report', () => reports.read());
@@ -262,65 +256,7 @@ app.whenReady().then(async () => {
         if (update.active) throw new Error('Wait for the update to finish before resetting data.');
         if (connecting || collectionTask || ssh.isCollecting)
             throw new Error('Wait for the current connection or collection to finish.');
-        ssh.clearTestData();
         lastSnapshot = null;
-    });
-    const allowTesting = () => {
-        if (connecting || update.active) throw Error('Testing is paused for connection or update.');
-    };
-    registerHandler('hub:tests-discover', () => {
-        allowTesting();
-        return ssh.discoverTests();
-    });
-    registerHandler('hub:tests-prepare', (profile) => {
-        allowTesting();
-        return ssh.prepareTests(profile);
-    });
-    registerHandler('hub:tests-start', (request) => {
-        allowTesting();
-        return ssh.startTests(request);
-    });
-    registerHandler('hub:tests-run', () => ssh.readTestRun());
-    registerHandler('hub:tests-clear', () => {
-        allowTesting();
-        ssh.clearTestData();
-    });
-    registerHandler('hub:tests-cancel', (id) => ssh.cancelTests(id));
-    registerHandler('hub:tests-confirm', (request) => {
-        allowTesting();
-        return ssh.confirmTest(request);
-    });
-    registerHandler('hub:tests-export', async (format, supplied) => {
-        if (!['json', 'html', 'pdf'].includes(String(format)))
-            throw Error('Unsupported test report format.');
-        let report;
-        if (supplied !== undefined) {
-            report = await validateTestReport(supplied);
-            if (report.run.mode === 'ssh') report.imported = true;
-        } else {
-            const run = ssh.readTestRun();
-            if (!run) throw Error('Run or import board tests before exporting.');
-            report = createTestReport(run);
-        }
-        const choice = await dialog.showSaveDialog(window, {
-            title: 'Export board test report',
-            defaultPath: `board-test-${report.run.mode}-${report.run.id}.${format}`,
-            filters: [
-                {
-                    name: `${String(format).toUpperCase()} test report`,
-                    extensions: [String(format)],
-                },
-            ],
-        });
-        if (choice.canceled || !choice.filePath) return false;
-        const content =
-            format === 'pdf'
-                ? await renderTestPdf(report)
-                : format === 'html'
-                  ? reportHtml(report)
-                  : JSON.stringify(report, null, 4);
-        await writeFile(choice.filePath, content);
-        return true;
     });
     registerHandler('hub:acknowledge-update-report', (id) => {
         if (typeof id !== 'string') throw new Error('Invalid saved update report.');
@@ -351,12 +287,10 @@ app.whenReady().then(async () => {
         return true;
     });
     await window.loadURL(appUrl);
-    void transitions.prime();
 });
 
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
-    transitions?.dispose();
     hostVerification.clear();
     ssh.clear();
 });

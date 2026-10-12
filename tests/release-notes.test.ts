@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -75,10 +75,33 @@ test('release notes include all commits after the published baseline, including 
             packageNotes: 'Long package explanation that belongs in the download guide.',
         });
         assert.match(page, /Important update/);
-        assert.match(page, /\[Guide\]/);
+        assert.match(page, /Guide - https:\/\/example.invalid\/guide/);
         assert.match(page, /compare\/v0.1.0\.\.\.v0.2.0-rc.1/);
         assert.doesNotMatch(page, /Long package explanation|commits included|### Features/);
-        assert.ok(!page.includes(`/commit/${first}`));
+        for (const hash of [first, branch, merge, last])
+            assert.ok(page.includes(`/commit/${hash}`));
+        assert.deepEqual(page.match(/^(Description|Changes|Commits|Links):$/gm), [
+            'Description:',
+            'Changes:',
+            'Commits:',
+            'Links:',
+        ]);
+        assert.doesNotMatch(page, /^#/m);
+        const structured = releasePageNotes({
+            repository: 'owner/repository',
+            currentTag: 'v0.2.0-rc.1',
+            previousTag: 'v0.1.0',
+            cwd: root,
+            highlights:
+                'Description:\nNative windows. Linux qualification remains pending.\n\nChanges:\n- Keep terminal.\n\nCommits:\n- Draft placeholder.\n\nLinks:\nGuide - https://example.invalid/guide',
+            packageNotes:
+                'Unsigned engineering preview. Windows may show an unknown-publisher warning.',
+        });
+        assert.match(structured, /Linux qualification remains pending/);
+        assert.match(structured, /Unsigned engineering preview/);
+        assert.doesNotMatch(structured, /Draft placeholder/);
+        for (const hash of [first, branch, merge, last])
+            assert.ok(structured.includes(`/commit/${hash}`));
         const fallback = releasePageNotes({
             repository: 'owner/repository',
             currentTag: 'v0.1.0',
@@ -114,4 +137,30 @@ test('release notes include all commits after the published baseline, including 
     } finally {
         await rm(root, { recursive: true, force: true });
     }
+});
+
+test('published baseline ignores later releases when rendering an existing tag', () => {
+    assert.equal(
+        previousRelease(
+            [
+                { tag_name: 'v0.1.0', published_at: '2026-01-01', draft: false, id: 1 },
+                { tag_name: 'v0.2.0', published_at: '2026-02-01', draft: false, id: 2 },
+                { tag_name: 'v0.3.0', published_at: '2026-03-01', draft: false, id: 3 },
+            ],
+            'v0.2.0',
+        ),
+        'v0.1.0',
+    );
+});
+
+test('stable source draft preserves four literal sections and complete link lines', async () => {
+    const source = await readFile('docs/releases/v0.2.0.txt', 'utf8');
+    assert.deepEqual(source.match(/^(Description|Changes|Commits|Links):$/gm), [
+        'Description:',
+        'Changes:',
+        'Commits:',
+        'Links:',
+    ]);
+    for (const line of source.split('Links:\n')[1].trim().split('\n'))
+        assert.match(line, /^.+ - https:\/\/\S+$/);
 });

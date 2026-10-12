@@ -1,3 +1,6 @@
+> Historical feature documentation: current source has retired the Tests workspace. Saved report
+> files remain unchanged.
+
 # Test reports
 
 Exporting is optional. **Export JSON** creates the canonical `diagnostic-hub-test-report`, schema 1;
