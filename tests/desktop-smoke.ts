@@ -92,6 +92,10 @@ async function main() {
                 ...(process.env.HUB_GNOME_BACKEND === 'wayland'
                     ? ['--ozone-platform=wayland']
                     : []),
+                ...(process.env.HUB_GNOME_ISOLATED === '1' &&
+                process.env.HUB_GNOME_BACKEND === 'wayland'
+                    ? ['--enable-logging=stderr', '--vmodule=wayland_toplevel_window=3']
+                    : []),
                 ...(process.platform === 'linux' && !process.env.HUB_TEST_SANDBOX
                     ? ['--no-sandbox']
                     : []),
@@ -103,6 +107,20 @@ async function main() {
             await new Promise<void>((resolve) => server.close(() => resolve()));
             await rm(temporary, { recursive: true, force: true });
             throw error;
+        });
+    const configureStates: string[] = [];
+    let configureBuffer = '';
+    if (process.env.HUB_GNOME_ISOLATED === '1' && process.env.HUB_GNOME_BACKEND === 'wayland')
+        desktop.process().stderr?.on('data', (chunk: Buffer) => {
+            configureBuffer += chunk.toString();
+            const lines = configureBuffer.split('\n');
+            configureBuffer = lines.pop()!.slice(-4096);
+            for (const line of lines) {
+                if (!line.includes('HandleToplevelConfigure') || !line.includes('states=['))
+                    continue;
+                configureStates.push(line.slice(-2048));
+                if (configureStates.length > 200) configureStates.shift();
+            }
         });
     try {
         if (process.env.HUB_TEST_SANDBOX)
@@ -997,6 +1015,11 @@ async function main() {
         );
     } catch (error) {
         console.error('Desktop smoke assertion failed:', error);
+        if (configureStates.length)
+            console.error(
+                'Wayland configure state tail:',
+                JSON.stringify(configureStates.slice(-24)),
+            );
         throw error;
     } finally {
         // The update fixture stubs quit; restore it even if an assertion fails before its reset.
@@ -1006,6 +1029,11 @@ async function main() {
                 if (realQuit) app.quit = realQuit;
             })
             .catch(() => {});
+        if (process.env.HUB_GNOME_EVIDENCE)
+            await writeFile(
+                path.join(process.env.HUB_GNOME_EVIDENCE, 'wayland-configure-states.json'),
+                JSON.stringify(configureStates, null, 2),
+            );
         await desktop.close();
         await expect.poll(() => openConnections).toBe(0);
         await expect.poll(() => terminalState.closes).toBe(terminalState.opens);

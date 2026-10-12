@@ -7,6 +7,7 @@ export async function nativeWindowCycles(desktop: ElectronApplication, cycles: n
     const isolated = process.env.HUB_GNOME_ISOLATED === '1';
     const pid = await desktop.evaluate(() => process.pid);
     const observations: unknown[] = [];
+    let previousObservation: { phase: string; signature: string } | undefined;
     const started = Date.now();
     await desktop.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0];
@@ -45,9 +46,11 @@ export async function nativeWindowCycles(desktop: ElectronApplication, cycles: n
             };
         });
         let compositor: number | undefined;
+        let compositorAnimating: boolean | undefined;
+        let compositorFrame: { x: number; y: number; width: number; height: number } | undefined;
         if (isolated) {
-            // A numeric mask avoids lossy GVariant/JSON string decoding: bit 0=minimized, bits 1/2=maximized.
-            const expression = `(()=>{const windows=global.get_window_actors().map(actor=>actor.meta_window).filter(window=>window.get_pid()===${pid});return windows.length===1?(Number(windows[0].minimized)|(windows[0].maximized_horizontally?2:0)|(windows[0].maximized_vertically?4:0)):-1;})()`;
+            // Numeric JSON avoids nested GVariant quoting and keeps state/geometry independently visible.
+            const expression = `(()=>{const actors=global.get_window_actors().filter(actor=>actor.meta_window.get_pid()===${pid});if(actors.length!==1)return [];const actor=actors[0],window=actor.meta_window,rect=window.get_frame_rect();const moving=['x','y','width','height','scale-x','scale-y','translation-x','translation-y','opacity'].some(name=>actor.get_transition(name)?.is_playing());return [Number(window.minimized)|(window.maximized_horizontally?2:0)|(window.maximized_vertically?4:0),Number(moving),rect.x,rect.y,rect.width,rect.height];})()`;
             const raw = execFileSync(
                 'gdbus',
                 [
@@ -63,12 +66,31 @@ export async function nativeWindowCycles(desktop: ElectronApplication, cycles: n
                 ],
                 { encoding: 'utf8', timeout: 5000 },
             ).trim();
-            const match = /^\(true, ['"](-?\d+)['"]\)$/.exec(raw);
+            const match = /^\(true, ['"](\[[\d, .-]*\])['"]\)$/.exec(raw);
             if (!match) throw Error(`Cannot read compositor state: ${raw}`);
-            compositor = Number(match[1]);
+            const values: number[] = JSON.parse(match[1]);
+            expect(values).toHaveLength(6);
+            expect(values.every(Number.isFinite)).toBe(true);
+            [compositor] = values;
+            compositorAnimating = values[1] !== 0;
+            compositorFrame = { x: values[2], y: values[3], width: values[4], height: values[5] };
         }
-        observations.push({ phase, elapsedMs: Date.now() - started, ...native, compositor });
-        return { ...native, ...(isolated ? { compositor } : {}) };
+        const signature = JSON.stringify({
+            ...native,
+            compositor,
+            compositorAnimating,
+            compositorFrame,
+        });
+        const settled =
+            !compositorAnimating &&
+            previousObservation?.phase === phase &&
+            previousObservation.signature === signature;
+        previousObservation = { phase, signature };
+        const composite = isolated
+            ? { compositor, compositorAnimating, compositorFrame, settled }
+            : {};
+        observations.push({ phase, elapsedMs: Date.now() - started, ...native, ...composite });
+        return { ...native, ...composite };
     }
     async function confirmed(
         phase: string,
@@ -79,13 +101,20 @@ export async function nativeWindowCycles(desktop: ElectronApplication, cycles: n
         const expected = {
             minimized,
             maximized,
-            ...(isolated ? { compositor: (minimized ? 1 : 0) | (maximized ? 6 : 0) } : {}),
+            ...(isolated
+                ? {
+                      compositor: (minimized ? 1 : 0) | (maximized ? 6 : 0),
+                      compositorAnimating: false,
+                      settled: true,
+                  }
+                : {}),
             ...(size ? { bounds: size } : {}),
         };
         await expect.poll(() => state(phase)).toMatchObject(expected);
     }
     try {
-        // Each request waits for native state AND compositor acknowledgement before issuing the next.
+        // Retain exact native/compositor checks; isolated desktops must also finish animations
+        // and report unchanged geometry on consecutive observations before the next request.
         await desktop.evaluate(({ BrowserWindow }) =>
             BrowserWindow.getAllWindows()[0].unmaximize(),
         );
