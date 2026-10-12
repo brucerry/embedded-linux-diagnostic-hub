@@ -12,7 +12,7 @@ test(
     'Linux prerequisite installation requires explicit consent and rechecks libraries before launch',
     {
         skip:
-            process.platform === 'win32' ||
+            process.platform !== 'linux' ||
             spawnSync('script', ['--version'], { encoding: 'utf8' }).status !== 0,
     },
     async () => {
@@ -123,7 +123,7 @@ else process.stdout.write(content);
 
 test(
     'Linux download-and-run selects engineering previews, verifies bytes, launches without elevation or FUSE',
-    { skip: process.platform === 'win32' },
+    { skip: process.platform !== 'linux' },
     async () => {
         const item = await fixture();
         try {
@@ -149,7 +149,7 @@ test(
 
 test(
     'Linux downloader rejects corrupt bytes without replacing the last verified executable',
-    { skip: process.platform === 'win32' },
+    { skip: process.platform !== 'linux' },
     async () => {
         const item = await fixture();
         try {
@@ -173,7 +173,7 @@ test(
 
 test(
     'unsupported Linux architecture and unsafe version tags fail before network requests',
-    { skip: process.platform === 'win32' },
+    { skip: process.platform !== 'linux' },
     async () => {
         const item = await fixture();
         try {
@@ -188,7 +188,7 @@ test(
 
 test(
     'Linux prerequisite launcher reports missing packages and does not install silently',
-    { skip: process.platform === 'win32' },
+    { skip: process.platform !== 'linux' },
     async () => {
         const root = await mkdtemp(path.join(tmpdir(), 'hub-prerequisite-test-'));
         try {
@@ -229,5 +229,18 @@ test(
         } finally {
             await rm(root, { recursive: true, force: true });
         }
+    },
+);
+
+test(
+    'the Linux downloader rejects macOS before any download or prerequisite operation',
+    { skip: process.platform !== 'darwin' },
+    () => {
+        const result = spawnSync('bash', [launcher, '--version', 'v0.2.0', '--download-only'], {
+            encoding: 'utf8',
+            timeout: 5000,
+        });
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /requires Linux x86_64/);
     },
 );

@@ -51,7 +51,7 @@ test('process tables preserve kernel resource units and CPU sampling excludes PI
 
 test(
     'the fixed procfs resource collector runs on Linux without extra tools or process control',
-    { skip: process.platform === 'win32' },
+    { skip: process.platform !== 'linux' },
     () => {
         const stdout = execFileSync('/bin/sh', ['-c', PROCESS_COMMAND], {
             encoding: 'utf8',
