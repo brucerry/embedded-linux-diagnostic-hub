@@ -107,7 +107,7 @@ window-control method and disappears on disable.
 
 The Linux workflow retains Ubuntu 22.04 package/native fallback checks and adds isolated GNOME
 42/46/48/50 compositor sessions. All seven hosted cases passed at the source recorded in the
-[RC7 qualification sign-off](releases/v0.2.0-rc.7-qualification.md). Each release must pass its own
+[RC8 qualification sign-off](releases/v0.2.0-rc.8-qualification.md). Each release must pass its own
 rebuilt matrix before publication. `tests/gnome-session.sh` uses private XDG directories and a
 separate session bus. Its test-only unsafe Shell evaluation is never distributed in the companion.
 

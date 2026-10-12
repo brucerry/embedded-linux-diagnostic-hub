@@ -47,6 +47,8 @@ jobs:
             - uses: actions/setup-node@v7
               with:
                   node-version: '24'
+            - name: Install release validation dependencies
+              run: npm ci --ignore-scripts
             - uses: actions/download-artifact@v4
               with:
                   pattern: Diagnostic-Hub-*
