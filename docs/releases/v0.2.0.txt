@@ -4,7 +4,7 @@ The reported OpenWrt Tests discovery error was not reproduced or repaired; its r
 
 Changes:
 - Remove the Tests workspace and its desktop/gateway/SSH discovery, execution and test-report controls; preserve saved reports.
-- Remove Genie runtime, native hooks, taskbar helpers and companion setup/delivery. Keep application data, desktop launcher and updater identities; change only the Linux window class to avoid the installed legacy extension's exact match.
+- Remove Genie runtime, native hooks, taskbar helpers and companion setup/delivery. Keep application data, desktop launcher and updater identities; scope the Linux window class/app ID to avoid the installed legacy extension's exact match.
 - Keep the in-place terminal, device clock and later scrollbar/session fixes. The redundant Report & Evidence page remains absent.
 - Preserve Windows and all seven existing Linux compositor cases, adapting gates to native windows, terminal continuity, responsiveness and crashes.
 - Use exact-tag release names and four-section notes with all commits since the prior published release.

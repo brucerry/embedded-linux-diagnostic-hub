@@ -39,7 +39,7 @@ if (process.argv.includes('--assets')) {
     const signing =
         info.signature === 'Valid'
             ? 'Windows Authenticode signature: valid.'
-            : 'Unsigned engineering preview. Windows may show an unknown-publisher warning.';
+            : 'Unsigned build. Windows may show an unknown-publisher warning.';
     await writeFile(
         'release/notes.md',
         `Portable Windows and Linux x64 apps, website, and SSH gateway.\n\n${signing}\n\n[Downloads and setup](https://github.com/${process.env.GITHUB_REPOSITORY ?? 'brucerry/embedded-linux-diagnostic-hub'}/blob/v${version}/docs/downloads.md). Commit: ${info.commit}\n`,

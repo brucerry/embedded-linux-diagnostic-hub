@@ -56,7 +56,7 @@ test('release rejects mismatched tags and source commits before publishing', asy
         assert.notEqual(fixture.check('v0.1.0', 'another-commit').status, 0);
         assert.equal(fixture.check().status, 0);
         const notes = await readFile(path.join(fixture.root, 'release/notes.md'), 'utf8');
-        assert.match(notes, /Unsigned engineering preview/);
+        assert.match(notes, /Unsigned build/);
         assert.ok(notes.includes(fixtureCommit));
     } finally {
         await fixture.close();

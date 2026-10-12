@@ -234,10 +234,31 @@ async function main() {
         await expect(page.getByText('Desktop · Offline ready', { exact: true })).toHaveCount(0);
         const packaged = await desktop.evaluate(({ app }) => app.isPackaged);
         if (process.env.HUB_GNOME_ISOLATED === '1') {
-            expect(
-                await desktop.evaluate(({ app }) => app.commandLine.getSwitchValue('class')),
-            ).toBe('diagnostic-hub-native');
+            expect(await desktop.evaluate(() => process.env.CHROME_DESKTOP)).toBe(
+                'diagnostic-hub.desktop',
+            );
             const mainPid = await desktop.evaluate(() => process.pid);
+            const observed = execFileSync(
+                'gdbus',
+                [
+                    'call',
+                    '--session',
+                    '--dest',
+                    'org.gnome.Shell',
+                    '--object-path',
+                    '/org/gnome/Shell',
+                    '--method',
+                    'org.gnome.Shell.Eval',
+                    `JSON.stringify(global.get_window_actors().map(actor=>({pid:actor.meta_window.get_pid(),wmClass:actor.meta_window.get_wm_class()})))`,
+                ],
+                { encoding: 'utf8', timeout: 5000 },
+            );
+            console.log('Compositor window identity:', observed.trim(), 'Electron PID:', mainPid);
+            if (process.env.HUB_GNOME_EVIDENCE)
+                await writeFile(
+                    path.join(process.env.HUB_GNOME_EVIDENCE, 'native-window-identity.txt'),
+                    observed,
+                );
             const predicate = `(()=>{const windows=global.get_window_actors().map(actor=>actor.meta_window).filter(window=>window.get_pid()===${mainPid});return windows.length===1&&windows.every(window=>window.get_wm_class()?.toLowerCase()==='diagnostic-hub-native');})()`;
             await expect
                 .poll(() =>

@@ -137,7 +137,7 @@ export function releasePageNotes({
     )
         throw Error('Description is required and changes must be bullet points.');
     const signing = packageNotes.match(
-        /Windows Authenticode signature: valid\.|Unsigned engineering preview\. Windows may show an unknown-publisher warning\./,
+        /Windows Authenticode signature: valid\.|Unsigned (?:engineering preview|build)\. Windows may show an unknown-publisher warning\./,
     )?.[0];
     if (signing && !description.includes(signing)) description += '\n' + signing;
     const comparison = previousTag

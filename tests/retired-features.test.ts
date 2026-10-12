@@ -5,6 +5,7 @@ import { gatewayFixture } from './fixtures/gateway';
 import { probes } from '../shared/diagnostics/probes';
 import { GatewayClient } from '../src/services/GatewayClient';
 import { SshSession } from '../backend/ssh/session';
+import { withNativeLinuxWindow } from '../electron/linux-window-identity';
 
 test('retired Tests endpoints reject authenticated requests without remote execution or session loss', async () => {
     const fixture = await gatewayFixture();
@@ -67,7 +68,10 @@ test('ordinary delivery keeps checksum verification and never manages a desktop 
     assert.equal(pkg.build.appId, 'dev.diagnostichub.desktop');
     assert.equal(pkg.build.linux.executableName, 'diagnostic-hub');
     assert.equal(pkg.build.linux.desktop.entry.StartupWMClass, 'diagnostic-hub-native');
-    assert.match(main, /appendSwitch\('class', 'diagnostic-hub-native'\)/);
+    assert.match(
+        main,
+        /withNativeLinuxWindow\(\(name\) => app.setDesktopName\(name\), createWindow\)/,
+    );
     // Both released legacy formats require this exact old class AND desktop ID.
     const legacyMatches = (wmClass: string, desktopId: string) =>
         wmClass.toLowerCase() === 'diagnostic-hub' && desktopId === 'diagnostic-hub.desktop';
@@ -84,4 +88,25 @@ test('workspace view and navigation cannot restore redundant Reports/Evidence or
         /label="(?:Tests|Reports? & [Ee]vidence)"|setView\('(?:tests|reports|evidence)'\)/,
     );
     assert.match(app, /useState<View>\('overview'\)/);
+});
+
+test('native Linux window identity restores the stable desktop identity on success and failure', () => {
+    let identity = 'diagnostic-hub.desktop';
+    const setIdentity = (name: string) => {
+        identity = name;
+    };
+    const window = withNativeLinuxWindow(setIdentity, () => {
+        assert.equal(identity, 'diagnostic-hub-native.desktop');
+        return { wmClass: identity.replace(/\.desktop$/, '') };
+    });
+    assert.equal(window.wmClass, 'diagnostic-hub-native');
+    assert.equal(identity, 'diagnostic-hub.desktop');
+    assert.throws(
+        () =>
+            withNativeLinuxWindow(setIdentity, () => {
+                throw Error('window creation failed');
+            }),
+        /window creation failed/,
+    );
+    assert.equal(identity, 'diagnostic-hub.desktop');
 });

@@ -94,11 +94,10 @@ test('release notes include all commits after the published baseline, including 
             cwd: root,
             highlights:
                 'Description:\nNative windows. Linux qualification remains pending.\n\nChanges:\n- Keep terminal.\n\nCommits:\n- Draft placeholder.\n\nLinks:\nGuide - https://example.invalid/guide',
-            packageNotes:
-                'Unsigned engineering preview. Windows may show an unknown-publisher warning.',
+            packageNotes: 'Unsigned build. Windows may show an unknown-publisher warning.',
         });
         assert.match(structured, /Linux qualification remains pending/);
-        assert.match(structured, /Unsigned engineering preview/);
+        assert.match(structured, /Unsigned build/);
         assert.doesNotMatch(structured, /Draft placeholder/);
         for (const hash of [first, branch, merge, last])
             assert.ok(structured.includes(`/commit/${hash}`));

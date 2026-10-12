@@ -22,16 +22,13 @@ import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
 import { UpdateCoordinator } from './update-coordinator';
 import { UpdateReports } from './update-reports';
+import { LINUX_DESKTOP_NAME, withNativeLinuxWindow } from './linux-window-identity';
 
 const development = process.argv.includes('--dev') && !app.isPackaged;
 const appUrl = development ? 'http://127.0.0.1:5173/' : 'app://bundle/index.html';
 let window: BrowserWindow;
 if (process.platform === 'win32') app.setAppUserModelId('dev.diagnostichub.desktop');
-if (process.platform === 'linux') {
-    app.setDesktopName('diagnostic-hub.desktop');
-    // The retired extension requires the old exact class AND desktop ID.
-    app.commandLine.appendSwitch('class', 'diagnostic-hub-native');
-}
+if (process.platform === 'linux') app.setDesktopName(LINUX_DESKTOP_NAME);
 let keyPath: string | null = null;
 let connecting = false;
 let lastSnapshot: Snapshot | null = null;
@@ -141,23 +138,28 @@ app.whenReady().then(async () => {
         callback(false),
     );
     session.defaultSession.setPermissionCheckHandler(() => false);
-    window = new BrowserWindow({
-        icon: path.join(app.getAppPath(), 'dist', 'app-icon.png'),
-        width: 1440,
-        height: 960,
-        minWidth: 980,
-        minHeight: 720,
-        title: 'Diagnostic Hub',
-        backgroundColor: '#1d242d',
-        autoHideMenuBar: true,
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.cjs'),
-            nodeIntegration: false,
-            contextIsolation: true,
-            sandbox: true,
-            webSecurity: true,
-        },
-    });
+    const createWindow = () =>
+        new BrowserWindow({
+            icon: path.join(app.getAppPath(), 'dist', 'app-icon.png'),
+            width: 1440,
+            height: 960,
+            minWidth: 980,
+            minHeight: 720,
+            title: 'Diagnostic Hub',
+            backgroundColor: '#1d242d',
+            autoHideMenuBar: true,
+            webPreferences: {
+                preload: path.join(__dirname, 'preload.cjs'),
+                nodeIntegration: false,
+                contextIsolation: true,
+                sandbox: true,
+                webSecurity: true,
+            },
+        });
+    window =
+        process.platform === 'linux'
+            ? withNativeLinuxWindow((name) => app.setDesktopName(name), createWindow)
+            : createWindow();
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event, url) => {
         if (url !== appUrl) event.preventDefault();
