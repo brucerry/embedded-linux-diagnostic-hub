@@ -4,8 +4,7 @@ Download helpers fetch the newest published release with the appropriate desktop
 engineering prereleases. They verify its SHA-256 checksum before replacing a previous download or
 launching it. Both the executable and its checksum come from the same release tag.
 
-These commands become available after the source is pushed to `main` and a release is published. Run
-them as your ordinary desktop user; no application installer, Node.js or administrator launch is
+Run them as your ordinary desktop user; no application installer, Node.js or administrator launch is
 needed. Unsigned Windows builds can still show a publisher warning.
 
 ## One-line commands
@@ -59,11 +58,12 @@ installation cannot be offered by a script that has not yet been downloaded.
 | Client                                           | Delivery                       | Qualification                                                                           |
 | ------------------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------------- |
 | Windows 10/11 x64                                | `Diagnostic-Hub.exe`           | Existing Windows 11 launch checks; Windows 10 acceptance remains separate               |
-| Ubuntu 22.04 / compatible Debian x86_64 desktops | AppImage or `.tar.gz`          | Ubuntu 22.04 CI build/runtime checks prepared; real-PC acceptance pending               |
+| Ubuntu 22.04 / compatible Debian x86_64 desktops | AppImage or `.tar.gz`          | Hosted build/runtime and seven GNOME compositor cases pass; real-PC acceptance pending  |
 | Other glibc Linux x86_64 desktops                | Same Linux packages            | Requires compatible libraries and desktop sandbox support; distribution testing pending |
 | Windows 10 x86 / Linux i686                      | Website                        | Current Electron runtime has no 32-bit build                                            |
 | Windows 11 x86                                   | Website                        | Windows 11 has no 32-bit OS edition                                                     |
 | ARM PCs, musl Linux, headless hosts              | Website in a supported browser | No native package shipped for these clients                                             |
+| macOS Intel / Apple silicon                      | Website in a supported browser | macOS 15.7.9 x64/arm64 hosted qualification passes; no public Mac package               |
 
 The SSH target can use a different CPU architecture and Linux distribution from the client PC. There
 is no promise that one glibc binary works on every Linux distribution or version.
@@ -78,13 +78,13 @@ References:
 Download the helpers from the same repository or a release, then use their options:
 
 ```powershell
-./download-run.ps1 -Version v0.1.0 -DownloadOnly
-./download-run.ps1 -Version v0.1.0 -Directory "$env:USERPROFILE\DiagnosticHub"
+./download-run.ps1 -Version v0.3.0 -DownloadOnly
+./download-run.ps1 -Version v0.3.0 -Directory "$env:USERPROFILE\DiagnosticHub"
 ```
 
 ```sh
-bash download-run.sh --version v0.1.0 --download-only
-bash download-run.sh --version v0.1.0 --format tar.gz --directory "$HOME/DiagnosticHub"
+bash download-run.sh --version v0.3.0 --download-only
+bash download-run.sh --version v0.3.0 --format tar.gz --directory "$HOME/DiagnosticHub"
 ```
 
 Default download locations are `%LOCALAPPDATA%\DiagnosticHub\downloads\<tag>` on Windows and

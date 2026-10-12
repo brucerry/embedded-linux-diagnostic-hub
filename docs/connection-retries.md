@@ -1,8 +1,7 @@
 # Connection attempts
 
-These changes are on main after v0.2.0. Published v0.2.0 assets are unchanged and do not include
-this retry behavior. The new browser flow needs a gateway built from matching source with
-cancellation support.
+This behavior is included in v0.3.0. Published v0.2.0 assets are unchanged and do not include these
+retries. The browser flow requires the matching v0.3.0 gateway with cancellation support.
 
 A connection you start retries temporary SSH/network failures three seconds after the failed attempt
 has finished cleanup. Attempts do not overlap. Cancel stops the active handshake and removes the
