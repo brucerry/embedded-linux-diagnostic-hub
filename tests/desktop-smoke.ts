@@ -11,6 +11,7 @@ import { demoSnapshot } from './fixtures/snapshots';
 import { attachTerminalFixture, terminalFixtureState } from './fixtures/terminal';
 import { DEVICE_CLOCK_COMMAND } from '../shared/diagnostics/device-clock';
 import { clockOutput } from './fixtures/device-clock';
+import { nativeWindowCycles } from './native-window-cycles';
 
 async function main() {
     const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-smoke-'));
@@ -603,36 +604,7 @@ async function main() {
             );
             const crashes: string[] = [];
             page.on('crash', () => crashes.push('renderer crashed'));
-            for (let cycle = 0; cycle < nativeCycles; cycle++) {
-                if (cycle % 10 === 0) {
-                    await desktop.evaluate(({ BrowserWindow }) => {
-                        const window = BrowserWindow.getAllWindows()[0];
-                        window.setSize(1200, 900);
-                        window.maximize();
-                        window.unmaximize();
-                    });
-                }
-                await desktop.evaluate(({ BrowserWindow }) =>
-                    BrowserWindow.getAllWindows()[0].minimize(),
-                );
-                await expect
-                    .poll(() =>
-                        desktop.evaluate(({ BrowserWindow }) =>
-                            BrowserWindow.getAllWindows()[0].isMinimized(),
-                        ),
-                    )
-                    .toBe(true);
-                await desktop.evaluate(({ BrowserWindow }) =>
-                    BrowserWindow.getAllWindows()[0].restore(),
-                );
-                await expect
-                    .poll(() =>
-                        desktop.evaluate(({ BrowserWindow }) =>
-                            BrowserWindow.getAllWindows()[0].isMinimized(),
-                        ),
-                    )
-                    .toBe(false);
-            }
+            await nativeWindowCycles(desktop, nativeCycles);
             expect(
                 await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length),
             ).toBe(1);
