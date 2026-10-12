@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { demoSnapshot } from '../fixtures/snapshots';
+import { installBundledHistoryWorker } from './fixtures/history-worker';
 
 const fixture = demoSnapshot('openwrt');
 
@@ -201,6 +202,7 @@ test('ranked search supports exact names, aliases and typos while sticky header 
 test('process graphs expose memory then CPU, highlight hovered samples and scroll dense history without moving the view', async ({
     page,
 }) => {
+    await installBundledHistoryWorker(page);
     await connectFixture(page);
     await page.getByRole('button', { name: 'Processes', exact: true }).click();
     await page.locator('.probe-card').click();

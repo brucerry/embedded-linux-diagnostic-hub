@@ -25,8 +25,10 @@ for (const enabled of [true, false]) {
     }) => {
         test.setTimeout(60_000);
         await installDesktop(page);
-        await page.clock.install();
+        await page.clock.install({ time: new Date('2026-10-09T08:34:00Z') });
         await page.goto('/');
+        // Only explicit advances may add samples; slow UI actions must not run the live timer.
+        await page.clock.pauseAt(new Date('2026-10-09T08:35:00Z'));
         const live = page.getByRole('switch', { name: 'Live updates' });
         if (!enabled) await live.click();
         await page.getByLabel('Live update interval').selectOption('5');
@@ -76,6 +78,7 @@ for (const enabled of [true, false]) {
         }
 
         await page.getByRole('button', { name: 'Reset session data', exact: true }).click();
+        await page.clock.runFor(1000);
         await expect(
             page.getByRole('dialog', { name: 'Resetting session data' }),
         ).not.toBeVisible();
