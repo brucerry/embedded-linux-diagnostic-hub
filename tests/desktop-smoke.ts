@@ -12,6 +12,7 @@ import { attachTerminalFixture, terminalFixtureState } from './fixtures/terminal
 import { DEVICE_CLOCK_COMMAND } from '../shared/diagnostics/device-clock';
 import { clockOutput } from './fixtures/device-clock';
 import { nativeWindowCycles } from './native-window-cycles';
+import { captureNativeScreenshot } from './fixtures/native-capture';
 
 async function main() {
     const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-smoke-'));
@@ -241,7 +242,7 @@ async function main() {
             await page.evaluate(() => typeof (window as unknown as { require?: unknown }).require),
         ).toBe('undefined');
         await mkdir('test-results', { recursive: true });
-        await page.screenshot({ path: 'test-results/desktop-overview.png', fullPage: true });
+        await captureNativeScreenshot(desktop, page, 'test-results/desktop-overview.png');
         // The native SSH/report path must remain functional without any browser network access.
         await page.getByRole('link', { name: 'GitHub repository' }).click();
         expect(
@@ -748,7 +749,7 @@ async function main() {
         expect(terminalState.opens).toBe(2);
         expect(readyConnections).toBe(1);
         expect(openConnections).toBe(1);
-        await page.screenshot({ path: 'test-results/desktop-terminal.png', fullPage: true });
+        await captureNativeScreenshot(desktop, page, 'test-results/desktop-terminal.png');
         await page.evaluate(() =>
             (window as unknown as { terminalSmoke: { stop: () => void } }).terminalSmoke.stop(),
         );
