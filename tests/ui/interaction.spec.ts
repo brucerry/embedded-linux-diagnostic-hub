@@ -65,6 +65,16 @@ async function connectFixture(page: Page) {
     return fixture;
 }
 
+async function fixtureCollectionCommitted(page: Page, previous: number) {
+    return page.evaluate(
+        (count) =>
+            (window as any).interaction.collections > count &&
+            document.querySelector('.workbench-toolbar .button')?.textContent?.trim() ===
+                'Collect snapshot',
+        previous,
+    );
+}
+
 test('connection button reflects plug state and blocks disconnect/manual collection during live collection', async ({
     page,
 }) => {
@@ -277,6 +287,35 @@ test('soft dark layout stays readable and animated on desktop/mobile under syste
     });
 });
 
+test('collection start is not committed renderer state while a snapshot is held', async ({
+    page,
+}) => {
+    await page.setViewportSize({ width: 1000, height: 650 });
+    await connectFixture(page);
+    await page.getByRole('button', { name: 'Memory', exact: true }).click();
+    await settlePageEntry(page);
+    const before = await page.evaluate(() => {
+        const state = (window as any).interaction;
+        state.hold = true;
+        window.scrollTo(0, 450);
+        return { y: window.scrollY, collections: state.collections };
+    });
+    await page.clock.runFor(5100);
+    await expect
+        .poll(() => page.evaluate(() => (window as any).interaction.collections))
+        .toBeGreaterThan(before.collections);
+    await expect(page.locator('.workbench-toolbar .button')).toHaveText('Collecting…');
+    await settlePageEntry(page);
+    expect(await fixtureCollectionCommitted(page, before.collections)).toBe(false);
+    await page.evaluate(() => {
+        const state = (window as any).interaction;
+        state.hold = false;
+        state.complete();
+    });
+    await expect.poll(() => fixtureCollectionCommitted(page, before.collections)).toBe(true);
+    expect(await page.evaluate(() => window.scrollY)).toBe(before.y);
+});
+
 test('entry completion clamps the scroll range before updates and cannot be used as an unsettled baseline', async ({
     page,
 }) => {
@@ -334,8 +373,21 @@ test('entry completion clamps the scroll range before updates and cannot be used
     expect(before.maximum - after.maximum).toBe(1);
     expect(after.collections).toBe(after.beforeCollections);
     await page.clock.runFor(5100);
-    await expect
-        .poll(() => page.evaluate(() => (window as any).interaction.collections))
-        .toBeGreaterThan(after.collections);
-    expect(await page.evaluate(() => window.scrollY)).toBe(after.y);
+    await expect.poll(() => fixtureCollectionCommitted(page, after.collections)).toBe(true);
+    try {
+        expect(await page.evaluate(() => window.scrollY)).toBe(after.y);
+    } catch (error) {
+        console.error(
+            'Completed collection scroll geometry:',
+            JSON.stringify({
+                baseline: after,
+                current: await scrollGeometry(page),
+                collection: await page.evaluate(() => ({
+                    count: (window as any).interaction.collections,
+                    control: document.querySelector('.workbench-toolbar .button')?.textContent,
+                })),
+            }),
+        );
+        throw error;
+    }
 });

@@ -78,13 +78,13 @@ References:
 Download the helpers from the same repository or a release, then use their options:
 
 ```powershell
-./download-run.ps1 -Version v0.3.0 -DownloadOnly
-./download-run.ps1 -Version v0.3.0 -Directory "$env:USERPROFILE\DiagnosticHub"
+./download-run.ps1 -Version v0.3.1 -DownloadOnly
+./download-run.ps1 -Version v0.3.1 -Directory "$env:USERPROFILE\DiagnosticHub"
 ```
 
 ```sh
-bash download-run.sh --version v0.3.0 --download-only
-bash download-run.sh --version v0.3.0 --format tar.gz --directory "$HOME/DiagnosticHub"
+bash download-run.sh --version v0.3.1 --download-only
+bash download-run.sh --version v0.3.1 --format tar.gz --directory "$HOME/DiagnosticHub"
 ```
 
 Default download locations are `%LOCALAPPDATA%\DiagnosticHub\downloads\<tag>` on Windows and
