@@ -545,7 +545,14 @@ async function main() {
             );
             await terminalInput.focus();
             await page.keyboard.press('Control+v');
+            // Clipboard IPC is asynchronous; submit only after the actual pasted input is visible.
+            await expect(terminalPanel.locator('.xterm-cursor').locator('..')).toContainText(
+                'echo NATIVE_CLIPBOARD_OK',
+            );
             await page.keyboard.press('Enter');
+            await expect
+                .poll(() => Buffer.concat(terminalState.inputs).toString())
+                .toContain('echo NATIVE_CLIPBOARD_OK\r');
             await expect(terminalPanel.locator('.terminal-screen')).toContainText(
                 'NATIVE_CLIPBOARD_OK',
             );
@@ -572,6 +579,7 @@ async function main() {
         await terminalInput.focus();
         await page.keyboard.type('cd /tmp');
         await page.keyboard.press('Enter');
+        await expect.poll(() => terminalState.workingDirectories?.[0]).toBe('/tmp');
         await page.keyboard.type('unicode');
         await page.keyboard.press('Enter');
         await expect(terminalPanel.locator('.terminal-screen')).toContainText('裝置✓');
@@ -580,6 +588,7 @@ async function main() {
         await expect(terminalPanel.locator('.terminal-screen')).toContainText('watching');
         await page.keyboard.press('Control+c');
         await expect(terminalPanel.locator('.terminal-screen')).toContainText('^C');
+        await expect(terminalPanel.locator('.xterm-cursor').locator('..')).toContainText('/tmp $');
         await desktop.evaluate(({ BrowserWindow }) =>
             BrowserWindow.getAllWindows()[0].setSize(1100, 850),
         );
@@ -703,6 +712,8 @@ async function main() {
             await expect(page.locator('.xterm')).toBeVisible();
         }
 
+        expect(terminalState.workingDirectories?.[0]).toBe('/tmp');
+        await expect(terminalPanel.locator('.xterm-cursor').locator('..')).toContainText('/tmp $');
         await terminalPanel.getByRole('button', { name: 'Clear terminal' }).click();
         await expect(terminalInput).toBeFocused();
         await expect(terminalPanel.locator('.xterm-accessibility-tree')).not.toContainText(
@@ -1015,6 +1026,17 @@ async function main() {
         );
     } catch (error) {
         console.error('Desktop smoke assertion failed:', error);
+        const delivered = Buffer.concat(terminalState.inputs).toString();
+        console.error(
+            'Terminal continuity checkpoints:',
+            JSON.stringify({
+                opens: terminalState.opens,
+                closes: terminalState.closes,
+                directoryIsTmp: terminalState.workingDirectories?.[0] === '/tmp',
+                clipboardCommandDelivered: delivered.includes('echo NATIVE_CLIPBOARD_OK\r'),
+                cdCommandDelivered: delivered.includes('cd /tmp\r'),
+            }),
+        );
         if (configureStates.length)
             console.error(
                 'Wayland configure state tail:',

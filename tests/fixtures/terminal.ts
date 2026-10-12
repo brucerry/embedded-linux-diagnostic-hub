@@ -9,6 +9,7 @@ export interface TerminalFixtureState {
     streamDurationMs?: number;
     streamed?: number;
     streamFinished?: boolean;
+    workingDirectories?: string[];
 }
 export function terminalFixtureState(): TerminalFixtureState {
     return { opens: 0, closes: 0, inputs: [], sizes: [] };
@@ -36,7 +37,12 @@ export function attachTerminalFixture(session: Session, state: TerminalFixtureSt
         let running = false;
         let output: NodeJS.Timeout | undefined;
         channel.on('close', () => clearInterval(output));
-        const prompt = () => channel.write(`${cwd} $ `);
+        const directoryIndex = state.opens - 1;
+        const directories = (state.workingDirectories ??= []);
+        const prompt = () => {
+            directories[directoryIndex] = cwd;
+            return channel.write(`${cwd} $ `);
+        };
         prompt();
         channel.on('close', () => state.closes++);
         channel.on('data', (bytes: Buffer) => {
