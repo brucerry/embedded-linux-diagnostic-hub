@@ -92,7 +92,8 @@ export function useDeviceClock({
             }
         };
         const run = () => {
-            if (disposed || unsupported) return;
+            // Visibility events can precede React's effect cleanup and a due timer callback.
+            if (disposed || unsupported || document.visibilityState === 'hidden') return;
             if (flight.current) {
                 queued.current = run;
                 return;

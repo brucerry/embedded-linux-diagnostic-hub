@@ -26,6 +26,7 @@ async function paused(page: Page) {
     await connect(page);
     await expect(clock(page)).toContainText('16:35');
     await page.getByRole('switch', { name: 'Live updates' }).click();
+    expect(await calls(page)).toBe(1);
 }
 
 test('device clock is global, accessible and responsive independently of browser timezone', async ({
@@ -437,14 +438,23 @@ test('website clock supports native gateway data and older/malformed routes with
             await modal.getByLabel('I verified this fingerprint with a trusted source.').check();
             await modal.getByRole('button', { name: 'Connect via SSH' }).click();
             await expect(modal).not.toBeVisible();
+            // A fake-clock jump must exercise an established PTY, not expire its pending
+            // network-open timeout before the real gateway has delivered its first event.
+            await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+            await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+            await page.getByRole('button', { name: 'Overview', exact: true }).click();
         };
         await open();
         await expect(clock(page)).toContainText('Device time unavailable');
+        const authentications = gateway.authentications();
+        const terminalOpens = gateway.terminal.opens;
         await page.getByRole('switch', { name: 'Live updates' }).click();
         await page.clock.fastForward(60_000);
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
         await page.getByRole('button', { name: 'Terminal', exact: true }).click();
         await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+        expect(gateway.authentications()).toBe(authentications);
+        expect(gateway.terminal.opens).toBe(terminalOpens);
         await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
         mode = 'malformed';
         await open();
@@ -457,4 +467,49 @@ test('website clock supports native gateway data and older/malformed routes with
         await page.goto('about:blank');
         await gateway.close();
     }
+});
+
+test('a minute callback delivered in the hide event cannot read before React cleanup', async ({
+    page,
+}) => {
+    await installDesktop(page);
+    await page.clock.install();
+    await page.addInitScript(() => {
+        const timers = window as unknown as {
+            setInterval(handler: TimerHandler, delay?: number, ...args: unknown[]): number;
+        };
+        const schedule = timers.setInterval.bind(timers);
+        const testing = window as unknown as { clockVisibilityTick?: () => void };
+        timers.setInterval = (handler, delay, ...args) => {
+            if (delay === 60_000 && typeof handler === 'function')
+                testing.clockVisibilityTick = () => handler(...args);
+            return schedule(handler, delay, ...args);
+        };
+    });
+    await page.goto('/');
+    await connect(page);
+    await expect(clock(page)).toContainText('16:35');
+    expect(await calls(page)).toBe(1);
+    const count = await page.evaluate(() => {
+        const tick = (window as unknown as { clockVisibilityTick?: () => void })
+            .clockVisibilityTick;
+        if (!tick) throw Error('The active minute timer was not captured.');
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+        // Deliver the real scheduled callback in the same task, before React can clean up.
+        tick();
+        return window.desktopTest.clock.calls;
+    });
+    expect(count).toBe(1);
+    await page.clock.fastForward(180_000);
+    expect(await calls(page)).toBe(1);
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'visible',
+        });
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(() => calls(page)).toBe(2);
+    await expect(clock(page)).toContainText('16:35');
 });

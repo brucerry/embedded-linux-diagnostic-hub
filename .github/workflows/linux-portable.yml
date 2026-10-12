@@ -64,6 +64,13 @@ jobs:
                       release/Diagnostic-Hub-linux-x64.tar.gz.sha256
                       release/linux-build-info.json
                   if-no-files-found: error
+            - name: Retain browser failure context and traces
+              if: failure()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: linux-browser-failure-${{ github.run_attempt }}
+                  path: test-results/
+                  if-no-files-found: warn
     gnome:
         needs: build
         runs-on: ubuntu-24.04
