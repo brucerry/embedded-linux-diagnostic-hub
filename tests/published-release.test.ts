@@ -6,6 +6,8 @@ import {
     validatePublishedRelease,
     readPublicAsset,
     validatePublishedFiles,
+    selectedPublishedTag,
+    publicCommandTargets,
 } from '../scripts/lib/published-release.mjs';
 import { releaseAssets } from '../scripts/lib/release-assets.mjs';
 import { SOURCE_SHA, MAC_DRAFT_ID, REUSED_MAC_ASSETS } from '../scripts/lib/release-recovery.mjs';
@@ -94,6 +96,61 @@ test('downloaded file controls reject changed sidecars, helpers and manifest sou
         );
         assert.throws(() => validatePublishedFiles(data, options, () => body));
     }
+});
+
+test('latest stable and explicit historical selections bind helper and metadata destinations together', () => {
+    const latest = publicCommandTargets({ repository: context.repository, tag: 'v0.6.0' });
+    assert.equal(
+        latest.metadataURL,
+        'https://api.github.com/repos/' + context.repository + '/releases/latest',
+    );
+    assert.match(latest.helperURL, /\/releases\/latest\/download\/download-run-macos.sh$/);
+    assert.deepEqual(latest.versionArguments, []);
+    const historical = publicCommandTargets({
+        repository: context.repository,
+        tag: 'v0.5.0',
+        requestedTag: 'v0.5.0',
+    });
+    assert.match(historical.metadataURL, /\/releases\/tags\/v0\.5\.0$/);
+    assert.match(historical.helperURL, /\/releases\/download\/v0\.5\.0\/download-run-macos.sh$/);
+    assert.deepEqual(historical.versionArguments, ['--version', 'v0.5.0']);
+    assert.equal(selectedPublishedTag(' v0.5.0-rc.1 '), 'v0.5.0-rc.1');
+    for (const invalid of ['main', '../v0.5.0', 'v0.5.0;id', 'https://attacker.test'])
+        assert.throws(() => selectedPublishedTag(invalid));
+    assert.throws(() =>
+        publicCommandTargets({
+            repository: context.repository,
+            tag: 'v0.6.0',
+            requestedTag: 'v0.5.0',
+        }),
+    );
+});
+test('explicit published preview validation is allowed while default latest still rejects previews', () => {
+    const version = '0.5.0-rc.1',
+        tag = 'v' + version;
+    const selected = { ...context, version, tag, allowPrerelease: true };
+    const value = {
+        ...fixture(),
+        name: tag,
+        tag_name: tag,
+        prerelease: true,
+        html_url: 'https://github.com/' + context.repository + '/releases/tag/' + tag,
+        assets: publishedCatalog(version).map((name, index) => ({
+            id: index + 1,
+            name,
+            size: 3,
+            digest: 'sha256:' + 'b'.repeat(64),
+            browser_download_url:
+                'https://github.com/' +
+                context.repository +
+                '/releases/download/' +
+                tag +
+                '/' +
+                name,
+        })),
+    };
+    validatePublishedRelease(value, selected);
+    assert.throws(() => validatePublishedRelease(value, { ...selected, allowPrerelease: false }));
 });
 
 const context = {

@@ -1,5 +1,30 @@
 import { execFileSync } from 'node:child_process';
 
+export function meaningfulReleaseLink(line) {
+    const legacy = line.trim().match(/^(.+?) - (https?:\/\/\S+)$/);
+    if (legacy) return '[' + legacy[1].replace(/[\[\]]/g, '\\$&') + '](' + legacy[2] + ')';
+    if (/^\[[^\r\n]+\]\(https?:\/\/[^\s]+\)$/.test(line.trim())) return line.trim();
+    throw Error('Release links require a meaningful Markdown label or legacy name - URL.');
+}
+export function meaningfulReleaseLinks(body) {
+    const headers = body.match(/^(Description|Changes|Commits|Links):$/gm);
+    if (
+        JSON.stringify(headers) !==
+        JSON.stringify(['Description:', 'Changes:', 'Commits:', 'Links:'])
+    )
+        throw Error('Preserve the four literal release sections.');
+    const marker = '\nLinks:\n';
+    const index = body.indexOf(marker);
+    if (index < 0) throw Error('Missing Links section.');
+    const prefix = body.slice(0, index + marker.length);
+    const links = body
+        .slice(index + marker.length)
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+    return prefix + links.map(meaningfulReleaseLink).join('\n') + '\n';
+}
+
 export function previousRelease(releases, currentTag) {
     const current = releases.find(
         (release) => release.tag_name === currentTag && !release.draft && release.published_at,
@@ -112,8 +137,7 @@ export function releasePageNotes({
         description = clean(sections[2]);
         changes = clean(sections[4]);
         links = sections[8].trim().split('\n').filter(Boolean);
-        if (links.some((line) => !/^.+ - https?:\/\/\S+$/.test(line)))
-            throw Error('Release links must use name - URL.');
+        for (const line of links) meaningfulReleaseLink(line);
     } else {
         const paragraphs = body
             .split(/\n\s*\n/)
@@ -150,5 +174,5 @@ export function releasePageNotes({
             `Downloads and setup - https://github.com/${repository}/blob/${currentTag}/docs/downloads.md`,
         ]),
     ];
-    return `Description:\n${description}\n\nChanges:\n${changes}\n\nCommits:\n${commits.join('\n') || '- No new commits.'}\n\nLinks:\n${links.join('\n')}\n`;
+    return `Description:\n${description}\n\nChanges:\n${changes}\n\nCommits:\n${commits.join('\n') || '- No new commits.'}\n\nLinks:\n${[...new Set(links.map(meaningfulReleaseLink))].join('\n')}\n`;
 }

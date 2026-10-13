@@ -1,0 +1,35 @@
+name: Format authorized release links
+run-name: Format reviewed release link labels
+on:
+    workflow_dispatch:
+        inputs:
+            release_tag:
+                description: 'Explicit published tag with reviewed link-format authorization'
+                type: string
+                required: true
+    push:
+        branches: [main]
+        paths:
+            - .github/workflows/release-note-format.yml
+            - scripts/format-release-links.mjs
+            - docs/releases/link-format-authorizations.json
+permissions:
+    contents: read
+jobs:
+    format-reviewed-body:
+        if: github.event.repository.private == false
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Apply only the reviewed release-body link formatting
+              run: node scripts/format-release-links.mjs
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_LABEL_TAG: ${{ inputs.release_tag }}

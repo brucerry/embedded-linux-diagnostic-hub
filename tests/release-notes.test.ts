@@ -4,7 +4,32 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { previousRelease, commitNotes, releasePageNotes } from '../scripts/lib/release-notes.mjs';
+import {
+    previousRelease,
+    commitNotes,
+    releasePageNotes,
+    meaningfulReleaseLinks,
+} from '../scripts/lib/release-notes.mjs';
+
+test('meaningful release links preserve every destination, factual section and executable URL', () => {
+    const body =
+        'Description:\nRun curl https://example.invalid/helper.sh | bash\n\nChanges:\n- Same facts.\n\nCommits:\n- [abc](https://example.invalid/commit/abc)\n\nLinks:\nMac installation - https://example.invalid/mac\nChecksums - https://example.invalid/checksums\n';
+    const changed = meaningfulReleaseLinks(body);
+    assert.ok(changed.includes('[Mac installation](https://example.invalid/mac)'));
+    assert.ok(changed.includes('[Checksums](https://example.invalid/checksums)'));
+    assert.equal(changed.split('Links:\n')[0], body.split('Links:\n')[0]);
+    assert.deepEqual(changed.match(/https?:\/\/[^\s)]+/g), body.match(/https?:\/\/[^\s)]+/g));
+    assert.equal(meaningfulReleaseLinks(changed), changed);
+    assert.throws(() => meaningfulReleaseLinks('Links:\nNo descriptive destination'));
+    assert.throws(() =>
+        meaningfulReleaseLinks(
+            body.replace(
+                'Mac installation - https://example.invalid/mac',
+                'https://example.invalid/mac',
+            ),
+        ),
+    );
+});
 
 test('release baseline includes published prereleases and excludes drafts/current/unreleased tags', () => {
     assert.equal(
@@ -75,7 +100,8 @@ test('release notes include all commits after the published baseline, including 
             packageNotes: 'Long package explanation that belongs in the download guide.',
         });
         assert.match(page, /Important update/);
-        assert.match(page, /Guide - https:\/\/example.invalid\/guide/);
+        assert.ok(page.includes('[Guide](https://example.invalid/guide)'));
+        assert.doesNotMatch(page.split('Links:\n')[1], /^.+ - https?:/m);
         assert.match(page, /compare\/v0.1.0\.\.\.v0.2.0-rc.1/);
         assert.doesNotMatch(page, /Long package explanation|commits included|### Features/);
         for (const hash of [first, branch, merge, last])

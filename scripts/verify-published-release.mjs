@@ -7,9 +7,10 @@ import {
     validatePublishedRelease,
     readPublicAsset,
     validatePublishedFiles,
+    selectedPublishedTag,
 } from './lib/published-release.mjs';
 import { listAllReleases } from './lib/release-draft.mjs';
-import { previousRelease, releasePageNotes } from './lib/release-notes.mjs';
+import { previousRelease, releasePageNotes, meaningfulReleaseLinks } from './lib/release-notes.mjs';
 const repository = process.env.GITHUB_REPOSITORY;
 assert.equal(repository, 'brucerry/embedded-linux-diagnostic-hub');
 const api = 'https://api.github.com/repos/' + repository;
@@ -27,11 +28,10 @@ async function read(url) {
     assert.equal(response.status, 200, 'Published metadata unavailable: ' + response.status);
     return response.json();
 }
-const selected = process.env.HUB_PUBLISHED_TAG?.trim();
-if (selected) assert.match(selected, /^v\d+\.\d+\.\d+$/);
+const selected = selectedPublishedTag(process.env.HUB_PUBLISHED_TAG ?? '');
 const release = await read(api + '/releases/' + (selected ? 'tags/' + selected : 'latest'));
 const tag = release.tag_name;
-assert.match(tag, /^v\d+\.\d+\.\d+$/);
+assert.ok(selectedPublishedTag(tag));
 const commit = execFileSync('git', ['rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'], {
     encoding: 'utf8',
 }).trim();
@@ -39,10 +39,18 @@ function blob(name) {
     return execFileSync('git', ['show', tag + ':' + name], { maxBuffer: 32 * 1024 * 1024 });
 }
 const packageInfo = JSON.parse(blob('package.json').toString());
-const context = { repository, tag, version: packageInfo.version, commit };
+const context = {
+    repository,
+    tag,
+    version: packageInfo.version,
+    commit,
+    allowPrerelease: Boolean(selected),
+};
 validatePublishedRelease(release, context);
-const latest = await read(api + '/releases/latest');
-assert.equal(latest.id, release.id, 'Native documented latest command must target this release.');
+if (!selected) {
+    const latest = await read(api + '/releases/latest');
+    assert.equal(latest.id, release.id, 'Latest selection changed during verification.');
+}
 const directory = await mkdtemp(path.join(tmpdir(), 'hub-published-audit-'));
 await mkdir(path.join(directory, 'release'));
 await writeFile(path.join(directory, 'package.json'), blob('package.json'));
@@ -81,13 +89,13 @@ const expectedNotes = releasePageNotes({
     packageNotes: await readFile(path.join(directory, 'release/notes.md'), 'utf8'),
 });
 assert.equal(
-    release.body.trim(),
-    expectedNotes.trim(),
+    meaningfulReleaseLinks(release.body).trim(),
+    meaningfulReleaseLinks(expectedNotes).trim(),
     'Published notes differ from source-generated notes.',
 );
 const fresh = await read(api + '/releases/' + release.id);
 validatePublishedRelease(fresh, context);
-assert.equal(fresh.body, release.body);
+assert.equal(meaningfulReleaseLinks(fresh.body), meaningfulReleaseLinks(release.body));
 assert.deepEqual(
     fresh.assets
         .map(({ id, name, size, digest }) => ({ id, name, size, digest }))
@@ -99,7 +107,15 @@ assert.deepEqual(
 if (process.env.GITHUB_OUTPUT)
     await writeFile(
         process.env.GITHUB_OUTPUT,
-        'tag=' + tag + '\ncommit=' + commit + '\nrelease-id=' + release.id + '\n',
+        'tag=' +
+            tag +
+            '\ncommit=' +
+            commit +
+            '\nrelease-id=' +
+            release.id +
+            '\nasset-count=' +
+            release.assets.length +
+            '\n',
         { flag: 'a' },
     );
 if (process.env.GITHUB_STEP_SUMMARY)

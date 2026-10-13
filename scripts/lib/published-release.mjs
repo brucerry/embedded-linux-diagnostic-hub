@@ -4,6 +4,30 @@ import { releaseAssets } from './release-assets.mjs';
 import { MAC_ARCHES, macManifest, validateMacManifest, macAsset } from './macos-release.mjs';
 import { SOURCE_SHA, MAC_DRAFT_ID, REUSED_MAC_ASSETS } from './release-recovery.mjs';
 
+export function selectedPublishedTag(value = '') {
+    const selected = value.trim();
+    if (selected) assert.match(selected, /^v\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?$/);
+    return selected;
+}
+export function publicCommandTargets({ repository, tag, requestedTag = '' }) {
+    assert.equal(repository, 'brucerry/embedded-linux-diagnostic-hub');
+    assert.ok(selectedPublishedTag(tag));
+    const selected = selectedPublishedTag(requestedTag);
+    if (selected) assert.equal(selected, tag, 'Selected tag must match validated consumer source.');
+    const base = 'https://github.com/' + repository + '/releases/';
+    return {
+        helperURL:
+            base + (selected ? 'download/' + tag : 'latest/download') + '/download-run-macos.sh',
+        metadataURL:
+            'https://api.github.com/repos/' +
+            repository +
+            '/releases/' +
+            (selected ? 'tags/' + tag : 'latest'),
+        versionArguments: selected ? ['--version', tag] : [],
+        selection: selected ? 'explicit-tag' : 'latest-stable',
+    };
+}
+
 export function publishedCatalog(version) {
     return [
         ...releaseAssets(version).flatMap((name) => [name, name + '.sha256']),
@@ -12,18 +36,19 @@ export function publishedCatalog(version) {
         ...MAC_ARCHES.map(macManifest),
     ].sort();
 }
-export function validatePublishedRelease(release, { repository, tag, version, commit }) {
+export function validatePublishedRelease(
+    release,
+    { repository, tag, version, commit, allowPrerelease = false },
+) {
     assert.equal(repository, 'brucerry/embedded-linux-diagnostic-hub');
-    assert.match(tag, /^v\d+\.\d+\.\d+$/);
+    assert.ok(selectedPublishedTag(tag));
     assert.equal(tag, 'v' + version);
     assert.match(commit, /^[a-f0-9]{40}$/);
     assert.ok(Number.isSafeInteger(release.id));
     assert.equal(release.draft, false, 'Audit only an already published release.');
-    assert.equal(
-        release.prerelease,
-        false,
-        'The documented latest command requires a stable release.',
-    );
+    assert.equal(typeof release.prerelease, 'boolean');
+    if (!allowPrerelease)
+        assert.equal(release.prerelease, false, 'Latest verification requires a stable release.');
     assert.equal(release.tag_name, tag);
     assert.equal(release.target_commitish, commit);
     assert.equal(release.name, tag);

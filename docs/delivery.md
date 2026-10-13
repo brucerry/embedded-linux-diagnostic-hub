@@ -196,13 +196,22 @@ publication entry runs only on tag pushes. The audit verifies the complete publi
 downloaded digests, sidecars, source manifests, exact tag helper bytes and generated source notes,
 then both native public-command/installed SSH checks. These jobs use Contents read, no release
 mutation calls, app rebuilding/packaging or new Mac artifact/cache storage. An empty tag audits
-latest stable; a selected tag must also be latest for the documented latest-release command.
+latest stable and exercises the documented latest-release command. An explicit published tag
+resolves its own source and exercises that tag's helper with `--version`, so historical checks
+remain valid after a newer release. Explicit published prereleases are allowed; default latest
+verification requires a stable release. Selected releases must include the Mac-capable full catalog.
 
 README separates latest release availability, release workflow health and published Mac
 verification. A successful read-only run reports current verification, without changing the failed
 original v0.4.0 publication run 38342913511. Recovery publication 38352448204 and subsequent
 corrected public checks remain separate historical records. Releases and tags are preserved by this
 workflow's policy and guards; this does not claim GitHub-enforced immutable-release settings.
+
+The version-neutral `Verify published Mac commands` workflow uses the same validated tag/source
+resolution and supports manual or reusable invocation with optional `published_tag`. Its README
+badge continues to report real workflow results. The original v0.4.0 recovery remains a clearly
+labeled, manual-only historical capability pinned to its original source/gate evidence; it is not a
+current release verifier and never auto-runs on main changes.
 
 ## Maintenance
 

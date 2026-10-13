@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { FixtureCdp } from './fixtures/cdp-document';
+import { publicCommandTargets } from '../scripts/lib/published-release.mjs';
 
 async function verifyPublishedMac() {
     assert.equal(process.platform, 'darwin');
@@ -22,9 +23,14 @@ async function verifyPublishedMac() {
     }
     const mainPort = await port(),
         rendererPort = await port();
-    const url =
-        'https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/download-run-macos.sh';
+    const targets = publicCommandTargets({
+        repository: 'brucerry/embedded-linux-diagnostic-hub',
+        tag,
+        requestedTag: process.env.HUB_PUBLISHED_TAG,
+    });
+    const url = targets.helperURL;
     const args = [
+        ...targets.versionArguments,
         '--directory',
         directory,
         '--',
@@ -116,6 +122,7 @@ async function verifyPublishedMac() {
         console.log(
             JSON.stringify({
                 publishedCommandPassed: true,
+                selection: targets.selection,
                 source: manifest.commit,
                 tag,
                 arch: process.arch,

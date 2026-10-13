@@ -4,15 +4,22 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-const tag = process.env.HUB_PUBLIC_TAG ?? 'v0.4.0';
-const releaseId = Number(process.env.HUB_PUBLIC_RELEASE_ID ?? 411238491);
-assert.match(tag, /^v\d+\.\d+\.\d+$/);
-assert.ok(Number.isSafeInteger(releaseId));
+import { publicCommandTargets } from '../scripts/lib/published-release.mjs';
+const tag = process.env.HUB_PUBLIC_TAG;
+const releaseId = Number(process.env.HUB_PUBLIC_RELEASE_ID);
+const assetCount = Number(process.env.HUB_PUBLIC_ASSET_COUNT);
+assert.ok(Number.isSafeInteger(releaseId) && releaseId > 0);
+assert.ok(Number.isSafeInteger(assetCount) && assetCount > 0);
+const targets = publicCommandTargets({
+    repository: 'brucerry/embedded-linux-diagnostic-hub',
+    tag,
+    requestedTag: process.env.HUB_PUBLISHED_TAG,
+});
 const directory = await mkdtemp(path.join(tmpdir(), 'hub-public-http-'));
 const urls = [
     'https://api.github.com/repos/brucerry/embedded-linux-diagnostic-hub/releases/410956079',
-    'https://api.github.com/repos/brucerry/embedded-linux-diagnostic-hub/releases/latest',
-    'https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/download-run-macos.sh',
+    targets.metadataURL,
+    targets.helperURL,
 ];
 const deadline = Date.now() + 15 * 60 * 1000;
 for (const [index, url] of urls.entries()) {
@@ -84,7 +91,7 @@ for (const [index, url] of urls.entries()) {
                 assert.equal(info.tag_name, tag);
                 assert.equal(info.target_commitish, process.env.HUB_APP_SOURCE);
                 assert.equal(info.draft, false);
-                assert.equal(info.assets.length, 24);
+                assert.equal(info.assets.length, assetCount);
             } else if (index === 2) {
                 const source = await readFile('public/download-run-macos.sh');
                 assert.ok(bytes.equals(source), 'Public helper differs from immutable tag source.');

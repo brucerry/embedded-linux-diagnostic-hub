@@ -1,11 +1,8 @@
-name: Recover verified v0.4.0 publication
+name: Historical release recovery (guarded private draft)
+run-name: Historical v0.4.0 recovery from its qualified source
 
 on:
     workflow_dispatch:
-    push:
-        branches: [main]
-        paths:
-            - .github/workflows/release-recovery.yml
 
 permissions:
     contents: read

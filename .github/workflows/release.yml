@@ -8,7 +8,9 @@ on:
     workflow_dispatch:
         inputs:
             published_tag:
-                description: 'Read-only audit of a published stable tag; empty audits latest'
+                description:
+                    'Read-only audit: empty selects latest stable; explicit tag checks published
+                    history'
                 type: string
                 default: ''
     push:
@@ -41,6 +43,7 @@ jobs:
             tag: ${{ steps.audit.outputs.tag }}
             commit: ${{ steps.audit.outputs.commit }}
             release-id: ${{ steps.audit.outputs.release-id }}
+            asset-count: ${{ steps.audit.outputs.asset-count }}
         steps:
             - uses: actions/checkout@v6
               with:
@@ -75,6 +78,8 @@ jobs:
             HUB_APP_SOURCE: ${{ needs.audit-published.outputs.commit }}
             HUB_PUBLIC_TAG: ${{ needs.audit-published.outputs.tag }}
             HUB_PUBLIC_RELEASE_ID: ${{ needs.audit-published.outputs.release-id }}
+            HUB_PUBLIC_ASSET_COUNT: ${{ needs.audit-published.outputs.asset-count }}
+            HUB_PUBLISHED_TAG: ${{ inputs.published_tag }}
             HUB_MAC_ARCH: ${{ matrix.arch }}
         steps:
             - uses: actions/checkout@v6

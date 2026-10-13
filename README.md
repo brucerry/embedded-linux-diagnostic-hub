@@ -54,8 +54,8 @@ The [development guide](docs/development.md) covers module boundaries and additi
 
 The release workflow badge shows the latest default-branch read-only audit of a published release.
 New tags still run the complete publication gates, whose history remains on the workflow page.
-Published Mac verification reports the separate public-command checks; the download link shows
-latest-release availability. Historical failed runs remain visible; see
+Published Mac verification resolves latest stable by default; a manual published tag checks history.
+The download link shows latest-release availability. Historical failed runs remain visible; see
 [delivery and verification](docs/delivery.md).
 
 ## Contribute
