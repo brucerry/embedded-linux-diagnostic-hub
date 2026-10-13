@@ -1,0 +1,60 @@
+name: Verify published v0.4.0 Mac commands
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [main]
+        paths:
+            - .github/workflows/macos-published-verification.yml
+
+permissions:
+    contents: read
+
+jobs:
+    verify:
+        if: github.event.repository.private == false
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                    - runner: macos-15
+                      arch: arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 20
+        env:
+            HUB_APP_SOURCE: b0f94d7d49d36fecc97b87d516724280d840e727
+            HUB_MAC_ARCH: ${{ matrix.arch }}
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/checkout@v6
+              with:
+                  ref: v0.4.0
+                  path: release-source
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Confirm native runner and immutable consumer source
+              run: |
+                  test "$(node -p process.arch)" = "$HUB_MAC_ARCH"
+                  test "$(git -C release-source rev-parse HEAD)" = "$HUB_APP_SOURCE"
+                  git diff --quiet v0.4.0 HEAD -- electron src shared gateway public package.json package-lock.json vite.config.ts tsconfig.json
+                  printf 'Consumer source: %s; corrected harness: %s\n' "$HUB_APP_SOURCE" "$GITHUB_SHA"
+                  sw_vers
+            - name: Install only test dependencies, without building or packaging an app
+              run: npm ci
+            - name: Verify the actual public command with the corrected CommonJS harness
+              working-directory: release-source
+              run:
+                  GITHUB_SHA="$HUB_APP_SOURCE" npx --no-install tsx
+                  "$GITHUB_WORKSPACE/tests/macos-published-smoke.ts"
+            - name: Verify downloaded installed SSH, trust, clock, reset and unsupported updates
+              working-directory: release-source
+              run: npx --no-install tsx tests/desktop-smoke.ts
+            - name: State downloaded-app qualification limits
+              run: |
+                  printf '%s\n' 'Actual public CLI downloads and native launch; no Safari quarantine, notarization, older macOS or physical-device acceptance.'

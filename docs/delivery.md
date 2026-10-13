@@ -181,6 +181,13 @@ No account setting, persistent credential or new Mac Actions artifact/cache is a
 repeats complete 24-file validation, publishes the same draft and runs both real published-command
 checks. App source and release-tooling source are logged separately.
 
+The initial v0.4.0 postpublication harness failed at TypeScript transformation because top-level
+await was incompatible with this CommonJS package. Its corrected async entry point preserves all
+assertions/deadlines. The read-only published-Mac verification workflow checks the immutable
+consumer source and exercises actual public downloads/launch/installed SSH on both standard native
+runners, without building, replacing or republishing any release file. The original failed test jobs
+remain historical evidence.
+
 ## Maintenance
 
 Update Pages automatically through reviewed `main` changes; use a new version tag for desktop
