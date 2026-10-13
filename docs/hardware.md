@@ -69,10 +69,61 @@ watchdog devices, changing GPIO/power rails, erasing flash, modifying networking
 device. Those actions belong to separately designed functional tests with explicit prerequisites and
 recovery.
 
-## Next feature milestone
+## Serial, network insights and Automation
 
-Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+v0.5.0 includes [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
 [ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
 UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
 qualification gates. Automation operator scripts are distinct from the fixed observational
 diagnostic catalogue.
+
+## v0.5.0 work-environment acceptance checklist
+
+**Physical qualification is deferred, not passed.** No DUT or UART adapter was available during
+software qualification. The user plans to test Serial on Windows 11 at work. Automated fixtures and
+hosted native CI establish the tested software paths; they do not establish adapter, wiring, board,
+RF or managed-desktop acceptance. Record the application version/source/checksum, Windows build,
+adapter VID/PID/driver, target identity, framing, timestamps and expected/observed result. Use Pass,
+Fail, Unsupported or Blocked for each case.
+
+- [ ] Verify the downloaded candidate checksum/source and retain the last known good app. Confirm
+      site policy, pinout, voltage and DTR/RTS/open-close effects on an approved adapter/loopback
+      before connecting a reset-sensitive target. Target UART enabling, pin mux, wiring, bootloader
+      and target operation remain the user's responsibility. Do not disable security controls or
+      change host permissions/driver configuration to force acceptance.
+- [ ] On Windows 11, verify correct local COM identification, chooser cancellation, selection
+      without opening, explicit Connect/Disconnect/Deselect, and the actual supported baud/data/
+      parity/stop/flow settings. Check busy, denied and unsupported-setting states. Confirm received
+      bytes, Unicode, CR/LF/CRLF, local echo and Ctrl+C using an approved target or loopback.
+- [ ] Observe unplug/replug, target reset, blocked hardware flow and disconnect during a write.
+      Confirm retained output, discarded queued input, truthful cleanup, no automatic reopening or
+      replay, and blocked replacement while ownership is unresolved. Check update/close cleanup
+      while connected; rearm deliberately after interruption.
+- [ ] Use harmless user-approved commands to test ordered multiline Automation over both SSH and
+      Serial. Verify the board's literal prompt and chosen line ending; prompt observation is not an
+      exit status. Check one-shot/delay/repetition, Stop versus Cancel, manual-input exclusion,
+      nonzero SSH exit, signal/timeout interruption and no later-step/backlog execution.
+- [ ] Test scheduled work on the actual host across hiding, sleep/wake and disconnect/replacement.
+      Verify local calendar/timezone/offset and explicit rearming. For SSH device-time starts,
+      compare the sampled device clock and stated uncertainty with an independent observation.
+      Arbitrary Serial consoles cannot provide verified device-time starts; received timestamp
+      prefixes remain observations rather than measured emission latency.
+- [ ] Review selected/filtered/all-retained JSON, CSV, Markdown and text exports against captured
+      bytes, stream/exit metadata and local/device-time provenance. Exercise multiline/control/
+      Unicode content, retention/truncation and the intended spreadsheet/QA reader. Review for
+      secrets before sharing; exports do not execute commands.
+- [ ] On the real Linux target, collect the fixed read-only `iw`, `ip` and optional `ethtool`
+      evidence with normal permissions. Compare WLAN interface/mode/connection/signal/noise/power
+      with raw output and keep PHY/channel/regulatory capabilities separate from current state.
+      Compare LAN administrative/carrier/operational state, addresses/routes/neighbors, topology and
+      exact counters. Missing tools, denied reads and driver omissions remain unavailable or failed
+      observations; do not install tools, scan RF or reconfigure networking during this check.
+- [ ] Qualify any additional intended client: physical Linux/macOS adapters and permissions, browser
+      support, and native Mac Safari-download/quarantine first launch or managed-device policy.
+      Hosted Mac CI does not establish these cases; ad-hoc integrity signatures are not Developer ID
+      signing or notarization. Use the normal platform security path.
+
+Record unperformed cases as Not run. A sample/mock SSH server is useful for practicing the UI and
+exports, but its diagnostics, clocks and command results must never be counted as DUT qualification.
+See [Serial controls](serial.md), [network evidence](network-insights.md) and
+[Automation semantics](automation.md).

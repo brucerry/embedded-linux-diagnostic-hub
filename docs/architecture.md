@@ -139,9 +139,9 @@ The website gateway remains pinned to the keys in `HUB_TARGETS_JSON`; the browse
 those administrative pins. After a verified board/key change, update the relevant gateway entry and
 restart the gateway.
 
-## Next feature milestone
+## Serial, network insights and Automation
 
-Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+v0.5.0 includes [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
 [ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
 UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
 qualification gates. Automation operator scripts are distinct from the fixed observational

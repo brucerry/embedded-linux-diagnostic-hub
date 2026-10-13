@@ -74,7 +74,7 @@ substantial changes, open an issue describing the problem and affected environme
   [hardware coverage](docs/hardware.md).
 - [Validation history](docs/validation.md) and [production qualification](docs/production.md).
 
-## v0.5.0 feature candidate
+## v0.5.0 features
 
 The v0.5.0 source adds [Serial](docs/serial.md), [WLAN/LAN insights](docs/network-insights.md) and
 [ordered Automation / QA exports](docs/automation.md). Published v0.4.0 assets remain unchanged.

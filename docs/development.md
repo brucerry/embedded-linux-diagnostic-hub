@@ -146,9 +146,9 @@ through the owned GNOME window manager, matching native desktop/window-switcher 
 Both state assertions retain the five-second deadline. The app exposes no privileged restore control
 or workaround.
 
-## Next feature milestone
+## Serial, network insights and Automation
 
-Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+v0.5.0 includes [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
 [ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
 UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
 qualification gates. Automation operator scripts are distinct from the fixed observational

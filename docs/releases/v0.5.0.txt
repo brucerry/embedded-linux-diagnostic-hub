@@ -18,3 +18,4 @@ Downloads and setup - https://github.com/brucerry/embedded-linux-diagnostic-hub/
 Local Serial terminal - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/serial.md
 Network insights - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/network-insights.md
 Automation and QA exports - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/automation.md
+Work-environment acceptance checklist - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/hardware.md#v050-work-environment-acceptance-checklist
