@@ -4,6 +4,10 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+const tag = process.env.HUB_PUBLIC_TAG ?? 'v0.4.0';
+const releaseId = Number(process.env.HUB_PUBLIC_RELEASE_ID ?? 411238491);
+assert.match(tag, /^v\d+\.\d+\.\d+$/);
+assert.ok(Number.isSafeInteger(releaseId));
 const directory = await mkdtemp(path.join(tmpdir(), 'hub-public-http-'));
 const urls = [
     'https://api.github.com/repos/brucerry/embedded-linux-diagnostic-hub/releases/410956079',
@@ -76,8 +80,8 @@ for (const [index, url] of urls.entries()) {
         );
         if (result.status === 0 && status === 200) {
             if (index === 1) {
-                assert.equal(info.id, 411238491);
-                assert.equal(info.tag_name, 'v0.4.0');
+                assert.equal(info.id, releaseId);
+                assert.equal(info.tag_name, tag);
                 assert.equal(info.target_commitish, process.env.HUB_APP_SOURCE);
                 assert.equal(info.draft, false);
                 assert.equal(info.assets.length, 24);

@@ -4,15 +4,16 @@
 [![Windows](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/windows-portable.yml/badge.svg?branch=main)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/windows-portable.yml)
 [![Linux](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/linux-portable.yml/badge.svg?branch=main)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/linux-portable.yml)
 [![macOS](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/macos-qualification.yml/badge.svg?branch=main)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/macos-qualification.yml)
-[![Release](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/release.yml/badge.svg)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/release.yml)
+[![Release workflow](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/release.yml/badge.svg)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/release.yml)
+[![Published Mac verification](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/macos-published-verification.yml/badge.svg?branch=main)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/macos-published-verification.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A desktop and web workbench for diagnosing embedded Linux devices over SSH. Inspect system
 resources, interfaces, hardware and logs with read-only checks, live graphs and local JSON reports.
 Use the embedded terminal for interactive device commands.
 
-[Download a release](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases) ·
-[Open the website](https://brucerry.github.io/embedded-linux-diagnostic-hub/)
+[Download the latest release](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest)
+· [Open the website](https://brucerry.github.io/embedded-linux-diagnostic-hub/)
 
 ## Get started
 
@@ -50,6 +51,12 @@ npm run desktop:dev
 Use `npm run dev` for browser development and `npm run verify` for formatting, types and unit tests.
 The [development guide](docs/development.md) covers module boundaries and additional checks;
 [build and release instructions](docs/delivery.md) cover packaging and deployment.
+
+The release workflow badge shows the latest default-branch read-only audit of a published release.
+New tags still run the complete publication gates, whose history remains on the workflow page.
+Published Mac verification reports the separate public-command checks; the download link shows
+latest-release availability. Historical failed runs remain visible; see
+[delivery and verification](docs/delivery.md).
 
 ## Contribute
 

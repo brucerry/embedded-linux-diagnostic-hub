@@ -188,6 +188,22 @@ consumer source and exercises actual public downloads/launch/installed SSH on bo
 runners, without building, replacing or republishing any release file. The original failed test jobs
 remain historical evidence.
 
+## Published-release workflow audits
+
+The `Publish verified release` workflow retains all new-tag publication gates. A main push affecting
+its audit tooling or a manual `published_tag` request runs explicitly named read-only audit jobs;
+publication entry runs only on tag pushes. The audit verifies the complete public catalog, API and
+downloaded digests, sidecars, source manifests, exact tag helper bytes and generated source notes,
+then both native public-command/installed SSH checks. These jobs use Contents read, no release
+mutation calls, app rebuilding/packaging or new Mac artifact/cache storage. An empty tag audits
+latest stable; a selected tag must also be latest for the documented latest-release command.
+
+README separates latest release availability, release workflow health and published Mac
+verification. A successful read-only run reports current verification, without changing the failed
+original v0.4.0 publication run 38342913511. Recovery publication 38352448204 and subsequent
+corrected public checks remain separate historical records. Releases and tags are preserved by this
+workflow's policy and guards; this does not claim GitHub-enforced immutable-release settings.
+
 ## Maintenance
 
 Update Pages automatically through reviewed `main` changes; use a new version tag for desktop
