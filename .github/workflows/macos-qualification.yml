@@ -28,55 +28,9 @@ jobs:
                       appDir: mac-arm64
         runs-on: ${{ matrix.runner }}
         timeout-minutes: 45
-        env:
-            CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         steps:
             - uses: actions/checkout@v6
-            - uses: actions/setup-node@v7
+            - uses: ./.github/actions/macos-build
               with:
-                  node-version: '24'
-                  package-manager-cache: false
-            - name: Confirm native runner architecture
-              run: |
-                  test "$(node -p process.arch)" = "${{ matrix.arch }}"
-                  sw_vers
-                  node --version
-                  printf 'Qualification source: %s\n' "$GITHUB_SHA"
-            - run: npm ci
-            - run: npm run verify
-            - run: npm run build
-            - run: npm run build:web
-            - run: npm run build:gateway
-            - run: npx playwright install chromium
-            - name: Run the full browser suite with one worker
-              run: npm run test:e2e -- --workers=1
-            - name: Verify development SSH, trust, clock, reset and unsupported updates
-              run: npx tsx tests/desktop-smoke.ts
-            - name: Generate full-resolution Mac icon from the shared SVG
-              run: node scripts/generate-macos-icon.mjs
-            - name: Build ad-hoc app directory (no distribution)
-              run:
-                  npx electron-builder --mac dir --${{ matrix.arch }} --publish never
-                  --config.mac.identity=- --config.mac.hardenedRuntime=false
-                  --config.mac.icon=release/macos-icon.png
-            - name: Verify architecture, bundle integrity and packaged source
-              run:
-                  node scripts/verify-macos-package.mjs "release/${{ matrix.appDir }}/Diagnostic
-                  Hub.app" "${{ matrix.arch }}"
-            - name: Verify packaged SSH, trust, clock, reset and unsupported updates
-              run: npx tsx tests/desktop-smoke.ts
-              env:
-                  HUB_TEST_EXECUTABLE:
-                      ${{ github.workspace }}/release/${{ matrix.appDir }}/Diagnostic
-                      Hub.app/Contents/MacOS/Diagnostic Hub
-            - name: Stress packaged native windows and in-place terminal
-              run: npx tsx tests/native-window-smoke.ts
-              env:
-                  HUB_NATIVE_CYCLES: '100'
-                  HUB_TEST_EXECUTABLE:
-                      ${{ github.workspace }}/release/${{ matrix.appDir }}/Diagnostic
-                      Hub.app/Contents/MacOS/Diagnostic Hub
-            - name: State qualification limits
-              run: |
-                  printf '%s\n' 'Runner-local app launch only; no downloaded-app Gatekeeper, notarization, older macOS or physical-device qualification.'
-                  printf '%s\n' 'No public Mac artifact, updater deployment or release is produced.'
+                  arch: ${{ matrix.arch }}
+                  app-dir: ${{ matrix.appDir }}

@@ -37,6 +37,30 @@ async function releaseFixture() {
             assets: linuxAssets,
         }),
     );
+    for (const arch of ['x64', 'arm64']) {
+        const asset = 'Diagnostic-Hub-macos-' + arch + '.zip';
+        const sha256 = (
+            await readFile(path.join(root, 'release', asset + '.sha256'), 'utf8')
+        ).split('  ')[0];
+        await writeFile(
+            path.join(root, 'release', 'macos-build-info-' + arch + '.json'),
+            JSON.stringify({
+                platform: 'darwin',
+                arch,
+                version: '0.1.0',
+                commit: fixtureCommit,
+                asset,
+                sha256,
+                asarSHA256: 'c'.repeat(64),
+                bundleIdentifier: 'dev.diagnostichub.desktop',
+                minimumMacOSVersion: '12.0.0',
+                signature: 'ad-hoc',
+                adHocIntegrityVerified: true,
+                notarized: false,
+                gatekeeperDownloadedAppQualified: false,
+            }),
+        );
+    }
     return {
         root,
         check: (tag = 'v0.1.0', commit = fixtureCommit, assets = true) =>
@@ -85,6 +109,29 @@ test('release requires Linux source identity and every platform asset', async ()
         assert.notEqual(fixture.check().status, 0);
         await writeFile(metadata, original);
         await rm(path.join(fixture.root, 'release/Diagnostic-Hub-linux-x64.AppImage'));
+        assert.notEqual(fixture.check().status, 0);
+    } finally {
+        await fixture.close();
+    }
+});
+
+test('release rejects Mac manifest source, architecture, integrity claims and missing bundles', async () => {
+    const fixture = await releaseFixture();
+    try {
+        const metadata = path.join(fixture.root, 'release/macos-build-info-arm64.json');
+        const original = await readFile(metadata, 'utf8');
+        for (const change of [
+            { commit: 'b'.repeat(40) },
+            { arch: 'x64' },
+            { notarized: true },
+            { adHocIntegrityVerified: false },
+            { sha256: '0'.repeat(64) },
+        ]) {
+            await writeFile(metadata, JSON.stringify({ ...JSON.parse(original), ...change }));
+            assert.notEqual(fixture.check().status, 0);
+        }
+        await writeFile(metadata, original);
+        await rm(path.join(fixture.root, 'release/Diagnostic-Hub-macos-arm64.zip'));
         assert.notEqual(fixture.check().status, 0);
     } finally {
         await fixture.close();

@@ -1,0 +1,75 @@
+name: Build and qualify native Mac distribution
+description:
+    Shared native build, installer, SSH and window qualification without Actions artifacts or
+    caches.
+inputs:
+    arch:
+        required: true
+        description: Native Node architecture
+    app-dir:
+        required: true
+        description: electron-builder architecture directory
+runs:
+    using: composite
+    steps:
+        - uses: actions/setup-node@v7
+          with:
+              node-version: '24'
+              package-manager-cache: false
+        - name: Confirm native runner architecture
+          shell: bash
+          run: |
+              test "$(node -p process.arch)" = "${{ inputs.arch }}"
+              sw_vers
+              node --version
+              printf 'Qualification source: %s\n' "$GITHUB_SHA"
+        - shell: bash
+          run: npm ci
+        - shell: bash
+          run: npm run verify
+        - shell: bash
+          run: npm run build
+        - shell: bash
+          run: npm run build:web
+        - shell: bash
+          run: npm run build:gateway
+        - shell: bash
+          run: npx playwright install chromium
+        - name: Run the full browser suite with one worker
+          shell: bash
+          run: npm run test:e2e -- --workers=1
+        - name: Verify development SSH, trust, clock, reset and unsupported updates
+          shell: bash
+          run: npx tsx tests/desktop-smoke.ts
+        - name: Generate full-resolution Mac icon from the shared SVG
+          shell: bash
+          run: node scripts/generate-macos-icon.mjs
+        - name: Build complete ad-hoc app directory
+          shell: bash
+          run:
+              npx electron-builder --mac dir --${{ inputs.arch }} --publish never
+              --config.mac.identity=- --config.mac.hardenedRuntime=false
+              --config.mac.icon=release/macos-icon.png
+          env:
+              CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        - name: Verify native ZIP roundtrip, bundle integrity and packaged source
+          shell: bash
+          run:
+              node scripts/package-macos.mjs "release/${{ inputs.app-dir }}/Diagnostic Hub.app" "${{
+              inputs.arch }}"
+        - name: Exercise installer rejection, rollback, spaces and native installed app
+          shell: bash
+          run: node tests/macos-installer-smoke.mjs
+        - name: Verify installed SSH, trust, clock, reset and unsupported updates
+          shell: bash
+          run: npx tsx tests/desktop-smoke.ts
+        - name: Stress installed native windows and in-place terminal
+          shell: bash
+          run: npx tsx tests/native-window-smoke.ts
+          env:
+              HUB_NATIVE_CYCLES: '100'
+        - name: State qualification limits
+          shell: bash
+          run:
+              printf '%s\n' 'Native CI installation and launch; no Safari quarantine, notarization,
+              older macOS or physical-device acceptance.'

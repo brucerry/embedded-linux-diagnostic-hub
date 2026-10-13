@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { distributable, releaseAssets } from './lib/release-assets.mjs';
+import { MAC_ARCHES, macAsset, macManifest, validateMacManifest } from './lib/macos-release.mjs';
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 assert.match(version, /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/, 'Use a semantic release version.');
 assert.equal(process.env.GITHUB_REF_NAME, `v${version}`, 'Tag must match package.json version.');
@@ -36,13 +37,20 @@ if (process.argv.includes('--assets')) {
         Object.keys(linux.assets).sort(),
         ['Diagnostic-Hub-linux-x64.AppImage', 'Diagnostic-Hub-linux-x64.tar.gz'].sort(),
     );
+    for (const arch of MAC_ARCHES) {
+        const mac = JSON.parse(await readFile(path.join('release', macManifest(arch)), 'utf8'));
+        const sha256 = (
+            await readFile(path.join('release', macAsset(arch) + '.sha256'), 'utf8')
+        ).split('  ')[0];
+        validateMacManifest(mac, { arch, version, commit: process.env.GITHUB_SHA, sha256 });
+    }
     const signing =
         info.signature === 'Valid'
             ? 'Windows Authenticode signature: valid.'
             : 'Unsigned build. Windows may show an unknown-publisher warning.';
     await writeFile(
         'release/notes.md',
-        `Portable Windows and Linux x64 apps, website, and SSH gateway.\n\n${signing}\n\n[Downloads and setup](https://github.com/${process.env.GITHUB_REPOSITORY ?? 'brucerry/embedded-linux-diagnostic-hub'}/blob/v${version}/docs/downloads.md). Commit: ${info.commit}\n`,
+        `Portable Windows and Linux x64 apps, native Intel and Apple Silicon Mac apps, website, and SSH gateway. Mac apps use ad-hoc integrity signatures and are not Developer ID signed or notarized. Mac updates are manual.\n\n${signing}\n\n[Downloads and setup](https://github.com/${process.env.GITHUB_REPOSITORY ?? 'brucerry/embedded-linux-diagnostic-hub'}/blob/v${version}/docs/downloads.md). Commit: ${info.commit}\n`,
     );
 }
 console.log(`Release version verified: v${version}`);

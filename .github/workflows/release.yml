@@ -21,6 +21,21 @@ jobs:
                   node-version: '24'
             - name: Require a version-matching tag
               run: node scripts/verify-release.mjs
+    draft:
+        needs: version
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Create only a new-tag source-bound unpublished draft
+              run: node scripts/release-draft.mjs create
+              env:
+                  GH_TOKEN: ${{ github.token }}
     website:
         needs: version
         uses: ./.github/workflows/verify-website.yml
@@ -31,10 +46,15 @@ jobs:
     linux:
         needs: version
         uses: ./.github/workflows/linux-portable.yml
+    macos:
+        needs: draft
+        permissions:
+            contents: write
+        uses: ./.github/workflows/macos-release.yml
     publish:
-        needs: [website, desktop, linux]
+        needs: [website, desktop, linux, macos]
         runs-on: ubuntu-latest
-        timeout-minutes: 10
+        timeout-minutes: 15
         permissions:
             contents: write
         concurrency:
@@ -54,17 +74,43 @@ jobs:
                   pattern: Diagnostic-Hub-*
                   merge-multiple: true
                   path: release
-            - name: Check release assets
+            - name: Download both native Mac drafts without exposing signed URLs
+              run: node scripts/release-draft.mjs download
+              env:
+                  GH_TOKEN: ${{ github.token }}
+            - name: Check every release asset, checksum and source manifest
               run: node scripts/verify-release.mjs --assets
             - name: Prepare four-section release notes from the previous published release
               env:
                   GH_TOKEN: ${{ github.token }}
               run: node scripts/release-notes.mjs
-            - name: Publish tested assets
+            - name: Publish only the complete guarded and tested draft
+              run: node scripts/release-draft.mjs publish
               env:
                   GH_TOKEN: ${{ github.token }}
-                  RELEASE_TAG: ${{ github.ref_name }}
-              run: |
-                  flags=()
-                  if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
-                  gh release create "$RELEASE_TAG" release/Diagnostic-Hub.exe release/*.AppImage release/*.tar.gz release/*.zip release/*.sha256 release/download-run.ps1 release/download-run.sh release/build-info.json release/linux-build-info.json --verify-tag --title "$RELEASE_TAG" --notes-file release/notes.md "${flags[@]}"
+    published-macos:
+        needs: publish
+        if: github.event.repository.private == false
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                      appDir: mac
+                    - runner: macos-15
+                      arch: arm64
+                      appDir: mac-arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - run: npm ci
+            - name: Run the actual published command and verify normal launched app
+              run: npx tsx tests/macos-published-smoke.ts
+            - name: Verify downloaded installed SSH, trust, clock, reset and unsupported updates
+              run: npx tsx tests/desktop-smoke.ts

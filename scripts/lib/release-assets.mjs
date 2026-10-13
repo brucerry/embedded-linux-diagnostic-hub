@@ -1,13 +1,15 @@
 export const WINDOWS_ASSET = 'Diagnostic-Hub.exe';
 export const LINUX_ASSET = 'Diagnostic-Hub-linux-x64.AppImage';
 export const LINUX_ARCHIVE = 'Diagnostic-Hub-linux-x64.tar.gz';
-export const LAUNCHERS = ['download-run.ps1', 'download-run.sh'];
+export const LAUNCHERS = ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'];
 
 export function releaseAssets(version) {
     return [
         WINDOWS_ASSET,
         LINUX_ASSET,
         LINUX_ARCHIVE,
+        'Diagnostic-Hub-macos-x64.zip',
+        'Diagnostic-Hub-macos-arm64.zip',
         `Diagnostic-Hub-Gateway-${version}.tar.gz`,
         `Diagnostic-Hub-Web-${version}.zip`,
         ...LAUNCHERS,

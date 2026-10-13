@@ -76,6 +76,43 @@ for (const file of ['app-icon.svg', 'app-icon.png', 'app-icon.ico'])
         'Packaged brand asset mismatch: ' + file,
     );
 const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+const bundleVersion = execFileSync(
+    '/usr/libexec/PlistBuddy',
+    ['-c', 'Print :CFBundleShortVersionString', path.join(app, 'Contents/Info.plist')],
+    { encoding: 'utf8' },
+).trim();
+assert.equal(bundleVersion, version, 'Bundle version must match package.json.');
+assert.equal(
+    JSON.parse(extractFile(archive, 'package.json').toString()).version,
+    version,
+    'ASAR package version must match.',
+);
+const minimumMacOSVersion = execFileSync(
+    '/usr/libexec/PlistBuddy',
+    ['-c', 'Print :LSMinimumSystemVersion', path.join(app, 'Contents/Info.plist')],
+    { encoding: 'utf8' },
+).trim();
+assert.match(minimumMacOSVersion, /^\d+\.\d+(?:\.\d+)?$/);
+assert.equal(
+    minimumMacOSVersion,
+    JSON.parse(readFileSync('package.json', 'utf8')).build.mac.minimumSystemVersion,
+    'Bundle must retain the explicitly configured Electron 44 runtime minimum.',
+);
+for (const executable of [
+    'Contents/MacOS/Diagnostic Hub',
+    'Contents/Frameworks/Electron Framework.framework/Electron Framework',
+]) {
+    const slices = execFileSync('/usr/bin/lipo', ['-archs', path.join(app, executable)], {
+        encoding: 'utf8',
+    })
+        .trim()
+        .split(/\s+/);
+    assert.deepEqual(
+        slices,
+        [arch === 'x64' ? 'x86_64' : 'arm64'],
+        'Expected a single native architecture.',
+    );
+}
 console.log(
     JSON.stringify({
         platform: 'darwin',
@@ -83,6 +120,7 @@ console.log(
         version,
         source: process.env.GITHUB_SHA,
         bundleIdentifier: identifier,
+        minimumMacOSVersion,
         adHocIntegrityVerified: true,
         packagedSourceMatches: true,
         asarSHA256: createHash('sha256').update(readFileSync(archive)).digest('hex'),

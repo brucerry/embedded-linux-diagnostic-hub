@@ -16,7 +16,11 @@ Use the embedded terminal for interactive device commands.
 
 ## Get started
 
-1. Download `Diagnostic-Hub.exe` for Windows 10/11 x64, or the AppImage/archive for Linux x86_64.
+1. Download `Diagnostic-Hub.exe` for Windows 10/11 x64, the AppImage/archive for Linux x86_64, or
+   the complete
+   [Intel Mac app](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/Diagnostic-Hub-macos-x64.zip)
+   /
+   [Apple Silicon Mac app](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/Diagnostic-Hub-macos-arm64.zip).
    The portable desktop needs no Node.js installation and connects over a local network without
    internet or a device agent. See [download commands and platform requirements](docs/downloads.md).
 2. Launch the app, choose **Connect device**, enter your SSH credentials and verify the device
@@ -24,7 +28,15 @@ Use the embedded terminal for interactive device commands.
 
 The website uses a separately deployed [HTTPS SSH gateway](docs/gateway.md). Automatic diagnostics
 are read-only; terminal commands run with your SSH account's permissions and can change the device.
-Current releases are engineering previews.
+Mac Terminal install and launch:
+
+```sh
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/download-run-macos.sh | /bin/bash'
+```
+
+Mac apps are ad-hoc signed, not Developer ID signed or notarized. Updates are manual; macOS or
+managed-device policy can block launch. See
+[Mac installation and trust guidance](docs/macos-qualification.md).
 
 ## Develop
 
@@ -49,7 +61,7 @@ substantial changes, open an issue describing the problem and affected environme
 
 - [Using the app](docs/usage.md): snapshots, reports, terminal shortcuts and updates.
 - [Connection retries](docs/connection-retries.md) and
-  [macOS CI qualification limits](docs/macos-qualification.md).
+  [macOS installation and CI qualification limits](docs/macos-qualification.md).
 - [Website setup](docs/website.md) and [gateway deployment](docs/gateway.md).
 - [Architecture](docs/architecture.md), [design](docs/design.md) and
   [hardware coverage](docs/hardware.md).

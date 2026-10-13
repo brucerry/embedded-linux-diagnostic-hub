@@ -27,8 +27,24 @@ extraction and per-user trusted SSH key storage still require writable host dire
 an old executable alongside the current one.
 
 Release validation requires the app, gateway, web and launcher assets with matching checksums and
-source identity. Linux CI retains its native compositor matrix. Historical published releases may
-include retired companion ZIPs; they are not part of new builds.
+source identity. Mac distribution includes native x64 and arm64 complete ZIPs, sidecars and
+`macos-build-info-<arch>.json` (minimum OS, source, ASAR hash and ad-hoc signature status). Linux CI
+retains its native compositor matrix. Historical published releases may include retired companion
+ZIPs; they are not part of new builds.
+
+Native Mac packaging on the matching architecture (Node.js 24, for development/CI):
+
+```sh
+npm ci
+npm run build
+node scripts/generate-macos-icon.mjs
+npx electron-builder --mac dir --arm64 --publish never --config.mac.identity=- --config.mac.hardenedRuntime=false --config.mac.icon=release/macos-icon.png
+node scripts/package-macos.mjs "release/mac-arm64/Diagnostic Hub.app" arm64
+```
+
+For Intel use `--x64`, `release/mac` and `x64`. The configured runtime minimum is macOS 13.0.0;
+packaging does not qualify every supported older Mac. CI additionally runs installer controls,
+packaged SSH checks and 100 native cycles before distribution.
 
 Unsigned Linux/WSL cross-build:
 
@@ -53,10 +69,16 @@ Windows PowerShell to run the packaged checks from [the development guide](devel
 | `.github/workflows/linux-portable.yml`   | Ubuntu 22.04 x64 build; inspect AppImage/archive, run packaged SSH tests with sandboxing enabled         |
 | `.github/workflows/release.yml`          | Version tag validation; invoke all verified builds; verify asset checksums and publish Releases          |
 
-Each release publishes the exact Windows and Linux artifacts tested by their build jobs, without
-rebuilding in the publish job. Only publishing has `contents: write`; Pages deployment has its own
-`pages: write` and `id-token: write`. PR runs do not publish or deploy. Build artifacts are
-available from Actions even without a release tag.
+The shared `.github/actions/macos-build` action qualifies both native architectures on main and in
+`.github/workflows/macos-release.yml`, without Mac Actions artifacts or caches. Mac jobs produce
+complete bundles with `scripts/package-macos.mjs`, roundtrip verify them and exercise the helper
+before packaged SSH and 100 native cycles.
+
+Each release publishes the exact Windows, Linux and Mac artifacts tested by their build jobs,
+without rebuilding in the publish job. New-draft creation, native Mac staging and final publishing
+have scoped `contents: write` with the existing job token; main Mac jobs remain read-only. Pages
+deployment has its own `pages: write` and `id-token: write`. PR runs do not publish or deploy. Build
+artifacts are available from Actions even without a release tag.
 
 ## One-time repository setup
 
@@ -87,13 +109,21 @@ After source changes have been committed, reviewed and pushed:
     git push origin v0.2.0-rc.1
     ```
 
-3. The release workflow repeats website, Windows and Linux verification for that tag, then publishes
-   `Diagnostic-Hub.exe`, Linux AppImage/archive, portable website ZIP, gateway archive, download
-   helpers and their SHA-256 checksums. `build-info.json` and `linux-build-info.json` identify the
-   source commit, architecture and Windows signing status. Versions with prerelease suffixes are
-   marked prereleases; a plain version tag publishes an official release. Release notes identify
-   unsigned engineering builds explicitly.
-4. Inspect the Release assets and test downloaded packages on the intended Windows and Linux
+3. The release workflow creates a source-bound **unpublished** draft, repeats website, Windows,
+   Linux/seven GNOME and both native Mac qualifications, and checks anonymous draft/API/asset
+   denial. Mac bytes are staged privately using release assets rather than additional Actions
+   storage. Any gate failure leaves the draft unpublished. After all gates and complete validation
+   it publishes `Diagnostic-Hub.exe`, Linux AppImage/archive, portable website ZIP, gateway archive,
+   download helpers (including `download-run-macos.sh`), both complete Mac ZIPs and their SHA-256
+   checksums. All 24 files must match: ten payloads, ten sidecars and four manifests.
+   `build-info.json`, `linux-build-info.json` and both Mac manifests identify the source commit,
+   architecture and Windows signing status. Versions with prerelease suffixes are marked
+   prereleases; a plain version tag publishes an official release. Release notes identify unsigned
+   engineering builds explicitly.
+4. Dependent native Mac jobs test the actual published one-line command, normal launch, source,
+   architecture, renderer bridge, running-app refusal and downloaded packaged SSH behavior. These
+   command-line checks do not establish Safari quarantine or physical/managed Mac acceptance.
+   Inspect the Release assets and test downloaded packages on the intended Windows, Mac and Linux
    desktops, including Ubuntu 22.04. Review [production qualification](production.md) before
    declaring production readiness.
 
@@ -120,8 +150,8 @@ baseline.
 
 A normal branch push runs verification and Pages deployment. A version-tag push also builds and
 publishes a Release with these notes. Commit the version and highlights before creating the tag. Do
-not move an already-published tag. The proposed next release is `v0.2.0-rc.1`, with `v0.2.0`
-reserved for the accepted feature release.
+not move an already-published tag. The Mac distribution increment uses a new `v0.4.0` tag; `v0.3.1`,
+unpublished `v0.3.0` and `v0.2.0` are preserved.
 
 ## Maintenance
 
