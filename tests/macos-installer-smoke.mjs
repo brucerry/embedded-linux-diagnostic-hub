@@ -121,7 +121,13 @@ for (const change of [
     await reset({ ...original, ...change });
     await reject('mismatched ' + Object.keys(change)[0]);
 }
-for (const entry of ['../outside', 'Other.app/file', 'Diagnostic Hub.app/../../outside']) {
+for (const entry of [
+    '../outside',
+    'Other.app/file',
+    'Diagnostic Hub.app/../../outside',
+    'Diagnostic Hub.app//outside',
+    'Diagnostic Hub.app/./outside',
+]) {
     await reset(original, zipSync({ [entry]: strToU8('unsafe') }));
     await reject('unsafe archive ' + entry);
 }

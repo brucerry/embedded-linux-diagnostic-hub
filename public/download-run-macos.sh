@@ -119,7 +119,7 @@ while IFS= read -r entry; do
         'Diagnostic Hub.app/'*|'__MACOSX/Diagnostic Hub.app/'*|'__MACOSX/._Diagnostic Hub.app'|__MACOSX/) ;;
         *) fail "Unexpected archive root: $entry" ;;
     esac
-    case "/$entry/" in *'/../'*|*'/./'*|*'//'*) fail 'Unsafe archive path.' ;; esac
+    case "/${entry%/}/" in *'/../'*|*'/./'*|*'//'*) fail "Unsafe archive path: $entry" ;; esac
     case "$entry" in *\\*|*$'\r'*|*$'\t'*) fail 'Unsafe archive filename.' ;; esac
 done < "$stage/entries"
 [ "$(sort "$stage/entries" | uniq -d | wc -l | tr -d ' ')" = 0 ] || fail 'Duplicate archive paths.'
