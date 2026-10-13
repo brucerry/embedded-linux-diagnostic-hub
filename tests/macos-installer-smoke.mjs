@@ -87,6 +87,28 @@ async function reset(info = original, bytes) {
     );
 }
 await reset();
+const actualEntries = execFileSync('/usr/bin/zipinfo', ['-1', path.join(fixture, payload)], {
+    encoding: 'utf8',
+})
+    .trim()
+    .split('\n');
+const bundleDirectories = actualEntries.filter(
+    (entry) => entry.startsWith('Diagnostic Hub.app/') && entry.endsWith('/'),
+);
+assert.ok(
+    bundleDirectories.length > 0,
+    'Real ditto bundle must exercise normal directory markers.',
+);
+console.log(
+    'Actual native ZIP directory regression entries:',
+    JSON.stringify(bundleDirectories.slice(0, 12)),
+);
+const actualLinks = execFileSync('/usr/bin/zipinfo', ['-l', path.join(fixture, payload)], {
+    encoding: 'utf8',
+})
+    .split('\n')
+    .filter((line) => line.startsWith('l'));
+console.log('Actual native ZIP link entries:', JSON.stringify(actualLinks.slice(0, 8)));
 let result = run();
 assert.equal(result.status, 0, result.stderr + result.stdout);
 const previous = await readFile(path.join(target, 'Contents/Resources/app.asar'));
