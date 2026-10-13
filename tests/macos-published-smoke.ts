@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, realpath } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,7 +11,7 @@ async function verifyPublishedMac() {
     assert.equal(process.platform, 'darwin');
     const { version } = JSON.parse(await readFile('package.json', 'utf8'));
     const tag = 'v' + version;
-    const root = await mkdtemp(path.join(tmpdir(), 'hub-published-mac-'));
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), 'hub-published-mac-')));
     const directory = path.join(root, 'Applications with spaces');
     async function port() {
         const server = createServer();

@@ -47,6 +47,9 @@ jobs:
                   sw_vers
             - name: Install only test dependencies, without building or packaging an app
               run: npm ci
+            - name: Record bounded native curl status and respect confirmed quota resets
+              working-directory: release-source
+              run: node "$GITHUB_WORKSPACE/tests/macos-published-transport.mjs"
             - name: Verify the actual public command with the corrected CommonJS harness
               working-directory: release-source
               run:
