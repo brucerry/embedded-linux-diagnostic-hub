@@ -162,17 +162,24 @@ preserved.
 
 Corrected release tooling discovers the draft through authenticated paginated listing, then reads
 its stable release ID before every mutation. Tag/source/ownership/draft guards and anonymous
-ID/tag/asset denial remain mandatory. It never modifies an existing published release or substitutes
-a new app commit behind an old tag.
+actual-ID/asset denial remain mandatory. A public published-release JSON control must also
+return 200. The published-only tag endpoint is not used as draft-privacy evidence. Only confirmed
+rate-limit responses may wait for their documented reset/Retry-After within bounded attempts and
+time; ambiguous responses fail closed. It never modifies an existing published release or
+substitutes a new app commit behind an old tag.
 
 The one-time release-recovery workflow checks the original run and artifact source, requires all 13
-main gates for the corrected operational commit, rebuilds/requalifies both Macs from the immutable
-v0.4.0 app source, and reads the already tested Windows/Linux/web artifacts from the original run.
-Only recovery checks and publication gain per-job Actions read access for that evidence/artifact
-retrieval; approved Contents write remains limited by source-owned draft guards. No account setting,
-persistent credential or new Mac Actions artifact/cache is added. It then repeats complete 24-file
-validation, publishes the same draft and runs both real published-command checks. App source and
-release-tooling source are logged separately.
+main gates for the corrected operational commit and checks native qualification run 38348257545. It
+reuses all six already uploaded Mac asset IDs, sizes and digests, rechecks sidecars/manifests,
+compiles immutable source for ASAR byte comparison, and repeats bundle/signature/installer/SSH/100
+cycles on both native Macs without repackaging or uploading replacement Mac files. Metadata privacy
+runs centrally with an actual release-ID probe and public positive control; native readers retain
+anonymous checks of actual asset URLs. It reads the already tested Windows/Linux/web artifacts from
+the original run. Only recovery checks and publication gain per-job Actions read access for that
+evidence/artifact retrieval; approved Contents write remains limited by source-owned draft guards.
+No account setting, persistent credential or new Mac Actions artifact/cache is added. It then
+repeats complete 24-file validation, publishes the same draft and runs both real published-command
+checks. App source and release-tooling source are logged separately.
 
 ## Maintenance
 

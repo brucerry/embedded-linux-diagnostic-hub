@@ -5,6 +5,8 @@ import {
     SOURCE_SHA,
     SOURCE_RUN,
     validateRecoverySource,
+    MAC_SOURCE_RUN,
+    validateReusedMacQualification,
 } from './lib/release-recovery.mjs';
 const repository = process.env.GITHUB_REPOSITORY;
 assert.equal(repository, 'brucerry/embedded-linux-diagnostic-hub');
@@ -27,6 +29,11 @@ if (mode === 'original') {
         read('/actions/runs/' + SOURCE_RUN + '/artifacts?per_page=100'),
     ]);
     const receipt = validateRecoverySource(run, data.jobs, artifacts.artifacts);
+    const [macRun, macJobs] = await Promise.all([
+        read('/actions/runs/' + MAC_SOURCE_RUN),
+        read('/actions/runs/' + MAC_SOURCE_RUN + '/jobs?per_page=100'),
+    ]);
+    const qualifiedMac = validateReusedMacQualification(macRun, macJobs.jobs);
     const actual = execFileSync('git', ['rev-parse', 'refs/tags/' + SOURCE_TAG + '^{commit}'], {
         encoding: 'utf8',
     }).trim();
@@ -42,6 +49,7 @@ if (mode === 'original') {
         '.github/workflows/macos-release.yml',
         '.github/workflows/release-recovery.yml',
         'docs/delivery.md',
+        'scripts/verify-reused-macos.mjs',
     ]);
     const changes = execFileSync(
         'git',
@@ -54,7 +62,7 @@ if (mode === 'original') {
         changes.every((file) => allowed.has(file)),
         'Recovery tooling must not change app/helper/version bytes: ' + changes.join(','),
     );
-    console.log(JSON.stringify({ ...receipt, operationalOnlyChanges: changes }));
+    console.log(JSON.stringify({ ...receipt, qualifiedMac, operationalOnlyChanges: changes }));
 } else if (mode === 'tooling') {
     const source = process.env.HUB_TOOLING_SHA;
     assert.match(source, /^[a-f0-9]{40}$/);

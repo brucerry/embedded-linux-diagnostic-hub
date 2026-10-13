@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -12,6 +12,7 @@ import {
 } from './lib/release-draft.mjs';
 import { releaseAssets } from './lib/release-assets.mjs';
 import { MAC_ARCHES, macAsset, macManifest } from './lib/macos-release.mjs';
+import { validateReusedMacInventory, validateReusedMacFiles } from './lib/release-recovery.mjs';
 
 const repo = process.env.GITHUB_REPOSITORY;
 assert.equal(repo, 'brucerry/embedded-linux-diagnostic-hub');
@@ -44,7 +45,6 @@ const tagCommit = execFileSync('git', ['rev-parse', '--verify', 'refs/tags/' + t
     encoding: 'utf8',
 }).trim();
 const marker = requireNewRelease({ tag, version, commit, tagCommit, repository });
-const endpoint = api + '/releases/tags/' + tag;
 const context = { tag, commit, marker };
 async function releases() {
     return listAllReleases((page) => request(api + '/releases?per_page=100&page=' + page));
@@ -57,7 +57,7 @@ async function draft() {
     return owned;
 }
 async function privateDraft(release) {
-    await requireAnonymousDenial(endpoint);
+    await requireAnonymousDenial(api + '/releases/410956079', fetch, { expectedStatus: 200 });
     await requireAnonymousDenial(api + '/releases/' + release.id);
     for (const asset of release.assets) {
         await requireAnonymousDenial(asset.browser_download_url);
@@ -109,8 +109,9 @@ if (mode === 'create') {
             commit +
             '; anonymous API access denied.',
     );
-} else if (mode === 'resume') {
+} else if (mode === 'resume' || mode === 'resume-reuse') {
     const existing = await draft();
+    if (mode === 'resume-reuse') validateReusedMacInventory(existing);
     await privateDraft(existing);
     console.log(
         'Resuming only owned unpublished draft ID ' +
@@ -119,7 +120,7 @@ if (mode === 'create') {
             tag +
             ' at ' +
             commit +
-            '; authenticated ID lookup succeeded and anonymous ID/tag access denied.',
+            '; authenticated ID lookup succeeded and anonymous actual-ID/asset access denied.',
     );
 } else if (mode === 'stage') {
     assert.ok(MAC_ARCHES.includes(arch));
@@ -127,10 +128,19 @@ if (mode === 'create') {
         await upload(await draft(), file);
     await privateDraft(await draft());
     console.log('Staged native ' + arch + ' assets; anonymous asset/API access denied.');
-} else if (mode === 'download') {
+} else if (mode === 'download' || mode === 'reuse') {
     const release = await draft();
-    await privateDraft(release);
-    for (const architecture of MAC_ARCHES)
+    if (mode === 'reuse') {
+        validateReusedMacInventory(release);
+        assert.ok(arch === 'all' || MAC_ARCHES.includes(arch));
+        // Metadata privacy is checked centrally by resume-reuse and again before publication.
+        // These native readers independently verify the actual private asset URLs.
+        for (const asset of release.assets)
+            await requireAnonymousDenial(asset.browser_download_url);
+    } else await privateDraft(release);
+    await mkdir('release', { recursive: true });
+    const architectures = mode === 'reuse' && arch !== 'all' ? [arch] : MAC_ARCHES;
+    for (const architecture of architectures)
         for (const name of [
             macAsset(architecture),
             macAsset(architecture) + '.sha256',
@@ -169,7 +179,20 @@ if (mode === 'create') {
             );
             await writeFile(path.join('release', name), bytes);
         }
-    console.log('Downloaded both native Mac draft payloads through authenticated API.');
+    if (mode === 'reuse')
+        for (const architecture of architectures) {
+            const files = Object.fromEntries(
+                await Promise.all(
+                    [
+                        macAsset(architecture),
+                        macAsset(architecture) + '.sha256',
+                        macManifest(architecture),
+                    ].map(async (name) => [name, await readFile(path.join('release', name))]),
+                ),
+            );
+            validateReusedMacFiles(files, architecture);
+        }
+    console.log('Downloaded and verified native Mac draft bytes through authenticated API.');
 } else if (mode === 'publish') {
     let release = await draft();
     await privateDraft(release);
@@ -215,4 +238,7 @@ if (mode === 'create') {
     console.log(
         'Published ' + published.html_url + ' with ' + expected.length + ' verified assets.',
     );
-} else throw Error('Usage: release-draft.mjs create|resume|stage ARCH|download|publish');
+} else
+    throw Error(
+        'Usage: release-draft.mjs create|resume|resume-reuse|stage ARCH|download|reuse ARCH|publish',
+    );

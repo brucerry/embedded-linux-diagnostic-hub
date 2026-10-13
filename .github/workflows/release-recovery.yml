@@ -52,23 +52,79 @@ jobs:
               with:
                   node-version: '24'
                   package-manager-cache: false
-            - name: Verify owned draft through authenticated ID and anonymous JSON privacy probes
+            - name:
+                  Verify owned draft and fresh positive-control/actual-ID privacy after any
+                  confirmed quota reset
               working-directory: release-source
               env:
                   GH_TOKEN: ${{ github.token }}
               run: |
                   export GITHUB_REF_NAME="$HUB_RELEASE_TAG" GITHUB_SHA="$HUB_APP_SOURCE"
-                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" resume
+                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" resume-reuse
     macos:
         needs: draft
         permissions:
             contents: write
-        uses: ./.github/workflows/macos-release.yml
-        with:
-            source-ref: v0.4.0
-            source-sha: b0f94d7d49d36fecc97b87d516724280d840e727
-            release-tag: v0.4.0
-            tooling-ref: ${{ github.sha }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                    - runner: macos-15
+                      arch: arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/checkout@v6
+              with:
+                  ref: v0.4.0
+                  path: release-source
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Confirm native architecture and immutable app source
+              working-directory: release-source
+              env:
+                  HUB_MAC_ARCH: ${{ matrix.arch }}
+              run: |
+                  test "$(node -p process.arch)" = "$HUB_MAC_ARCH"
+                  test "$(git rev-parse HEAD)" = "$HUB_APP_SOURCE"
+                  sw_vers
+            - name: Download only the pinned previously qualified private archive
+              working-directory: release-source
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_MAC_ARCH: ${{ matrix.arch }}
+              run: |
+                  export GITHUB_REF_NAME="$HUB_RELEASE_TAG" GITHUB_SHA="$HUB_APP_SOURCE"
+                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" reuse "$HUB_MAC_ARCH"
+            - name: Compile immutable source for packaged byte comparison
+              working-directory: release-source
+              run: |
+                  npm ci
+                  npm run build
+            - name:
+                  Reverify existing archive signature, architecture, ASAR and source without
+                  repackaging
+              working-directory: release-source
+              run: node "$GITHUB_WORKSPACE/scripts/verify-reused-macos.mjs"
+            - name: Repeat installer rejection, rollback, spaces and native installed app
+              working-directory: release-source
+              run: GITHUB_SHA="$HUB_APP_SOURCE" node tests/macos-installer-smoke.mjs
+            - name: Verify installed SSH, trust, clock, reset and unsupported updates
+              working-directory: release-source
+              run: npx tsx tests/desktop-smoke.ts
+            - name: Stress the same installed native app for 100 cycles
+              working-directory: release-source
+              env:
+                  HUB_NATIVE_CYCLES: '100'
+              run: npx tsx tests/native-window-smoke.ts
+            - name: State qualification limits
+              run: |
+                  printf '%s\n' 'Reused qualified bytes; no Safari quarantine, notarization, older macOS or physical-device acceptance.'
     publish:
         needs: [version, draft, macos]
         runs-on: ubuntu-latest
@@ -118,7 +174,7 @@ jobs:
                   GH_TOKEN: ${{ github.token }}
               run: |
                   export GITHUB_REF_NAME="$HUB_RELEASE_TAG" GITHUB_SHA="$HUB_APP_SOURCE"
-                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" download
+                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" reuse all
                   node scripts/verify-release.mjs --assets
                   node scripts/release-notes.mjs
             - name: Publish only the complete existing guarded draft
