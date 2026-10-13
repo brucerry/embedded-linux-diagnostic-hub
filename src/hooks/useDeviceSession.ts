@@ -173,7 +173,10 @@ export function useDeviceSession(onResetView: () => void) {
         setHistory((retained) => [...retained, frame].slice(-HISTORY_LIMIT));
     }
 
-    async function refresh(automatic = false): Promise<boolean> {
+    async function refresh(
+        automatic = false,
+        options?: import('../../shared/diagnostics/network/evidence').CollectOptions,
+    ): Promise<boolean> {
         if (
             resettingRef.current ||
             collectingRef.current ||
@@ -187,7 +190,7 @@ export function useDeviceSession(onResetView: () => void) {
         setError('');
         try {
             if (transport && connected && !imported) {
-                const data = await transport.collect();
+                const data = await transport.collect(options);
                 await retainSnapshot(data, previousFrame.current);
             } else throw new Error('Reconnect to collect a new snapshot.');
             if (!automatic) setNotice('Device snapshot collected');
@@ -326,7 +329,7 @@ export function useDeviceSession(onResetView: () => void) {
             if (collectingRef.current)
                 await new Promise<void>((resolve) => idleWaiters.current.add(resolve));
             setResetProgress('Clearing the snapshot and graph history…');
-            await bridge?.clearSessionData();
+            await transport?.clearSessionData();
             setWorkspaceReady(true);
             setSnapshot(null);
             previousFrame.current = undefined;
@@ -464,6 +467,7 @@ export function useDeviceSession(onResetView: () => void) {
         importInput,
         bridge,
         refresh,
+        refreshCapabilities: () => refresh(true, { forceNetworkCapabilities: true }),
         connect,
         cancelConnection,
         disconnect,

@@ -1,3 +1,4 @@
+import { DEVICE_CLOCK_COMMAND } from '../shared/diagnostics/device-clock';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SshSession } from '../backend/ssh/session';
@@ -33,7 +34,11 @@ test('clock, diagnostics and user PTY share authentication with isolated output 
         ]);
         assert.equal(clock.status, 'available');
         assert.equal(fixture.clock.calls, 1);
-        assert.equal(fixture.probeExecutions(), 36);
+        assert.equal(
+            fixture.probeExecutions(),
+            snapshot.results.length +
+                snapshot.results.reduce((n, r) => n + (r.networkEvidence?.sections.length ?? 0), 0),
+        );
         assert.equal(fixture.authentications(), authenticated);
         await eventually(() => output.join('').includes('USER_CLOCK_ISOLATED'));
         assert.doesNotMatch(output.join(''), /DIAGNOSTIC_HUB_CLOCK|16:35:42/);
@@ -142,6 +147,35 @@ test('gateway clock access is authenticated, fixed, concurrent and cancellation 
         fixture.clock.stall = false;
         assert.equal((await (await fixture.request(route, 'POST')).json()).status, 'available');
     } finally {
+        await fixture.close();
+    }
+});
+test('clock and supplemental diagnostics share at most three exec channels', async () => {
+    let active = 0,
+        maximum = 0;
+    const fixture = await gatewayFixture(undefined, {
+        exec: (command, channel) => {
+            active++;
+            maximum = Math.max(maximum, active);
+            setTimeout(() => {
+                channel.write(
+                    command.endsWith(DEVICE_CLOCK_COMMAND) ? clockOutput() : 'fixture evidence',
+                );
+                active--;
+                channel.exit(0);
+                channel.end();
+            }, 15);
+            return true;
+        },
+    });
+    const ssh = new SshSession();
+    try {
+        await ssh.connect({ ...fixture.options, auth: 'password' }, async () => true);
+        const [clock] = await Promise.all([ssh.readClock(), ssh.collect()]);
+        assert.equal(clock.status, 'available');
+        assert.equal(maximum, 3);
+    } finally {
+        ssh.disconnect();
         await fixture.close();
     }
 });

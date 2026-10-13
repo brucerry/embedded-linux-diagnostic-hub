@@ -1,3 +1,5 @@
+import { automationRequest } from '../shared/automation';
+import { collectOptions } from '../shared/diagnostics/network/evidence';
 import { APP_VERSION } from '../shared/project';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
@@ -384,7 +386,7 @@ export function createGateway(config: GatewayConfig) {
         }
 
         const match = url.pathname.match(
-            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:clock|snapshot|heartbeat|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
+            /^\/api\/sessions\/([A-Za-z0-9_-]{32})(\/(?:clock|network-cache|snapshot|heartbeat|automation(?:\/cancel)?|terminal(?:\/[^/]+(?:\/(?:input|resize))?)?))?$/,
         );
         if (match) {
             const active = sessions.get(match[1]);
@@ -413,6 +415,52 @@ export function createGateway(config: GatewayConfig) {
                 send(res, 200, { disconnected: true });
                 return;
             }
+            if (req.method === 'POST' && match[2] === '/automation/cancel') {
+                const data = (await body(req)) as { id: string; connection: string };
+                if (
+                    !data ||
+                    data.connection !== match[1] ||
+                    Object.keys(data).some((k) => !['id', 'connection'].includes(k))
+                )
+                    throw new ApiError(400, 'Invalid automation cancellation.');
+                active.ssh.cancelAutomation(data.id, active.ssh.automationConnection);
+                send(res, 200, { ok: true });
+                return;
+            }
+            if (req.method === 'POST' && match[2] === '/automation') {
+                let request;
+                try {
+                    request = automationRequest(await body(req));
+                } catch {
+                    throw new ApiError(400, 'Invalid automation request.');
+                }
+                if (request.connection !== match[1])
+                    throw new ApiError(409, 'Automation connection changed.');
+                if (active.busy)
+                    throw new ApiError(409, 'Wait for collection or automation to finish.');
+                active.busy = true;
+                const internalConnection = active.ssh.automationConnection;
+                const aborted = () => {
+                    if (!res.writableEnded) {
+                        try {
+                            active.ssh.cancelAutomation(request.id, internalConnection);
+                        } catch {}
+                    }
+                };
+                res.on('close', aborted);
+                try {
+                    const result = await active.ssh.runAutomation({
+                        ...request,
+                        connection: internalConnection,
+                    });
+                    if (!res.destroyed) send(res, 200, result);
+                } finally {
+                    active.busy = false;
+                    active.touched = Date.now();
+                    res.removeListener('close', aborted);
+                }
+                return;
+            }
             if (req.method === 'POST' && match[2] === '/heartbeat') {
                 send(res, 200, { connected: true });
                 return;
@@ -439,6 +487,23 @@ export function createGateway(config: GatewayConfig) {
                 }
                 return;
             }
+            if (req.method === 'POST' && match[2] === '/network-cache') {
+                if (active.busy)
+                    throw new ApiError(
+                        409,
+                        'Wait for collection before clearing capability cache.',
+                    );
+                if (
+                    Number(req.headers['content-length'] ?? 0) > 0 ||
+                    req.headers['transfer-encoding']
+                ) {
+                    req.resume();
+                    throw new ApiError(400, 'Capability cache reset accepts no request data.');
+                }
+                active.ssh.clearNetworkCache();
+                send(res, 200, { ok: true });
+                return;
+            }
             if (req.method === 'POST' && match[2] === '/snapshot') {
                 if (active.busy)
                     throw new ApiError(409, 'Collection is paused while device work is running.');
@@ -451,7 +516,20 @@ export function createGateway(config: GatewayConfig) {
                 };
                 res.on('close', aborted);
                 try {
-                    send(res, 200, await active.ssh.collect());
+                    const parseCollection = (value: unknown) => {
+                        try {
+                            return collectOptions(value);
+                        } catch {
+                            throw new ApiError(400, 'Invalid collection options.');
+                        }
+                    };
+                    const options = parseCollection(
+                        Number(req.headers['content-length'] ?? 0) > 0 ||
+                            req.headers['transfer-encoding']
+                            ? await body(req)
+                            : undefined,
+                    );
+                    send(res, 200, await active.ssh.collect(options));
                 } finally {
                     active.busy = false;
                     active.touched = Date.now();

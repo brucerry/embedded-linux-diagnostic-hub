@@ -7,6 +7,7 @@ interface Lifecycle {
     isConnecting(): boolean;
     isConnected(): boolean;
     waitForCollection(): Promise<void>;
+    quiesceSerial?(): Promise<void>;
     latestSnapshot(): Snapshot | null;
     disconnect(): void;
     progress(message: string): void;
@@ -41,6 +42,10 @@ export class UpdateCoordinator {
         let armed = false;
         let saved: Awaited<ReturnType<UpdateReports['save']>> = null;
         try {
+            if (this.lifecycle.quiesceSerial) {
+                this.lifecycle.progress('Closing local Serial before update…');
+                await this.lifecycle.quiesceSerial();
+            }
             const connected = this.lifecycle.isConnected();
             this.lifecycle.progress('Waiting for any active collection to finish…');
             await this.lifecycle.waitForCollection();

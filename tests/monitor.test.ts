@@ -40,7 +40,8 @@ test('snapshot monitoring reuses one authenticated connection until explicit dis
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const monitor = new DeviceMonitor();
-    let verifications = 0;
+    let verifications = 0,
+        expectedChecks = 0;
     try {
         await monitor.configure(
             {
@@ -56,12 +57,16 @@ test('snapshot monitoring reuses one authenticated connection until explicit dis
             },
         );
         for (let i = 0; i < 2; i++) {
-            assert.equal((await monitor.collect()).results.length, 36);
+            const snapshot = await monitor.collect();
+            assert.equal(snapshot.results.length, 36);
+            expectedChecks +=
+                snapshot.results.length +
+                snapshot.results.reduce((n, r) => n + (r.networkEvidence?.sections.length ?? 0), 0);
             assert.equal(open, 1);
         }
         assert.equal(connections, 1);
         assert.equal(verifications, 1);
-        assert.equal(checks, 72);
+        assert.equal(checks, expectedChecks);
         monitor.clear();
         for (let attempt = 0; open && attempt < 100; attempt++)
             await new Promise((r) => setTimeout(r, 10));

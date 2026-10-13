@@ -12,3 +12,7 @@ package-lock.json
 !.env.gateway.example
 
 dist-site/
+
+/.codex/
+
+/openspec/changes/archive/

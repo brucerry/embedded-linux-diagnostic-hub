@@ -1,3 +1,4 @@
+import { validateNetworkEvidence } from './diagnostics/network/evidence';
 import { summarize } from './diagnostics/metrics';
 import { probes } from './diagnostics/probes';
 import type { Snapshot } from './types';
@@ -91,6 +92,14 @@ export function validateSnapshot(input: unknown, requireComplete = false): Snaps
             collectedAt: item.collectedAt,
             truncated: item.truncated,
             ...(typeof item.command === 'string' ? { command: item.command } : {}),
+            ...(item.networkEvidence !== undefined
+                ? {
+                      networkEvidence: validateNetworkEvidence(item.networkEvidence, {
+                          stdout: item.stdout,
+                          stderr: item.stderr,
+                      }),
+                  }
+                : {}),
         } as Snapshot['results'][number];
     });
     for (const probe of probes) {

@@ -1,3 +1,4 @@
+import { NetworkSummary } from '../network/NetworkSummary';
 import { CircleAlert, ShieldCheck, Terminal } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { EvidencePresentation } from '../../../shared/diagnostics/evidence';
@@ -23,6 +24,7 @@ interface EvidenceModalProps {
     history: HistoryFrame[];
     onCopy: (command: string) => Promise<void>;
     onClose: () => void;
+    refreshCapabilities?: () => Promise<unknown>;
 }
 
 export function EvidenceModal({
@@ -33,6 +35,7 @@ export function EvidenceModal({
     history,
     onCopy,
     onClose,
+    refreshCapabilities,
 }: EvidenceModalProps) {
     const latestFrame = history.at(-1);
     const precedingFrame = history.at(-2);
@@ -51,8 +54,11 @@ export function EvidenceModal({
               }
             : evidencePresentation(probe.id, result);
     }, [probe.id, result.stdout, result.status, previousProcess]);
-    const preferred = 'stdout';
-    const [tab, setTab] = useState<'stdout' | 'stderr' | 'table' | 'tree' | 'graph'>('stdout');
+    const network = probe.id === 'wireless' || probe.id === 'ethernet';
+    const preferred = network ? 'summary' : 'stdout';
+    const [tab, setTab] = useState<'summary' | 'stdout' | 'stderr' | 'table' | 'tree' | 'graph'>(
+        preferred,
+    );
     const graph = useMemo(() => {
         const latestFrame = history.at(-1);
         const current =
@@ -89,6 +95,7 @@ export function EvidenceModal({
             setTab(preferred);
     }, [graphAvailable, presentation.tree, table, preferred, tab]);
     const tabs = [
+        ...(network ? [['summary', 'Summary']] : []),
         ['stdout', 'Standard output'],
         ['stderr', 'Standard error'],
         ...(table ? [['table', 'Table view']] : []),
@@ -183,7 +190,15 @@ export function EvidenceModal({
                 role="tabpanel"
                 aria-labelledby={`evidence-tab-${tab}`}
             >
-                {tab === 'tree' && presentation.tree ? (
+                {tab === 'summary' && network ? (
+                    <NetworkSummary
+                        id={probe.id as 'wireless' | 'ethernet'}
+                        snapshot={snapshot}
+                        mode={mode}
+                        onCopy={onCopy}
+                        refreshCapabilities={refreshCapabilities}
+                    />
+                ) : tab === 'tree' && presentation.tree ? (
                     <EvidenceTree nodes={presentation.tree} />
                 ) : tab === 'table' && table ? (
                     <div className="evidence-table-wrap">

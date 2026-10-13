@@ -68,3 +68,11 @@ Generic discovery deliberately avoids writing sysfs controls, probing unknown bu
 watchdog devices, changing GPIO/power rails, erasing flash, modifying networking, or resetting the
 device. Those actions belong to separately designed functional tests with explicit prerequisites and
 recovery.
+
+## Next feature milestone
+
+Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+[ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
+UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
+qualification gates. Automation operator scripts are distinct from the fixed observational
+diagnostic catalogue.

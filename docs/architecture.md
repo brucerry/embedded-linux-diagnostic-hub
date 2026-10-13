@@ -86,18 +86,18 @@ Functional hardware testing requires separately qualified fixtures and procedure
 
 ## Delivery milestones
 
-| Milestone                                    | Deliverables                                                                                                                                                 | Acceptance                                                                                                         |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| v0.1 — SSH evidence foundation (implemented) | Dashboard, 36 read-only probes, hardware discovery, website/gateway, local report import, evidence inspector, findings, JSON reports, portable packaging     | Build, loopback SSH tests, GUI tests and native integration smoke test                                             |
-| v0.2 — Daily engineering workflow            | Saved non-secret device profiles, multi-device sessions, cancellable collection, CPU utilization/network-rate histories, report comparison, HTML reports     | Explicit connected/stale/offline states, consistent export/import, bounded collections across targets              |
-| v0.3 — Network and service diagnosis         | Reachability, DNS, socket inspection, Wi-Fi state, firewall/routing context, systemd/procd adapters, bounded packet captures and optional throughput tests   | Tools/permissions detected; traffic-generating operations selected explicitly; capture cleanup and useful evidence |
-| v0.4 — Embedded hardware adapters            | Qualify existing generic hardware discovery; add board-specific decoding, driver/module/interrupt evidence, reset-cause correlation and calibrated telemetry | Vendor and kernel-specific results with precise source evidence; no generic flash-health PASS                      |
-| v0.5 — Test engineering                      | Versioned test plans, prerequisites, timed runs, cancellation/recovery, batch reports, separately classified stress and destructive operations               | Reproducible PASS/FAIL criteria validated on actual hardware; recovery tested                                      |
-| v1.0 — Qualified portable release            | Signed single-file executable, accessibility/readability polish, qualification matrix, dependency/license manifest, operator guide                           | Windows 10/11 clean-machine and real-device qualification completed                                                |
+| Milestone                                                     | Deliverables                                                                                                                                                 | Acceptance                                                                                                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| v0.1 — SSH evidence foundation (implemented)                  | Dashboard, 36 read-only probes, hardware discovery, website/gateway, local report import, evidence inspector, findings, JSON reports, portable packaging     | Build, loopback SSH tests, GUI tests and native integration smoke test                                                        |
+| v0.2 — Daily engineering workflow                             | Saved non-secret device profiles, multi-device sessions, cancellable collection, CPU utilization/network-rate histories, report comparison, HTML reports     | Explicit connected/stale/offline states, consistent export/import, bounded collections across targets                         |
+| v0.3 — Network and service diagnosis                          | Reachability, DNS, socket inspection, Wi-Fi state, firewall/routing context, systemd/procd adapters, bounded packet captures and optional throughput tests   | Tools/permissions detected; traffic-generating operations selected explicitly; capture cleanup and useful evidence            |
+| v0.4 — Embedded hardware adapters                             | Qualify existing generic hardware discovery; add board-specific decoding, driver/module/interrupt evidence, reset-cause correlation and calibrated telemetry | Vendor and kernel-specific results with precise source evidence; no generic flash-health PASS                                 |
+| v0.5 — Local Serial and readable network/Automation workflows | Independent local UART terminal, observational WLAN/LAN summaries, ordered SSH/Serial command flows with optional strict timing and QA exports               | Synthetic lifecycle, parser, loopback SSH, browser/native gates; separately authorized physical UART and driver qualification |
+| v1.0 — Qualified portable release                             | Signed single-file executable, accessibility/readability polish, qualification matrix, dependency/license manifest, operator guide                           | Windows 10/11 clean-machine and real-device qualification completed                                                           |
 
-Serial/UART console and boot-log capture are a later transport milestone after SSH workflows
-stabilize. File transfer remains a future feature. Interactive terminal commands are separate from
-the read-only diagnostic catalogue and use the existing SSH account's permissions.
+Local Serial/UART console uses an independent generation-owned Web Serial transport. See
+[Serial](serial.md). File transfer remains a future feature. Interactive terminal commands are
+separate from the read-only diagnostic catalogue and use the existing SSH account's permissions.
 
 Optional features must report their prerequisites: an unavailable `iperf3`, `tcpdump`, `iw`,
 `ethtool`, `smartctl`, `mmc`, `mtdinfo`, or vendor utility cannot be silently replaced with a
@@ -110,12 +110,11 @@ Only one desktop collection is active. Desktop SSH stays connected between snaps
 while live updates are paused. Disconnect or app closure releases it; a dropped connection requires
 explicit reconnection. Live updates default to 30 seconds after each completed collection, with
 5/15/30/60-second choices, no overlap, and pause on failure. There is no background retry after a
-failed update, transport cancellation, persistent report history, serial console, SFTP, functional
-hardware testing or automatic tool installation. A collection runs at most three probes concurrently
-and can take up to about 144 seconds after authentication if every command times out. The connection
-attempt allows 60 seconds for reachability, host-key confirmation and authentication. Very large
-logs can be truncated, and a successful journal query may still expose only the subset allowed to
-that account.
+failed update, transport cancellation, persistent report history, SFTP, functional hardware testing
+or automatic tool installation. A collection runs at most three probes concurrently and can take up
+to about 144 seconds after authentication if every command times out. The connection attempt allows
+60 seconds for reachability, host-key confirmation and authentication. Very large logs can be
+truncated, and a successful journal query may still expose only the subset allowed to that account.
 
 Fingerprints are remembered using trust on first use with explicit confirmation. Changed keys are
 rejected; recovery requires the operator to verify the new identity and remove the specific trusted
@@ -139,3 +138,11 @@ silently replaced.
 The website gateway remains pinned to the keys in `HUB_TARGETS_JSON`; the browser cannot replace
 those administrative pins. After a verified board/key change, update the relevant gateway entry and
 restart the gateway.
+
+## Next feature milestone
+
+Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+[ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
+UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
+qualification gates. Automation operator scripts are distinct from the fixed observational
+diagnostic catalogue.

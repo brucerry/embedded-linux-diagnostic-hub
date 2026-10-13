@@ -104,3 +104,11 @@ Updates wait for active collection, disconnect SSH, verify the download and rest
 reconnecting. Saved reports remain under `update-reports` in the user's application data folder.
 Updating without saving keeps older backups and trusted SSH fingerprints. See
 [update and release details](delivery.md#maintenance).
+
+## Next feature milestone
+
+Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+[ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
+UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
+qualification gates. Automation operator scripts are distinct from the fixed observational
+diagnostic catalogue.

@@ -1,3 +1,4 @@
+import type { CollectOptions } from '../../shared/diagnostics/network/evidence';
 import type { ConnectOptions, Snapshot } from '../../shared/types';
 import { SshSession } from './session';
 import type { TerminalEvent, TerminalOpen } from '../../shared/terminal';
@@ -11,6 +12,15 @@ export class DeviceMonitor {
         this.session = new SshSession(onDisconnected);
     }
 
+    get automationConnection() {
+        return this.session.automationConnection;
+    }
+    runAutomation(request: import('../../shared/automation').AutomationRequest) {
+        return this.session.runAutomation(request);
+    }
+    cancelAutomation(id: string, connection: string) {
+        this.session.cancelAutomation(id, connection);
+    }
     get isCollecting(): boolean {
         return this.running;
     }
@@ -30,15 +40,19 @@ export class DeviceMonitor {
         await this.session.connect(options, verify, key, signal);
     }
 
-    async collect(): Promise<Snapshot> {
+    async collect(options?: CollectOptions): Promise<Snapshot> {
         if (this.running) throw new Error('A collection is already running.');
         if (!this.session.isConnected) throw new Error('Connect to a target device first.');
         this.running = true;
         try {
-            return await this.session.collect();
+            return await this.session.collect(options);
         } finally {
             this.running = false;
         }
+    }
+
+    clearNetworkCache(): void {
+        this.session.clearNetworkCache();
     }
 
     clear(): void {

@@ -213,3 +213,48 @@ test('report recovery is repeatable until acknowledged and rejects corrupt or un
         await item.close();
     }
 });
+test('Serial quiescence occurs only after validation and under the update lock', async () => {
+    const item = await fixture();
+    try {
+        let quiesces = 0;
+        const lifecycle = {
+            ...item.lifecycle,
+            quiesceSerial: async (): Promise<void> => {
+                quiesces++;
+                assert.equal(coordinator.active, true);
+                item.events.push('serial-close');
+            },
+        };
+        const coordinator = new UpdateCoordinator(item.updater, item.reports, lifecycle);
+        await assert.rejects(coordinator.start({ mode: 'invalid' }));
+        assert.equal(quiesces, 0);
+        assert.equal(item.connected(), true);
+        await coordinator.start({ mode: 'clean' });
+        assert.deepEqual(item.events, [
+            'serial-close',
+            'disconnect',
+            'download',
+            'verify',
+            'restart',
+        ]);
+    } finally {
+        await item.close();
+    }
+});
+test('failed Serial cleanup stops update before SSH disconnect, backup or download', async () => {
+    const item = await fixture();
+    try {
+        const coordinator = new UpdateCoordinator(item.updater, item.reports, {
+            ...item.lifecycle,
+            quiesceSerial: async () => {
+                throw Error('Serial cleanup pending');
+            },
+        });
+        await assert.rejects(coordinator.start({ mode: 'smart' }), /Serial cleanup pending/);
+        assert.equal(coordinator.active, false);
+        assert.equal(item.connected(), true);
+        assert.deepEqual(item.events, []);
+    } finally {
+        await item.close();
+    }
+});

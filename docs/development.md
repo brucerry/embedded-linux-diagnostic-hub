@@ -145,3 +145,17 @@ through the owned GNOME window manager, matching native desktop/window-switcher 
 `BrowserWindow.restore()` can leave the actual surface minimized even after its local flag clears.
 Both state assertions retain the five-second deadline. The app exposes no privileged restore control
 or workaround.
+
+## Next feature milestone
+
+Local feature development adds [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
+[ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
+UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
+qualification gates. Automation operator scripts are distinct from the fixed observational
+diagnostic catalogue.
+
+Focused local gates: tsx --test tests/network.test.ts tests/serial-_.test.ts
+tests/automation_.test.ts; playwright test tests/ui/network.spec.ts tests/ui/serial.spec.ts
+tests/ui/automation.spec.ts; tsx tests/serial-desktop-smoke.ts; tsx
+tests/automation-desktop-smoke.ts. Native proof uses synthetic chooser descriptors with the Chromium
+sandbox and no physical opens. Full verify/e2e/desktop/window/portability checks remain required.

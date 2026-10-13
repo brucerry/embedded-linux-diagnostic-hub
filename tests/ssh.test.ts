@@ -118,9 +118,24 @@ test('real loopback SSH collects the allowlist, classifies errors and limits out
         const cpu = snapshot.results.find((item) => item.id === 'cpu')!;
         assert.equal(cpu.truncated, true);
         assert.equal(Buffer.byteLength(cpu.stdout), MAX_OUTPUT_BYTES);
-        assert.equal(server.commands.length, probes.length);
+        const commands = [
+            ...probes.map((probe) => probe.command),
+            ...snapshot.results.flatMap(
+                (r) => r.networkEvidence?.sections.map((s) => s.command!) ?? [],
+            ),
+        ];
+        assert.equal(server.commands.length, commands.length);
         assert.ok(
-            server.commands.every((command, index) => command.endsWith(probes[index].command)),
+            server.commands.every((command) =>
+                commands.some((allowed) => command.endsWith(allowed)),
+            ),
+        );
+        assert.ok(
+            probes.every(
+                (probe) =>
+                    server.commands.filter((command) => command.endsWith(probe.command)).length ===
+                    1,
+            ),
         );
         assert.ok(!JSON.stringify(snapshot).includes(options.password));
         session.disconnect();

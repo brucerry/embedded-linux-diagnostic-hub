@@ -11,6 +11,7 @@ export interface Probe {
 }
 
 export interface ProbeResult {
+    networkEvidence?: import('./diagnostics/network/evidence').NetworkEvidence;
     id: string;
     command?: string;
     status: ResultStatus;
@@ -49,7 +50,11 @@ export interface HostKeyVerification {
     saved?: string;
 }
 
-export interface DesktopBridge extends Partial<import('./terminal').TerminalTransport> {
+export interface DesktopBridge
+    extends
+        Partial<import('./terminal').TerminalTransport>,
+        Partial<import('./serial').SerialDesktopBridge>,
+        Partial<import('./automation').AutomationTransport> {
     onWindowRestored?(callback: () => void): () => void;
     checkUpdates(includePrereleases: boolean): Promise<UpdateStatus>;
     startUpdate(request: UpdateRequest): Promise<void>;
@@ -62,8 +67,10 @@ export interface DesktopBridge extends Partial<import('./terminal').TerminalTran
     connect(options: ConnectOptions, attemptId?: string): Promise<void>;
     cancelConnect?(attemptId: string): Promise<void>;
     disconnect(): Promise<void>;
-    collect(): Promise<Snapshot>;
-    readDeviceClock?(): Promise<import('./diagnostics/device-clock').DeviceClockResponse>;
+    collect(options?: import('./diagnostics/network/evidence').CollectOptions): Promise<Snapshot>;
+    readDeviceClock?(
+        connection?: string,
+    ): Promise<import('./diagnostics/device-clock').DeviceClockResponse>;
     pickKey(): Promise<string | null>;
     copyText(command: string): Promise<void>;
     readClipboard?(): Promise<string>;

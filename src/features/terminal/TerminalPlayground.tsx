@@ -1,6 +1,6 @@
 import { useId } from 'react';
 
-const duck = [
+export const duck = [
     '......oooooo........',
     '.....oyyyyyyo.......',
     '....oywyyyyyyo......',
@@ -17,7 +17,7 @@ const duck = [
     '.....orr..orr.......',
     '....orrr.orrr.......',
 ];
-const pig = [
+export const pig = [
     '....ooo......ooo....',
     '...opspo....opspo...',
     '...opppoooooopppo...',
@@ -45,7 +45,13 @@ const colors: Record<string, string> = {
     s: '#cc788e',
 };
 
-function Sprite({ pixels }: { pixels: string[] }) {
+export function Sprite({
+    pixels,
+    palette = colors,
+}: {
+    pixels: string[];
+    palette?: Record<string, string>;
+}) {
     return (
         <>
             {pixels.flatMap((row, y) =>
@@ -59,7 +65,7 @@ function Sprite({ pixels }: { pixels: string[] }) {
                             y={y * 2}
                             width="2"
                             height="2"
-                            fill={colors[color]}
+                            fill={palette[color]}
                         />
                     ),
                 ),

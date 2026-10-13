@@ -1,3 +1,4 @@
+import { terminalOptions, terminalOutputGuards } from './primitives';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -95,28 +96,7 @@ export default function TerminalPage(props: Props) {
     }
 
     useEffect(() => {
-        const term = new Terminal({
-            allowProposedApi: true,
-            allowTransparency: true,
-            cursorBlink: true,
-            cursorStyle: 'block',
-            cursorInactiveStyle: 'outline',
-            disableStdin: true,
-            scrollback: 5000,
-            screenReaderMode: true,
-            fontFamily: 'Cascadia Mono, Consolas, monospace',
-            fontSize: 14,
-            theme: {
-                background: '#00000000',
-                foreground: '#e7edf4',
-                cursor: '#83d9b0',
-                cursorAccent: '#151c24',
-                selectionBackground: '#52759999',
-                selectionInactiveBackground: '#52759988',
-            },
-            linkHandler: { activate: () => {}, allowNonHttpProtocols: false },
-            windowOptions: {},
-        });
+        const term = new Terminal(terminalOptions());
         const addon = new FitAddon();
         term.loadAddon(addon);
         term.open(container.current!);
@@ -152,7 +132,7 @@ export default function TerminalPage(props: Props) {
         fit.current = addon;
         const prompts = colorPrompts(term);
         promptColors.current = prompts;
-        const denied = [52, 8].map((code) => term.parser.registerOscHandler(code, () => true));
+        const denied = terminalOutputGuards(term);
         const forward = (bytes: Uint8Array) => {
             const context = latest.current;
             if (

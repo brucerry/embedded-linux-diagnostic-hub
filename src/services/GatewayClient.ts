@@ -1,3 +1,4 @@
+import { validateCapture } from '../../shared/automation';
 import { validateSnapshot } from '../../shared/report';
 import {
     ConnectionFailure,
@@ -229,15 +230,46 @@ export class GatewayClient implements TerminalTransport {
         }
     }
 
-    async collect(): Promise<Snapshot> {
+    async clearSessionData(): Promise<void> {
+        if (this.sessionId)
+            await this.request('/api/sessions/' + this.sessionId + '/network-cache', 'POST');
+    }
+
+    async collect(
+        options?: import('../../shared/diagnostics/network/evidence').CollectOptions,
+    ): Promise<Snapshot> {
         if (!this.sessionId) throw new Error('Connect through a gateway first.');
         return validateSnapshot(
-            await this.request(`/api/sessions/${this.sessionId}/snapshot`, 'POST'),
+            await this.request(`/api/sessions/${this.sessionId}/snapshot`, 'POST', options),
             true,
         );
     }
 
-    async readDeviceClock(): Promise<DeviceClockResponse> {
+    automationConnection() {
+        return this.sessionId;
+    }
+    async runAutomation(request: import('../../shared/automation').AutomationRequest) {
+        if (!request.connection || request.connection !== this.sessionId)
+            throw Error('Automation connection changed.');
+        const result = await this.request(
+            '/api/sessions/' + request.connection + '/automation',
+            'POST',
+            request,
+            { signal: AbortSignal.timeout(request.timeoutMs + 10000) },
+        );
+        if (request.connection !== this.sessionId) throw Error('Automation connection changed.');
+        return validateCapture(result);
+    }
+    async cancelAutomation(id: string, connection: string) {
+        if (connection !== this.sessionId) return;
+        await this.request('/api/sessions/' + connection + '/automation/cancel', 'POST', {
+            id,
+            connection,
+        });
+    }
+    async readDeviceClock(connection?: string): Promise<DeviceClockResponse> {
+        if (connection !== undefined && connection !== this.sessionId)
+            throw Error('Device clock connection changed.');
         if (!this.sessionId) throw Error('Connect through a gateway first.');
         if (this.clockAbort) throw Error('A device clock read is already running.');
         const session = this.sessionId;

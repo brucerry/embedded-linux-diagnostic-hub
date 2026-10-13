@@ -73,3 +73,11 @@ substantial changes, open an issue describing the problem and affected environme
 - [Architecture](docs/architecture.md), [design](docs/design.md) and
   [hardware coverage](docs/hardware.md).
 - [Validation history](docs/validation.md) and [production qualification](docs/production.md).
+
+## v0.5.0 feature candidate
+
+The v0.5.0 source adds [Serial](docs/serial.md), [WLAN/LAN insights](docs/network-insights.md) and
+[ordered Automation / QA exports](docs/automation.md). Published v0.4.0 assets remain unchanged.
+Target UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are
+separate qualification gates. Automation operator scripts are distinct from the fixed observational
+diagnostic catalogue.

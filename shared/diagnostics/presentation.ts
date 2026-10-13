@@ -211,7 +211,12 @@ export function graphReadings(
             else if (id === 'ethernet' && /^(rx|tx)_(packets|errors)$/.test(field)) unit = 'count';
             else return [];
             const value = Number(match[2]) / scale;
-            if (!Number.isFinite(value) || seen.has(key)) return [];
+            if (
+                !Number.isFinite(value) ||
+                seen.has(key) ||
+                (id === 'ethernet' && !Number.isSafeInteger(value))
+            )
+                return [];
             seen.add(key);
             const label = key.replace(/^\/sys\/class\//, '').replace(/\/statistics\//, '/');
             return [make(key, label, value, unit)];

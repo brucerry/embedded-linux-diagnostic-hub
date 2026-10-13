@@ -1,3 +1,4 @@
+import { useSerialSession } from '../hooks/useSerialSession';
 import {
     ArrowDown,
     ArrowUp,
@@ -37,8 +38,14 @@ import { EmptyOverview } from '../pages/EmptyOverview';
 import { OverviewPage } from '../pages/OverviewPage';
 import { message } from '../services/errors';
 import type { View } from './view';
+const AutomationPage = lazy(() => import('../features/automation/AutomationPage'));
+const SerialPage = lazy(() => import('../features/serial/SerialPage'));
 const TerminalPage = lazy(() => import('../features/terminal/TerminalPage'));
 function App() {
+    const serial = useSerialSession();
+    const [automationSeen, setAutomationSeen] = useState(false);
+    const [automationBusy, setAutomationBusy] = useState(false);
+    const [serialSeen, setSerialSeen] = useState(false);
     const [terminalSeen, setTerminalSeen] = useState(false);
     const [showUpdates, setShowUpdates] = useState(false);
     const [view, setView] = useState<View>('overview');
@@ -84,6 +91,7 @@ function App() {
         importInput,
         bridge,
         refresh,
+        refreshCapabilities,
         connect,
         cancelConnection,
         disconnect,
@@ -120,9 +128,13 @@ function App() {
             ? 'Device overview'
             : view === 'diagnostics'
               ? 'Diagnostic workbench'
-              : view === 'terminal'
-                ? 'Device terminal'
-                : categoryLabels[view];
+              : view === 'automation'
+                ? 'Automation'
+                : view === 'serial'
+                  ? 'Serial'
+                  : view === 'terminal'
+                    ? 'Device terminal'
+                    : categoryLabels[view];
     return (
         <div className="app-shell" inert={resetting}>
             <header className="site-header">
@@ -159,6 +171,24 @@ function App() {
                         onClick={() => {
                             setTerminalSeen(true);
                             setView('terminal');
+                        }}
+                    />
+                    <Nav
+                        icon={Plug}
+                        label="Serial"
+                        active={view === 'serial'}
+                        onClick={() => {
+                            setSerialSeen(true);
+                            setView('serial');
+                        }}
+                    />
+                    <Nav
+                        icon={Command}
+                        label="Automation"
+                        active={view === 'automation'}
+                        onClick={() => {
+                            setAutomationSeen(true);
+                            setView('automation');
                         }}
                     />
                 </nav>
@@ -226,58 +256,72 @@ function App() {
                             <p>
                                 {view === 'overview'
                                     ? 'Every interface. Every insight. One connected workspace.'
-                                    : view === 'terminal'
-                                      ? 'Run commands on your connected device through SSH.'
-                                      : 'Inspect system capabilities and the evidence behind every result.'}
+                                    : view === 'automation'
+                                      ? 'Build and review connected SSH or Serial command flows.'
+                                      : view === 'serial'
+                                        ? 'Local UART access through ports on this computer.'
+                                        : view === 'terminal'
+                                          ? 'Run commands on your connected device through SSH.'
+                                          : 'Inspect system capabilities and the evidence behind every result.'}
                             </p>
                         </div>
-                        <div className="heading-actions">
-                            {view !== 'terminal' && (
-                                <>
-                                    <button
-                                        className="button secondary"
-                                        onClick={() => importInput.current?.click()}
-                                        disabled={busy || resetting || connecting || disconnecting}
-                                    >
-                                        <FileInput size={16} />
-                                        Import report
-                                    </button>
-                                    <button
-                                        className="button secondary"
-                                        onClick={exportReport}
-                                        disabled={
-                                            !snapshot ||
-                                            busy ||
-                                            resetting ||
-                                            connecting ||
-                                            disconnecting
+                        {view !== 'serial' && view !== 'automation' && (
+                            <div className="heading-actions">
+                                {view !== 'terminal' && (
+                                    <>
+                                        <button
+                                            className="button secondary"
+                                            onClick={() => importInput.current?.click()}
+                                            disabled={
+                                                busy || resetting || connecting || disconnecting
+                                            }
+                                        >
+                                            <FileInput size={16} />
+                                            Import report
+                                        </button>
+                                        <button
+                                            className="button secondary"
+                                            onClick={exportReport}
+                                            disabled={
+                                                !snapshot ||
+                                                busy ||
+                                                resetting ||
+                                                connecting ||
+                                                disconnecting
+                                            }
+                                        >
+                                            <FileOutput size={16} />
+                                            Export report
+                                        </button>
+                                    </>
+                                )}
+                                <button
+                                    className={`button primary connection-button ${connected ? 'connected' : 'disconnected'}`}
+                                    data-connection={connected ? 'connected' : 'disconnected'}
+                                    onClick={() => {
+                                        if (connected) void disconnect();
+                                        else {
+                                            setError('');
+                                            setShowConnect(true);
                                         }
-                                    >
-                                        <FileOutput size={16} />
-                                        Export report
-                                    </button>
-                                </>
-                            )}
-                            <button
-                                className={`button primary connection-button ${connected ? 'connected' : 'disconnected'}`}
-                                data-connection={connected ? 'connected' : 'disconnected'}
-                                onClick={() => {
-                                    if (connected) void disconnect();
-                                    else {
-                                        setError('');
-                                        setShowConnect(true);
+                                    }}
+                                    disabled={
+                                        busy ||
+                                        resetting ||
+                                        connecting ||
+                                        disconnecting ||
+                                        automationBusy
                                     }
-                                }}
-                                disabled={busy || resetting || connecting || disconnecting}
-                            >
-                                {connected ? <Plug size={18} /> : <Unplug size={18} />}
-                                {disconnecting
-                                    ? 'Disconnecting…'
-                                    : connected
-                                      ? 'Disconnect device'
-                                      : 'Connect device'}
-                            </button>
-                        </div>
+                                >
+                                    {connected ? <Plug size={18} /> : <Unplug size={18} />}
+                                    {disconnecting
+                                        ? 'Disconnecting…'
+                                        : connected
+                                          ? 'Disconnect device'
+                                          : 'Connect device'}
+                                </button>
+                            </div>
+                        )}
                     </div>
 
                     {updateReport && (
@@ -313,81 +357,84 @@ function App() {
                         }}
                     />
 
-                    <div className={`mode-banner ${snapshot ? 'ssh-banner' : ''}`}>
-                        <div>
-                            <span className="sample-tag">
-                                {!snapshot && !connected
-                                    ? 'NOT CONNECTED'
-                                    : imported
-                                      ? 'IMPORTED REPORT'
-                                      : connected
-                                        ? 'SSH SESSION'
-                                        : 'SAVED SNAPSHOT'}
-                            </span>
-                            <span>
-                                {!snapshot
-                                    ? connected
-                                        ? 'SSH connected · current record cleared.'
-                                        : 'Connect your target device to collect diagnostics, or import a saved report.'
-                                    : imported
-                                      ? `Historical ${snapshot.mode === 'demo' ? 'sample' : 'SSH'} evidence opened locally. No device connection or upload.`
-                                      : `${snapshot.username}@${snapshot.endpoint} · ${connected ? `${bridge ? 'Direct SSH connected.' : 'Gateway SSH connected.'} ${live ? `Live updates every ${interval}s after collection.` : 'Live updates paused.'}` : 'Disconnected. Displaying the last collected evidence.'}`}
-                            </span>
-                        </div>
-                    </div>
+                    {view !== 'serial' && view !== 'automation' && (
+                        <>
+                            <div className={`mode-banner ${snapshot ? 'ssh-banner' : ''}`}>
+                                <div>
+                                    <span className="sample-tag">
+                                        {!snapshot && !connected
+                                            ? 'NOT CONNECTED'
+                                            : imported
+                                              ? 'IMPORTED REPORT'
+                                              : connected
+                                                ? 'SSH SESSION'
+                                                : 'SAVED SNAPSHOT'}
+                                    </span>
+                                    <span>
+                                        {!snapshot
+                                            ? connected
+                                                ? 'SSH connected · current record cleared.'
+                                                : 'Connect your target device to collect diagnostics, or import a saved report.'
+                                            : imported
+                                              ? `Historical ${snapshot.mode === 'demo' ? 'sample' : 'SSH'} evidence opened locally. No device connection or upload.`
+                                              : `${snapshot.username}@${snapshot.endpoint} · ${connected ? `${bridge ? 'Direct SSH connected.' : 'Gateway SSH connected.'} ${live ? `Live updates every ${interval}s after collection.` : 'Live updates paused.'}` : 'Disconnected. Displaying the last collected evidence.'}`}
+                                    </span>
+                                </div>
+                            </div>
 
-                    <div className="live-controls">
-                        <button
-                            type="button"
-                            role="switch"
-                            aria-checked={live}
-                            aria-label="Live updates"
-                            className={`live-switch ${live ? 'enabled' : ''}`}
-                            onClick={() => setLive((value) => !value)}
-                            disabled={imported || resetting}
-                        >
-                            <span className="switch-track">
-                                <span />
-                            </span>
-                            Live updates <strong>{live ? 'On' : 'Off'}</strong>
-                        </button>
-                        <label>
-                            Interval
-                            <select
-                                aria-label="Live update interval"
-                                value={interval}
-                                disabled={resetting}
-                                onChange={(e) => setInterval(Number(e.target.value))}
-                            >
-                                {[5, 15, 30, 60].map((seconds) => (
-                                    <option key={seconds} value={seconds}>
-                                        {seconds} seconds
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-                        <button
-                            className="button danger"
-                            disabled={!snapshot || resetting || connecting || disconnecting}
-                            onClick={() => void resetData()}
-                            title="Clear the current snapshot and graph history from RAM. Saved reports remain on disk."
-                        >
-                            <RotateCcw size={16} />
-                            {resetting ? 'Resetting session data…' : 'Reset session data'}
-                        </button>
-                        <span>
-                            {resetting
-                                ? 'Resetting session data · live updates paused'
-                                : !connected
-                                  ? 'Connect a target to start updates.'
-                                  : busy || connecting
-                                    ? 'Collecting · next update waits for completion'
-                                    : live
-                                      ? `Next collection in ${interval}s`
-                                      : 'Manual refresh available'}
-                        </span>
-                    </div>
-
+                            <div className="live-controls">
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={live}
+                                    aria-label="Live updates"
+                                    className={`live-switch ${live ? 'enabled' : ''}`}
+                                    onClick={() => setLive((value) => !value)}
+                                    disabled={imported || resetting || automationBusy}
+                                >
+                                    <span className="switch-track">
+                                        <span />
+                                    </span>
+                                    Live updates <strong>{live ? 'On' : 'Off'}</strong>
+                                </button>
+                                <label>
+                                    Interval
+                                    <select
+                                        aria-label="Live update interval"
+                                        value={interval}
+                                        disabled={resetting}
+                                        onChange={(e) => setInterval(Number(e.target.value))}
+                                    >
+                                        {[5, 15, 30, 60].map((seconds) => (
+                                            <option key={seconds} value={seconds}>
+                                                {seconds} seconds
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <button
+                                    className="button danger"
+                                    disabled={!snapshot || resetting || connecting || disconnecting}
+                                    onClick={() => void resetData()}
+                                    title="Clear the current snapshot and graph history from RAM. Saved reports remain on disk."
+                                >
+                                    <RotateCcw size={16} />
+                                    {resetting ? 'Resetting session data…' : 'Reset session data'}
+                                </button>
+                                <span>
+                                    {resetting
+                                        ? 'Resetting session data · live updates paused'
+                                        : !connected
+                                          ? 'Connect a target to start updates.'
+                                          : busy || connecting
+                                            ? 'Collecting · next update waits for completion'
+                                            : live
+                                              ? `Next collection in ${interval}s`
+                                              : 'Manual refresh available'}
+                                </span>
+                            </div>
+                        </>
+                    )}
                     {error && (
                         <div className="error-banner" role="alert">
                             <CircleAlert size={17} />
@@ -410,6 +457,7 @@ function App() {
                                 device={activeDevice}
                                 visible={view === 'terminal'}
                                 blocked={
+                                    automationBusy ||
                                     resetting ||
                                     connecting ||
                                     disconnecting ||
@@ -425,7 +473,67 @@ function App() {
                             />
                         </Suspense>
                     )}
-                    {view === 'terminal' ? null : view === 'overview' ? (
+                    {serialSeen && (
+                        <Suspense
+                            fallback={
+                                view === 'serial' ? (
+                                    <p role="status">Loading serial terminal…</p>
+                                ) : null
+                            }
+                        >
+                            <SerialPage
+                                session={serial}
+                                visible={view === 'serial'}
+                                blocked={
+                                    automationBusy ||
+                                    resetting ||
+                                    showConnect ||
+                                    showUpdates ||
+                                    Boolean(selectedProbe)
+                                }
+                                reset={terminalReset}
+                            />
+                        </Suspense>
+                    )}
+                    {automationSeen && (
+                        <Suspense
+                            fallback={view === 'automation' ? <p>Loading automation…</p> : null}
+                        >
+                            <AutomationPage
+                                visible={view === 'automation'}
+                                serial={serial}
+                                transport={transport}
+                                connected={connected}
+                                busy={busy || connecting || disconnecting || resetting}
+                                blocked={
+                                    showConnect ||
+                                    showUpdates ||
+                                    Boolean(selectedProbe) ||
+                                    resetting
+                                }
+                                target={
+                                    activeDevice
+                                        ? {
+                                              endpoint: activeDevice.endpoint,
+                                              username: activeDevice.username,
+                                          }
+                                        : null
+                                }
+                                onConnect={() => setShowConnect(true)}
+                                onSerial={() => {
+                                    setSerialSeen(true);
+                                    setView('serial');
+                                }}
+                                onBusy={(value) => {
+                                    if (value) pauseLiveUpdates();
+                                    setAutomationBusy(value);
+                                }}
+                            />
+                        </Suspense>
+                    )}
+                    {view === 'terminal' ||
+                    view === 'serial' ||
+                    view === 'automation' ? null : view === 'overview' ? (
                         snapshot || workspaceReady ? (
                             <OverviewPage
                                 snapshot={snapshot}
@@ -467,15 +575,19 @@ function App() {
                     <footer className="workspace-footer">
                         <span>
                             {connected ? <Plug size={16} /> : <Unplug size={16} />}
-                            {!snapshot
-                                ? connected
-                                    ? 'SSH connected · no current snapshot'
-                                    : 'No device connected · no data collected'
-                                : imported
-                                  ? 'Report opened locally · no device connection'
-                                  : connected
-                                    ? `Secure ${bridge ? 'direct' : 'gateway'} SSH connection`
-                                    : 'Disconnected · historical evidence'}
+                            {view === 'automation'
+                                ? 'Automation · connected command flows'
+                                : view === 'serial'
+                                  ? 'Local Serial · ports on this computer'
+                                  : !snapshot
+                                    ? connected
+                                        ? 'SSH connected · no current snapshot'
+                                        : 'No device connected · no data collected'
+                                    : imported
+                                      ? 'Report opened locally · no device connection'
+                                      : connected
+                                        ? `Secure ${bridge ? 'direct' : 'gateway'} SSH connection`
+                                        : 'Disconnected · historical evidence'}
                         </span>
                         <span>Ubuntu · Debian · OpenWrt · BusyBox</span>
                     </footer>
@@ -549,6 +661,11 @@ function App() {
                     snapshot={snapshot}
                     mode={imported ? 'imported' : snapshot.mode}
                     history={history}
+                    refreshCapabilities={
+                        connected && !imported && !busy && !resetting
+                            ? refreshCapabilities
+                            : undefined
+                    }
                     onCopy={(command) =>
                         bridge ? bridge.copyText(command) : navigator.clipboard.writeText(command)
                     }

@@ -1,7 +1,14 @@
+import { StringDecoder } from 'node:string_decoder';
+import { ExecSlots } from './exec-budget';
+import { NetworkCollector } from './network';
+import { collectOptions, type CollectOptions } from '../../shared/diagnostics/network/evidence';
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { Client } from 'ssh2';
+import { randomUUID } from 'node:crypto';
+import { captureCommand } from './automation';
+import { automationRequest, type AutomationRequest } from '../../shared/automation';
 import { probes } from '../../shared/diagnostics/probes';
 import type { ConnectOptions, ProbeResult, Snapshot } from '../../shared/types';
 import {
@@ -64,9 +71,14 @@ export class SshSession {
     private client: Client | null = null;
     private options: ConnectOptions | null = null;
     private collecting = false;
+    private connectionToken = '';
+    private automation?: { id: string; controller: AbortController };
+    private cancelledAutomation = new Map<string, number>();
     private ready = false;
     private terminal: SshTerminal | null = null;
     private cancelClock?: () => void;
+    private slots = new ExecSlots();
+    private network = new NetworkCollector();
 
     constructor(private readonly onDisconnected: () => void = () => {}) {}
 
@@ -129,6 +141,7 @@ export class SshSession {
                 }
                 ready = true;
                 this.ready = true;
+                this.connectionToken = randomUUID().replaceAll('-', '');
                 finish();
             });
             client.on('error', (error) => {
@@ -183,7 +196,15 @@ export class SshSession {
         });
     }
 
+    clearNetworkCache(): void {
+        this.network.clear();
+    }
+
     disconnect(): void {
+        this.automation?.controller.abort();
+        this.connectionToken = '';
+        this.cancelledAutomation.clear();
+        this.network.clear();
         this.cancelClock?.();
         this.terminal?.close();
         this.ready = false;
@@ -193,6 +214,49 @@ export class SshSession {
         client?.destroy();
     }
 
+    get automationConnection() {
+        return this.isConnected ? this.connectionToken : '';
+    }
+    cancelAutomation(id: string, connection: string) {
+        if (connection !== this.automationConnection) throw Error('Automation connection changed.');
+        if (!/^[A-Za-z0-9_-]{16,64}$/.test(id)) throw Error('Invalid automation ID.');
+        for (const [key, expiry] of this.cancelledAutomation)
+            if (expiry < Date.now()) this.cancelledAutomation.delete(key);
+        if (this.cancelledAutomation.size >= 64)
+            this.cancelledAutomation.delete(this.cancelledAutomation.keys().next().value!);
+        this.cancelledAutomation.set(id, Date.now() + 60000);
+        if (this.automation?.id === id) this.automation.controller.abort();
+    }
+    async runAutomation(input: AutomationRequest) {
+        const request = automationRequest(input),
+            client = this.client;
+        if (!client || request.connection !== this.automationConnection)
+            throw Error('Automation connection changed. Arm the flow again.');
+        if (this.collecting || this.automation || this.terminal?.hasPendingInput)
+            throw Error('Wait for current collection or automation to finish.');
+        const controller = new AbortController(),
+            owner = { id: request.id, controller };
+        this.automation = owner;
+        if ((this.cancelledAutomation.get(request.id) ?? 0) > Date.now()) controller.abort();
+        const started = performance.now();
+        try {
+            return await this.slots.run(
+                () => {
+                    if (client !== this.client || request.connection !== this.automationConnection)
+                        throw Error('Automation connection changed.');
+                    return captureCommand(
+                        client,
+                        request.command,
+                        Math.max(1, request.timeoutMs - (performance.now() - started)),
+                        controller.signal,
+                    );
+                },
+                { signal: controller.signal, timeoutMs: request.timeoutMs },
+            );
+        } finally {
+            if (this.automation === owner) this.automation = undefined;
+        }
+    }
     get isConnected(): boolean {
         return this.ready && this.client !== null && this.options !== null;
     }
@@ -201,69 +265,91 @@ export class SshSession {
         const client = this.client;
         if (!this.isConnected || !client) throw Error('Connect to a device first.');
         if (this.cancelClock) throw Error('A device clock read is already running.');
-        return new Promise((resolve) => {
-            let channel: import('ssh2').ClientChannel | undefined;
-            let output = '';
-            let bytes = 0;
-            let settled = false;
-            const finish = (result: DeviceClockResponse) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', cancel);
-                if (this.cancelClock === cancel) this.cancelClock = undefined;
-                channel?.removeListener('data', append);
-                channel?.stderr.removeListener('data', countError);
-                resolve(
-                    this.client === client ? result : { status: 'unavailable', reason: 'failed' },
-                );
-            };
-            const cancel = () => {
-                finish({ status: 'unavailable', reason: 'failed' });
-                channel?.close();
-            };
-            const append = (data: Buffer) => {
-                bytes += data.length;
-                if (bytes > CLOCK_MAX_BYTES) return cancel();
-                output += data.toString('utf8');
-            };
-            const countError = (data: Buffer) => {
-                bytes += data.length;
-                if (bytes > CLOCK_MAX_BYTES) cancel();
-            };
-            const timer = setTimeout(cancel, CLOCK_TIMEOUT_MS);
-            this.cancelClock = cancel;
-            signal?.addEventListener('abort', cancel, { once: true });
-            if (signal?.aborted) return cancel();
-            try {
-                client.exec(
-                    `export LC_ALL=C; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; ${DEVICE_CLOCK_COMMAND}`,
-                    (error, stream) => {
-                        if (error) return cancel();
-                        channel = stream;
-                        if (settled) return stream.close();
-                        stream.on('data', append);
-                        stream.stderr.on('data', countError);
-                        stream.on('error', cancel);
-                        stream.on('close', (code: number | null) => {
+        const clockStarted = performance.now();
+        const waiting = new AbortController();
+        const queuedCancel = () => waiting.abort();
+        signal = AbortSignal.any([waiting.signal, ...(signal ? [signal] : [])]);
+        this.cancelClock = queuedCancel;
+        return this.slots
+            .run(
+                () =>
+                    new Promise<DeviceClockResponse>((resolve) => {
+                        let channel: import('ssh2').ClientChannel | undefined;
+                        let output = '';
+                        let bytes = 0;
+                        let settled = false;
+                        const finish = (result: DeviceClockResponse) => {
                             if (settled) return;
-                            if (code !== 0)
-                                return finish({
-                                    status: 'unavailable',
-                                    reason: code === 127 ? 'unsupported' : 'failed',
-                                });
-                            try {
-                                finish({ status: 'available', sample: parseDeviceClock(output) });
-                            } catch {
-                                finish({ status: 'unavailable', reason: 'failed' });
-                            }
-                        });
-                    },
-                );
-            } catch {
-                cancel();
-            }
-        });
+                            settled = true;
+                            clearTimeout(timer);
+                            signal?.removeEventListener('abort', cancel);
+                            if (this.cancelClock === cancel) this.cancelClock = undefined;
+                            channel?.removeListener('data', append);
+                            channel?.stderr.removeListener('data', countError);
+                            resolve(
+                                this.client === client
+                                    ? result
+                                    : { status: 'unavailable', reason: 'failed' },
+                            );
+                        };
+                        const cancel = () => {
+                            finish({ status: 'unavailable', reason: 'failed' });
+                            channel?.close();
+                        };
+                        const append = (data: Buffer) => {
+                            bytes += data.length;
+                            if (bytes > CLOCK_MAX_BYTES) return cancel();
+                            output += data.toString('utf8');
+                        };
+                        const countError = (data: Buffer) => {
+                            bytes += data.length;
+                            if (bytes > CLOCK_MAX_BYTES) cancel();
+                        };
+                        const timer = setTimeout(
+                            cancel,
+                            Math.max(1, CLOCK_TIMEOUT_MS - (performance.now() - clockStarted)),
+                        );
+                        this.cancelClock = cancel;
+                        signal?.addEventListener('abort', cancel, { once: true });
+                        if (signal?.aborted) return cancel();
+                        try {
+                            client.exec(
+                                `export LC_ALL=C; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; ${DEVICE_CLOCK_COMMAND}`,
+                                (error, stream) => {
+                                    if (error) return cancel();
+                                    channel = stream;
+                                    if (settled) return stream.close();
+                                    stream.on('data', append);
+                                    stream.stderr.on('data', countError);
+                                    stream.on('error', cancel);
+                                    stream.on('close', (code: number | null) => {
+                                        if (settled) return;
+                                        if (code !== 0)
+                                            return finish({
+                                                status: 'unavailable',
+                                                reason: code === 127 ? 'unsupported' : 'failed',
+                                            });
+                                        try {
+                                            finish({
+                                                status: 'available',
+                                                sample: parseDeviceClock(output),
+                                            });
+                                        } catch {
+                                            finish({ status: 'unavailable', reason: 'failed' });
+                                        }
+                                    });
+                                },
+                            );
+                        } catch {
+                            cancel();
+                        }
+                    }),
+                { signal, timeoutMs: CLOCK_TIMEOUT_MS },
+            )
+            .catch(() => ({ status: 'unavailable' as const, reason: 'failed' as const }))
+            .finally(() => {
+                if (this.cancelClock === queuedCancel) this.cancelClock = undefined;
+            });
     }
 
     async openTerminal(input: TerminalOpen, emit: (event: TerminalEvent) => void): Promise<void> {
@@ -271,9 +357,15 @@ export class SshSession {
         const size = terminalSize(input);
         if (!this.isConnected || !this.client) throw Error('Connect to a device first.');
         if (this.terminal) throw Error('A terminal is already active for this device.');
-        const terminal = new SshTerminal({ id, ...size }, emit, () => {
-            if (this.terminal === terminal) this.terminal = null;
-        });
+        const terminal = new SshTerminal(
+            { id, ...size },
+            emit,
+            () => {
+                if (this.terminal === terminal) this.terminal = null;
+            },
+            undefined,
+            () => Boolean(this.automation),
+        );
         this.terminal = terminal;
         await terminal.open(this.client, size);
     }
@@ -284,7 +376,9 @@ export class SshSession {
         return this.terminal;
     }
 
-    async collect(): Promise<Snapshot> {
+    async collect(input?: CollectOptions): Promise<Snapshot> {
+        if (this.automation) throw Error('Collection is paused for automation.');
+        const collection = collectOptions(input);
         const client = this.client;
         const options = this.options;
         if (!client || !options) throw new Error('Connect to a device first.');
@@ -301,7 +395,20 @@ export class SshSession {
                     ...(await Promise.all(
                         probes
                             .slice(index, index + 3)
-                            .map((probe) => this.execute(client, probe.id, probe.command)),
+                            .map((probe) =>
+                                this.network.collect(
+                                    probe,
+                                    (id, command, limits) =>
+                                        this.execute(
+                                            client,
+                                            id,
+                                            command,
+                                            limits.timeoutMs,
+                                            limits.maxBytes,
+                                        ),
+                                    collection,
+                                ),
+                            ),
                     )),
                 );
             }
@@ -320,11 +427,40 @@ export class SshSession {
         }
     }
 
-    private execute(client: Client, id: string, command: string): Promise<ProbeResult> {
+    private execute(
+        client: Client,
+        id: string,
+        command: string,
+        timeoutMs = PROBE_TIMEOUT_MS,
+        maxBytes = MAX_OUTPUT_BYTES,
+    ): Promise<ProbeResult> {
+        const started = performance.now();
+        return this.slots.run(
+            () =>
+                this.executeOwned(
+                    client,
+                    id,
+                    command,
+                    Math.max(1, timeoutMs - (performance.now() - started)),
+                    maxBytes,
+                ),
+            { timeoutMs },
+        );
+    }
+
+    private executeOwned(
+        client: Client,
+        id: string,
+        command: string,
+        timeoutMs: number,
+        maxBytes: number,
+    ): Promise<ProbeResult> {
         const started = performance.now();
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
+            const outputDecoder = new StringDecoder('utf8'),
+                errorDecoder = new StringDecoder('utf8');
             let bytes = 0;
             let truncated = false;
             let settled = false;
@@ -333,7 +469,18 @@ export class SshSession {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timer);
-                if (error) stderr += `${stderr ? '\n' : ''}${error}`;
+                stdout += outputDecoder.end();
+                stderr += errorDecoder.end();
+                if (error) stderr += (stderr ? '\n' : '') + error;
+                const bound = (value: string, limit: number) =>
+                    new StringDecoder('utf8').write(
+                        Buffer.from(value).subarray(0, Math.max(0, limit)),
+                    );
+                const boundedOut = bound(stdout, maxBytes);
+                const boundedError = bound(stderr, maxBytes - Buffer.byteLength(boundedOut));
+                if (boundedOut !== stdout || boundedError !== stderr) truncated = true;
+                stdout = boundedOut;
+                stderr = boundedError;
                 resolve({
                     id,
                     command,
@@ -347,9 +494,9 @@ export class SshSession {
                 });
             };
             const timer = setTimeout(() => {
-                finish(null, 'Command timed out after 12 seconds.');
+                finish(null, 'Command timed out within its bounded collection deadline.');
                 channel?.close();
-            }, PROBE_TIMEOUT_MS);
+            }, timeoutMs);
             // Non-interactive locale and known utility paths keep output predictable on minimal firmware.
             client.exec(
                 `export LC_ALL=C; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; ${command}`,
@@ -364,8 +511,10 @@ export class SshSession {
                         return;
                     }
                     const append = (data: Buffer, isError: boolean) => {
-                        const remaining = Math.max(0, MAX_OUTPUT_BYTES - bytes);
-                        const part = data.subarray(0, remaining).toString('utf8');
+                        const remaining = Math.max(0, maxBytes - bytes);
+                        const part = (isError ? errorDecoder : outputDecoder).write(
+                            data.subarray(0, remaining),
+                        );
                         bytes += Math.min(data.length, remaining);
                         if (isError) stderr += part;
                         else stdout += part;

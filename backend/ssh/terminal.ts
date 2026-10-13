@@ -132,8 +132,11 @@ export class SshTerminal {
         }
     }
 
+    get hasPendingInput() {
+        return this.inputBytes > 0;
+    }
     async write(data: unknown): Promise<void> {
-        if (this.inputBlocked()) throw Error('Terminal input is paused during functional testing.');
+        if (this.inputBlocked()) throw Error('Terminal input is paused during Automation.');
         const bytes = Buffer.from(terminalData(data), 'base64');
         const stream = this.stream;
         if (this.ended || !stream) throw Error('Connect to a device first.');

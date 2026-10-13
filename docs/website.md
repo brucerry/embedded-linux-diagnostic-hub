@@ -10,7 +10,8 @@ The two editions share the React UI, probe catalogue, parsers, findings and JSON
 
 Offline desktop use does not require a browser, account, further package download or separate
 JavaScript runtime once host prerequisites are satisfied. A disconnected/offline board can still be
-investigated using a previously saved report. Serial/UART transport is a future feature.
+investigated using a previously saved report. Local Serial is feature-detected in secure Chromium
+browsers and has no gateway Serial endpoint. See [Serial](serial.md).
 
 ## GitHub Pages
 

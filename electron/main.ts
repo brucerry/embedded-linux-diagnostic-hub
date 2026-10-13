@@ -1,3 +1,4 @@
+import { configureSerial } from './serial';
 import {
     app,
     BrowserWindow,
@@ -112,8 +113,10 @@ app.whenReady().then(async () => {
         app.isPackaged,
     );
     const reports = new UpdateReports(path.join(app.getPath('userData'), 'update-reports'));
+    let serial: ReturnType<typeof configureSerial>;
     const update = new UpdateCoordinator(updater, reports, {
         isConnecting: () => connecting,
+        quiesceSerial: () => serial.quiesce(),
         isConnected: () => ssh.isConnected,
         waitForCollection: async () => {
             await collectionTask?.catch(() => {});
@@ -144,10 +147,6 @@ app.whenReady().then(async () => {
             return new Response('Not found', { status: 404 });
         return net.fetch(pathToFileURL(file).toString());
     });
-    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
-        callback(false),
-    );
-    session.defaultSession.setPermissionCheckHandler(() => false);
     const createWindow = () =>
         new BrowserWindow({
             icon: path.join(app.getAppPath(), 'dist', 'app-icon.png'),
@@ -170,6 +169,9 @@ app.whenReady().then(async () => {
         process.platform === 'linux'
             ? withNativeLinuxWindow((name) => app.setDesktopName(name), createWindow)
             : createWindow();
+    serial = configureSerial(window, appUrl, () => update.active);
+    registerHandler('hub:serial-select', (id, portId) => serial.select(id, portId));
+    registerHandler('hub:serial-cleanup-ack', (id) => serial.acknowledge(id));
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event, url) => {
         if (url !== appUrl) event.preventDefault();
@@ -247,7 +249,7 @@ app.whenReady().then(async () => {
                 hostVerification.clear();
                 connecting = false;
             }
-            return { ok: true };
+            return { ok: true, connection: ssh.automationConnection };
         } catch (error) {
             if (currentConnectionAttempt === id) currentConnectionAttempt = '';
             const failure = connectionFailure(error);
@@ -289,18 +291,30 @@ app.whenReady().then(async () => {
         ssh.getTerminal(id).acknowledge(sequence),
     );
     registerHandler('hub:terminal-close', (id) => ssh.getTerminal(id).close());
-    registerHandler('hub:device-clock', () => {
+    registerHandler('hub:automation-run', (request) => {
+        if (update.active || connecting)
+            throw Error('Automation is paused for the connection or update.');
+        return ssh.runAutomation(request as import('../shared/automation').AutomationRequest);
+    });
+    registerHandler('hub:automation-cancel', (id, connection) =>
+        ssh.cancelAutomation(id as string, connection as string),
+    );
+    registerHandler('hub:device-clock', (connection) => {
+        if (connection !== undefined && connection !== ssh.automationConnection)
+            throw Error('Device clock connection changed.');
         if (update.active || connecting)
             throw Error('Wait for the current connection or update to finish.');
         return ssh.readClock();
     });
-    registerHandler('hub:collect', async () => {
+    registerHandler('hub:collect', async (options) => {
         if (update.active) throw new Error('Live collection is paused for the update.');
         if (collectionTask) throw new Error('A collection is already running.');
-        const pending = ssh.collect().then((snapshot) => {
-            lastSnapshot = snapshot;
-            return snapshot;
-        });
+        const pending = ssh
+            .collect(options as import('../shared/diagnostics/network/evidence').CollectOptions)
+            .then((snapshot) => {
+                lastSnapshot = snapshot;
+                return snapshot;
+            });
         collectionTask = pending;
         try {
             return await pending;
@@ -321,8 +335,13 @@ app.whenReady().then(async () => {
         if (update.active) throw new Error('An update is already in progress.');
         return updater.check(includePrereleases as boolean);
     });
-    registerHandler('hub:start-update', (request) => {
-        return update.start(request);
+    registerHandler('hub:start-update', async (request) => {
+        if (update.active) throw Error('An update is already in progress.');
+        try {
+            return await update.start(request);
+        } finally {
+            serial.release();
+        }
     });
     registerHandler('hub:read-update-report', () => reports.read());
     registerHandler('hub:clear-session-data', () => {
@@ -330,6 +349,7 @@ app.whenReady().then(async () => {
         if (connecting || collectionTask || ssh.isCollecting)
             throw new Error('Wait for the current connection or collection to finish.');
         lastSnapshot = null;
+        ssh.clearNetworkCache();
     });
     registerHandler('hub:acknowledge-update-report', (id) => {
         if (typeof id !== 'string') throw new Error('Invalid saved update report.');

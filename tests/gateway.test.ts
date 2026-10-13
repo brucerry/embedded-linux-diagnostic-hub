@@ -195,3 +195,37 @@ test('gateway authenticates encrypted private keys, rejects bad credentials and 
         await fixture.close();
     }
 });
+test('capability refresh/reset stay authenticated fixed operations and reject arbitrary request fields', async () => {
+    const fixture = await gatewayFixture();
+    try {
+        const created = await fixture.request('/api/sessions', 'POST', {
+            ...fixture.options,
+            auth: 'password',
+        });
+        const data = (await created.json()) as { sessionId: string };
+        const id = data.sessionId;
+        assert.ok(id);
+        const before = fixture.probeExecutions();
+        const reset = await fixture.request('/api/sessions/' + id + '/network-cache', 'POST');
+        assert.equal(reset.status, 200);
+        assert.equal(fixture.probeExecutions(), before);
+        const invalid = await fixture.request('/api/sessions/' + id + '/snapshot', 'POST', {
+            command: 'reboot',
+        });
+        assert.equal(invalid.status, 400);
+        assert.equal(fixture.probeExecutions(), before);
+        const snapshot = await fixture.request('/api/sessions/' + id + '/snapshot', 'POST', {
+            forceNetworkCapabilities: true,
+        });
+        assert.equal(snapshot.status, 200);
+        const denied = await fixture.request(
+            '/api/sessions/' + id + '/network-cache',
+            'POST',
+            undefined,
+            { Authorization: 'Bearer wrong-token' },
+        );
+        assert.equal(denied.status, 401);
+    } finally {
+        await fixture.close();
+    }
+});

@@ -1,8 +1,34 @@
+import { validateCapture } from '../shared/automation';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ConnectOptions, DesktopBridge, HostKeyVerification, Snapshot } from '../shared/types';
 import type { TerminalEvent } from '../shared/terminal';
 
+let automationConnection = '';
 const bridge: DesktopBridge = {
+    automationConnection: () => automationConnection,
+    runAutomation: async (request) =>
+        validateCapture(await ipcRenderer.invoke('hub:automation-run', request)),
+    cancelAutomation: (id, connection) =>
+        ipcRenderer.invoke('hub:automation-cancel', id, connection),
+    onSerialChooser: (callback) => {
+        const listener = (
+            _event: unknown,
+            value: import('../shared/serial').SerialChooser | null,
+        ) => callback(value);
+        ipcRenderer.on('hub:serial-chooser', listener);
+        return () => {
+            ipcRenderer.removeListener('hub:serial-chooser', listener);
+        };
+    },
+    selectSerialPort: (id, portId) => ipcRenderer.invoke('hub:serial-select', id, portId),
+    onSerialQuiesce: (callback) => {
+        const listener = (_event: unknown, id: string) => callback(id);
+        ipcRenderer.on('hub:serial-quiesce', listener);
+        return () => {
+            ipcRenderer.removeListener('hub:serial-quiesce', listener);
+        };
+    },
+    acknowledgeSerialQuiesce: (id) => ipcRenderer.invoke('hub:serial-cleanup-ack', id),
     onWindowRestored: (callback) => {
         const listener = () => callback();
         ipcRenderer.on('hub:window-restored', listener);
@@ -41,11 +67,15 @@ const bridge: DesktopBridge = {
     connect: async (options: ConnectOptions, attemptId?: string) => {
         const result = await ipcRenderer.invoke('hub:connect', options, attemptId);
         if (result?.ok === false) throw new Error(`HUB_CONNECTION_FAILURE:${result.code}`);
+        automationConnection = result?.connection ?? '';
     },
     cancelConnect: (attemptId) => ipcRenderer.invoke('hub:cancel-connect', attemptId),
-    disconnect: () => ipcRenderer.invoke('hub:disconnect'),
-    collect: () => ipcRenderer.invoke('hub:collect'),
-    readDeviceClock: () => ipcRenderer.invoke('hub:device-clock'),
+    disconnect: async () => {
+        await ipcRenderer.invoke('hub:disconnect');
+        automationConnection = '';
+    },
+    collect: (options) => ipcRenderer.invoke('hub:collect', options),
+    readDeviceClock: (connection) => ipcRenderer.invoke('hub:device-clock', connection),
     copyText: (command: string) => ipcRenderer.invoke('hub:copy-text', command),
     readClipboard: () => ipcRenderer.invoke('hub:read-clipboard'),
     openRepository: () => ipcRenderer.invoke('hub:open-repository'),
@@ -54,7 +84,10 @@ const bridge: DesktopBridge = {
     exportReport: (importedSnapshot?: Snapshot) =>
         ipcRenderer.invoke('hub:export', importedSnapshot),
     onDisconnected: (callback) => {
-        const listener = (_event: unknown, reason?: 'update') => callback(reason);
+        const listener = (_event: unknown, reason?: 'update') => {
+            automationConnection = '';
+            callback(reason);
+        };
         ipcRenderer.on('hub:disconnected', listener);
         return () => ipcRenderer.removeListener('hub:disconnected', listener);
     },
