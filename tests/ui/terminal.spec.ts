@@ -603,6 +603,20 @@ test('full terminal viewport contains the last prompt and wheel input at both sc
     );
     const input = page.getByLabel('Device terminal input');
     await input.focus();
+    // Measure wheel containment after page-entry geometry has settled.
+    await expect
+        .poll(() =>
+            page
+                .locator('main')
+                .evaluate((element) =>
+                    element
+                        .getAnimations()
+                        .some(
+                            (animation) => animation.pending || animation.playState === 'running',
+                        ),
+                ),
+        )
+        .toBe(false);
     await panel.locator('.terminal-frame').scrollIntoViewIfNeeded();
     await expect(panel.locator('.xterm-cursor')).toBeAttached();
     const bounds = await panel.locator('.terminal-frame').boundingBox();
