@@ -113,7 +113,9 @@ if (mode === 'create') {
     const existing = await draft();
     await privateDraft(existing);
     console.log(
-        'Resuming only owned unpublished draft ' +
+        'Resuming only owned unpublished draft ID ' +
+            existing.id +
+            ': ' +
             tag +
             ' at ' +
             commit +

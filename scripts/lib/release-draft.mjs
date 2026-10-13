@@ -36,16 +36,25 @@ export async function listAllReleases(readPage) {
 }
 
 export async function requireAnonymousDenial(url, request = fetch) {
+    const resource = new URL(url);
+    const metadata =
+        resource.hostname === 'api.github.com' &&
+        !/\/releases\/assets\/\d+$/.test(resource.pathname);
     const response = await request(url, {
         method: 'GET',
         redirect: 'manual',
-        headers: { Accept: 'application/octet-stream', Range: 'bytes=0-0' },
+        headers: metadata
+            ? { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }
+            : { Accept: 'application/octet-stream', Range: 'bytes=0-0' },
     });
     await response.body?.cancel();
     assert.equal(
         response.status,
         404,
         'Expected anonymous draft denial; transport/rate-limit errors are not privacy evidence. Status: ' +
-            response.status,
+            response.status +
+            ' at ' +
+            resource.origin +
+            resource.pathname,
     );
 }

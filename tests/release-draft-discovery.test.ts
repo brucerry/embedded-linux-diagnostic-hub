@@ -4,6 +4,7 @@ import {
     listAllReleases,
     selectOwnedDraft,
     requireNewRelease,
+    requireAnonymousDenial,
 } from '../scripts/lib/release-draft.mjs';
 const context = {
     tag: 'v0.4.0',
@@ -52,6 +53,62 @@ test('draft discovery rejects missing, duplicate, published and unrelated-source
     ])
         assert.throws(() => selectOwnedDraft(releases, { ...context, marker }));
 });
+
+test('anonymous privacy probes use JSON metadata headers and binary asset headers without credentials', async () => {
+    const calls: { url: string; headers: Headers; method: unknown; redirect: unknown }[] = [];
+    const request = async (input: unknown, init?: RequestInit) => {
+        calls.push({
+            url: String(input),
+            headers: new Headers(init?.headers),
+            method: init?.method,
+            redirect: init?.redirect,
+        });
+        return new Response(null, { status: 404 });
+    };
+    await requireAnonymousDenial(
+        'https://api.github.com/repos/example/project/releases/42',
+        request,
+    );
+    await requireAnonymousDenial(
+        'https://api.github.com/repos/example/project/releases/tags/v0.4.0',
+        request,
+    );
+    await requireAnonymousDenial(
+        'https://github.com/example/project/releases/download/v0.4.0/app.zip',
+        request,
+    );
+    await requireAnonymousDenial(
+        'https://api.github.com/repos/example/project/releases/assets/99',
+        request,
+    );
+    for (const [index, call] of calls.entries()) {
+        assert.equal(call.method, 'GET');
+        assert.equal(call.redirect, 'manual');
+        assert.equal(call.headers.get('Authorization'), null);
+        assert.equal(
+            call.headers.get('Accept'),
+            index < 2 ? 'application/vnd.github+json' : 'application/octet-stream',
+        );
+        assert.equal(call.headers.get('Range'), index < 2 ? null : 'bytes=0-0');
+    }
+});
+test('unsupported media remains a failed privacy gate and never counts as anonymous denial', async () => {
+    await assert.rejects(
+        requireAnonymousDenial(
+            'https://api.github.com/repos/example/project/releases/42',
+            async () => new Response(null, { status: 415 }),
+        ),
+        /415/,
+    );
+    await assert.rejects(
+        requireAnonymousDenial(
+            'https://api.github.com/repos/example/project/releases/42',
+            async () => new Response(null, { status: 200 }),
+        ),
+        /200/,
+    );
+});
+
 test('listing failures and invalid/bounded pagination never permit a draft mutation', async () => {
     await assert.rejects(
         listAllReleases(async () => {

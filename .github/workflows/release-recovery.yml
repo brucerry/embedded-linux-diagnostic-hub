@@ -52,7 +52,7 @@ jobs:
               with:
                   node-version: '24'
                   package-manager-cache: false
-            - name: Resume only the existing source-owned private draft by authenticated ID
+            - name: Verify owned draft through authenticated ID and anonymous JSON privacy probes
               working-directory: release-source
               env:
                   GH_TOKEN: ${{ github.token }}
