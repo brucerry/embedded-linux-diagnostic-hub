@@ -70,18 +70,24 @@ export async function captureNativeScreenshot(
                         document.readyState !== 'complete'
                     )
                         return false;
-                    const geometry = () =>
+                    const before = [
+                        innerWidth,
+                        innerHeight,
+                        document.documentElement.scrollWidth,
+                        document.documentElement.scrollHeight,
+                    ].join(',');
+                    await new Promise<void>((resolve) =>
+                        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+                    );
+                    return (
+                        document.visibilityState === 'visible' &&
                         [
                             innerWidth,
                             innerHeight,
                             document.documentElement.scrollWidth,
                             document.documentElement.scrollHeight,
-                        ].join(',');
-                    const before = geometry();
-                    await new Promise<void>((resolve) =>
-                        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+                        ].join(',') === before
                     );
-                    return document.visibilityState === 'visible' && geometry() === before;
                 },
                 undefined,
                 { polling: 'raf', timeout: remaining() },

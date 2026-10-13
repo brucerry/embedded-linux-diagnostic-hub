@@ -34,6 +34,7 @@ interface Props {
     onConnect(): void;
     onSerial(): void;
 }
+const GUIDE_STEPS = ['Connection', 'Commands', 'Timing', 'Review & Run'];
 const step = (): CommandStep => ({
     id: crypto.randomUUID(),
     name: 'Command',
@@ -42,6 +43,25 @@ const step = (): CommandStep => ({
     delaySeconds: 0,
 });
 export default function AutomationPage(props: Props) {
+    const [guideStep, setGuideStep] = useState(0);
+    const [headerOffset, setHeaderOffset] = useState(84);
+    useEffect(() => {
+        const header = document.querySelector('.site-header');
+        if (!header) return;
+        const measure = () => setHeaderOffset(header.getBoundingClientRect().height + 12);
+        const observer = new ResizeObserver(measure);
+        observer.observe(header);
+        measure();
+        return () => observer.disconnect();
+    }, []);
+    const guideHeading = useRef<HTMLHeadingElement>(null),
+        resultsHeading = useRef<HTMLHeadingElement>(null);
+    useEffect(() => {
+        if (props.visible) {
+            guideHeading.current?.focus({ preventScroll: true });
+            guideHeading.current?.scrollIntoView({ block: 'nearest' });
+        }
+    }, [guideStep]);
     const [steps, setSteps] = useState<CommandStep[]>([step()]),
         [transport, setTransport] = useState<'ssh' | 'serial'>('ssh');
     const [timeout, setTimeoutValue] = useState('60'),
@@ -61,7 +81,7 @@ export default function AutomationPage(props: Props) {
         [sampling, setSampling] = useState(false),
         [state, setState] = useState<FlowState>({
             state: 'idle',
-            message: 'Connect a transport, build and preview your flow.',
+            message: 'Ready to build.',
         }),
         [error, setError] = useState(''),
         [running, setRunning] = useState(false);
@@ -360,396 +380,536 @@ export default function AutomationPage(props: Props) {
     };
     return (
         <section className="automation-page" hidden={!props.visible} aria-label="Automation">
-            <div className="automation-intro">
+            <div className="automation-intro automation-guide-heading">
                 <h2>Ordered command flow</h2>
-                <p>
-                    Commands execute in order on the connected SSH device or local Serial console.
-                    Build, preview and explicitly run. Repetition is off by default.
-                </p>
+                <button
+                    className="button secondary"
+                    onClick={() => {
+                        resultsHeading.current?.scrollIntoView({ block: 'start' });
+                        resultsHeading.current?.focus({ preventScroll: true });
+                    }}
+                >
+                    Results · {rows.length}
+                </button>
             </div>
-            <div className="automation-toolbar">
-                {!connected && (
+            <nav className="automation-guide-nav" aria-label="Automation setup steps">
+                {GUIDE_STEPS.map((name, index) => (
                     <button
-                        className="button secondary"
-                        onClick={transport === 'ssh' ? props.onConnect : props.onSerial}
+                        key={name}
+                        className={'automation-guide-tab ' + (guideStep === index ? 'active' : '')}
+                        aria-current={guideStep === index ? 'step' : undefined}
+                        onClick={() => setGuideStep(index)}
+                        disabled={props.blocked}
                     >
-                        {transport === 'ssh' ? 'Connect SSH' : 'Open Serial controls'}
+                        <span>{index + 1}</span>
+                        {name}
                     </button>
-                )}
-                <label>
-                    Transport
-                    <select
-                        aria-label="Automation transport"
-                        value={transport}
-                        onChange={(e) => {
-                            setTransport(e.target.value as 'ssh' | 'serial');
-                            setCalibration(undefined);
-                        }}
-                    >
-                        <option value="ssh">SSH</option>
-                        <option value="serial">Serial</option>
-                    </select>
-                </label>
-                <span>
-                    {connected
-                        ? 'Connected · ' +
-                          (transport === 'ssh' ? props.target?.endpoint : serialStatus.label)
-                        : 'Connect ' + transport + ' first'}
-                </span>
-                <button
-                    className="button"
-                    disabled={
-                        Boolean(validation) || running || !connected || props.busy || props.blocked
-                    }
-                    onClick={() => start(true)}
+                ))}
+            </nav>
+            {(running || state.state !== 'idle') && (
+                <div
+                    className={'automation-live-controls ' + (running ? 'is-running' : '')}
+                    style={{ top: running ? headerOffset : undefined }}
                 >
-                    {scheduled ? 'Run once at scheduled time' : 'Run once'}
-                </button>
-                <button
-                    className="button primary"
-                    disabled={
-                        Boolean(validation) || running || !connected || props.busy || props.blocked
-                    }
-                    onClick={() => start()}
-                >
-                    Start flow
-                </button>
-                <button
-                    className="button"
-                    disabled={!running}
-                    onClick={() => runner.current!.stop()}
-                >
-                    Stop
-                </button>
-                <button
-                    className="button danger"
-                    disabled={!running}
-                    onClick={() => runner.current!.cancel()}
-                >
-                    Cancel run
-                </button>
-            </div>
-            <p className="automation-state" role="status">
-                {state.message}
-                {running ? ' Draft edits apply when you arm again.' : ''}
-            </p>
-            {(error || validation) && (
-                <p className="error-banner" role="alert">
-                    {error || validation}
-                </p>
+                    <p className="automation-state" role="status">
+                        {state.message}
+                        {running ? ' · Draft frozen' : ''}
+                    </p>
+                    {running && (
+                        <div className="automation-run-actions">
+                            {' '}
+                            <button
+                                className="button"
+                                disabled={!running}
+                                onClick={() => runner.current!.stop()}
+                            >
+                                Stop
+                            </button>
+                            <button
+                                className="button danger"
+                                disabled={!running}
+                                onClick={() => runner.current!.cancel()}
+                            >
+                                Cancel run
+                            </button>
+                        </div>
+                    )}
+                </div>
             )}
-            <ol className="automation-steps">
-                {steps.map((s, i) => (
-                    <li key={s.id}>
-                        <div className="automation-step-heading">
-                            <strong>{i + 1}</strong>
+            <div className="automation-guide-card">
+                <h3
+                    id="automation-guide-title"
+                    style={{ scrollMarginTop: headerOffset }}
+                    ref={guideHeading}
+                    tabIndex={-1}
+                >
+                    {GUIDE_STEPS[guideStep]}
+                </h3>
+                <div
+                    className="automation-stage"
+                    hidden={guideStep !== 0}
+                    role="group"
+                    aria-label="Connection"
+                >
+                    {' '}
+                    <div className="automation-toolbar">
+                        {!connected && (
+                            <button
+                                className="button secondary"
+                                onClick={transport === 'ssh' ? props.onConnect : props.onSerial}
+                            >
+                                {transport === 'ssh' ? 'Connect SSH' : 'Serial controls'}
+                            </button>
+                        )}
+                        <label>
+                            Transport
+                            <select
+                                aria-label="Automation transport"
+                                value={transport}
+                                onChange={(e) => {
+                                    setTransport(e.target.value as 'ssh' | 'serial');
+                                    setCalibration(undefined);
+                                }}
+                            >
+                                <option value="ssh">SSH</option>
+                                <option value="serial">Serial</option>
+                            </select>
+                        </label>
+                        <span className="automation-session" id="automation-connection-state">
+                            {connected
+                                ? 'Connected · ' +
+                                  (transport === 'ssh'
+                                      ? props.target?.endpoint
+                                      : serialStatus.label)
+                                : 'Disconnected'}
+                        </span>
+                    </div>
+                    <div className="automation-fields automation-serial-fields">
+                        {' '}
+                        {transport === 'serial' && (
+                            <>
+                                <label>
+                                    Append line ending
+                                    <select
+                                        aria-label="Serial automation line ending"
+                                        value={ending}
+                                        onChange={(e) => setEnding(e.target.value as typeof ending)}
+                                    >
+                                        {['none', 'CR', 'LF', 'CRLF'].map((x) => (
+                                            <option key={x}>{x}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label>
+                                    Completion prompt
+                                    <input
+                                        aria-label="Serial completion prompt"
+                                        value={prompt}
+                                        onChange={(e) => setPrompt(e.target.value)}
+                                    />
+                                </label>
+                                <details className="automation-more">
+                                    <summary>Timestamp capture</summary>{' '}
+                                    <label>
+                                        Received timestamp prefix
+                                        <input
+                                            aria-label="Serial timestamp prefix"
+                                            value={prefix}
+                                            onChange={(e) => setPrefix(e.target.value)}
+                                        />
+                                    </label>
+                                </details>
+                                <small className="automation-note">
+                                    Prompt match is not an exit code.
+                                </small>
+                            </>
+                        )}
+                    </div>
+                </div>
+                <div
+                    className="automation-stage"
+                    hidden={guideStep !== 1}
+                    role="group"
+                    aria-label="Commands"
+                >
+                    {' '}
+                    <ol className="automation-steps">
+                        {steps.map((s, i) => (
+                            <li key={s.id}>
+                                <div className="automation-step-heading">
+                                    <strong>{i + 1}</strong>
+                                    <label>
+                                        <input
+                                            type="checkbox"
+                                            checked={s.enabled}
+                                            onChange={(e) =>
+                                                edit(s.id, { enabled: e.target.checked })
+                                            }
+                                        />
+                                        Enabled
+                                    </label>
+                                    <input
+                                        aria-label={'Command ' + (i + 1) + ' name'}
+                                        value={s.name}
+                                        maxLength={120}
+                                        onChange={(e) => edit(s.id, { name: e.target.value })}
+                                    />
+                                    <div className="automation-step-actions">
+                                        <button
+                                            className="button secondary"
+                                            aria-label={'Move command ' + (i + 1) + ' up'}
+                                            disabled={i === 0}
+                                            onClick={() => move(i, -1)}
+                                        >
+                                            ↑
+                                        </button>
+                                        <button
+                                            className="button"
+                                            aria-label={'Move command ' + (i + 1) + ' down'}
+                                            disabled={i === steps.length - 1}
+                                            onClick={() => move(i, 1)}
+                                        >
+                                            ↓
+                                        </button>
+                                        <button
+                                            className="button"
+                                            disabled={steps.length >= 20}
+                                            onClick={() =>
+                                                setSteps((list) => {
+                                                    const next = [...list];
+                                                    next.splice(i + 1, 0, {
+                                                        ...s,
+                                                        id: crypto.randomUUID(),
+                                                        name: s.name + ' copy',
+                                                    });
+                                                    return next;
+                                                })
+                                            }
+                                        >
+                                            Duplicate
+                                        </button>
+                                        <button
+                                            className="button"
+                                            disabled={steps.length === 1}
+                                            onClick={() =>
+                                                setSteps((list) =>
+                                                    list.filter((x) => x.id !== s.id),
+                                                )
+                                            }
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                </div>
+                                <textarea
+                                    aria-label={'Command ' + (i + 1) + ' script'}
+                                    value={s.command}
+                                    rows={3}
+                                    spellCheck={false}
+                                    placeholder={
+                                        transport === 'ssh'
+                                            ? 'Type your script'
+                                            : 'Type the console payload'
+                                    }
+                                    onChange={(e) => edit(s.id, { command: e.target.value })}
+                                />
+                            </li>
+                        ))}
+                    </ol>
+                    <button
+                        className="button"
+                        disabled={steps.length >= 20}
+                        onClick={() =>
+                            setSteps((list) => [
+                                ...list,
+                                { ...step(), name: 'Command ' + (list.length + 1) },
+                            ])
+                        }
+                    >
+                        Add command
+                    </button>
+                </div>
+                <div
+                    className="automation-stage"
+                    hidden={guideStep !== 2}
+                    role="group"
+                    aria-label="Timing"
+                >
+                    {' '}
+                    <div className="automation-settings">
+                        <div className="automation-fields">
+                            <label>
+                                Timeout (s)
+                                <input
+                                    aria-label="Command timeout"
+                                    value={timeout}
+                                    onChange={(e) => setTimeoutValue(e.target.value)}
+                                />
+                            </label>
                             <label>
                                 <input
                                     type="checkbox"
-                                    checked={s.enabled}
-                                    onChange={(e) => edit(s.id, { enabled: e.target.checked })}
+                                    checked={repeat}
+                                    onChange={(e) => setRepeat(e.target.checked)}
                                 />
-                                Enabled
+                                Repeat completed flow
                             </label>
-                            <input
-                                aria-label={'Command ' + (i + 1) + ' name'}
-                                value={s.name}
-                                maxLength={120}
-                                onChange={(e) => edit(s.id, { name: e.target.value })}
-                            />
-                            <button
-                                className="button"
-                                aria-label={'Move command ' + (i + 1) + ' up'}
-                                disabled={i === 0}
-                                onClick={() => move(i, -1)}
-                            >
-                                ↑
-                            </button>
-                            <button
-                                className="button"
-                                aria-label={'Move command ' + (i + 1) + ' down'}
-                                disabled={i === steps.length - 1}
-                                onClick={() => move(i, 1)}
-                            >
-                                ↓
-                            </button>
-                            <button
-                                className="button"
-                                disabled={steps.length >= 20}
-                                onClick={() =>
-                                    setSteps((list) => {
-                                        const next = [...list];
-                                        next.splice(i + 1, 0, {
-                                            ...s,
-                                            id: crypto.randomUUID(),
-                                            name: s.name + ' copy',
-                                        });
-                                        return next;
-                                    })
-                                }
-                            >
-                                Duplicate
-                            </button>
-                            <button
-                                className="button"
-                                disabled={steps.length === 1}
-                                onClick={() =>
-                                    setSteps((list) => list.filter((x) => x.id !== s.id))
-                                }
-                            >
-                                Remove
-                            </button>
-                        </div>
-                        <textarea
-                            aria-label={'Command ' + (i + 1) + ' script'}
-                            value={s.command}
-                            rows={3}
-                            spellCheck={false}
-                            placeholder={
-                                transport === 'ssh'
-                                    ? 'One complete multiline shell script'
-                                    : 'Exact console payload; no shell assumptions'
-                            }
-                            onChange={(e) => edit(s.id, { command: e.target.value })}
-                        />
-                        <label className="automation-delay">
-                            Optional delay before this step (seconds)
-                            <input
-                                aria-label={'Command ' + (i + 1) + ' delay'}
-                                type="text"
-                                inputMode="decimal"
-                                value={delayDraft[s.id] ?? String(s.delaySeconds)}
-                                onChange={(e) => {
-                                    const text = e.target.value;
-                                    setDelayDraft((v) => ({ ...v, [s.id]: text }));
-                                    edit(s.id, {
-                                        delaySeconds: /^(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)
-                                            ? Number(text)
-                                            : NaN,
-                                    });
-                                }}
-                            />
-                        </label>
-                    </li>
-                ))}
-            </ol>
-            <button
-                className="button"
-                disabled={steps.length >= 20}
-                onClick={() =>
-                    setSteps((list) => [
-                        ...list,
-                        { ...step(), name: 'Command ' + (list.length + 1) },
-                    ])
-                }
-            >
-                Add command
-            </button>
-            <details className="automation-settings">
-                <summary>Timing and transport settings</summary>
-                <div className="automation-fields">
-                    <label>
-                        Command timeout (seconds)
-                        <input
-                            aria-label="Command timeout"
-                            value={timeout}
-                            onChange={(e) => setTimeoutValue(e.target.value)}
-                        />
-                    </label>
-                    <label>
-                        <input
-                            type="checkbox"
-                            checked={repeat}
-                            onChange={(e) => setRepeat(e.target.checked)}
-                        />
-                        Repeat completed flow
-                    </label>
-                    {repeat && (
-                        <label>
-                            Delay after complete flow (seconds)
-                            <input
-                                aria-label="Repetition delay"
-                                value={repeatSeconds}
-                                onChange={(e) => setRepeatSeconds(e.target.value)}
-                            />
-                        </label>
-                    )}
-                    <label>
-                        <input
-                            type="checkbox"
-                            checked={scheduled}
-                            onChange={(e) => setScheduled(e.target.checked)}
-                        />
-                        Schedule wall-clock start
-                    </label>
-                    {scheduled && (
-                        <>
+                            {repeat && (
+                                <label>
+                                    Repeat delay (s)
+                                    <input
+                                        aria-label="Repetition delay"
+                                        value={repeatSeconds}
+                                        onChange={(e) => setRepeatSeconds(e.target.value)}
+                                    />
+                                </label>
+                            )}
                             <label>
-                                Start date and time
                                 <input
-                                    aria-label="Scheduled start date and time"
-                                    placeholder="YYYY-MM-DDTHH:mm:ss"
-                                    value={date}
-                                    onChange={(e) => setDate(e.target.value)}
+                                    type="checkbox"
+                                    checked={scheduled}
+                                    onChange={(e) => setScheduled(e.target.checked)}
                                 />
+                                Schedule wall-clock start
                             </label>
-                            <label>
-                                IANA timezone
-                                <input
-                                    aria-label="Start timezone"
-                                    value={zone}
-                                    onChange={(e) => setZone(e.target.value)}
-                                />
-                            </label>
-                            <label>
-                                UTC offset if needed
-                                <input
-                                    aria-label="Start UTC offset"
-                                    placeholder="+01:00 (required for repeated time)"
-                                    value={offset}
-                                    onChange={(e) => setOffset(e.target.value)}
-                                />
-                            </label>
-                            <label>
-                                Start clock
-                                <select
-                                    aria-label="Start clock"
-                                    value={clockKind}
-                                    onChange={(e) =>
-                                        setClockKind(e.target.value as 'local' | 'device')
-                                    }
-                                >
-                                    <option value="local">Local host clock</option>
-                                    <option value="device">Verified device clock</option>
-                                </select>
-                            </label>
-                            {clockKind === 'device' && (
+                            {scheduled && (
                                 <>
-                                    <button
-                                        className="button"
-                                        disabled={
-                                            transport !== 'ssh' || !connected || running || sampling
-                                        }
-                                        onClick={sampleClicked}
-                                    >
-                                        {sampling ? 'Sampling…' : 'Sample device clock'}
-                                    </button>
-                                    <p>
-                                        {calibration
-                                            ? calibration.source +
-                                              ' · ' +
-                                              calibration.zone +
-                                              ' · uncertainty ±' +
-                                              Math.ceil(calibration.uncertaintyMs) +
-                                              ' ms'
-                                            : 'Device calibration unavailable. Serial received timestamps do not establish emission latency.'}{' '}
-                                        SSH device schedules refresh this disclosed read-only source
-                                        while armed.
-                                    </p>
+                                    <label>
+                                        Start date and time
+                                        <input
+                                            aria-label="Scheduled start date and time"
+                                            placeholder="YYYY-MM-DDTHH:mm:ss"
+                                            value={date}
+                                            onChange={(e) => setDate(e.target.value)}
+                                        />
+                                    </label>
+                                    <label>
+                                        Timezone
+                                        <input
+                                            aria-label="Start timezone"
+                                            value={zone}
+                                            onChange={(e) => setZone(e.target.value)}
+                                        />
+                                    </label>
+                                    <label>
+                                        UTC offset
+                                        <input
+                                            aria-label="Start UTC offset"
+                                            placeholder="+01:00 if needed"
+                                            value={offset}
+                                            onChange={(e) => setOffset(e.target.value)}
+                                        />
+                                    </label>
+                                    <label>
+                                        Start clock
+                                        <select
+                                            aria-label="Start clock"
+                                            value={clockKind}
+                                            onChange={(e) =>
+                                                setClockKind(e.target.value as 'local' | 'device')
+                                            }
+                                        >
+                                            <option value="local">Local host clock</option>
+                                            <option value="device">Verified device clock</option>
+                                        </select>
+                                    </label>
+                                    {clockKind === 'device' && (
+                                        <>
+                                            <button
+                                                className="button"
+                                                disabled={
+                                                    transport !== 'ssh' ||
+                                                    !connected ||
+                                                    running ||
+                                                    sampling
+                                                }
+                                                onClick={sampleClicked}
+                                            >
+                                                {sampling ? 'Sampling…' : 'Sample device clock'}
+                                            </button>
+                                            <p>
+                                                {calibration
+                                                    ? calibration.source +
+                                                      ' · ' +
+                                                      calibration.zone +
+                                                      ' · uncertainty ±' +
+                                                      Math.ceil(calibration.uncertaintyMs) +
+                                                      ' ms'
+                                                    : 'Device time unavailable. Use local time for Serial.'}{' '}
+                                                Samples refresh while armed.
+                                            </p>
+                                        </>
+                                    )}
                                 </>
                             )}
-                        </>
-                    )}
-                    {transport === 'ssh' && (
-                        <label>
-                            <input
-                                type="checkbox"
-                                checked={captureClock}
-                                onChange={(e) => setCaptureClock(e.target.checked)}
-                            />
-                            Capture device clock before commands (fixed read-only sample)
-                        </label>
-                    )}
-                    {transport === 'serial' && (
-                        <>
-                            <label>
-                                Append line ending
-                                <select
-                                    aria-label="Serial automation line ending"
-                                    value={ending}
-                                    onChange={(e) => setEnding(e.target.value as typeof ending)}
-                                >
-                                    {['none', 'CR', 'LF', 'CRLF'].map((x) => (
-                                        <option key={x}>{x}</option>
-                                    ))}
-                                </select>
-                            </label>
-                            <label>
-                                Literal completion prompt
+                            {transport === 'ssh' && (
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        checked={captureClock}
+                                        onChange={(e) => setCaptureClock(e.target.checked)}
+                                    />
+                                    Capture device time
+                                </label>
+                            )}
+                        </div>
+                        <small className="automation-note">
+                            Hidden app, sleep or disconnect pauses work. Rearm manually.
+                        </small>
+                    </div>
+                    <div className="automation-delay-list">
+                        <h4>Step delays</h4>
+                        {steps.map((s, i) => (
+                            <label key={s.id} className="automation-delay">
+                                {s.name || 'Command ' + (i + 1)} · delay (s)
                                 <input
-                                    aria-label="Serial completion prompt"
-                                    value={prompt}
-                                    onChange={(e) => setPrompt(e.target.value)}
+                                    aria-label={'Command ' + (i + 1) + ' delay'}
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={delayDraft[s.id] ?? String(s.delaySeconds)}
+                                    onChange={(e) => {
+                                        const text = e.target.value;
+                                        setDelayDraft((v) => ({ ...v, [s.id]: text }));
+                                        edit(s.id, {
+                                            delaySeconds: /^(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)
+                                                ? Number(text)
+                                                : NaN,
+                                        });
+                                    }}
                                 />
                             </label>
-                            <label>
-                                Optional received timestamp prefix
-                                <input
-                                    aria-label="Serial timestamp prefix"
-                                    value={prefix}
-                                    onChange={(e) => setPrefix(e.target.value)}
-                                />
-                            </label>
-                            <p>
-                                Prompt observation is a completion condition, not an exit status.
-                                Echo, unsolicited output and stale device buffers can be captured.
-                                No setup/date/sentinel payload is added.
-                            </p>
-                        </>
+                        ))}
+                    </div>
+                </div>
+                <div
+                    className="automation-stage"
+                    hidden={guideStep !== 3}
+                    role="group"
+                    aria-label="Review and run"
+                >
+                    {' '}
+                    <details className="automation-preview" open>
+                        <summary>Exact flow preview</summary>
+                        <p>
+                            {plan?.start
+                                ? 'Start ' +
+                                  new Date(plan.start.epochMs).toISOString() +
+                                  ' · ' +
+                                  plan.start.zone +
+                                  (plan.start.utcOffset ? ' UTC' + plan.start.utcOffset : '') +
+                                  ' · ' +
+                                  plan.start.clock +
+                                  ' clock'
+                                : 'Immediate start'}{' '}
+                            ·{' '}
+                            {repeat
+                                ? 'Start flow repeats after ' +
+                                  repeatSeconds +
+                                  ' seconds; Run once executes one flow'
+                                : 'one flow'}{' '}
+                            · timeout {timeout}s
+                        </p>
+                        {steps
+                            .filter((s) => s.enabled)
+                            .map((s) => (
+                                <div key={s.id}>
+                                    <strong>
+                                        {s.name} · delay {s.delaySeconds}s
+                                    </strong>
+                                    <pre>
+                                        {JSON.stringify(
+                                            s.command +
+                                                (transport === 'serial'
+                                                    ? {
+                                                          none: '',
+                                                          CR: '\r',
+                                                          LF: '\n',
+                                                          CRLF: '\r\n',
+                                                      }[ending]
+                                                    : ''),
+                                        )}
+                                    </pre>
+                                </div>
+                            ))}
+                        <small className="automation-note">
+                            Escapes shown above. Original text and the selected Serial ending are
+                            sent.
+                        </small>
+                    </details>
+                    <div className="automation-run-actions">
+                        {' '}
+                        <button
+                            className="button"
+                            disabled={
+                                Boolean(validation) ||
+                                running ||
+                                !connected ||
+                                props.busy ||
+                                props.blocked
+                            }
+                            onClick={() => start(true)}
+                        >
+                            {scheduled ? 'Run once at scheduled time' : 'Run once'}
+                        </button>
+                        <button
+                            className="button primary"
+                            disabled={
+                                Boolean(validation) ||
+                                running ||
+                                !connected ||
+                                props.busy ||
+                                props.blocked
+                            }
+                            onClick={() => start()}
+                        >
+                            Start flow
+                        </button>
+                    </div>
+                    <small className="automation-note">
+                        Stop finishes the active command. Cancel cannot undo sent commands.
+                    </small>
+                    {!connected && (
+                        <button
+                            className="button secondary"
+                            onClick={transport === 'ssh' ? props.onConnect : props.onSerial}
+                        >
+                            {transport === 'ssh' ? 'SSH connection' : 'Serial controls'}
+                        </button>
                     )}
                 </div>
-                <p>
-                    Delays measure elapsed time. Repeat waits after the full flow. Hidden app,
-                    sleep, clock jumps or disconnect pause work; explicitly arm again. Stop allows
-                    an active command to finish. Cancel cannot undo commands already sent.
-                </p>
-            </details>
-            <details className="automation-preview" open>
-                <summary>Exact flow preview</summary>
-                <p>
-                    {plan?.start
-                        ? 'Start ' +
-                          new Date(plan.start.epochMs).toISOString() +
-                          ' · ' +
-                          plan.start.zone +
-                          (plan.start.utcOffset ? ' UTC' + plan.start.utcOffset : '') +
-                          ' · ' +
-                          plan.start.clock +
-                          ' clock'
-                        : 'Immediate start'}{' '}
-                    ·{' '}
-                    {repeat
-                        ? 'Start flow repeats after ' +
-                          repeatSeconds +
-                          ' seconds; Run once executes one flow'
-                        : 'one flow'}{' '}
-                    · timeout {timeout}s
-                </p>
-                {steps
-                    .filter((s) => s.enabled)
-                    .map((s) => (
-                        <div key={s.id}>
-                            <strong>
-                                {s.name} · delay {s.delaySeconds}s
-                            </strong>
-                            <pre>
-                                {JSON.stringify(
-                                    s.command +
-                                        (transport === 'serial'
-                                            ? { none: '', CR: '\r', LF: '\n', CRLF: '\r\n' }[ending]
-                                            : ''),
-                                )}
-                            </pre>
-                        </div>
-                    ))}
-                <p>
-                    Run once honors the configured start and step delays and never repeats. Quotes
-                    above show JSON escapes; execution uses the original text and explicitly chosen
-                    Serial ending.
-                </p>
-            </details>
+                {(error || (guideStep > 0 && validation)) && (
+                    <p className="error-banner" role="alert">
+                        {error || validation}
+                    </p>
+                )}
+                <div className="automation-guide-footer">
+                    <button
+                        className="button secondary"
+                        disabled={guideStep === 0 || props.blocked}
+                        onClick={() => setGuideStep((s) => Math.max(0, s - 1))}
+                    >
+                        Back
+                    </button>
+                    {guideStep < 3 && (
+                        <button
+                            className="button primary"
+                            disabled={props.blocked}
+                            onClick={() => setGuideStep((s) => Math.min(3, s + 1))}
+                        >
+                            Next: {GUIDE_STEPS[guideStep + 1]}
+                        </button>
+                    )}
+                </div>
+            </div>
             <div className="automation-results-heading">
-                <h2>Results</h2>
+                <h2
+                    id="automation-results-title"
+                    style={{ scrollMarginTop: headerOffset }}
+                    ref={resultsHeading}
+                    tabIndex={-1}
+                >
+                    Results
+                </h2>
                 <span>
                     {rows.length} retained · {store.current.evicted} evicted · max{' '}
                     {AUTOMATION_LIMITS.rows} rows / 8 MiB
@@ -987,10 +1147,8 @@ export default function AutomationPage(props: Props) {
                 </button>
             </div>
             <p className="automation-warning">
-                Review before sharing: commands and output can contain secrets. Exports use retained
-                results only; evicted rows cannot be recovered. CSV prefixes formula-like cells with
-                an apostrophe and lists transformedFields. Markdown/text visibly render nonprinting
-                controls; JSON preserves exact retained evidence.
+                Review for secrets. Exports cover retained rows only; evicted rows cannot be
+                recovered.
             </p>
         </section>
     );

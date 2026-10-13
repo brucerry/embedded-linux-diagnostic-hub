@@ -3,6 +3,13 @@ import { installSerial } from './fixtures/serial';
 import { installDesktop } from './fixtures/desktop';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+
+const setup = (flow: import('@playwright/test').Locator, stage: string) =>
+    flow
+        .getByRole('navigation', { name: 'Automation setup steps' })
+        .getByRole('button', { name: new RegExp(stage) })
+        .click();
+
 const output = async (page: Page, name: string, testInfo: import('@playwright/test').TestInfo) => {
     const file = process.env.HUB_FEATURE_EVIDENCE
         ? path.join(process.env.HUB_FEATURE_EVIDENCE, name)
@@ -23,18 +30,24 @@ test('Serial flow edits remain deliberate, multiline bytes and QA exports use ca
     await page.getByRole('button', { name: 'Automation', exact: true }).click();
     const flow = page.getByRole('region', { name: 'Automation', exact: true });
     await flow.getByLabel('Automation transport').selectOption('serial');
+    await setup(flow, 'Commands');
     await flow.getByLabel('Command 1 name').fill('Read console');
+    await setup(flow, 'Commands');
     await flow.getByLabel('Command 1 script').fill('first line');
     await flow.getByLabel('Command 1 script').press('Enter');
     await flow.getByLabel('Command 1 script').pressSequentially('second line');
     expect(await page.evaluate(() => window.serialTest.writes.length)).toBe(0);
-    await flow.getByText('Timing and transport settings', { exact: true }).click();
+    await setup(flow, 'Timing');
+    await setup(flow, 'Connection');
     await flow.getByLabel('Serial completion prompt').fill('console# ');
     await flow.getByLabel('Serial automation line ending').selectOption('LF');
+    await setup(flow, 'Review');
+    await setup(flow, 'Review');
     await flow.getByRole('button', { name: 'Run once', exact: true }).click();
     await expect
         .poll(() => page.evaluate(() => String.fromCharCode(...window.serialTest.writes.flat())))
         .toBe('first line\nsecond line\n');
+    await setup(flow, 'Commands');
     await flow.getByLabel('Command 1 script').fill('next draft');
     await page.evaluate(() => {
         window.serialTest.push([...new TextEncoder().encode('reply\r\n\x1b[32mcon')]);
@@ -72,9 +85,12 @@ test('invalid scheduled dates, repeated local time and invalid delay keep draft 
     await page.getByRole('button', { name: 'Automation', exact: true }).click();
     const flow = page.getByRole('region', { name: 'Automation', exact: true });
     await flow.getByLabel('Automation transport').selectOption('serial');
+    await setup(flow, 'Commands');
     await flow.getByLabel('Command 1 script').fill('explicit payload');
-    await flow.getByText('Timing and transport settings', { exact: true }).click();
+    await setup(flow, 'Timing');
+    await setup(flow, 'Connection');
     await flow.getByLabel('Serial completion prompt').fill('# ');
+    await setup(flow, 'Timing');
     await flow.getByLabel('Schedule wall-clock start').check();
     await flow.getByLabel('Start timezone').fill('UTC');
     await flow.getByLabel('Scheduled start date and time').fill('2027-02-29T12:00:00');
@@ -82,7 +98,9 @@ test('invalid scheduled dates, repeated local time and invalid delay keep draft 
     await expect(flow.getByLabel('Scheduled start date and time')).toHaveValue(
         '2027-02-29T12:00:00',
     );
+    await setup(flow, 'Review');
     await expect(flow.getByRole('button', { name: 'Start flow', exact: true })).toBeDisabled();
+    await setup(flow, 'Timing');
     await flow.getByLabel('Start timezone').fill('America/New_York');
     await flow.getByLabel('Scheduled start date and time').fill('2026-11-01T01:30:00');
     await expect(flow.getByRole('alert')).toContainText('repeats');
@@ -120,7 +138,9 @@ test('SSH flow uses separate API, retains drafts and genuine exits without termi
     await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible();
     await page.getByRole('button', { name: 'Automation', exact: true }).click();
     const flow = page.getByRole('region', { name: 'Automation', exact: true });
+    await setup(flow, 'Commands');
     await flow.getByLabel('Command 1 script').fill('fixture first\nfixture second');
+    await setup(flow, 'Review');
     await flow.getByRole('button', { name: 'Run once', exact: true }).click();
     await expect(flow.locator('tbody')).toContainText('7');
     await expect(flow.locator('tbody')).toContainText('synthetic SSH result');
@@ -183,16 +203,21 @@ for (const transport of ['ssh', 'serial'] as const)
             await page.getByRole('button', { name: 'Automation', exact: true }).click();
             const flow = page.getByRole('region', { name: 'Automation', exact: true });
             await flow.getByLabel('Automation transport').selectOption(transport);
+            await setup(flow, 'Commands');
             await flow.getByLabel('Command 1 script').fill('scheduled fixture');
-            await flow.getByText('Timing and transport settings', { exact: true }).click();
+            await setup(flow, 'Timing');
             // Freeze after lazy pages and their controls are mounted; pausing before import stalls React retries.
             await page.clock.pauseAt(new Date('2028-02-29T12:00:00Z'));
-            if (transport === 'serial')
+            if (transport === 'serial') {
+                await setup(flow, 'Connection');
                 await flow.getByLabel('Serial completion prompt').fill('# ');
+            }
+            await setup(flow, 'Timing');
             await flow.getByLabel('Schedule wall-clock start').check();
             await flow.getByLabel('Start timezone').fill('UTC');
             await flow.getByLabel('Scheduled start date and time').fill('2028-02-29T12:00:05');
             await flow.getByLabel('Repeat completed flow').check();
+            await setup(flow, 'Review');
             await expect(flow.locator('.automation-preview')).toContainText(
                 '2028-02-29T12:00:05.000Z',
             );

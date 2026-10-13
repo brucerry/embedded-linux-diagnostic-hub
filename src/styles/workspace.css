@@ -8,6 +8,8 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     font-size: 15px;
+    --text: #e7edf4;
+    --panel: var(--surface);
     --muted: #b9c4d2;
     --line: #414d5d;
     --blue: #8bb8ff;
@@ -3126,7 +3128,7 @@ main {
     gap: 10px;
 }
 .serial-page .terminal-frame {
-    background: #151c24;
+    background: #d5e9ee;
 }
 .serial-page .terminal-screen {
     height: 100%;
@@ -3242,11 +3244,7 @@ main {
     width: 100%;
     height: 100%;
 }
-.serial-beach-veil {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(#151c24e8 0%, #151c24dd 58%, #151c24b8 100%);
-}
+
 .serial-waves {
     animation: serial-wave 6s ease-in-out infinite;
 }
@@ -3263,10 +3261,8 @@ main {
 .serial-volleyball {
     animation: serial-ball-volley 4s linear infinite;
 }
-.serial-sun-rays {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: serial-sunlight 24s linear infinite;
+.serial-sun-surface {
+    animation: serial-solar-turn 4s linear infinite;
 }
 .serial-beach.paused svg * {
     animation-play-state: paused;
@@ -3340,9 +3336,9 @@ main {
         transform: translate(286px, 161px) rotate(315deg);
     }
 }
-@keyframes serial-sunlight {
+@keyframes serial-solar-turn {
     to {
-        transform: rotate(360deg);
+        transform: translateX(-64px);
     }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -3354,29 +3350,22 @@ main {
     }
 }
 
-/* Reserve a soft beach frieze below the text so bright sprites cannot obscure output. */
+/* Serial uses the full light scene behind the text, without a reserved footer. */
 .serial-page .terminal-frame {
     height: clamp(440px, 65vh, 720px);
 }
 .serial-page .terminal-screen {
-    height: calc(100% - 140px);
-}
-.serial-beach-veil {
-    background: linear-gradient(
-        #151c24f2 0%,
-        #151c24e8 60%,
-        #151c24e0 calc(100% - 140px),
-        #151c2428 calc(100% - 139px),
-        #151c2428 100%
-    );
+    height: 100%;
+    padding: 0;
 }
 
 .serial-beach .serial-sun {
     position: absolute;
     right: 24px;
-    bottom: 78px;
-    width: 54px;
-    height: 54px;
+    top: 22px;
+    width: clamp(64px, 8vw, 90px);
+    height: auto;
+    aspect-ratio: 1;
     overflow: visible;
 }
 
@@ -3563,5 +3552,426 @@ main {
     }
     .automation-steps li {
         padding: 12px;
+    }
+}
+
+/* Native popup colors follow the same explicit palette as their closed controls. */
+select option,
+select optgroup {
+    color: var(--text, #e7edf4);
+    background: var(--surface);
+}
+select option:checked {
+    color: HighlightText;
+    background: Highlight;
+}
+.serial-page {
+    color-scheme: light;
+    color: #203743;
+    --text: #203743;
+    --muted: #506873;
+    --line: #adc1c9;
+    --surface: #f2f7f3;
+    --panel: #f7faf6;
+    --blue: #296d88;
+    --sky: #d9eaf0;
+}
+.serial-page .panel {
+    background: var(--surface);
+    border-color: var(--line);
+    box-shadow: none;
+}
+.serial-controls .panel-heading {
+    padding: 0;
+    margin: 0 0 20px;
+}
+.serial-controls .panel-heading h3 {
+    margin: 0;
+}
+.serial-page input[type='number'],
+.serial-page select {
+    min-height: 44px;
+    box-sizing: border-box;
+    width: 100%;
+    color: var(--text);
+    background: var(--panel);
+}
+.serial-page .button {
+    min-height: 44px;
+    color: var(--text);
+    background: #f7faf6;
+    border: 1px solid var(--line);
+}
+.serial-page .button.primary {
+    color: #fff;
+    background: #296d88;
+    border-color: #296d88;
+}
+.serial-page .button.primary:hover:not(:disabled) {
+    background: #20566d;
+}
+.serial-page .button:disabled,
+.serial-page input:disabled,
+.serial-page select:disabled {
+    opacity: 1;
+    color: #637780;
+    background: #e9efeb;
+    border-color: #bacbd0;
+}
+.serial-page .subtle-badge {
+    background: #e1eee7;
+    color: #2b5a4b;
+}
+.serial-page .serial-error {
+    color: #942c3c;
+}
+.serial-page :focus-visible {
+    outline-color: #286781;
+}
+.serial-page .terminal-screen:focus-within {
+    outline-color: #286781;
+    outline-offset: 0;
+}
+.serial-page .serial-landscape {
+    display: block;
+}
+.serial-page .terminal-copy-control button {
+    background: #f4f8ef;
+    color: #245163;
+    border-color: #99b9c4;
+}
+.serial-page .xterm-scrollable-element .slider {
+    background: #55798566 !important;
+}
+.serial-page .xterm-scrollable-element .slider:hover {
+    background: #55798599 !important;
+}
+.serial-page .terminal-actions {
+    align-items: end;
+}
+.serial-page .serial-echo {
+    min-height: 44px;
+}
+@media (max-width: 700px) {
+    .serial-port-row > label {
+        flex-basis: 100%;
+    }
+    .serial-port-row > .button {
+        flex: 1 1 calc(50% - 12px);
+    }
+    .serial-settings {
+        align-items: start;
+    }
+    .serial-settings > label:last-child {
+        grid-column: 1 / -1;
+    }
+}
+@media (forced-colors: active) {
+    select option,
+    select optgroup,
+    .serial-page select {
+        forced-color-adjust: auto;
+        color: CanvasText;
+        background: Canvas;
+    }
+}
+
+/* Guided Automation keeps one setup stage visible, with live controls independent of editing. */
+.automation-guide-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+.automation-guide-heading h2 {
+    margin: 0;
+}
+.automation-guide-nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+.automation-guide-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    text-align: left;
+    font: inherit;
+    font-size: 14px;
+}
+.automation-guide-tab > span {
+    flex: 0 0 24px;
+    display: grid;
+    place-items: center;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--sky);
+}
+.automation-guide-tab.active {
+    border-color: var(--blue);
+    background: var(--sky);
+}
+.automation-guide-tab.active > span {
+    color: #122945;
+    background: var(--blue);
+}
+.automation-guide-card {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px;
+    background: #222c37;
+}
+.automation-guide-card > h3 {
+    margin: 0 0 18px;
+    font-size: 18px;
+}
+.automation-stage {
+    display: grid;
+    gap: 18px;
+}
+.automation-stage[hidden] {
+    display: none;
+}
+.automation-guide-card .automation-settings,
+.automation-guide-card .automation-preview {
+    padding: 0;
+    border: 0;
+}
+.automation-toolbar {
+    align-items: end;
+}
+.automation-toolbar > label {
+    flex: 0 1 190px;
+}
+.automation-session {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    flex: 1 1 180px;
+    overflow-wrap: anywhere;
+    color: var(--muted);
+}
+.automation-page input:not([type='checkbox']),
+.automation-page select {
+    min-height: 44px;
+    box-sizing: border-box;
+    border-color: #64788d;
+    background: #1c2732;
+}
+.automation-page input[type='checkbox'] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--blue);
+}
+.automation-page .button:not(.primary):not(.danger) {
+    background: #293542;
+    border-color: var(--line);
+}
+.automation-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    align-items: end;
+    gap: 16px;
+}
+.automation-fields label:has(input[type='checkbox']) {
+    flex-direction: row;
+    align-items: center;
+    min-height: 44px;
+}
+.automation-fields > p,
+.automation-fields > small,
+.automation-fields > details {
+    grid-column: 1 / -1;
+}
+.automation-step-heading {
+    display: grid;
+    grid-template-columns: 34px auto minmax(140px, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+}
+.automation-step-heading > label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 44px;
+    font-size: 13px;
+}
+.automation-step-heading input:not([type='checkbox']) {
+    width: 100%;
+    min-width: 0;
+}
+.automation-step-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.automation-step-actions .button {
+    padding: 0 12px;
+}
+.automation-steps textarea {
+    margin-bottom: 0;
+    min-height: 92px;
+    border-color: #64788d;
+    background: #1c2732;
+}
+.automation-stage > .button {
+    justify-self: start;
+}
+.automation-note {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.automation-more {
+    padding: 8px 0;
+}
+.automation-more summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--muted);
+}
+.automation-more > label {
+    margin-top: 10px;
+}
+.automation-delay-list {
+    margin-top: 14px;
+}
+.automation-delay-list h4 {
+    margin: 0 0 12px;
+}
+.automation-delay {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 120px;
+    align-items: center;
+    margin: 8px 0;
+}
+.automation-delay input {
+    width: 100%;
+}
+.automation-run-actions,
+.automation-guide-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.automation-guide-footer {
+    justify-content: space-between;
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+}
+.automation-live-controls {
+    position: sticky;
+    top: 84px;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #252e39;
+}
+.automation-live-controls .automation-state {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    flex: 1 1 240px;
+    font-size: 13px;
+}
+.automation-results-heading {
+    scroll-margin-top: 100px;
+}
+@media (max-width: 760px) {
+    .automation-guide-nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .automation-guide-card {
+        padding: 16px;
+    }
+    .automation-step-heading {
+        grid-template-columns: 34px 1fr;
+        gap: 10px;
+    }
+    .automation-step-heading input:not([type='checkbox']),
+    .automation-step-actions {
+        grid-column: 1 / -1;
+    }
+    .automation-step-actions {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+    .automation-step-heading input:not([type='checkbox']) {
+        width: 100%;
+    }
+    .automation-live-controls {
+        top: 132px;
+    }
+    .automation-toolbar > label {
+        flex: 1 1 100%;
+    }
+    .automation-fields label {
+        width: auto;
+    }
+}
+@media (max-width: 480px) {
+    .automation-guide-heading {
+        align-items: start;
+    }
+    .automation-guide-heading h2 {
+        font-size: 19px;
+    }
+    .automation-guide-tab {
+        padding: 8px;
+        font-size: 12px;
+        gap: 7px;
+    }
+    .automation-fields {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .automation-run-actions > .button {
+        flex: 1;
+    }
+}
+
+.automation-settings .automation-fields {
+    align-items: end;
+}
+.automation-delay-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 16px;
+}
+.automation-delay-list h4 {
+    grid-column: 1 / -1;
+    margin-bottom: 0;
+}
+.automation-delay {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    margin: 0;
+}
+
+.automation-toolbar > label,
+.automation-fields > label {
+    font-size: 13px;
+}
+@media (max-width: 900px) {
+    /* Native scrolling stays available; floating helpers must not cover form controls. */
+    .page-scroll-controls {
+        display: none;
     }
 }

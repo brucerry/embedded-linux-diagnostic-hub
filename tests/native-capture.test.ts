@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { captureNativeScreenshot } from './fixtures/native-capture';
 
@@ -106,4 +107,32 @@ test('an exhausted capture deadline cannot start readiness or a fresh capture bu
     );
     assert.equal(f.captures.length, 1);
     assert.deepEqual(f.counts(), { readiness: 0, observations: 0 });
+});
+
+test('capture recovery callback executes in a fresh context without transpiler globals', async () => {
+    const f = fixture([protocol(), png]);
+    f.page.waitForFunction = (async (
+        predicate: unknown,
+        _argument: unknown,
+        options: { timeout: number },
+    ) => {
+        assert.equal(typeof predicate, 'function');
+        const result = await runInNewContext('(' + String(predicate) + ')()', {
+            document: {
+                visibilityState: 'visible',
+                readyState: 'complete',
+                documentElement: { scrollWidth: 1280, scrollHeight: 900 },
+            },
+            innerWidth: 1280,
+            innerHeight: 900,
+            Promise,
+            requestAnimationFrame: (callback: () => void) => setImmediate(callback),
+        });
+        assert.equal(result, true);
+        assert(options.timeout > 0 && options.timeout <= f.captures[0].timeout);
+        return {};
+    }) as typeof f.page.waitForFunction;
+    await captureNativeScreenshot(f.desktop, f.page, 'capture.png');
+    assert.equal(f.captures.length, 2);
+    assert(f.captures[1].timeout <= f.captures[0].timeout);
 });

@@ -192,7 +192,9 @@ test('ranked search supports exact names, aliases and typos while sticky header 
     expect(response.ok()).toBe(true);
     expect(response.headers()['content-type']).toContain('image/svg+xml');
     await page.setViewportSize({ width: 390, height: 844 });
-    await bottom.click();
+    await expect(top).toBeHidden();
+    await expect(bottom).toBeHidden();
+    await page.keyboard.press('Control+End');
     expect((await page.locator('.site-header').boundingBox())!.y).toBe(0);
     expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

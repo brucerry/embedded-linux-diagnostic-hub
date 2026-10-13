@@ -55,10 +55,18 @@ async function main() {
         await expect(modal).not.toBeVisible({ timeout: 20000 });
         await page.getByRole('button', { name: 'Automation', exact: true }).click();
         const flow = page.getByRole('region', { name: 'Automation', exact: true });
+        await flow
+            .getByRole('navigation', { name: 'Automation setup steps' })
+            .getByRole('button', { name: /Commands/ })
+            .click();
         await flow.getByLabel('Command 1 name').fill('Native proof');
         await flow
             .getByLabel('Command 1 script')
             .fill('fixture automation native\nexact multiline script');
+        await flow
+            .getByRole('navigation', { name: 'Automation setup steps' })
+            .getByRole('button', { name: /Review/ })
+            .click();
         await flow.getByRole('button', { name: 'Run once', exact: true }).click();
         await expect(flow.getByRole('status')).toContainText('Flow finished');
         await expect(flow.locator('tbody')).toContainText('Native isolated capture €');
@@ -99,9 +107,17 @@ async function main() {
         await app.evaluate((_modules, savePath) => {
             (globalThis as unknown as { automationSavePath: string }).automationSavePath = savePath;
         }, signalOutput);
+        await flow
+            .getByRole('navigation', { name: 'Automation setup steps' })
+            .getByRole('button', { name: /Commands/ })
+            .click();
         await flow.getByLabel('Command 1 script').fill('fixture automation native signal');
         await flow.getByRole('button', { name: 'Add command', exact: true }).click();
         await flow.getByLabel('Command 2 script').fill('fixture automation native must-not-run');
+        await flow
+            .getByRole('navigation', { name: 'Automation setup steps' })
+            .getByRole('button', { name: /Review/ })
+            .click();
         await flow.getByRole('button', { name: 'Run once', exact: true }).click();
         await expect(flow.getByRole('status')).toContainText('Command ended with signalled');
         await expect(flow.locator('tbody tr').last()).toContainText('SIGTERM');

@@ -73,8 +73,10 @@ test('Serial beach motion, reduced motion, resize and no pointer interception', 
     await expect(beach).toHaveAttribute('aria-hidden', 'true');
     await expect(page.locator('.serial-page .terminal-earth')).toHaveCount(0);
     expect(
-        await page.locator('.serial-sun-rays').evaluate((el) => getComputedStyle(el).animationName),
-    ).toBe('serial-sunlight');
+        await page
+            .locator('.serial-sun-surface')
+            .evaluate((el) => getComputedStyle(el).animationName),
+    ).toBe('serial-solar-turn');
     expect(await beach.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none');
     expect(await ball.evaluate((el) => getComputedStyle(el).animationName)).toBe(
         'serial-ball-volley',

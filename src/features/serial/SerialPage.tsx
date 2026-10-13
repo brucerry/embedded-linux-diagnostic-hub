@@ -1,4 +1,5 @@
 import { SerialBeach } from './SerialBeach';
+import { serialTerminalOptions } from './theme';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -12,11 +13,15 @@ import {
     type SerialSettings,
 } from '../../../shared/serial';
 import { SerialSession, serialFailure } from './session';
-import { terminalOptions, terminalOutputGuards, terminalWheel } from '../terminal/primitives';
+import { terminalOutputGuards, terminalWheel } from '../terminal/primitives';
 import { terminalCopyText } from '../terminal/display';
 import { CopyButton } from '../../components/CopyButton';
 import { Modal } from '../../components/Modal';
 import '@xterm/xterm/css/xterm.css';
+const BAUD_RATES = [
+    300, 600, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 38400, 57600, 115200, 128000, 230400,
+    256000, 460800, 500000, 576000, 921600, 1000000, 1500000, 2000000, 3000000,
+];
 interface Props {
     session: SerialSession;
     visible: boolean;
@@ -29,6 +34,8 @@ export default function SerialPage(props: Props) {
         bridge = window.diagnosticHub;
     const [status, setStatus] = useState(session.current);
     const [settings, setSettings] = useState<SerialSettings>({ ...DEFAULT_SERIAL_SETTINGS });
+    const [customBaud, setCustomBaud] = useState(false),
+        [baudDraft, setBaudDraft] = useState(String(DEFAULT_SERIAL_SETTINGS.baudRate));
     const [echo, setEcho] = useState(false),
         [enter, setEnter] = useState('CR');
     const [ports, setPorts] = useState<LocalSerialPort[]>([]),
@@ -121,7 +128,7 @@ export default function SerialPage(props: Props) {
         };
     }, [api, bridge]);
     useEffect(() => {
-        const terminal = new Terminal(terminalOptions()),
+        const terminal = new Terminal(serialTerminalOptions()),
             addon = new FitAddon();
         terminal.loadAddon(addon);
         terminal.open(container.current!);
@@ -327,24 +334,40 @@ export default function SerialPage(props: Props) {
                     <legend>UART settings</legend>
                     <label>
                         Baud rate
-                        <input
+                        <select
                             aria-label="Baud rate"
-                            type="number"
-                            min={1}
-                            max={4294967295}
-                            list="serial-baud"
-                            value={settings.baudRate}
-                            onChange={(e) =>
-                                setSettings({ ...settings, baudRate: Number(e.target.value) })
-                            }
-                        />
-                        <datalist id="serial-baud">
-                            {[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map(
-                                (v) => (
-                                    <option key={v} value={v} />
-                                ),
-                            )}
-                        </datalist>
+                            value={customBaud ? 'custom' : settings.baudRate}
+                            onChange={(e) => {
+                                if (e.target.value === 'custom') {
+                                    setCustomBaud(true);
+                                    setBaudDraft(String(settings.baudRate));
+                                } else {
+                                    setCustomBaud(false);
+                                    setSettings({ ...settings, baudRate: Number(e.target.value) });
+                                    setBaudDraft(e.target.value);
+                                }
+                            }}
+                        >
+                            {BAUD_RATES.map((v) => (
+                                <option key={v} value={v}>
+                                    {v.toLocaleString('en-US')}
+                                </option>
+                            ))}
+                            <option value="custom">Custom…</option>
+                        </select>
+                        {customBaud && (
+                            <input
+                                aria-label="Custom baud rate"
+                                type="number"
+                                min={1}
+                                max={4294967295}
+                                value={baudDraft}
+                                onChange={(e) => {
+                                    setBaudDraft(e.target.value);
+                                    setSettings({ ...settings, baudRate: Number(e.target.value) });
+                                }}
+                            />
+                        )}
                     </label>
                     <label>
                         Data bits
