@@ -1,3 +1,4 @@
+import { coalesceTerminalEvents } from './gateway-terminal-events';
 import { validateCapture } from '../../shared/automation';
 import { validateSnapshot } from '../../shared/report';
 import {
@@ -364,6 +365,7 @@ export class GatewayClient implements TerminalTransport {
                         // Cap the frame parser even if a server sends an unterminated frame.
                         if (buffer.length > 256 * 1024)
                             throw Error('Gateway terminal output exceeded the frame limit.');
+                        const events: TerminalEvent[] = [];
                         let newline: number;
                         while ((newline = buffer.indexOf('\n')) !== -1) {
                             const line = buffer.slice(0, newline);
@@ -372,6 +374,11 @@ export class GatewayClient implements TerminalTransport {
                             const event = terminalEvent(JSON.parse(line));
                             if (event.id !== request.id || this.sessionId !== session)
                                 throw Error('Gateway returned an event for an earlier terminal.');
+                            events.push(event);
+                        }
+                        for (const event of coalesceTerminalEvents(events)) {
+                            if (controller.signal.aborted || this.sessionId !== session)
+                                throw Error('Gateway terminal ownership changed during output.');
                             // Release ownership before notifying consumers that may replace the shell.
                             // The old reader's finally block must not clear a replacement controller.
                             if (
