@@ -1,0 +1,156 @@
+name: Recover verified v0.4.0 publication
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [main]
+        paths:
+            - .github/workflows/release-recovery.yml
+
+permissions:
+    contents: read
+
+concurrency:
+    group: release-recovery-v0.4.0
+    cancel-in-progress: false
+
+env:
+    HUB_RELEASE_TAG: v0.4.0
+    HUB_APP_SOURCE: b0f94d7d49d36fecc97b87d516724280d840e727
+
+jobs:
+    version:
+        if: github.event.repository.private == false
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            actions: read
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Verify original exact-source gates and operational-only repair
+              run: node scripts/release-recovery-check.mjs original
+              env:
+                  GH_TOKEN: ${{ github.token }}
+    draft:
+        needs: version
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/checkout@v6
+              with:
+                  ref: v0.4.0
+                  path: release-source
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Resume only the existing source-owned private draft by authenticated ID
+              working-directory: release-source
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  export GITHUB_REF_NAME="$HUB_RELEASE_TAG" GITHUB_SHA="$HUB_APP_SOURCE"
+                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" resume
+    macos:
+        needs: draft
+        permissions:
+            contents: write
+        uses: ./.github/workflows/macos-release.yml
+        with:
+            source-ref: v0.4.0
+            source-sha: b0f94d7d49d36fecc97b87d516724280d840e727
+            release-tag: v0.4.0
+            tooling-ref: ${{ github.sha }}
+    publish:
+        needs: [version, draft, macos]
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: write
+            actions: read
+        concurrency:
+            group: release-publication
+            cancel-in-progress: false
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/checkout@v6
+              with:
+                  ref: v0.4.0
+                  path: release-source
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Require every main gate for the corrected operational source
+              run: node scripts/release-recovery-check.mjs tooling
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_TOOLING_SHA: ${{ github.sha }}
+            - name: Recheck original artifact/gate provenance immediately before reuse
+              run: node scripts/release-recovery-check.mjs original
+              env:
+                  GH_TOKEN: ${{ github.token }}
+            - name: Read only the existing tested artifacts from the immutable source run
+              uses: actions/download-artifact@v4
+              with:
+                  github-token: ${{ github.token }}
+                  run-id: 38342913511
+                  pattern: Diagnostic-Hub-*
+                  merge-multiple: true
+                  path: release-source/release
+            - name: Install validation dependencies in immutable app source
+              working-directory: release-source
+              run: npm ci --ignore-scripts
+            - name: Download native private assets and verify all files/source before publication
+              working-directory: release-source
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  export GITHUB_REF_NAME="$HUB_RELEASE_TAG" GITHUB_SHA="$HUB_APP_SOURCE"
+                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" download
+                  node scripts/verify-release.mjs --assets
+                  node scripts/release-notes.mjs
+            - name: Publish only the complete existing guarded draft
+              working-directory: release-source
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  export GITHUB_REF_NAME="$HUB_RELEASE_TAG" GITHUB_SHA="$HUB_APP_SOURCE"
+                  node "$GITHUB_WORKSPACE/scripts/release-draft.mjs" publish
+    published-macos:
+        needs: publish
+        if: github.event.repository.private == false
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                    - runner: macos-15
+                      arch: arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  ref: v0.4.0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - run: npm ci
+            - name: Verify the actual documented published command and normally launched app
+              run: GITHUB_SHA="$HUB_APP_SOURCE" npx tsx tests/macos-published-smoke.ts
+            - name: Verify downloaded installed SSH, trust, clock, reset and unsupported updates
+              run: npx tsx tests/desktop-smoke.ts

@@ -153,6 +153,27 @@ publishes a Release with these notes. Commit the version and highlights before c
 not move an already-published tag. The Mac distribution increment uses a new `v0.4.0` tag; `v0.3.1`,
 unpublished `v0.3.0` and `v0.2.0` are preserved.
 
+## Immutable v0.4.0 publication recovery
+
+The first v0.4.0 tag run qualified all Windows/Linux/seven GNOME/website builds and both native Mac
+bundles, installers, SSH checks and 100 cycles. Staging then failed because the REST tag-name
+endpoint exposes published releases, not unpublished drafts. The tag and private draft are
+preserved.
+
+Corrected release tooling discovers the draft through authenticated paginated listing, then reads
+its stable release ID before every mutation. Tag/source/ownership/draft guards and anonymous
+ID/tag/asset denial remain mandatory. It never modifies an existing published release or substitutes
+a new app commit behind an old tag.
+
+The one-time release-recovery workflow checks the original run and artifact source, requires all 13
+main gates for the corrected operational commit, rebuilds/requalifies both Macs from the immutable
+v0.4.0 app source, and reads the already tested Windows/Linux/web artifacts from the original run.
+Only recovery checks and publication gain per-job Actions read access for that evidence/artifact
+retrieval; approved Contents write remains limited by source-owned draft guards. No account setting,
+persistent credential or new Mac Actions artifact/cache is added. It then repeats complete 24-file
+validation, publishes the same draft and runs both real published-command checks. App source and
+release-tooling source are logged separately.
+
 ## Maintenance
 
 Update Pages automatically through reviewed `main` changes; use a new version tag for desktop

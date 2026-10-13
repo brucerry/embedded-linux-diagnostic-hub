@@ -17,6 +17,24 @@ export function requireOwnedDraft(release, { tag, commit, marker }) {
     assert.ok(Number.isSafeInteger(release.id));
     return release;
 }
+
+export function selectOwnedDraft(releases, context) {
+    assert.ok(Array.isArray(releases), 'Invalid authenticated releases listing.');
+    const matches = releases.filter((release) => release.tag_name === context.tag);
+    assert.equal(matches.length, 1, 'Expected exactly one existing release for this tag.');
+    return requireOwnedDraft(matches[0], context);
+}
+export async function listAllReleases(readPage) {
+    const releases = [];
+    for (let page = 1; page <= 100; page++) {
+        const batch = await readPage(page);
+        assert.ok(Array.isArray(batch), 'Invalid releases page.');
+        releases.push(...batch);
+        if (batch.length < 100) return releases;
+    }
+    throw Error('Release listing exceeded the bounded pagination limit.');
+}
+
 export async function requireAnonymousDenial(url, request = fetch) {
     const response = await request(url, {
         method: 'GET',

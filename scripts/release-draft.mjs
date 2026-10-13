@@ -7,6 +7,8 @@ import {
     requireNewRelease,
     requireOwnedDraft,
     requireAnonymousDenial,
+    selectOwnedDraft,
+    listAllReleases,
 } from './lib/release-draft.mjs';
 import { releaseAssets } from './lib/release-assets.mjs';
 import { MAC_ARCHES, macAsset, macManifest } from './lib/macos-release.mjs';
@@ -44,11 +46,19 @@ const tagCommit = execFileSync('git', ['rev-parse', '--verify', 'refs/tags/' + t
 const marker = requireNewRelease({ tag, version, commit, tagCommit, repository });
 const endpoint = api + '/releases/tags/' + tag;
 const context = { tag, commit, marker };
+async function releases() {
+    return listAllReleases((page) => request(api + '/releases?per_page=100&page=' + page));
+}
+let releaseId;
 async function draft() {
-    return requireOwnedDraft(await request(endpoint), context);
+    if (!releaseId) releaseId = selectOwnedDraft(await releases(), context).id;
+    const owned = requireOwnedDraft(await request(api + '/releases/' + releaseId), context);
+    assert.equal(owned.id, releaseId, 'Draft identity changed.');
+    return owned;
 }
 async function privateDraft(release) {
     await requireAnonymousDenial(endpoint);
+    await requireAnonymousDenial(api + '/releases/' + release.id);
     for (const asset of release.assets) {
         await requireAnonymousDenial(asset.browser_download_url);
     }
@@ -80,8 +90,8 @@ async function upload(release, file) {
 }
 const [mode, arch] = process.argv.slice(2);
 if (mode === 'create') {
-    const existing = await fetch(endpoint, { headers, redirect: 'error' });
-    assert.equal(existing.status, 404, 'New release tag must have no existing release.');
+    const existing = (await releases()).filter((release) => release.tag_name === tag);
+    assert.equal(existing.length, 0, 'New release tag must have no published release or draft.');
     const created = await request(api + '/releases', 'POST', {
         tag_name: tag,
         target_commitish: commit,
@@ -98,6 +108,16 @@ if (mode === 'create') {
             ' at ' +
             commit +
             '; anonymous API access denied.',
+    );
+} else if (mode === 'resume') {
+    const existing = await draft();
+    await privateDraft(existing);
+    console.log(
+        'Resuming only owned unpublished draft ' +
+            tag +
+            ' at ' +
+            commit +
+            '; authenticated ID lookup succeeded and anonymous ID/tag access denied.',
     );
 } else if (mode === 'stage') {
     assert.ok(MAC_ARCHES.includes(arch));
@@ -193,4 +213,4 @@ if (mode === 'create') {
     console.log(
         'Published ' + published.html_url + ' with ' + expected.length + ' verified assets.',
     );
-} else throw Error('Usage: release-draft.mjs create|stage ARCH|download|publish');
+} else throw Error('Usage: release-draft.mjs create|resume|stage ARCH|download|publish');
