@@ -1,9 +1,14 @@
 # Using Diagnostic Hub
 
-The desktop and website share the same workspace. The desktop connects directly over SSH; the
-website needs a matching [HTTPS lab gateway](gateway.md). Start with a reachable Linux SSH service
-and credentials, choose **Connect device**, and verify the device fingerprint before accepting it.
-See [download and platform requirements](downloads.md) for installation and launch options.
+The desktop and website share the same workspace. For SSH diagnostics, the desktop connects
+directly; the website needs a matching [HTTPS lab gateway](gateway.md). Choose **Connect device**
+with a reachable Linux SSH service and verify the device fingerprint. For local UART access, open
+**Serial** without an SSH connection and follow [the Serial guide](serial.md). See
+[download and platform requirements](downloads.md) for installation and launch options.
+
+Windows and Linux provide verified in-app updates. Mac uses the verified manual installer helper;
+quit the app before replacing its bundle. The website is updated by its host. See
+[Desktop updates](#desktop-updates) for progress, report handling and platform limits.
 [Connection attempts and Cancel](connection-retries.md) explains three-second temporary retries,
 credential/trust correction and keeping healthy SSH when collection fails.
 
@@ -96,23 +101,19 @@ the terminal text. The animation pauses when the terminal is hidden or blocked b
 
 ## Desktop updates
 
-Choose **Check for updates** in the desktop header; prereleases are supported. The available choices
-are **Update without saving**, **Save report & update**, and **Save, update & reopen report**.
-Cancel before starting leaves the session unchanged. Once an update transaction starts, cancellation
-is disabled; closing the dialog is not presented as cancelling the native transaction.
+On Windows and Linux, choose **Check for updates** in the desktop header; prereleases are supported.
+The choices are **Update without saving**, **Save report & update**, and **Save, update & reopen
+report**. Cancel before starting leaves the session unchanged. Once an update transaction starts,
+cancellation is disabled; closing the dialog is not presented as cancelling the native transaction.
 
-Updates wait for active collection, disconnect SSH, verify the download and restart without
-reconnecting. Saved reports remain under `update-reports` in the user's application data folder.
-Updating without saving keeps older backups and trusted SSH fingerprints. See
+Mac shows manual update guidance and a verification command for its saved installer helper. Quit the
+app before running that helper to replace the bundle; see
+[Mac installation](downloads.md#mac-installation-and-launch).
+
+Windows and Linux in-app updates wait for active collection, disconnect SSH, verify the download and
+restart without reconnecting. Saved reports remain under `update-reports` in the user's application
+data folder. Updating without saving keeps older backups and trusted SSH fingerprints. See
 [update and release details](delivery.md#maintenance).
-
-## Serial, network insights and Automation
-
-v0.5.0 includes [Serial](serial.md), [WLAN/LAN insights](network-insights.md) and
-[ordered Automation / QA exports](automation.md). Published v0.4.0 assets remain unchanged. Target
-UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
-qualification gates. Automation operator scripts are distinct from the fixed observational
-diagnostic catalogue.
 
 ### Update progress and executable locations
 
@@ -137,16 +138,24 @@ retains manual update guidance.
 
 ### Update platform coverage
 
-| Platform            | Mechanism                                                                  | Destination/status                                                                                      | Native qualification                                                             |
-| ------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Windows x64         | Automatic verified EXE handoff                                             | Measured download, separate verification/commit/restart; wrapper path and receipt                       | Actual local new-process version/path/checksum qualified                         |
-| Linux x64           | Automatic verified AppImage handoff                                        | Same stages; durable APPIMAGE, preserved profile and receipt                                            | Distinct future AppImage test wired into existing Linux CI; native run required  |
-| macOS x64           | Verified manual .app installer; automatic update disabled                  | Terminal stages and launch requested; default ~/Applications/Diagnostic Hub.app plus actual bundle path | Existing Intel CI installer/rollback and new native UI/path/normal-launch checks |
-| macOS arm64         | Same manual mechanism; native machine detected even in translated terminal | Same truthful stages and bundle paths                                                                   | Existing Apple Silicon CI runs the same native checks                            |
-| Other architectures | Automatic update unavailable                                               | Explicit unsupported status and releases link                                                           | No compatible automatic handoff claim                                            |
+| Platform            | Mechanism                                                                  | Destination/status                                                                                      | Native qualification                                                               |
+| ------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Windows x64         | Automatic verified EXE handoff                                             | Measured download, separate verification/commit/restart; wrapper path and receipt                       | Actual local new-process version/path/checksum qualified                           |
+| Linux x64           | Automatic verified AppImage handoff                                        | Same stages; durable APPIMAGE, preserved profile and receipt                                            | Native AppImage handoff verified in Linux CI; physical desktop acceptance separate |
+| macOS x64           | Verified manual .app installer; automatic update disabled                  | Terminal stages and launch requested; default ~/Applications/Diagnostic Hub.app plus actual bundle path | Existing Intel CI installer/rollback and new native UI/path/normal-launch checks   |
+| macOS arm64         | Same manual mechanism; native machine detected even in translated terminal | Same truthful stages and bundle paths                                                                   | Existing Apple Silicon CI runs the same native checks                              |
+| Other architectures | Automatic update unavailable                                               | Explicit unsupported status and releases link                                                           | No compatible automatic handoff claim                                              |
 
 For Mac, download helper/checksum from the same release tag, verify the saved helper, then run the
 saved installer locally as your ordinary user. The app copies only the verification command. Normal
 codesign/Gatekeeper policy, archive/source/architecture verification and failure rollback remain.
 Logical platform tests on Windows do not replace native Linux/Mac CI results. No quarantine,
 notarization, older macOS or physical-device acceptance is claimed.
+
+## Serial, network insights and Automation
+
+Use [Serial](serial.md) for local UART access, [WLAN/LAN insights](network-insights.md) for readable
+network evidence, and [Automation](automation.md) for ordered SSH/Serial flows and QA exports.
+Target UART enablement, wiring and operation belong to the user. Physical adapter, port and driver
+acceptance remain separate from automated fixtures. Armed Automation scripts can change the target;
+ordinary diagnostic collection remains read-only.

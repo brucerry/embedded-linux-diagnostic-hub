@@ -2,35 +2,48 @@
 
 ## Local builds
 
+Install Node.js 24 and npm for development and packaging. Build the shared app, website and gateway:
+
 ```sh
 npm ci
 npm run build
 npm start
 npm run build:web
 npm run package:gateway
-npm run package:win
-npm run verify:package
-npm run package:linux
-npm run verify:linux
 npm run package:web
 npm run package:launchers
-npm run checksums
 ```
 
-Run portable packaging on Windows for release qualification and signing. The desktop output is one
-`release/Diagnostic-Hub.exe`; Windows users do not need `win-unpacked/` or Node.js. Linux users
-receive `Diagnostic-Hub-linux-x64.AppImage` or a portable archive. The Windows portable manifest
-requests user privileges. Linux extraction avoids FUSE and uses no administrator launch. Missing
-Ubuntu/Debian libraries trigger an explicit prerequisite installation prompt, separate from normal
-execution; package installation can require `sudo`. See [download commands](downloads.md). Temporary
-extraction and per-user trusted SSH key storage still require writable host directories. Do not ship
-an old executable alongside the current one.
+Package on the intended client platform, then generate checksums with `npm run checksums`. Release
+validation requires matching app, web, gateway and launcher assets with source identity. Historical
+releases may contain retired companion ZIPs; current builds use native window behavior.
 
-Release validation requires the app, gateway, web and launcher assets with matching checksums and
-source identity. Mac distribution includes native x64 and arm64 complete ZIPs, sidecars and
-`macos-build-info-<arch>.json` (minimum OS, source, ASAR hash and ad-hoc signature status). Linux CI
-retains its native compositor matrix. Historical published releases may include retired companion
-ZIPs; they are not part of new builds.
+### Windows
+
+```sh
+npm run package:win
+npm run verify:package
+```
+
+Qualify the actual portable executable on Windows. The output is one `release/Diagnostic-Hub.exe`;
+users do not need `win-unpacked/` or Node.js. Its manifest requests user privileges. Optional
+signing must be checked on Windows; an unsigned build can show a publisher warning. Per-user
+extraction and trusted SSH storage require writable host directories.
+
+### Linux
+
+```sh
+npm run package:linux
+npm run verify:linux
+```
+
+Distribute the x86_64 AppImage or portable archive. The helper extracts the AppImage without FUSE or
+administrator launch. Compatible glibc, graphical desktop libraries and normal sandbox support
+remain required. Missing Ubuntu/Debian packages use an explicit installation prompt; installing
+system packages can require `sudo`. CI includes the seven-case GNOME compositor matrix. See
+[download and prerequisite handling](downloads.md).
+
+### macOS
 
 Native Mac packaging on the matching architecture (Node.js 24, for development/CI):
 
@@ -46,7 +59,12 @@ For Intel use `--x64`, `release/mac` and `x64`. The configured runtime minimum i
 packaging does not qualify every supported older Mac. CI additionally runs installer controls,
 packaged SSH checks and 100 native cycles before distribution.
 
-Unsigned Linux/WSL cross-build:
+Native x64 and arm64 distributions contain complete app ZIPs, sidecars and
+`macos-build-info-<arch>.json` recording minimum OS, source, ASAR hash and ad-hoc signature status.
+Keep each app bundle intact. Developer ID signing, notarization, browser quarantine and physical or
+managed Mac acceptance are separate from native CI qualification.
+
+### Unsigned Linux/WSL cross-build
 
 ```sh
 npm run build
@@ -61,18 +79,22 @@ Windows PowerShell to run the packaged checks from [the development guide](devel
 
 ## Workflow structure
 
-| File                                     | Responsibility                                                                                           |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/verify-website.yml`   | Reusable Linux formatting, types, unit/SSH and browser verification; website and gateway build artifacts |
-| `.github/workflows/github-pages.yml`     | PR/main/manual website checks; deployment only on `main` after verification                              |
-| `.github/workflows/windows-portable.yml` | PR/main/manual and reusable Windows checks; package, inspect and run the actual portable executable      |
-| `.github/workflows/linux-portable.yml`   | Ubuntu 22.04 x64 build; inspect AppImage/archive, run packaged SSH tests with sandboxing enabled         |
-| `.github/workflows/release.yml`          | Version tag validation; invoke all verified builds; verify asset checksums and publish Releases          |
+| File                                                 | Responsibility                                                                                           |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/verify-website.yml`               | Reusable Linux formatting, types, unit/SSH and browser verification; website and gateway build artifacts |
+| `.github/workflows/github-pages.yml`                 | PR/main/manual website checks; deployment only on `main` after verification                              |
+| `.github/workflows/windows-portable.yml`             | PR/main/manual and reusable Windows checks; package, inspect and run the actual portable executable      |
+| `.github/workflows/linux-portable.yml`               | Ubuntu 22.04 x64 build; inspect AppImage/archive, run packaged SSH tests with sandboxing enabled         |
+| `.github/workflows/macos-qualification.yml`          | PR/main/manual qualification on native Intel and Apple Silicon runners                                   |
+| `.github/workflows/macos-release.yml`                | Source-bound native Mac bundle, installer and runtime qualification for releases                         |
+| `.github/workflows/macos-published-verification.yml` | Read-only public download/helper and installed-app verification on both Mac architectures                |
+| `.github/workflows/release.yml`                      | Version tag validation; invoke all verified builds; verify asset checksums and publish Releases          |
 
 The shared `.github/actions/macos-build` action qualifies both native architectures on main and in
-`.github/workflows/macos-release.yml`, without Mac Actions artifacts or caches. Mac jobs produce
-complete bundles with `scripts/package-macos.mjs`, roundtrip verify them and exercise the helper
-before packaged SSH and 100 native cycles.
+`.github/workflows/macos-release.yml`, without storing app bundles in Actions artifacts or caches.
+Failed browser tests retain their traces and geometry for three days. Mac jobs produce complete
+bundles with `scripts/package-macos.mjs`, roundtrip verify them and exercise the helper before
+packaged SSH and 100 native cycles.
 
 Each release publishes the exact Windows, Linux and Mac artifacts tested by their build jobs,
 without rebuilding in the publish job. New-draft creation, native Mac staging and final publishing
@@ -150,8 +172,8 @@ baseline.
 
 A normal branch push runs verification and Pages deployment. A version-tag push also builds and
 publishes a Release with these notes. Commit the version and highlights before creating the tag. Do
-not move an already-published tag. The Mac distribution increment uses a new `v0.4.0` tag; `v0.3.1`,
-unpublished `v0.3.0` and `v0.2.0` are preserved.
+not move an already-published tag. Earlier releases, assets, tags and recovery evidence remain
+historical records.
 
 ## Immutable v0.4.0 publication recovery
 
@@ -215,9 +237,15 @@ current release verifier and never auto-runs on main changes.
 
 ## Maintenance
 
-Update Pages automatically through reviewed `main` changes; use a new version tag for desktop
-updates. The portable updater includes prereleases by default, verifies the published SHA-256
-checksum and uses per-user storage without elevation or system installation.
+Update Pages through reviewed `main` changes; use a new version tag for desktop updates.
+
+- Windows: verified in-app EXE download and handoff, with per-user storage and no elevation.
+- Linux: verified in-app AppImage download and handoff, retaining the durable AppImage path.
+- Mac: verified manual bundle replacement with the installer helper after quitting the app; in-app
+  automatic installation is unsupported. See [Mac maintenance](macos-qualification.md).
+
+Windows and Linux in-app updates include prereleases by default and verify the published SHA-256
+checksum. Their report choices are:
 
 | Update choice                | Report behavior after restart                                                                                   |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |

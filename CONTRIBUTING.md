@@ -25,7 +25,10 @@ module boundaries and the [delivery guide](docs/delivery.md) for packaging and h
   results. Add meaningful parser/SSH fixtures for missing tools, malformed data and partial
   failures.
 - Keep sample data under `tests/fixtures/` and out of normal application startup.
-- Update affected documentation. Keep the README brief and put detailed instructions in `docs/`.
+- Update affected documentation. Keep the README focused on purpose, getting started, development
+  and guide links. Put feature details, platform instructions and validation limits in `docs/`; put
+  version-specific changes in release notes. Avoid a feature catalogue or stale release status in
+  the README.
 - Never commit credentials, private keys, tokens, exported device reports, builds or caches. Redact
   sensitive information from submitted logs.
 

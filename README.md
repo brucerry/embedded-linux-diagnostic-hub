@@ -8,36 +8,26 @@
 [![Published Mac verification](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/macos-published-verification.yml/badge.svg?branch=main)](https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/workflows/macos-published-verification.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A desktop and web workbench for diagnosing embedded Linux devices over SSH. Inspect system
-resources, interfaces, hardware and logs with read-only checks, live graphs and local JSON reports.
-Use the embedded terminal for interactive device commands.
+A desktop and web workbench for diagnosing embedded Linux devices. Collect read-only evidence over
+SSH, inspect live graphs and save local reports. Use the SSH terminal or local Serial terminal for
+interactive access.
 
 [Download the latest release](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest)
 · [Open the website](https://brucerry.github.io/embedded-linux-diagnostic-hub/)
 
 ## Get started
 
-1. Download `Diagnostic-Hub.exe` for Windows 10/11 x64, the AppImage/archive for Linux x86_64, or
-   the complete
-   [Intel Mac app](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/Diagnostic-Hub-macos-x64.zip)
-   /
-   [Apple Silicon Mac app](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/Diagnostic-Hub-macos-arm64.zip).
-   The portable desktop needs no Node.js installation and connects over a local network without
-   internet or a device agent. See [download commands and platform requirements](docs/downloads.md).
-2. Launch the app, choose **Connect device**, enter your SSH credentials and verify the device
-   fingerprint. Browse diagnostics, collect snapshots or use **Terminal**.
+1. Choose the Windows, Linux or Mac package in the
+   [download and installation guide](docs/downloads.md). Desktop packages include the runtime;
+   Node.js is needed only for development.
+2. Launch the app and follow [the usage guide](docs/usage.md). For SSH diagnostics, choose **Connect
+   device** and verify the device fingerprint. For local UART access, choose **Serial**; an SSH
+   connection is optional.
 
-The website uses a separately deployed [HTTPS SSH gateway](docs/gateway.md). Automatic diagnostics
-are read-only; terminal commands run with your SSH account's permissions and can change the device.
-Mac Terminal install and launch:
-
-```sh
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest/download/download-run-macos.sh | /bin/bash'
-```
-
-Mac apps are ad-hoc signed, not Developer ID signed or notarized. Updates are manual; macOS or
-managed-device policy can block launch. See
-[Mac installation and trust guidance](docs/macos-qualification.md).
+Desktop SSH sessions work over the local network without internet or a device agent. Website SSH
+requires a separately deployed [HTTPS gateway](docs/gateway.md). Automatic diagnostics are
+read-only; interactive commands and armed Automation scripts can change the device. See the platform
+guides for launch requirements, trust checks and updates.
 
 ## Develop
 
@@ -52,12 +42,6 @@ Use `npm run dev` for browser development and `npm run verify` for formatting, t
 The [development guide](docs/development.md) covers module boundaries and additional checks;
 [build and release instructions](docs/delivery.md) cover packaging and deployment.
 
-The release workflow badge shows the latest default-branch read-only audit of a published release.
-New tags still run the complete publication gates, whose history remains on the workflow page.
-Published Mac verification resolves latest stable by default; a manual published tag checks history.
-The download link shows latest-release availability. Historical failed runs remain visible; see
-[delivery and verification](docs/delivery.md).
-
 ## Contribute
 
 Contributions to diagnostics, parsers, accessibility, platform support and documentation are
@@ -67,17 +51,11 @@ substantial changes, open an issue describing the problem and affected environme
 ## Guides
 
 - [Using the app](docs/usage.md): snapshots, reports, terminal shortcuts and updates.
+- [Serial terminal](docs/serial.md), [network insights](docs/network-insights.md) and
+  [Automation](docs/automation.md).
 - [Connection retries](docs/connection-retries.md) and
   [macOS installation and CI qualification limits](docs/macos-qualification.md).
 - [Website setup](docs/website.md) and [gateway deployment](docs/gateway.md).
 - [Architecture](docs/architecture.md), [design](docs/design.md) and
   [hardware coverage](docs/hardware.md).
 - [Validation history](docs/validation.md) and [production qualification](docs/production.md).
-
-## v0.5.0 features
-
-The v0.5.0 source adds [Serial](docs/serial.md), [WLAN/LAN insights](docs/network-insights.md) and
-[ordered Automation / QA exports](docs/automation.md). Published v0.4.0 assets remain unchanged.
-Target UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are
-separate qualification gates. Automation operator scripts are distinct from the fixed observational
-diagnostic catalogue.
