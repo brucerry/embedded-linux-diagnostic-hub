@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -11,6 +11,15 @@ import {
     listAllReleases,
 } from './lib/release-draft.mjs';
 import { releaseAssets } from './lib/release-assets.mjs';
+import { validateFinalReleaseNotes } from './lib/release-notes.mjs';
+import {
+    EXISTING_RELEASE,
+    requireExistingSource,
+    validateExistingQualification,
+    validateExistingReceipt,
+    requireExistingInventory,
+    validateExistingFiles,
+} from './lib/existing-release-recovery.mjs';
 import { MAC_ARCHES, macAsset, macManifest } from './lib/macos-release.mjs';
 import { validateReusedMacInventory, validateReusedMacFiles } from './lib/release-recovery.mjs';
 
@@ -193,8 +202,34 @@ if (mode === 'create') {
             validateReusedMacFiles(files, architecture);
         }
     console.log('Downloaded and verified native Mac draft bytes through authenticated API.');
-} else if (mode === 'publish') {
+} else if (mode === 'publish' || mode === 'publish-existing') {
+    let receipt;
+    async function qualifiedExistingSource() {
+        const p = EXISTING_RELEASE;
+        const [run, jobs, artifacts, remoteRef, remoteTag] = await Promise.all([
+            request(api + '/actions/runs/' + p.run),
+            request(api + '/actions/runs/' + p.run + '/jobs?per_page=100'),
+            request(api + '/actions/runs/' + p.run + '/artifacts?per_page=100'),
+            request(api + '/git/ref/tags/' + p.tag),
+            request(api + '/git/tags/' + p.tagObject),
+        ]);
+        assert.equal(jobs.total_count, jobs.jobs.length);
+        assert.equal(artifacts.total_count, artifacts.artifacts.length);
+        requireExistingSource(tag, commit, remoteRef, remoteTag);
+        validateExistingQualification(run, jobs.jobs, artifacts.artifacts);
+    }
+    if (mode === 'publish-existing') {
+        assert.ok(arch, 'Choose the validated existing inventory receipt.');
+        const stat = await lstat(arch);
+        assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024);
+        receipt = validateExistingReceipt(
+            JSON.parse(await readFile(arch, 'utf8')),
+            process.env.HUB_TOOLING_SHA,
+        );
+        await qualifiedExistingSource();
+    }
     let release = await draft();
+    if (receipt) requireExistingInventory(release, receipt.inventory);
     await privateDraft(release);
     const expected = [
         ...releaseAssets(version).flatMap((file) => [file, file + '.sha256']),
@@ -202,11 +237,18 @@ if (mode === 'create') {
         'linux-build-info.json',
         ...MAC_ARCHES.map(macManifest),
     ].sort();
-    for (const name of expected)
-        if (!release.assets.some((a) => a.name === name)) {
-            await upload(await draft(), name);
-            release = await draft();
-        }
+    if (receipt)
+        assert.deepEqual(
+            release.assets.map((a) => a.name).sort(),
+            expected,
+            'Existing-only recovery refuses missing assets.',
+        );
+    else
+        for (const name of expected)
+            if (!release.assets.some((a) => a.name === name)) {
+                await upload(await draft(), name);
+                release = await draft();
+            }
     assert.deepEqual(release.assets.map((a) => a.name).sort(), expected);
     for (const asset of release.assets) {
         const bytes = await readFile(path.join('release', asset.name));
@@ -217,6 +259,19 @@ if (mode === 'create') {
             'Staged asset differs from validated bytes: ' + asset.name,
         );
     }
+    if (receipt) {
+        const files = Object.fromEntries(
+            await Promise.all(
+                receipt.inventory.map(async (asset) => [
+                    asset.name,
+                    await readFile(path.join('release', asset.name)),
+                ]),
+            ),
+        );
+        const blob = (name) =>
+            execFileSync('git', ['show', tag + ':' + name], { maxBuffer: 32 * 1024 * 1024 });
+        validateExistingFiles(files, receipt.inventory, blob);
+    }
     await privateDraft(release);
     // Validation happened earlier in this job; validate again immediately before publication.
     execFileSync(process.execPath, ['scripts/verify-release.mjs', '--assets'], {
@@ -225,8 +280,11 @@ if (mode === 'create') {
     // verify-release rewrites package notes: regenerate the final four-section notes.
     execFileSync(process.execPath, ['scripts/release-notes.mjs'], { stdio: 'inherit' });
     const finalNotes = await readFile('release/notes.md', 'utf8');
-    assert.ok(finalNotes.startsWith('Description:\n'));
+    validateFinalReleaseNotes(finalNotes, tag);
+    if (receipt) await qualifiedExistingSource();
     release = await draft();
+    // This is the final read immediately before the sole recovery write.
+    if (receipt) requireExistingInventory(release, receipt.inventory);
     const published = await request(api + '/releases/' + release.id, 'PATCH', {
         draft: false,
         body: finalNotes,
@@ -235,10 +293,18 @@ if (mode === 'create') {
     assert.equal(published.draft, false);
     assert.equal(published.tag_name, tag);
     assert.equal(published.target_commitish, commit);
+    if (receipt)
+        assert.deepEqual(
+            published.assets
+                .map(({ id, name, size, digest }) => ({ id, name, size, digest }))
+                .sort((a, b) => a.name.localeCompare(b.name)),
+            receipt.inventory,
+            'Published inventory changed.',
+        );
     console.log(
         'Published ' + published.html_url + ' with ' + expected.length + ' verified assets.',
     );
 } else
     throw Error(
-        'Usage: release-draft.mjs create|resume|resume-reuse|stage ARCH|download|reuse ARCH|publish',
+        'Usage: release-draft.mjs create|resume|resume-reuse|stage ARCH|download|reuse ARCH|publish|publish-existing RECEIPT',
     );

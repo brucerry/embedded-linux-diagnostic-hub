@@ -1,15 +1,43 @@
 import { execFileSync } from 'node:child_process';
 
+function releaseSectionCandidates(body) {
+    // Identify section-like lines first; malformed Markdown/spacing must not hide extra headings.
+    return [
+        ...body.matchAll(
+            /^[\t ]*(?:#{1,6}[\t ]*)?(?:\p{Extended_Pictographic}\uFE0F?[\t ]*)?(?:Description|Changes|Commits|Links):[^\r\n]*$/gimu,
+        ),
+    ];
+}
 export function meaningfulReleaseLink(line) {
     const legacy = line.trim().match(/^(.+?) - (https?:\/\/\S+)$/);
-    if (legacy) return '[' + legacy[1].replace(/[\[\]]/g, '\\$&') + '](' + legacy[2] + ')';
-    if (/^\[[^\r\n]+\]\(https?:\/\/[^\s]+\)$/.test(line.trim())) return line.trim();
-    throw Error('Release links require a meaningful Markdown label or legacy name - URL.');
+    const markdown = line.trim().match(/^\[([^\r\n]+)\]\((https?:\/\/[^\s]+)\)$/);
+    const match = legacy ?? markdown;
+    if (!match || !match[1].trim())
+        throw Error('Release links require a meaningful Markdown label or legacy name - URL.');
+    let destination;
+    try {
+        destination = new URL(match[2]);
+    } catch {
+        throw Error('Release links require a valid absolute HTTP(S) destination.');
+    }
+    if (
+        !['http:', 'https:'].includes(destination.protocol) ||
+        !destination.hostname ||
+        /^\.+$/.test(destination.hostname) ||
+        destination.username ||
+        destination.password ||
+        match[2].includes('\\')
+    )
+        throw Error('Release links require a valid absolute HTTP(S) destination.');
+    return legacy
+        ? '[' + legacy[1].replace(/[\[\]]/g, '\\$&') + '](' + legacy[2] + ')'
+        : line.trim();
 }
 export function meaningfulReleaseLinks(body) {
-    const headers = [
-        ...body.matchAll(/^(?:(?:📋|🔧|🔖|🔗) )?(Description|Changes|Commits|Links):$/gm),
-    ].map((match) => match[1] + ':');
+    const headers = releaseSectionCandidates(body).map((match) => {
+        const exact = /^(?:(?:📋|🔧|🔖|🔗) )?(Description|Changes|Commits|Links):$/.exec(match[0]);
+        return exact ? exact[1] + ':' : null;
+    });
     if (
         JSON.stringify(headers) !==
         JSON.stringify(['Description:', 'Changes:', 'Commits:', 'Links:'])
@@ -26,6 +54,46 @@ export function meaningfulReleaseLinks(body) {
         .split('\n')
         .filter(Boolean);
     return prefix + links.map(meaningfulReleaseLink).join('\n') + '\n';
+}
+
+export function releaseSectionHeadings(tag) {
+    const version = /^v(\d+)\.(\d+)\.(\d+)(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?$/.exec(tag);
+    if (!version) throw Error('Invalid release tag for note headings.');
+    const decorated =
+        Number(version[1]) > 0 ||
+        Number(version[2]) > 5 ||
+        (Number(version[2]) === 5 && Number(version[3]) >= 1);
+    const labels = ['Description', 'Changes', 'Commits', 'Links'];
+    const emojis = ['📋', '🔧', '🔖', '🔗'];
+    return labels.map((label, index) => (decorated ? emojis[index] + ' ' : '') + label + ':');
+}
+
+export function validateFinalReleaseNotes(body, tag) {
+    const expected = releaseSectionHeadings(tag);
+    const headers = releaseSectionCandidates(body);
+    if (
+        headers.length !== expected.length ||
+        headers.some((header, index) => header[0] !== expected[index]) ||
+        !body.startsWith(expected[0] + '\n')
+    )
+        throw Error('Final release notes require the version-specific four headings in order.');
+    const sections = headers.map((header, index) =>
+        body
+            .slice(header.index + header[0].length, headers[index + 1]?.index ?? body.length)
+            .trim(),
+    );
+    if (
+        sections.some((section) => !section) ||
+        [sections[1], sections[2]].some((section) =>
+            section.split('\n').some((line) => !line.startsWith('- ')),
+        )
+    )
+        throw Error(
+            'Final release note sections must be nonempty, with Changes and Commits as bullet lists.',
+        );
+    if (meaningfulReleaseLinks(body) !== body)
+        throw Error('Final release links require complete meaningful Markdown destinations.');
+    return body;
 }
 
 export function previousRelease(releases, currentTag) {
@@ -179,17 +247,6 @@ export function releasePageNotes({
             `Downloads and setup - https://github.com/${repository}/blob/${currentTag}/docs/downloads.md`,
         ]),
     ];
-    const version = /^v(\d+)\.(\d+)\.(\d+)/.exec(currentTag);
-    const decorated =
-        version &&
-        (Number(version[1]) > 0 ||
-            Number(version[2]) > 5 ||
-            (Number(version[2]) === 5 && Number(version[3]) >= 1));
-    const heading = (label) =>
-        (decorated
-            ? { Description: '📋 ', Changes: '🔧 ', Commits: '🔖 ', Links: '🔗 ' }[label]
-            : '') +
-        label +
-        ':';
-    return `${heading('Description')}\n${description}\n\n${heading('Changes')}\n${changes}\n\n${heading('Commits')}\n${commits.join('\n') || '- No new commits.'}\n\n${heading('Links')}\n${[...new Set(links.map(meaningfulReleaseLink))].join('\n')}\n`;
+    const headings = releaseSectionHeadings(currentTag);
+    return `${headings[0]}\n${description}\n\n${headings[1]}\n${changes}\n\n${headings[2]}\n${commits.join('\n') || '- No new commits.'}\n\n${headings[3]}\n${[...new Set(links.map(meaningfulReleaseLink))].join('\n')}\n`;
 }

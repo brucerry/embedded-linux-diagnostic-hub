@@ -1,0 +1,83 @@
+name: Recover verified v0.5.1 existing assets
+run-name:
+    ${{ inputs.publish && 'Publish verified v0.5.1 existing assets' || 'Preview verified v0.5.1
+    recovery (read only)' }}
+
+on:
+    push:
+        branches: [main]
+        paths: [.github/workflows/release-existing-recovery.yml]
+    workflow_dispatch:
+        inputs:
+            publish:
+                description:
+                    'Publish the reviewed existing draft after verification; false prepares evidence
+                    only'
+                type: boolean
+                default: false
+
+permissions:
+    contents: read
+    actions: read
+
+jobs:
+    recover:
+        if: github.event.repository.private == false && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        # GitHub requires push access to inspect an unpublished draft. Preparation performs GET only.
+        permissions:
+            contents: write
+            actions: read
+        concurrency:
+            group: release-publication
+            cancel-in-progress: false
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/checkout@v6
+              with:
+                  ref: v0.5.1
+                  fetch-depth: 0
+                  path: release-source
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  cache: npm
+            - name: Install test/tool dependencies without application build
+              run: npm ci --ignore-scripts
+            - name: Verify the reviewed recovery tooling
+              run: npm run verify
+            - name: Read and validate qualified original inputs and all existing draft hashes
+              working-directory: release-source
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_TOOLING_SHA: ${{ github.sha }}
+              run: node "$GITHUB_WORKSPACE/scripts/check-existing-release-recovery.mjs" prepare
+            - name: Preserve the immutable inventory and preparation evidence
+              uses: actions/upload-artifact@v4
+              with:
+                  name: v051-existing-recovery-${{ github.run_id }}
+                  path: validation/existing-recovery/*.json
+                  if-no-files-found: error
+            - name: Publish only the complete existing source-bound inventory
+              if: github.event_name == 'workflow_dispatch' && inputs.publish
+              working-directory: release-source
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_TOOLING_SHA: ${{ github.sha }}
+                  HUB_APP_SOURCE: dd71117299982c869dbcd187079e7951b60ac878
+                  HUB_RELEASE_TAG: v0.5.1
+              run:
+                  GITHUB_SHA="$HUB_APP_SOURCE" GITHUB_REF_NAME="$HUB_RELEASE_TAG" node
+                  "$GITHUB_WORKSPACE/scripts/release-draft.mjs" publish-existing
+                  "$GITHUB_WORKSPACE/validation/existing-recovery/receipt.json"
+    public-consumers:
+        needs: recover
+        if:
+            github.event_name == 'workflow_dispatch' && inputs.publish && needs.recover.result ==
+            'success'
+        uses: ./.github/workflows/macos-published-verification.yml
+        with:
+            published_tag: v0.5.1
