@@ -1,7 +1,7 @@
 name: Build and qualify native Mac distribution
 description:
-    Shared native build, installer, SSH and window qualification without Actions artifacts or
-    caches.
+    Shared native build, installer, SSH and window qualification; retain failed browser diagnostics
+    without storing app artifacts or caches.
 inputs:
     arch:
         required: true
@@ -53,9 +53,20 @@ runs:
           working-directory: ${{ inputs.source-dir }}
           run: npx playwright install chromium
         - name: Run the full browser suite with one worker
+          id: browser-suite
           shell: bash
           working-directory: ${{ inputs.source-dir }}
           run: npm run test:e2e -- --workers=1
+        - name: Retain failed browser traces and geometry
+          if: ${{ failure() && steps.browser-suite.outcome == 'failure' }}
+          uses: actions/upload-artifact@v4
+          with:
+              name:
+                  macos-browser-failure-${{ inputs.arch }}-${{ github.run_id }}-${{
+                  github.run_attempt }}
+              path: ${{ inputs.source-dir }}/test-results/
+              if-no-files-found: warn
+              retention-days: 3
         - name: Verify development SSH, trust, clock, reset and unsupported updates
           shell: bash
           working-directory: ${{ inputs.source-dir }}

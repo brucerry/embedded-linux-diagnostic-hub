@@ -104,10 +104,58 @@ test('Serial beach motion, reduced motion, resize and no pointer interception', 
     await expect
         .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
         .toBe(true);
-    const frame = await page.locator('.serial-page .terminal-frame').boundingBox();
-    const screen = await page.locator('.serial-page .xterm-screen').boundingBox();
-    expect(screen!.height).toBeLessThanOrEqual(frame!.height);
+    const expectFittedTerminal = async (direction: string, previousHeight?: number) => {
+        let geometry:
+            | {
+                  frameHeight: number;
+                  containerHeight: number;
+                  screenHeight: number;
+              }
+            | undefined;
+        try {
+            // ResizeObserver delivery can follow viewport/page-width settlement.
+            // Read both rectangles together and retain the exact containment limit.
+            await expect
+                .poll(
+                    async () => {
+                        geometry = await page.locator('.serial-page').evaluate((element) => ({
+                            frameHeight: element
+                                .querySelector('.terminal-frame')!
+                                .getBoundingClientRect().height,
+                            containerHeight: element
+                                .querySelector('.terminal-screen')!
+                                .getBoundingClientRect().height,
+                            screenHeight: element
+                                .querySelector('.xterm-screen')!
+                                .getBoundingClientRect().height,
+                        }));
+                        return {
+                            contained:
+                                geometry.screenHeight > 0 &&
+                                geometry.screenHeight <= geometry.frameHeight,
+                            expanded:
+                                previousHeight === undefined ||
+                                geometry.screenHeight > previousHeight,
+                        };
+                    },
+                    { message: 'Serial terminal fits after ' + direction },
+                )
+                .toEqual({ contained: true, expanded: true });
+        } finally {
+            await testInfo.attach('serial-' + direction + '-geometry', {
+                body: JSON.stringify(geometry ?? { unavailable: true }, null, 2),
+                contentType: 'application/json',
+            });
+        }
+        return geometry!;
+    };
+    const mobile = await expectFittedTerminal('shrink');
     await screenshot(page, 'serial-mobile.png', testInfo);
+    await page.setViewportSize({ width: 1440, height: 1050 });
+    await expect
+        .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+        .toBe(true);
+    await expectFittedTerminal('expand', mobile.screenHeight);
 });
 test('unplug and cancelled late open never reconnect or replay input', async ({ page }) => {
     await installSerial(page);
