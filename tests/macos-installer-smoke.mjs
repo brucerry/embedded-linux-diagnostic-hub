@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -10,7 +10,8 @@ import { zipSync, strToU8 } from 'fflate';
 assert.equal(process.platform, 'darwin');
 const arch = process.arch;
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
-const root = await mkdtemp(path.join(tmpdir(), 'hub-mac-installer-'));
+// The helper resolves its installation directory with pwd -P. Match that native contract.
+const root = await realpath(await mkdtemp(path.join(tmpdir(), 'hub-mac-installer-')));
 const bin = path.join(root, 'bin');
 const fixture = path.join(root, 'fixture');
 const directory = path.join(root, 'Applications with spaces');

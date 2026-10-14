@@ -101,13 +101,32 @@ export class UpdateReceipts {
             throw e;
         }
     }
-    async verifyFile(file: string, hash?: string): Promise<string> {
+    private async attestedLocation(location: string, anchor: string): Promise<boolean> {
+        const relative = path.relative(anchor, location);
+        if (!relative || path.isAbsolute(relative) || relative.split(path.sep).includes('..'))
+            return false;
+        const root = await lstat(anchor);
+        if (!root.isDirectory() || root.isSymbolicLink()) return false;
+        // Native ancestor aliases may be canonicalized; owned descendants must not redirect.
+        const canonicalRoot = await realpath(anchor);
+        let descendant = anchor;
+        for (const part of relative.split(path.sep)) {
+            descendant = path.join(descendant, part);
+            if ((await lstat(descendant)).isSymbolicLink()) return false;
+        }
+        return samePath(await realpath(location), path.join(canonicalRoot, relative));
+    }
+    async verifyFile(
+        file: string,
+        hash?: string,
+        anchor = hash ? this.directory : path.dirname(file),
+    ): Promise<string> {
         const stat = await lstat(file);
         if (
             !stat.isFile() ||
             stat.isSymbolicLink() ||
             stat.size > MAX_BYTES ||
-            !samePath(await realpath(file), file)
+            !(await this.attestedLocation(file, anchor))
         )
             throw Error('The update executable location changed or is unavailable.');
         if (hash) {
@@ -146,10 +165,14 @@ export class UpdateReceipts {
             if (
                 !stat.isDirectory() ||
                 stat.isSymbolicLink() ||
-                !samePath(await realpath(currentPath), currentPath)
+                !(await this.attestedLocation(currentPath, path.dirname(currentPath)))
             )
                 throw Error('The current application bundle location changed.');
-            await this.verifyFile(path.join(currentPath, 'Contents', 'MacOS', 'Diagnostic Hub'));
+            await this.verifyFile(
+                path.join(currentPath, 'Contents', 'MacOS', 'Diagnostic Hub'),
+                undefined,
+                currentPath,
+            );
             return currentPath;
         }
         return this.verifyFile(currentPath);
