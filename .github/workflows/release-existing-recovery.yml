@@ -6,7 +6,16 @@ run-name:
 on:
     push:
         branches: [main]
-        paths: [.github/workflows/release-existing-recovery.yml]
+        paths:
+            - .github/workflows/release-existing-recovery.yml
+            - scripts/check-existing-release-recovery.mjs
+            - scripts/lib/existing-release-recovery.mjs
+            - scripts/lib/recovery-download.mjs
+            - scripts/release-draft.mjs
+            - scripts/lib/release-notes.mjs
+            - tests/existing-release-recovery.test.ts
+            - tests/recovery-download.test.ts
+            - tests/release-publication-notes.test.ts
     workflow_dispatch:
         inputs:
             publish:
