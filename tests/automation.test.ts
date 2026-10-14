@@ -454,3 +454,30 @@ test('active-command heartbeat detects suspension and cancels later steps while 
     assert.match(messages.at(-1)!, /timer stalled/);
     assert.equal(watch, undefined);
 });
+
+test('Enter-only is an explicit Serial step with actual line-ending bytes; SSH and accidental blanks remain invalid', () => {
+    const p = plan();
+    p.transport = 'serial';
+    p.steps[0].command = '';
+    assert.throws(() => validatePlan(p), /select Send Enter only/);
+    p.steps[0].enterOnly = true;
+    for (const [ending, bytes] of [
+        ['CR', [13]],
+        ['LF', [10]],
+        ['CRLF', [13, 10]],
+    ] as const) {
+        p.serial.lineEnding = ending;
+        const validated = validatePlan(p);
+        assert.deepEqual([...serialPayload(validated.steps[0].command, ending)], [...bytes]);
+    }
+    p.serial.lineEnding = 'none';
+    assert.throws(() => validatePlan(p), /Enter-only requires/);
+    p.serial.lineEnding = 'CR';
+    p.transport = 'ssh';
+    assert.throws(() => validatePlan(p), /Enter-only requires/);
+    p.steps[0].enterOnly = false;
+    assert.throws(() => validatePlan(p), /enabled SSH command/);
+    p.transport = 'serial';
+    p.steps[0].command = 'x'.repeat(8193);
+    assert.throws(() => validatePlan(p), /exceeds 8192/);
+});

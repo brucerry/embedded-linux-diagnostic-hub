@@ -1,4 +1,19 @@
-import { useId } from 'react';
+import { useId, type CSSProperties } from 'react';
+const skyStars = (() => {
+    let seed = 73419;
+    const random = () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 4294967296;
+    };
+    return Array.from({ length: 18 }, () => ({
+        x: 3 + random() * 94,
+        y: 5 + random() * 88,
+        seconds: 8 + random() * 10,
+        delay: -random() * 18,
+        brightness: 0.25 + random() * 0.2,
+        size: random() > 0.8 ? 3 : 2,
+    }));
+})();
 
 export const duck = [
     '......oooooo........',
@@ -128,6 +143,25 @@ export function TerminalPlayground({ active }: { active: boolean }) {
                     <path d="M155 62h4v2h2v-2h4v6h-2v2h-2v2h-2v-2h-2v-2h-2z" />
                 </g>
             </svg>
+            <div className="terminal-stars">
+                {skyStars.map((star, index) => (
+                    <span
+                        key={index}
+                        className="terminal-star"
+                        style={
+                            {
+                                left: star.x + '%',
+                                top: star.y + '%',
+                                width: star.size,
+                                height: star.size,
+                                animationDuration: star.seconds + 's',
+                                animationDelay: star.delay + 's',
+                                '--star-brightness': star.brightness,
+                            } as CSSProperties
+                        }
+                    />
+                ))}
+            </div>
             <svg
                 className="terminal-earth"
                 viewBox="0 0 64 64"

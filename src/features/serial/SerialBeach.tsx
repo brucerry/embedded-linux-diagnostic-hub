@@ -10,6 +10,15 @@ const palette: Record<string, string> = {
     p: '#f8c2cc',
     s: '#da9bac',
 };
+function Coconut({ x, y }: { x: number; y: number }) {
+    return (
+        <g className="serial-coconut" transform={'translate(' + x + ' ' + y + ')'}>
+            <path d="M2 0h6v2h2v6H8v2H2V8H0V2h2z" fill="#b69a7b" />
+            <path d="M2 1h5v2H3v3H1V2h1z" fill="#d0b796" />
+            <path d="M7 5h2v3H7v1H3V7h4z" fill="#92795f" />
+        </g>
+    );
+}
 export function SerialBeach({ active }: { active: boolean }) {
     const sun = useId(),
         scene = useRef<HTMLDivElement>(null);
@@ -28,7 +37,7 @@ export function SerialBeach({ active }: { active: boolean }) {
     const horizon = (height * 116) / 240,
         shore = (height * 174) / 240,
         sandOffset = shore - 174,
-        treeTop = horizon - 22,
+        treeTop = horizon - 38,
         trunkHeight = shore + 16 - treeTop;
     return (
         <div
@@ -80,6 +89,8 @@ export function SerialBeach({ active }: { active: boolean }) {
                             }
                             fill="#b99b7d"
                         />
+                        <Coconut x={1} y={22} />
+                        <Coconut x={13} y={25} />
                         <g className="serial-palm-leaves">
                             <path
                                 d="M12 18h-24v-4h-16v-8h24v4h16V4h-12V-4h20v12h16V4h24v8H44v6H24v6h12v8H20V20z"
@@ -88,6 +99,21 @@ export function SerialBeach({ active }: { active: boolean }) {
                             <path
                                 d="M-26 8h22v4h16v4H0v-2h-18zM24 12h20v4H28v4h-8z"
                                 fill="#b6d1b2"
+                            />
+                        </g>
+                    </g>
+                ))}
+                <Coconut x={43} y={shore + 24} />
+                <Coconut x={61} y={shore + 33} />
+                <Coconut x={582} y={shore + 28} />
+                {[52, 570, 68].map((x, i) => (
+                    <g key={'bird-' + i} transform={'translate(' + x + ' ' + (treeTop + 8) + ')'}>
+                        <g className={'serial-bird serial-bird-' + i}>
+                            <path d="M-3-2h6v4h-6zM3-1h3v2H3z" fill="#526b78" />
+                            <path
+                                className="serial-bird-wing"
+                                d="M-2-2h-5v-3h-3v-2h5v2h3zM2-2h5v-3h3v-2H5v2H2z"
+                                fill="#6f8992"
                             />
                         </g>
                     </g>
@@ -109,7 +135,6 @@ export function SerialBeach({ active }: { active: boolean }) {
                             <g transform="scale(1.35)">
                                 <Sprite pixels={duck} palette={palette} />
                             </g>
-                            <path d="M43 15h8v3h5v3h-8v-3h-5z" fill="#ffe6a3" />
                         </g>
                     </g>
                     <g transform="translate(396 186)">

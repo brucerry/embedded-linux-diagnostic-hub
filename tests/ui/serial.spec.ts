@@ -283,9 +283,49 @@ test('desktop chooser reaches every metadata-optional COM identity with bounded 
     await expect(modal).not.toBeVisible();
     const selected = page.getByLabel('Local serial port', { exact: true });
     await expect(selected.locator('option')).toHaveCount(3);
-    await expect(selected.locator('option').filter({ hasText: /^COM11$/ })).toHaveCount(2);
+    await expect(selected.locator('option').filter({ hasText: /^COM11$/ })).toHaveCount(1);
     await expect(selected.locator('option').filter({ hasText: /Authorized port/ })).toHaveCount(1);
     expect(await page.evaluate(() => window.serialTest.opens)).toBe(0);
     await page.getByRole('button', { name: 'Deselect', exact: true }).click();
     expect(await page.evaluate(() => window.serialTest.opens)).toBe(0);
+});
+
+test('recoverable target break keeps local Serial connected and its shared clipboard menu accessible', async ({
+    page,
+}) => {
+    await installSerial(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Serial', exact: true }).click();
+    const serial = page.getByRole('region', { name: 'Local serial terminal' });
+    await serial.getByLabel('Local serial port', { exact: true }).selectOption('0');
+    await expect(serial.getByRole('button', { name: 'Forget permission' })).toHaveCount(0);
+    await expect(serial.getByRole('option', { name: /Authorized port/ })).toHaveCount(1);
+    await serial.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(serial.getByText('Ready', { exact: true })).toBeVisible();
+    await page.evaluate(() => window.serialTest.recoverBreak());
+    await page.evaluate(() =>
+        window.serialTest.push([...new TextEncoder().encode('boot resumed\r\n')]),
+    );
+    await expect(serial.locator('.xterm-screen')).toContainText('boot resumed');
+    await expect(serial.getByText('Ready', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.serialTest.opens)).toBe(1);
+    expect(await page.evaluate(() => window.serialTest.closes)).toBe(0);
+    await serial.locator('.terminal-screen').click({ button: 'right' });
+    const menu = serial.getByRole('menu', { name: 'Terminal clipboard' });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(menu.getByRole('menuitem', { name: 'Paste', exact: true })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(page.getByLabel('Serial terminal input')).toBeFocused();
+    await expect(serial.locator('.serial-bird')).toHaveCount(3);
+    await expect(serial.locator('.serial-coconut')).toHaveCount(7);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(
+        await serial
+            .locator('.serial-bird')
+            .first()
+            .evaluate((node) => getComputedStyle(node).animationName),
+    ).toBe('none');
 });

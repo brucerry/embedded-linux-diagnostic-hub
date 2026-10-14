@@ -2,6 +2,8 @@ import type { Page } from '@playwright/test';
 export interface SerialTestState {
     opens: number;
     closes: number;
+    readers: number;
+    recoverBreak(): void;
     writes: number[][];
     holdOpen: boolean;
     push(bytes: number[]): void;
@@ -20,6 +22,12 @@ export async function installSerial(page: Page) {
         const state: SerialTestState = {
             opens: 0,
             closes: 0,
+            readers: 0,
+            recoverBreak() {
+                const previous = input;
+                port.readable = createInput();
+                previous.error(new DOMException('break received', 'BreakError'));
+            },
             writes: [],
             holdOpen: false,
             push(bytes) {
@@ -33,6 +41,21 @@ export async function installSerial(page: Page) {
                 api.dispatchEvent(event);
             },
         };
+        const createInput = () => {
+            const stream = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    input = controller;
+                },
+            });
+            const getReader = stream.getReader.bind(stream);
+            Object.defineProperty(stream, 'getReader', {
+                value: () => {
+                    state.readers++;
+                    return getReader();
+                },
+            });
+            return stream;
+        };
         const port = {
             readable: null as ReadableStream<Uint8Array> | null,
             writable: null as WritableStream<Uint8Array> | null,
@@ -42,11 +65,7 @@ export async function installSerial(page: Page) {
                     await new Promise<void>((resolve) => {
                         state.releaseOpen = resolve;
                     });
-                this.readable = new ReadableStream({
-                    start(controller) {
-                        input = controller;
-                    },
-                });
+                this.readable = createInput();
                 this.writable = new WritableStream({
                     write(bytes: Uint8Array) {
                         state.writes.push([...bytes]);

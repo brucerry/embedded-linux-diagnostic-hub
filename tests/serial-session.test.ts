@@ -60,8 +60,22 @@ function fake(openGate?: Promise<void>, writeGate?: Promise<void>) {
         push(bytes: Uint8Array) {
             input.enqueue(bytes);
         },
+        failNamed(name: string) {
+            input.error(new DOMException(name, name));
+        },
         error() {
             input.error(new Error('unplugged'));
+        },
+        recover(name = 'BreakError') {
+            const previous = input;
+            const oldStream = port.readable!;
+            port.readable = new ReadableStream({
+                start(controller) {
+                    input = controller;
+                },
+            });
+            previous.error(new DOMException('UART ' + name, name));
+            return oldStream;
         },
         get opens() {
             return opens;
@@ -230,4 +244,159 @@ test('high-volume Serial input/output stay ordered and callback-paced in 16 KiB 
     assert.equal(f.closes, 1);
     assert.equal(session.isOwned, false);
     await session.close();
+});
+
+test('recoverable UART break replaces only the reader; receive, input and cleanup retain one open', async () => {
+    const f = fake(),
+        received: number[] = [];
+    const session = new SerialSession(async (bytes) => {
+        received.push(...bytes);
+    });
+    session.select(f.port, 'COM11');
+    await session.connect(DEFAULT_SERIAL_SETTINGS);
+    f.push(new Uint8Array([65]));
+    await tick();
+    const previous = f.recover();
+    await new Promise((r) => setTimeout(r, 40));
+    f.push(new Uint8Array([66]));
+    session.send(new Uint8Array([67]));
+    await tick();
+    assert.equal(session.current.state, 'connected');
+    assert.equal(previous.locked, false);
+    assert.deepEqual(received, [65, 66]);
+    assert.deepEqual([...f.writes[0]], [67]);
+    assert.equal(f.opens, 1);
+    assert.equal(f.closes, 0);
+    await session.close(true);
+    assert.equal(f.closes, 1);
+    assert.equal(session.isOwned, false);
+});
+test('recoverable read recovery cannot outlive explicit close or reacquire another port', async () => {
+    const f = fake(),
+        session = new SerialSession(async () => {});
+    session.select(f.port, 'COM11');
+    await session.connect(DEFAULT_SERIAL_SETTINGS);
+    f.recover('ParityError');
+    await tick();
+    await session.close(true);
+    assert.equal(f.opens, 1);
+    assert.equal(f.closes, 1);
+    assert.equal(session.current.state, 'idle');
+    assert.equal(session.isOwned, false);
+});
+
+test('break without a replacement stream and actual removal stay fatal; no implicit reopen occurs', async () => {
+    for (const removed of [false, true]) {
+        const f = fake(),
+            session = new SerialSession(async () => {});
+        session.select(f.port, 'COM11');
+        await session.connect(DEFAULT_SERIAL_SETTINGS);
+        if (removed) f.port.readable = null;
+        f.failNamed('BreakError');
+        await new Promise((r) => setTimeout(r, 40));
+        assert.equal(f.opens, 1);
+        assert.equal(f.closes, 1);
+        assert.equal(session.isOwned, false);
+        assert.throws(() => session.send(new Uint8Array([13])), /not connected/);
+    }
+});
+test('unknown read failures do not become recoverable simply because a stream exists', async () => {
+    const f = fake(),
+        session = new SerialSession(async () => {});
+    session.select(f.port, 'COM11');
+    await session.connect(DEFAULT_SERIAL_SETTINGS);
+    f.recover('SecurityError');
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(f.closes, 1);
+    assert.equal(f.opens, 1);
+    assert.equal(session.isOwned, false);
+});
+
+test('recoverable break interrupts an in-flight command capture without reopening, replaying or claiming completion', async () => {
+    const f = fake(),
+        received: number[] = [];
+    const session = new SerialSession(async (bytes) => {
+        received.push(...bytes);
+    });
+    session.select(f.port, 'COM11');
+    await session.connect(DEFAULT_SERIAL_SETTINGS);
+    const release = session.acquireAutomation();
+    const pending = session.runAutomation(
+        new Uint8Array([108, 115, 13]),
+        '# ',
+        1000,
+        new AbortController().signal,
+    );
+    await tick();
+    f.push(new TextEncoder().encode('partial output'));
+    await tick();
+    f.recover();
+    const result = await pending;
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(result.completion, 'cancelled');
+    assert.equal(result.exitCode, null);
+    assert.equal(result.stdout, 'partial output');
+    assert.equal(session.current.state, 'connected');
+    assert.equal(f.opens, 1);
+    assert.equal(f.closes, 0);
+    assert.deepEqual(
+        f.writes.map((bytes) => [...bytes]),
+        [[108, 115, 13]],
+    );
+    release();
+    session.send(new Uint8Array([13]));
+    await tick();
+    assert.deepEqual(
+        f.writes.map((bytes) => [...bytes]),
+        [[108, 115, 13], [13]],
+    );
+    await session.close();
+});
+
+test('UnknownError resumes only from a fresh replacement stream on the same open port', async () => {
+    const f = fake(),
+        values: number[] = [],
+        session = new SerialSession(async (bytes) => {
+            values.push(...bytes);
+        });
+    session.select(f.port, 'COM11');
+    await session.connect(DEFAULT_SERIAL_SETTINGS);
+    f.recover('UnknownError');
+    await new Promise((r) => setTimeout(r, 40));
+    f.push(new Uint8Array([90]));
+    await tick();
+    assert.equal(session.current.state, 'connected');
+    assert.deepEqual(values, [90]);
+    assert.equal(f.opens, 1);
+    assert.equal(f.closes, 0);
+    await session.close();
+});
+test('recoverable error during an outstanding Automation write closes ownership boundedly, with no reopen or replay', async () => {
+    const gate = deferred(),
+        f = fake(undefined, gate.promise),
+        session = new SerialSession(async () => {}, 250);
+    session.select(f.port, 'COM11');
+    await session.connect(DEFAULT_SERIAL_SETTINGS);
+    const release = session.acquireAutomation();
+    const result = session.runAutomation(
+        new Uint8Array([108, 115, 13]),
+        '# ',
+        1000,
+        new AbortController().signal,
+    );
+    await tick();
+    f.recover();
+    assert.equal((await result).completion, 'cancelled');
+    for (let i = 0; i < 25 && session.isOwned; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(session.isOwned, false);
+    assert.equal(session.current.state, 'selected');
+    assert.match(session.current.message, /write was still pending/);
+    assert.equal(f.opens, 1);
+    assert.equal(f.closes, 1);
+    assert.deepEqual(
+        f.writes.map((bytes) => [...bytes]),
+        [[108, 115, 13]],
+    );
+    release();
+    assert.throws(() => session.send(new Uint8Array([13])), /not connected/);
 });

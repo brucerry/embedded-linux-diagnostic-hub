@@ -9,10 +9,6 @@ export function serialTerminalOptions() {
             // Transparent; contrast calculations use the darkest pastel in the scene.
             background: '#91a3a800',
             foreground: '#1e3443',
-            cursor: '#234d5f',
-            cursorAccent: '#f4f8ef',
-            selectionBackground: '#376d9d55',
-            selectionInactiveBackground: '#376d9d33',
             black: '#16252e',
             red: '#722b3b',
             green: '#174b36',

@@ -75,6 +75,10 @@ export default function AutomationPage(props: Props) {
         [clockKind, setClockKind] = useState<'local' | 'device'>('local');
     const [referenceTick, setReferenceTick] = useState(Date.now());
     const [reorderNotice, setReorderNotice] = useState('');
+    const [draggedId, setDraggedId] = useState<string | null>(null);
+    const dragOriginal = useRef<CommandStep[] | null>(null);
+    const dragTarget = useRef<string | null>(null);
+    const dragScroll = useRef({ y: 0, timer: 0 as ReturnType<typeof setInterval> | 0 });
     const dragged = useRef<string | null>(null),
         activityEpoch = useRef(0),
         arming = useRef(false);
@@ -398,22 +402,54 @@ export default function AutomationPage(props: Props) {
             return next;
         });
     };
-    const drop = (targetId: string) => {
-        const sourceId = dragged.current;
+    const finishDrag = (commit: boolean) => {
+        if (!dragged.current) return;
+        if (!commit && dragOriginal.current) setSteps(dragOriginal.current);
+        setReorderNotice(commit ? 'Step order updated.' : 'Reordering cancelled.');
         dragged.current = null;
-        if (running || arming.current || props.blocked || !sourceId || sourceId === targetId)
+        dragOriginal.current = null;
+        dragTarget.current = null;
+        setDraggedId(null);
+        clearInterval(dragScroll.current.timer);
+        dragScroll.current.timer = 0;
+    };
+    const previewDrag = (targetId: string) => {
+        const sourceId = dragged.current;
+        if (running || arming.current || props.blocked || !sourceId) return;
+        if (sourceId === targetId) {
+            dragTarget.current = null;
             return;
-        const from = steps.findIndex((s) => s.id === sourceId),
-            to = steps.findIndex((s) => s.id === targetId);
-        if (from < 0 || to < 0) return;
+        }
+        if (dragTarget.current === targetId) return;
+        dragTarget.current = targetId;
         setSteps((list) => {
+            const from = list.findIndex((s) => s.id === sourceId),
+                to = list.findIndex((s) => s.id === targetId);
+            if (from < 0 || to < 0) return list;
             const next = [...list];
             const [item] = next.splice(from, 1);
             next.splice(to, 0, item);
             return next;
         });
-        setReorderNotice('Step moved to position ' + (to + 1));
     };
+    useEffect(() => {
+        if (running || props.blocked || !props.visible) finishDrag(false);
+    }, [running, props.blocked, props.visible]);
+    useEffect(() => {
+        const cancel = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') finishDrag(false);
+        };
+        const trackPointer = (event: DragEvent) => {
+            if (dragged.current) dragScroll.current.y = event.clientY;
+        };
+        window.addEventListener('keydown', cancel);
+        window.addEventListener('dragover', trackPointer, true);
+        return () => {
+            window.removeEventListener('keydown', cancel);
+            window.removeEventListener('dragover', trackPointer, true);
+            clearInterval(dragScroll.current.timer);
+        };
+    }, []);
     let reference = 'Unavailable';
     try {
         const now =
@@ -634,35 +670,59 @@ export default function AutomationPage(props: Props) {
                         {steps.map((s, i) => (
                             <li
                                 key={s.id}
+                                data-step-id={s.id}
+                                draggable={!running && !props.blocked}
+                                onPointerDownCapture={(e) => {
+                                    const interactive = (e.target as Element).closest(
+                                        'input, textarea, select, button, a, label, [contenteditable], [role="button"], [role="textbox"], [role="checkbox"], [role="slider"], [data-no-drag]',
+                                    );
+                                    e.currentTarget.draggable =
+                                        !interactive && !running && !props.blocked;
+                                }}
+                                onDragStart={(e) => {
+                                    if (
+                                        running ||
+                                        arming.current ||
+                                        props.blocked ||
+                                        !e.currentTarget.draggable
+                                    ) {
+                                        e.preventDefault();
+                                        return;
+                                    }
+                                    dragged.current = s.id;
+                                    dragOriginal.current = [...steps];
+                                    setDraggedId(s.id);
+                                    dragScroll.current.y = e.clientY;
+                                    dragScroll.current.timer = setInterval(() => {
+                                        const { y } = dragScroll.current;
+                                        if (y < 72) window.scrollBy(0, -16);
+                                        else if (y > innerHeight - 72) window.scrollBy(0, 16);
+                                    }, 50);
+                                    e.dataTransfer.effectAllowed = 'move';
+                                    e.dataTransfer.setData('text/plain', s.id);
+                                }}
+                                onDragEnd={() => finishDrag(false)}
+                                className={draggedId === s.id ? 'automation-drag-placeholder' : ''}
                                 onDragOver={(e) => {
-                                    if (dragged.current && !running) e.preventDefault();
+                                    if (!dragged.current || running || props.blocked) return;
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = 'move';
+                                    dragScroll.current.y = e.clientY;
+                                    previewDrag(s.id);
                                 }}
                                 onDrop={(e) => {
                                     e.preventDefault();
-                                    drop(s.id);
+                                    finishDrag(true);
                                 }}
                             >
                                 <span
                                     className="automation-drag-handle"
-                                    draggable={!running && !props.blocked}
                                     role="img"
                                     aria-label={
                                         'Drag step ' +
                                         (i + 1) +
                                         ' to reorder; use move buttons with keyboard'
                                     }
-                                    onDragStart={(e) => {
-                                        if (running || props.blocked) {
-                                            e.preventDefault();
-                                            return;
-                                        }
-                                        dragged.current = s.id;
-                                        e.dataTransfer.effectAllowed = 'move';
-                                        e.dataTransfer.setData('text/plain', s.id);
-                                    }}
-                                    onDragEnd={() => {
-                                        dragged.current = null;
-                                    }}
                                 >
                                     ⠿
                                 </span>
@@ -744,8 +804,27 @@ export default function AutomationPage(props: Props) {
                                             ? 'Type your script'
                                             : 'Type the console payload'
                                     }
-                                    onChange={(e) => edit(s.id, { command: e.target.value })}
+                                    disabled={transport === 'serial' && Boolean(s.enterOnly)}
+                                    onChange={(e) =>
+                                        edit(s.id, { command: e.target.value, enterOnly: false })
+                                    }
                                 />
+                                {transport === 'serial' && (
+                                    <label className="automation-enter-only">
+                                        <input
+                                            type="checkbox"
+                                            aria-label={'Command ' + (i + 1) + ' send Enter only'}
+                                            checked={Boolean(s.enterOnly)}
+                                            onChange={(e) =>
+                                                edit(s.id, {
+                                                    enterOnly: e.target.checked,
+                                                    ...(e.target.checked ? { command: '' } : {}),
+                                                })
+                                            }
+                                        />
+                                        Send Enter only
+                                    </label>
+                                )}
                             </li>
                         ))}
                     </ol>
@@ -924,8 +1003,7 @@ export default function AutomationPage(props: Props) {
                             <p className="automation-current-time">
                                 Current {clockKind === 'device' ? 'verified device' : 'local host'}{' '}
                                 time in {zone}:{' '}
-                                <time aria-label="Current time reference">{reference}</time>. The
-                                chosen start stays fixed.
+                                <time aria-label="Current time reference">{reference}</time>.
                             </p>
                             {transport === 'ssh' && (
                                 <label>
@@ -938,11 +1016,6 @@ export default function AutomationPage(props: Props) {
                                 </label>
                             )}
                         </div>
-                        <small className="automation-note">
-                            Desktop runs continue while minimized. Sleep, disconnect, ownership loss
-                            or clock uncertainty pauses work; rearm manually. Browser suspension can
-                            also pause timing.
-                        </small>
                     </div>
                     <div className="automation-delay-list">
                         <h4>Step delays</h4>

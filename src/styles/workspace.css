@@ -75,7 +75,7 @@
 .terminal-frame {
     position: relative;
     isolation: isolate;
-    height: clamp(340px, 55vh, 720px);
+    height: clamp(440px, 65vh, 720px);
     padding: 50px 12px 12px;
     overflow: hidden;
     overscroll-behavior: auto;
@@ -147,6 +147,7 @@
     bottom: 0;
     right: 0;
     width: min(100%, 680px);
+    transform: translateY(clamp(8px, 2vw, 20px));
     opacity: 0.42;
     image-rendering: pixelated;
 }
@@ -4096,4 +4097,118 @@ select option:checked {
     padding: 12px;
     border: 1px solid var(--line);
     border-radius: 10px;
+}
+
+/* Decorative birds return to their palms between flights. */
+.serial-bird {
+    --bird-delay: 0s;
+    animation: serial-bird-flight 18s ease-in-out infinite;
+    animation-delay: var(--bird-delay);
+}
+.serial-bird-1 {
+    --bird-delay: -8s;
+    animation-direction: reverse;
+}
+.serial-bird-2 {
+    --bird-delay: -13s;
+}
+.serial-bird-wing {
+    animation: serial-bird-wing 18s linear infinite;
+    animation-delay: var(--bird-delay);
+    transform-origin: 0 0;
+}
+@keyframes serial-bird-flight {
+    0%,
+    16%,
+    100% {
+        transform: translate(0, 0);
+    }
+    28% {
+        transform: translate(22px, -28px);
+    }
+    46% {
+        transform: translate(45px, -48px);
+    }
+    66% {
+        transform: translate(18px, -36px);
+    }
+    84% {
+        transform: translate(-12px, -18px);
+    }
+}
+@keyframes serial-bird-wing {
+    0%,
+    16%,
+    84%,
+    100% {
+        transform: scaleY(1);
+    }
+    24%,
+    36%,
+    48%,
+    60%,
+    72% {
+        transform: scaleY(-0.6);
+    }
+    30%,
+    42%,
+    54%,
+    66%,
+    78% {
+        transform: scaleY(1);
+    }
+}
+.automation-drag-placeholder {
+    outline: 2px dashed var(--blue);
+    opacity: 0.45;
+}
+.automation-drag-placeholder::before {
+    content: 'Drop command here';
+    display: block;
+    margin-bottom: 8px;
+}
+.automation-enter-only {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.automation-steps li {
+    cursor: grab;
+}
+.automation-steps li:hover {
+    border-color: var(--blue);
+}
+.automation-steps li :is(input, textarea, select, button, a, label, [contenteditable]) {
+    cursor: auto;
+}
+.automation-steps li.automation-drag-placeholder {
+    cursor: grabbing;
+}
+
+.terminal-stars {
+    position: absolute;
+    inset: 152px 14px 40%;
+    pointer-events: none;
+}
+.terminal-star {
+    position: absolute;
+    background: #abc8df;
+    opacity: 0.18;
+    animation: terminal-star-glow 12s ease-in-out infinite;
+}
+@keyframes terminal-star-glow {
+    0%,
+    100% {
+        opacity: 0.12;
+    }
+    50% {
+        opacity: var(--star-brightness);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .terminal-star {
+        animation: none;
+        opacity: 0.2;
+    }
 }

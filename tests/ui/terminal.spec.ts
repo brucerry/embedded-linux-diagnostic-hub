@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installDesktop } from './fixtures/desktop';
+import { installSerial } from './fixtures/serial';
 import { gatewayFixture } from '../fixtures/gateway';
 import { createReport } from '../../shared/report';
 import { demoSnapshot } from '../fixtures/snapshots';
@@ -791,4 +792,130 @@ test('actual Bash PTY handles continuations, subshells, loops and Ctrl+L cursor 
     } finally {
         await gateway.close();
     }
+});
+
+test('SSH and Serial terminal layouts match, Earth stays anchored and background motion remains inert', async ({
+    page,
+}, testInfo) => {
+    await installDesktop(page);
+    await installSerial(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+    await connectDesktop(page);
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+    const terminal = page.getByRole('region', { name: 'Connected device terminal' });
+    await expect(terminal.getByText('Ready', { exact: true })).toBeVisible();
+    const geometry = () =>
+        terminal.evaluate((node) => {
+            const frame = node.querySelector('.terminal-frame')!.getBoundingClientRect();
+            const screen = node.querySelector('.xterm-screen')!.getBoundingClientRect();
+            const landscape = node.querySelector('.terminal-landscape')!;
+            const earth = node.querySelector('.terminal-earth')!;
+            return {
+                height: frame.height,
+                cssHeight: getComputedStyle(node.querySelector('.terminal-frame')!).height,
+                screenHeight: screen.height,
+                earthTop: getComputedStyle(earth).top,
+                earthRight: getComputedStyle(earth).right,
+                landscapeTransform: getComputedStyle(landscape).transform,
+                duckBottom: node.querySelector('.terminal-duck')!.getBoundingClientRect().bottom,
+                frameBottom: frame.bottom,
+            };
+        });
+    await expect(terminal.locator('.terminal-star')).toHaveCount(18);
+    const opacity = await terminal
+        .locator('.terminal-star')
+        .first()
+        .evaluate((node) => getComputedStyle(node).opacity);
+    await expect
+        .poll(() =>
+            terminal
+                .locator('.terminal-star')
+                .first()
+                .evaluate((node) => getComputedStyle(node).opacity),
+        )
+        .not.toBe(opacity);
+    const timings = await terminal
+        .locator('.terminal-star')
+        .evaluateAll((nodes) => nodes.map((node) => getComputedStyle(node).animationDuration));
+    expect(new Set(timings).size).toBeGreaterThan(1);
+    const captured = [];
+    for (const viewport of [
+        { width: 1440, height: 1050 },
+        { width: 412, height: 915 },
+    ]) {
+        await page.setViewportSize(viewport);
+        await expect
+            .poll(async () => {
+                const g = await geometry();
+                return g.screenHeight <= g.height;
+            })
+            .toBe(true);
+        const ssh = await geometry();
+        expect(ssh.duckBottom).toBeLessThanOrEqual(ssh.frameBottom);
+        expect(ssh.earthTop).toBe('56px');
+        expect(ssh.earthRight).toBe('32px');
+        expect(ssh.landscapeTransform).toBe(
+            viewport.width === 1440 ? 'matrix(1, 0, 0, 1, 0, 20)' : 'matrix(1, 0, 0, 1, 0, 8.24)',
+        );
+        expect(
+            await terminal
+                .locator('.terminal-stars')
+                .evaluate((node) => getComputedStyle(node).pointerEvents),
+        ).toBe('none');
+        await page.screenshot({
+            path: testInfo.outputPath('ssh-' + viewport.width + '.png'),
+            fullPage: true,
+        });
+        await terminal.locator('.terminal-frame').evaluate((node) => {
+            node.scrollIntoView({ block: 'start' });
+            window.scrollBy(
+                0,
+                -(
+                    (document.querySelector('.site-header')?.getBoundingClientRect().height ?? 0) +
+                    16
+                ),
+            );
+        });
+        await terminal
+            .locator('.terminal-frame')
+            .screenshot({ path: testInfo.outputPath('ssh-frame-' + viewport.width + '.png') });
+        await page.getByRole('button', { name: 'Serial', exact: true }).click();
+        const serial = page.getByRole('region', { name: 'Local serial terminal' });
+        const serialHeight = await serial.locator('.terminal-frame').evaluate((node) => ({
+            box: node.getBoundingClientRect().height,
+            css: getComputedStyle(node).height,
+        }));
+        expect(serialHeight.css).toBe(ssh.cssHeight);
+        await page.screenshot({
+            path: testInfo.outputPath('serial-' + viewport.width + '.png'),
+            fullPage: true,
+        });
+        await serial.locator('.terminal-frame').evaluate((node) => {
+            node.scrollIntoView({ block: 'start' });
+            window.scrollBy(
+                0,
+                -(
+                    (document.querySelector('.site-header')?.getBoundingClientRect().height ?? 0) +
+                    16
+                ),
+            );
+        });
+        await serial
+            .locator('.terminal-frame')
+            .screenshot({ path: testInfo.outputPath('serial-frame-' + viewport.width + '.png') });
+        captured.push({ viewport, ssh, serialHeight });
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+    }
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    expect(
+        await terminal
+            .locator('.terminal-star')
+            .first()
+            .evaluate((node) => getComputedStyle(node).animationName),
+    ).toBe('none');
+    await testInfo.attach('terminal-layout-comparison', {
+        body: JSON.stringify(captured, null, 2),
+        contentType: 'application/json',
+    });
 });

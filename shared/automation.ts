@@ -20,6 +20,7 @@ export interface CommandStep {
     enabled: boolean;
     command: string;
     delaySeconds: number;
+    enterOnly?: boolean;
 }
 export interface ClockCalibration {
     source: string;
@@ -179,7 +180,7 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
     const ids = new Set<string>();
     for (const [i, s] of p.steps.entries()) {
         const field = 'Step ' + (i + 1);
-        knownFields(s, ['id', 'name', 'enabled', 'command', 'delaySeconds'], field);
+        knownFields(s, ['id', 'name', 'enabled', 'command', 'delaySeconds', 'enterOnly'], field);
         if (
             !s ||
             typeof s.id !== 'string' ||
@@ -194,10 +195,29 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
         ids.add(s.id);
         if (typeof s.command !== 'string' || s.command.includes('\0'))
             throw Error(field + ': command must be text without NUL.');
+        if (s.enterOnly !== undefined && typeof s.enterOnly !== 'boolean')
+            throw Error(field + ': Enter-only setting must be a boolean.');
+        if (
+            s.enterOnly &&
+            (p.transport !== 'serial' ||
+                s.command !== '' ||
+                !['CR', 'LF', 'CRLF'].includes(p.serial?.lineEnding))
+        )
+            throw Error(
+                field + ': Enter-only requires Serial, an empty script and CR, LF or CRLF.',
+            );
         const size = new TextEncoder().encode(s.command).length;
         total += size;
-        if (size > AUTOMATION_LIMITS.commandBytes || (s.enabled && !s.command.trim()))
-            throw Error(field + ': enabled command needs 1–8192 UTF-8 bytes.');
+        if (size > AUTOMATION_LIMITS.commandBytes)
+            throw Error(field + ': command exceeds 8192 UTF-8 bytes.');
+        if (s.enabled && !s.command.trim() && !s.enterOnly)
+            throw Error(
+                field +
+                    (s.name ? ' (' + s.name + ')' : '') +
+                    (p.transport === 'serial'
+                        ? ': enter a command or select Send Enter only.'
+                        : ': enabled SSH command needs 1–8192 UTF-8 bytes.'),
+            );
         boundedNumber(s.delaySeconds, 0, AUTOMATION_LIMITS.delaySeconds, field + ' delay');
     }
     if (total > AUTOMATION_LIMITS.planBytes || !p.steps.some((s) => s.enabled))

@@ -305,3 +305,146 @@ test('optional names, mouse and keyboard ordering, stable timing and fixed chose
     await setup(flow, 'Review');
     await expect(flow.locator('.automation-preview')).toContainText('2028-07-01T13:15:00.000Z');
 });
+
+test('Enter-only Serial Automation shares one port and reader; local input annotations never become device results', async ({
+    page,
+}) => {
+    await installSerial(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Serial', exact: true }).click();
+    const serial = page.getByRole('region', { name: 'Local serial terminal' });
+    await serial.getByLabel('Local serial port', { exact: true }).selectOption('0');
+    await serial.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(serial.getByText('Ready', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Automation', exact: true }).click();
+    const flow = page.getByRole('region', { name: 'Automation', exact: true });
+    await flow.getByLabel('Automation transport').selectOption('serial');
+    await flow.getByLabel('Serial completion prompt').fill('console# ');
+    await setup(flow, 'Commands');
+    await flow.getByLabel('Command 1 send Enter only').check();
+    await setup(flow, 'Review');
+    await flow.getByRole('button', { name: 'Run once', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.serialTest.writes)).toEqual([[13]]);
+    await page.getByRole('button', { name: 'Serial', exact: true }).click();
+    await expect(serial.locator('.xterm-screen')).toContainText('[Automation input, local] "\\r"');
+    await page.getByLabel('Serial terminal input').focus();
+    await page.keyboard.type('manual');
+    expect(await page.evaluate(() => window.serialTest.writes)).toEqual([[13]]);
+    await page.evaluate(() =>
+        window.serialTest.push([...new TextEncoder().encode('actual reply\r\nconsole# ')]),
+    );
+    await expect(serial.locator('.xterm-screen')).toContainText('actual reply');
+    await page.getByRole('button', { name: 'Automation', exact: true }).click();
+    await expect(flow.getByRole('status')).toContainText('Flow finished');
+    const [download] = await Promise.all([
+        page.waitForEvent('download'),
+        flow.getByRole('button', { name: 'Download QA results' }).click(),
+    ]);
+    const fs = await import('node:fs/promises'),
+        file = await download.path();
+    const result = JSON.parse(await fs.readFile(file!, 'utf8'));
+    expect(result.records[0].stdout).toBe('actual reply\r\nconsole# ');
+    expect(result.records[0].requestBytes).toBe('DQ==');
+    expect(result.records[0].completion).toBe('prompt-observed');
+    expect(
+        await page.evaluate(() => ({
+            opens: window.serialTest.opens,
+            readers: window.serialTest.readers,
+            closes: window.serialTest.closes,
+        })),
+    ).toEqual({ opens: 1, readers: 1, closes: 0 });
+});
+test('card surface drag previews before drop, Escape restores identity, controls remain editable and edge scrolling stops on cancel', async ({
+    page,
+}, testInfo) => {
+    await installSerial(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Automation', exact: true }).click();
+    const flow = page.getByRole('region', { name: 'Automation', exact: true });
+    await setup(flow, 'Commands');
+    await flow.getByLabel('Command 1 script').fill('first');
+    await flow.getByRole('button', { name: 'Add command', exact: true }).click();
+    await flow.getByLabel('Command 2 script').fill('second');
+    const originalIds = await flow
+        .locator('.automation-steps li')
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-step-id')));
+    const data = await page.evaluateHandle(() => new DataTransfer());
+    await flow
+        .locator('.automation-steps li')
+        .first()
+        .dispatchEvent('dragstart', { dataTransfer: data });
+    const target = flow.locator('.automation-steps li').last();
+    const targetBounds = await target.boundingBox();
+    await target.dispatchEvent('dragover', {
+        dataTransfer: data,
+        clientY: targetBounds!.y + targetBounds!.height - 4,
+    });
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('second');
+    for (let i = 0; i < 4; i++)
+        await flow.locator('[data-step-id="' + originalIds[1] + '"]').dispatchEvent('dragover', {
+            dataTransfer: data,
+            clientY: targetBounds!.y + targetBounds!.height - 4,
+        });
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('second');
+    await expect(flow.locator('.automation-drag-placeholder')).toHaveCount(1);
+    expect(
+        await flow
+            .locator('.automation-drag-placeholder')
+            .evaluate((node) => getComputedStyle(node).outlineStyle),
+    ).toBe('dashed');
+    await flow
+        .locator('.automation-steps')
+        .screenshot({ path: testInfo.outputPath('automation-drag-preview.png') });
+    await page.keyboard.press('Escape');
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('first');
+    expect(
+        await flow
+            .locator('.automation-steps li')
+            .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-step-id'))),
+    ).toEqual(originalIds);
+    await flow.getByLabel('Command 1 script').click();
+    expect(await flow.locator('.automation-steps li').first().getAttribute('draggable')).toBe(
+        'false',
+    );
+    await flow.getByLabel('Command 1 script').fill('editing still works');
+    await flow
+        .locator('.automation-steps li')
+        .first()
+        .dispatchEvent('dragstart', { dataTransfer: data });
+    await flow
+        .locator('.automation-steps li')
+        .last()
+        .dispatchEvent('dragover', { dataTransfer: data, clientY: 400 });
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('editing still works');
+    for (let i = 0; i < 8; i++)
+        await flow.getByRole('button', { name: 'Add command', exact: true }).click();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const first = flow.locator('.automation-steps li').first();
+    await first.evaluate((node) => {
+        (node as HTMLElement).draggable = true;
+    });
+    await first.dispatchEvent('dragstart', { dataTransfer: data, clientY: 900 });
+    const before = await page.evaluate(() => scrollY),
+        edge = await page.evaluate(() => innerHeight - 4);
+    await first.dispatchEvent('dragover', { dataTransfer: data, clientY: edge });
+    await expect.poll(() => page.evaluate(() => scrollY)).toBeGreaterThan(before);
+    await page
+        .locator('main')
+        .first()
+        .dispatchEvent('dragover', {
+            dataTransfer: data,
+            clientY: await page.evaluate(() => innerHeight / 2),
+        });
+    const awayFromEdge = await page.evaluate(() => scrollY);
+    await page.waitForTimeout(150);
+    expect(await page.evaluate(() => scrollY)).toBe(awayFromEdge);
+    await page.keyboard.press('Escape');
+    const cancelled = await page.evaluate(() => scrollY);
+    await page.waitForTimeout(150);
+    expect(await page.evaluate(() => scrollY)).toBe(cancelled);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const up = flow.getByRole('button', { name: 'Move command 2 up', exact: true });
+    await up.focus();
+    await page.keyboard.press('Enter');
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('second');
+});

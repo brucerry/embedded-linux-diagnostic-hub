@@ -24,8 +24,12 @@ export interface SerialStatus {
 }
 export class SerialSession {
     private automationOwner?: symbol;
-    private capture?: { append(bytes: Uint8Array): void; cancel(): void };
+    private capture?: { append(bytes: Uint8Array): void; cancel(): void; interrupt(): boolean };
     private lastReceived = 0;
+    private automationInput?: (bytes: Uint8Array, generation: number) => void;
+    setAutomationInputConsumer(consume?: (bytes: Uint8Array, generation: number) => void) {
+        this.automationInput = consume;
+    }
     private framingValue = '';
     get framing() {
         return this.framingValue;
@@ -180,11 +184,13 @@ export class SerialSession {
         const owner = Symbol();
         this.automationOwner = owner;
         this.clearInput();
+        this.publish(this.status.state);
         return () => {
             if (this.automationOwner === owner) {
                 this.capture?.cancel();
                 this.automationOwner = undefined;
                 this.inputRevision++;
+                this.publish(this.status.state);
             }
         };
     }
@@ -261,6 +267,11 @@ export class SerialSession {
                 timer = setTimeout(() => finish('timeout'), timeoutMs);
             const capture = {
                 cancel,
+                interrupt: () => {
+                    const pendingWrite = !writingDone;
+                    cancel();
+                    return pendingWrite;
+                },
                 append: (value: Uint8Array) => {
                     if (settled) return;
                     clearTimeout(quiet);
@@ -287,6 +298,7 @@ export class SerialSession {
             if (signal.aborted) return cancel();
             void (async () => {
                 try {
+                    this.automationInput?.(bytes.slice(), generation);
                     for (let offset = 0; offset < bytes.length; offset += SERIAL_CHUNK_BYTES) {
                         if (settled || generation !== this.status.generation) return;
                         await writer.write(bytes.slice(offset, offset + SERIAL_CHUNK_BYTES));
@@ -342,9 +354,52 @@ export class SerialSession {
         reader: ReadableStreamDefaultReader<Uint8Array>,
         signal: AbortSignal,
     ) {
+        let stream = this.port?.readable;
         try {
-            while (generation === this.status.generation) {
-                const { value, done } = await reader.read();
+            while (generation === this.status.generation && !signal.aborted) {
+                let result: ReadableStreamReadResult<Uint8Array>;
+                try {
+                    result = await reader.read();
+                } catch (error) {
+                    const replacement = this.port?.readable;
+                    const recoverable =
+                        error instanceof Error &&
+                        [
+                            'BreakError',
+                            'FramingError',
+                            'ParityError',
+                            'BufferOverrunError',
+                            'UnknownError',
+                        ].includes(error.name);
+                    if (
+                        !recoverable ||
+                        signal.aborted ||
+                        generation !== this.status.generation ||
+                        !replacement ||
+                        replacement === stream
+                    )
+                        throw error;
+                    if (this.capture?.interrupt()) {
+                        this.publish(
+                            'error',
+                            'UART ' +
+                                error.name +
+                                ': a write was still pending. Closing this port; reconnect explicitly.',
+                        );
+                        return;
+                    }
+                    // Web Serial replaces a recoverable errored stream. Never reopen the port.
+                    reader.releaseLock();
+                    reader = replacement.getReader();
+                    this.reader = reader;
+                    stream = replacement;
+                    this.clearInput();
+                    this.publish('connected', 'UART ' + error.name + ': reception continues.');
+                    // Bound repeated driver errors without a tight recovery loop.
+                    await new Promise((resolve) => setTimeout(resolve, 25));
+                    continue;
+                }
+                const { value, done } = result;
                 if (done) {
                     if (generation === this.status.generation)
                         throw Error('Serial input stream ended.');

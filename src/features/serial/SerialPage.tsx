@@ -3,7 +3,7 @@ import { serialTerminalOptions } from './theme';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { Plug, Unplug, Eraser, ClipboardPaste } from 'lucide-react';
+import { Plug, Unplug, Eraser, ClipboardPaste, Copy } from 'lucide-react';
 import {
     DEFAULT_SERIAL_SETTINGS,
     localSerial,
@@ -52,6 +52,8 @@ export default function SerialPage(props: Props) {
     const pageIndex = Math.min(chooserPage, pageCount - 1);
     const visibleChoices = filteredChoices.slice(pageIndex * 64, (pageIndex + 1) * 64);
     const [error, setError] = useState('');
+    const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
     const [documentVisible, setDocumentVisible] = useState(!document.hidden);
     useEffect(() => {
         const changed = () => setDocumentVisible(!document.hidden);
@@ -102,6 +104,7 @@ export default function SerialPage(props: Props) {
         void work().catch((error) => setError(serialFailure(error)));
     };
     async function paste() {
+        setMenu(null);
         const generation = session.current.generation,
             inputEpoch = session.inputEpoch;
         try {
@@ -114,6 +117,7 @@ export default function SerialPage(props: Props) {
                 generation !== session.current.generation ||
                 inputEpoch !== session.inputEpoch ||
                 session.current.state !== 'connected' ||
+                session.automationActive ||
                 !latest.current.visible ||
                 latest.current.blocked
             )
@@ -124,6 +128,16 @@ export default function SerialPage(props: Props) {
             setError(serialFailure(error));
         }
     }
+    useEffect(() => {
+        if (!menu) return;
+        menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+        const dismiss = (event: PointerEvent) => {
+            if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+        };
+        document.addEventListener('pointerdown', dismiss);
+        return () => document.removeEventListener('pointerdown', dismiss);
+    }, [menu]);
+
     useEffect(() => session.subscribe(setStatus), [session]);
     useEffect(() => {
         refreshPorts();
@@ -144,6 +158,14 @@ export default function SerialPage(props: Props) {
         terminal.open(container.current!);
         term.current = terminal;
         fit.current = addon;
+        session.setAutomationInputConsumer((bytes, generation) => {
+            if (generation !== session.current.generation) return;
+            const payload = JSON.stringify(new TextDecoder().decode(bytes)).replace(
+                /[\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g,
+                (value) => '\\u' + value.charCodeAt(0).toString(16).padStart(4, '0'),
+            );
+            terminal.write('\r\n[Automation input, local] ' + payload + '\r\n');
+        });
         terminal.textarea?.setAttribute('aria-label', 'Serial terminal input');
         const guards = terminalOutputGuards(terminal),
             wheel = terminalWheel(terminal, frame.current!, container.current!);
@@ -159,6 +181,7 @@ export default function SerialPage(props: Props) {
                 !latest.current.visible ||
                 latest.current.blocked ||
                 session.current.state !== 'connected' ||
+                session.automationActive ||
                 document.activeElement !== terminal.textarea
             )
                 return;
@@ -220,6 +243,7 @@ export default function SerialPage(props: Props) {
         observer.observe(container.current!);
         return () => {
             session.setConsumer(async () => {});
+            session.setAutomationInputConsumer();
             observer.disconnect();
             data.dispose();
             binary.dispose();
@@ -233,13 +257,17 @@ export default function SerialPage(props: Props) {
     useEffect(() => {
         if (term.current)
             term.current.options.disableStdin =
-                props.blocked || !props.visible || status.state !== 'connected';
+                props.blocked ||
+                !props.visible ||
+                status.state !== 'connected' ||
+                session.automationActive;
         if (props.blocked || !props.visible) {
             session.clearInput();
             term.current?.blur();
+            setMenu(null);
         }
         if (props.visible && container.current?.clientWidth) fit.current?.fit();
-    }, [props.visible, props.blocked, status.state, session]);
+    }, [props.visible, props.blocked, status, session]);
     useEffect(() => {
         session.clearInput();
         term.current?.reset();
@@ -277,7 +305,9 @@ export default function SerialPage(props: Props) {
                             }}
                         >
                             <option value={-1}>
-                                {status.label || 'Choose an authorized port'}
+                                {ports.includes(session.selectedPort!)
+                                    ? 'Choose an authorized port'
+                                    : status.label || 'Choose an authorized port'}
                             </option>
                             {ports.map((port, index) => (
                                 <option key={index} value={index}>
@@ -473,15 +503,6 @@ export default function SerialPage(props: Props) {
                         COM/tty names may not be exposed.
                     </p>
                 )}
-                {session.selectedPort?.forget && (
-                    <button
-                        className="button text-button"
-                        disabled={locked}
-                        onClick={() => action(() => session.forget())}
-                    >
-                        Forget permission
-                    </button>
-                )}
                 {(error || status.message) && (
                     <p role="alert" className="serial-error">
                         {error || status.message}
@@ -511,7 +532,11 @@ export default function SerialPage(props: Props) {
                     </button>
                     <button
                         className="button secondary"
-                        disabled={props.blocked || status.state !== 'connected'}
+                        disabled={
+                            props.blocked ||
+                            status.state !== 'connected' ||
+                            session.automationActive
+                        }
                         onClick={() => void paste()}
                     >
                         <ClipboardPaste size={16} />
@@ -550,12 +575,83 @@ export default function SerialPage(props: Props) {
                             text={() => terminalCopyText(term.current)}
                             label="Copy serial output"
                             buttonRef={copy}
-                            onCopy={(text) =>
-                                bridge ? bridge.copyText(text) : navigator.clipboard.writeText(text)
-                            }
+                            onCopy={async (text) => {
+                                if (bridge) await bridge.copyText(text);
+                                else await navigator.clipboard.writeText(text);
+                                setMenu(null);
+                            }}
                         />
                     </div>
-                    <div ref={container} className="terminal-screen" />
+                    <div
+                        ref={container}
+                        className="terminal-screen"
+                        onContextMenu={(event) => {
+                            event.preventDefault();
+                            if (props.blocked || !props.visible) return;
+                            const bounds = frame.current?.getBoundingClientRect();
+                            if (bounds)
+                                setMenu({
+                                    x: Math.max(
+                                        8,
+                                        Math.min(event.clientX - bounds.left, bounds.width - 150),
+                                    ),
+                                    y: Math.max(
+                                        48,
+                                        Math.min(event.clientY - bounds.top, bounds.height - 96),
+                                    ),
+                                });
+                        }}
+                    />
+                    {menu && (
+                        <div
+                            ref={menuRef}
+                            role="menu"
+                            aria-label="Terminal clipboard"
+                            className="terminal-context-menu"
+                            style={{ left: menu.x, top: menu.y }}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    setMenu(null);
+                                    term.current?.focus();
+                                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                                    event.preventDefault();
+                                    const buttons = [
+                                        ...menuRef.current!.querySelectorAll<HTMLButtonElement>(
+                                            'button',
+                                        ),
+                                    ];
+                                    const index = buttons.indexOf(
+                                        document.activeElement as HTMLButtonElement,
+                                    );
+                                    buttons[
+                                        (index +
+                                            (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) %
+                                            buttons.length
+                                    ]?.focus();
+                                } else if (event.ctrlKey && event.key.toLowerCase() === 'c') {
+                                    event.preventDefault();
+                                    copy.current?.click();
+                                } else if (event.ctrlKey && event.key.toLowerCase() === 'v') {
+                                    event.preventDefault();
+                                    void paste();
+                                }
+                            }}
+                        >
+                            <button role="menuitem" onClick={() => copy.current?.click()}>
+                                <Copy size={16} />
+                                Copy
+                            </button>
+                            <button
+                                role="menuitem"
+                                disabled={status.state !== 'connected'}
+                                onClick={() => void paste()}
+                            >
+                                <ClipboardPaste size={16} />
+                                Paste
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
             {chooser && (
@@ -566,7 +662,7 @@ export default function SerialPage(props: Props) {
                         session.cancelSelection();
                     }}
                 >
-                    <p>Choose one port on this computer. Selection does not open it.</p>
+                    <p>Choose one port on this computer.</p>
                     {(chooser.ports.length > 64 || chooserSearch.length > 0) && (
                         <label>
                             Find serial port
