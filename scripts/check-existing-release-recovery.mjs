@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +17,7 @@ import {
     extractQualifiedArchive,
 } from './lib/existing-release-recovery.mjs';
 import { validateFinalReleaseNotes } from './lib/release-notes.mjs';
+import { readRecoveryBytes } from './lib/recovery-download.mjs';
 
 // Read-only preparation: no API POST/PATCH/DELETE, no app rebuild, no Git mutation.
 assert.equal(process.argv[2], 'prepare');
@@ -64,53 +64,8 @@ async function read(endpoint) {
     );
     return response.json();
 }
-async function privateBytes(endpoint, expectedSize, kind) {
-    const limit = expectedSize ?? 16 * 1024 * 1024;
-    assert.ok(Number.isSafeInteger(limit) && limit > 0 && limit <= 512 * 1024 * 1024);
-    let response;
-    try {
-        response = await fetch(api + endpoint, {
-            method: 'GET',
-            headers: { ...headers, Accept: 'application/octet-stream' },
-            redirect: 'manual',
-            signal: AbortSignal.timeout(90000),
-        });
-        if ([302, 307].includes(response.status)) {
-            const location = new URL(response.headers.get('location'));
-            assert.equal(location.protocol, 'https:');
-            assert.ok(!location.username && !location.password);
-            assert.ok(!location.port || location.port === '443');
-            const releaseHost = [
-                'release-assets.githubusercontent.com',
-                'objects.githubusercontent.com',
-            ].includes(location.hostname);
-            assert.ok(
-                releaseHost ||
-                    (kind === 'actions' && location.hostname.endsWith('.blob.core.windows.net')),
-                'Unexpected download host.',
-            );
-            await response.body?.cancel();
-            // Never forward the job token to a signed redirect, or log the signed URL.
-            response = await fetch(location, {
-                method: 'GET',
-                redirect: 'error',
-                signal: AbortSignal.timeout(90000),
-            });
-        }
-        assert.equal(response.status, 200, 'Authenticated download failed.');
-        const chunks = [];
-        let size = 0;
-        for await (const chunk of response.body) {
-            size += chunk.length;
-            assert.ok(size <= limit, 'Download exceeded declared bound.');
-            chunks.push(Buffer.from(chunk));
-        }
-        if (expectedSize !== undefined) assert.equal(size, expectedSize);
-        return Buffer.concat(chunks);
-    } catch {
-        throw Error('Bounded authenticated recovery download failed for ' + kind + '.');
-    }
-}
+const privateBytes = (endpoint, expectedSize, kind) =>
+    readRecoveryBytes({ api, headers, endpoint, expectedSize, kind });
 const [run, jobData, artifactData, remoteRef, remoteTag] = await Promise.all([
     read('/actions/runs/' + policy.run),
     read('/actions/runs/' + policy.run + '/jobs?per_page=100'),

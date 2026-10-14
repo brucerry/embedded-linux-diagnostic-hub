@@ -18,21 +18,20 @@ async function fixture(version: string, existing = false) {
     const root = await mkdtemp(path.join(tmpdir(), 'hub-publication-notes-'));
     const git = (...args: string[]) =>
         execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
-    if (existing) {
-        execFileSync('git', ['clone', '--quiet', '--shared', '--no-checkout', process.cwd(), root]);
-        git('checkout', '--quiet', '--detach', EXISTING_RELEASE.tag);
-    } else await cp('scripts', path.join(root, 'scripts'), { recursive: true });
+    await cp('scripts', path.join(root, 'scripts'), { recursive: true });
+    await mkdir(path.join(root, 'public'));
+    for (const name of ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'])
+        await cp(path.join('public', name), path.join(root, 'public', name));
     await mkdir(path.join(root, 'docs/releases'), { recursive: true });
     await mkdir(path.join(root, 'release'));
-    if (!existing) git('init', '--initial-branch=main');
+    git('init', '--initial-branch=main');
     git('config', 'core.autocrlf', 'false');
     git('config', 'user.name', 'Fixture Author');
     git('config', 'user.email', 'fixture@example.invalid');
-    if (!existing)
-        await writeFile(
-            path.join(root, 'package.json'),
-            JSON.stringify({ version, build: { mac: { minimumSystemVersion: '13.0.0' } } }),
-        );
+    await writeFile(
+        path.join(root, 'package.json'),
+        JSON.stringify({ version, build: { mac: { minimumSystemVersion: '13.0.0' } } }),
+    );
     const headings =
         version === '0.5.1'
             ? ['📋 Description:', '🔧 Changes:', '🔖 Commits:', '🔗 Links:']
@@ -46,13 +45,26 @@ async function fixture(version: string, existing = false) {
         '\n- Placeholder.\n\n' +
         headings[3] +
         '\n[Setup](https://example.invalid/setup)\n';
-    if (!existing) {
-        await writeFile(path.join(root, 'docs/releases/v' + version + '.txt'), highlights);
-        git('add', '.');
-        git('commit', '-m', 'fix: publication fixture');
-        git('tag', 'v' + version);
-    }
+    await writeFile(path.join(root, 'docs/releases/v' + version + '.txt'), highlights);
+    git('add', '.');
+    git('commit', '-m', 'fix: publication fixture');
+    git('tag', '-a', 'v' + version, '-m', 'Fixture release');
     const commit = git('rev-parse', 'HEAD');
+    const policy = {
+        ...EXISTING_RELEASE,
+        source: commit,
+        tagObject: git('rev-parse', 'v' + version),
+    };
+    let receiptFactory = createExistingReceipt;
+    if (existing) {
+        // The copied policy binds only this owned fixture's Git identities; production pins remain unchanged.
+        const policyFile = path.join(root, 'scripts/lib/existing-release-recovery.mjs');
+        const code = (await readFile(policyFile, 'utf8'))
+            .replace(EXISTING_RELEASE.source, policy.source)
+            .replace(EXISTING_RELEASE.tagObject, policy.tagObject);
+        await writeFile(policyFile, code);
+        receiptFactory = (await import(pathToFileURL(policyFile).href)).createExistingReceipt;
+    }
     const assets: Array<{
         id: number;
         name: string;
@@ -152,7 +164,7 @@ async function fixture(version: string, existing = false) {
     if (existing) {
         await writeFile(
             receiptPath,
-            JSON.stringify(createExistingReceipt(draft, QUALIFIED_ARTIFACTS, toolingSHA)),
+            JSON.stringify(receiptFactory(draft, QUALIFIED_ARTIFACTS, toolingSHA)),
         );
         const success = SUCCESSFUL_JOBS.map((name, index) => ({
             id: 1000 + index,
@@ -201,7 +213,7 @@ async function fixture(version: string, existing = false) {
             expired: false,
             workflow_run: {
                 id: EXISTING_RELEASE.run,
-                head_sha: EXISTING_RELEASE.source,
+                head_sha: policy.source,
                 head_branch: EXISTING_RELEASE.tag,
             },
         }));
@@ -211,7 +223,7 @@ async function fixture(version: string, existing = false) {
                 run: {
                     id: EXISTING_RELEASE.run,
                     run_attempt: 1,
-                    head_sha: EXISTING_RELEASE.source,
+                    head_sha: policy.source,
                     head_branch: EXISTING_RELEASE.tag,
                     path: '.github/workflows/release.yml',
                     event: 'push',
@@ -223,12 +235,12 @@ async function fixture(version: string, existing = false) {
                 artifacts: { artifacts, total_count: artifacts.length },
                 ref: {
                     ref: 'refs/tags/' + EXISTING_RELEASE.tag,
-                    object: { type: 'tag', sha: EXISTING_RELEASE.tagObject },
+                    object: { type: 'tag', sha: policy.tagObject },
                 },
                 tag: {
-                    sha: EXISTING_RELEASE.tagObject,
+                    sha: policy.tagObject,
                     tag: EXISTING_RELEASE.tag,
-                    object: { type: 'commit', sha: EXISTING_RELEASE.source },
+                    object: { type: 'commit', sha: policy.source },
                 },
             }),
         );
@@ -271,7 +283,7 @@ async function fixture(version: string, existing = false) {
             spawnSync(
                 process.execPath,
                 existing
-                    ? [path.resolve('scripts/release-draft.mjs'), 'publish-existing', receiptPath]
+                    ? ['scripts/release-draft.mjs', 'publish-existing', receiptPath]
                     : ['scripts/release-draft.mjs', 'publish'],
                 {
                     cwd: root,

@@ -71,6 +71,8 @@ export const OPERATIONAL_FILES = Object.freeze([
     'scripts/check-existing-release-recovery.mjs',
     '.github/workflows/release-existing-recovery.yml',
     'tests/existing-release-recovery.test.ts',
+    'scripts/lib/recovery-download.mjs',
+    'tests/recovery-download.test.ts',
 ]);
 const marker =
     'Diagnostic Hub guarded draft; source=' +
