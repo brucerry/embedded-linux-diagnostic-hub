@@ -67,6 +67,7 @@ fetch() { curl --fail --silent --show-error --location --proto '=https' --proto-
 repo='brucerry/embedded-linux-diagnostic-hub'
 api="https://api.github.com/repos/$repo/releases"
 if [ -n "$tag" ]; then api="$api/tags/$tag"; else api="$api/latest"; fi
+printf '%s\n' 'Downloading release metadata…'
 fetch "$api" "$stage/release.json"
 json() { plutil -extract "$2" raw -o - "$1"; }
 resolved="$(json "$stage/release.json" tag_name)"
@@ -77,9 +78,11 @@ tag="$resolved"
 version="${tag#v}"
 asset="Diagnostic-Hub-macos-$arch.zip"
 base="https://github.com/$repo/releases/download/$tag"
+printf 'Downloading macOS %s bundle…\n' "$arch"
 fetch "$base/$asset" "$stage/app.zip"
 fetch "$base/$asset.sha256" "$stage/checksum"
 fetch "$base/macos-build-info-$arch.json" "$stage/manifest.json"
+printf '%s\n' 'Verifying archive checksum and release identity…'
 actual="$(shasum -a 256 "$stage/app.zip" | awk '{print $1}')"
 printf '%s  %s\n' "$actual" "$asset" > "$stage/expected"
 cmp -s "$stage/checksum" "$stage/expected" || fail 'Archive checksum mismatch.'
@@ -143,6 +146,7 @@ for executable in 'Contents/MacOS/Diagnostic Hub' 'Contents/Frameworks/Electron 
     [ "$(lipo -archs "$app/$executable")" = "$slice" ] || fail 'Installed binary architecture mismatch.'
 done
 [ "$(shasum -a 256 "$app/Contents/Resources/app.asar" | awk '{print $1}')" = "$asar_hash" ] || fail 'Installed application source mismatch.'
+printf '%s\n' 'Verifying native bundle architecture, source and integrity…'
 codesign --verify --deep --strict "$app" || fail 'Application integrity verification failed.'
 codesign --display --verbose=4 "$app" 2> "$stage/signature"
 grep -q '^Signature=adhoc$' "$stage/signature" || fail 'Expected an ad-hoc integrity signature.'
@@ -150,8 +154,10 @@ if [ -e "$target" ]; then
     if lsof -t "$target/Contents/MacOS/Diagnostic Hub" >/dev/null 2>&1; then fail 'Quit Diagnostic Hub before updating.'; fi
     mv "$target" "$stage/previous.app"
 fi
+printf 'Installing verified application at %s…\n' "$target"
 mv "$app" "$target"
 if [ "$launch" -eq 1 ]; then
+    printf 'Requesting normal launch of %s…\n' "$target"
     unset ELECTRON_RUN_AS_NODE
     if [ "$#" -gt 0 ]; then
         open -n -a "$target" --args "$@" || fail 'Launch refused; review macOS Privacy & Security or your organization policy.'
@@ -160,5 +166,10 @@ if [ "$launch" -eq 1 ]; then
     fi
 fi
 committed=1
+if [ "$launch" -eq 1 ]; then
+    printf '%s\n' 'Launch requested; confirm the opened application version and location.'
+else
+    printf '%s\n' 'No launch requested.'
+fi
 printf 'Installed Diagnostic Hub %s (%s), source %s at %s\n' "$version" "$arch" "$commit" "$target"
 printf '%s\n' 'Ad-hoc integrity signature; not Developer ID signed or notarized. Updates require rerunning this helper.'

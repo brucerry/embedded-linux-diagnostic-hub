@@ -31,6 +31,7 @@ import { Nav } from '../components/Nav';
 import { CopyButton } from '../components/CopyButton';
 import { ConnectModal } from '../features/connection/ConnectModal';
 import { UpdateModal } from '../features/updates/UpdateModal';
+import { UpdateReceiptNotice } from '../features/updates/UpdateLocation';
 import { ResetOverlay } from '../features/session/ResetOverlay';
 import { EvidenceModal } from '../features/evidence/EvidenceModal';
 import { DiagnosticsPage } from '../pages/DiagnosticsPage';
@@ -324,6 +325,7 @@ function App() {
                         )}
                     </div>
 
+                    {bridge && <UpdateReceiptNotice bridge={bridge} />}
                     {updateReport && (
                         <div className="update-report-banner" role="status">
                             <strong>

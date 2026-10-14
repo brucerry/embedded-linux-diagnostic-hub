@@ -6,16 +6,16 @@ Changes and Commits entry is a bullet; every Links entry uses a descriptive Mark
 exact destination.
 
 ```text
-Description:
+📋 Description:
 A few lines describing improvements, features and purpose.
 
-Changes:
+🔧 Changes:
 - Changes since the previous published release.
 
-Commits:
+🔖 Commits:
 - Each commit since the previous published release, including merged commits.
 
-Links:
+🔗 Links:
 [Full comparison](https://github.com/owner/repository/compare/previous...current)
 [Downloads and setup](https://github.com/owner/repository/blob/current/docs/downloads.md)
 ```
@@ -30,3 +30,6 @@ assets/tags. Legacy name - URL source links remain accepted and render as meanin
 Store literal future drafts in `docs/releases/<tag>.txt`; the generator prefers this format so
 Markdown formatting cannot join labels or wrap Links lines. Existing `.md` notes remain supported
 unchanged. Do not rewrite literal URLs inside executable commands.
+
+Upcoming v0.5.1 and later releases keep these four section names/order with the shown emoji
+prefixes. Historical published release headings and bodies remain unchanged.

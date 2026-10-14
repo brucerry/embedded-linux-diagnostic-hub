@@ -7,14 +7,17 @@ export function meaningfulReleaseLink(line) {
     throw Error('Release links require a meaningful Markdown label or legacy name - URL.');
 }
 export function meaningfulReleaseLinks(body) {
-    const headers = body.match(/^(Description|Changes|Commits|Links):$/gm);
+    const headers = [
+        ...body.matchAll(/^(?:(?:📋|🔧|🔖|🔗) )?(Description|Changes|Commits|Links):$/gm),
+    ].map((match) => match[1] + ':');
     if (
         JSON.stringify(headers) !==
         JSON.stringify(['Description:', 'Changes:', 'Commits:', 'Links:'])
     )
         throw Error('Preserve the four literal release sections.');
-    const marker = '\nLinks:\n';
-    const index = body.indexOf(marker);
+    const found = /\n(?:(?:📋|🔧|🔖|🔗) )?Links:\n/.exec(body);
+    const marker = found?.[0] ?? '';
+    const index = found?.index ?? -1;
     if (index < 0) throw Error('Missing Links section.');
     const prefix = body.slice(0, index + marker.length);
     const links = body
@@ -125,10 +128,12 @@ export function releasePageNotes({
         (match) => `${match[1]} - ${match[2]}`,
     );
     const clean = (value) => value.replace(/\[([^\]]+)\]\(https?:\/\/[^)]+\)/g, '$1').trim();
-    const structured = /^(?:#{1,6} )?Description:\s*$/m.test(body);
+    const structured = /^(?:#{1,6} )?(?:(?:📋|🔧|🔖|🔗) )?Description:\s*$/m.test(body);
     let description, changes, links;
     if (structured) {
-        const sections = body.split(/^(?:#{1,6} )?(Description|Changes|Commits|Links):\s*$/m);
+        const sections = body.split(
+            /^(?:#{1,6} )?(?:(?:📋|🔧|🔖|🔗) )?(Description|Changes|Commits|Links):\s*$/m,
+        );
         const names = sections.filter((_value, index) => index % 2 === 1);
         if (names.join(',') !== 'Description,Changes,Commits,Links')
             throw Error(
@@ -174,5 +179,17 @@ export function releasePageNotes({
             `Downloads and setup - https://github.com/${repository}/blob/${currentTag}/docs/downloads.md`,
         ]),
     ];
-    return `Description:\n${description}\n\nChanges:\n${changes}\n\nCommits:\n${commits.join('\n') || '- No new commits.'}\n\nLinks:\n${[...new Set(links.map(meaningfulReleaseLink))].join('\n')}\n`;
+    const version = /^v(\d+)\.(\d+)\.(\d+)/.exec(currentTag);
+    const decorated =
+        version &&
+        (Number(version[1]) > 0 ||
+            Number(version[2]) > 5 ||
+            (Number(version[2]) === 5 && Number(version[3]) >= 1));
+    const heading = (label) =>
+        (decorated
+            ? { Description: '📋 ', Changes: '🔧 ', Commits: '🔖 ', Links: '🔗 ' }[label]
+            : '') +
+        label +
+        ':';
+    return `${heading('Description')}\n${description}\n\n${heading('Changes')}\n${changes}\n\n${heading('Commits')}\n${commits.join('\n') || '- No new commits.'}\n\n${heading('Links')}\n${[...new Set(links.map(meaningfulReleaseLink))].join('\n')}\n`;
 }

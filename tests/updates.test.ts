@@ -113,7 +113,26 @@ test('verified portable download is staged in a user directory and checked again
         const updater = fixture([release('0.2.0')]).updater(directory);
         await assert.rejects(() => updater.executable(), /Download and verify/);
         await updater.check(true);
-        const file = await updater.download();
+        const progress: import('../shared/types').UpdateProgress[] = [];
+        const file = await updater.download((value) => progress.push(value));
+        const downloads = progress.filter((v) => v.stage === 'download');
+        assert.equal(downloads[0].receivedBytes, 0);
+        assert.equal(downloads.at(-1)?.receivedBytes, binary.length);
+        assert.ok(
+            downloads.every((v) => v.totalBytes === binary.length),
+            'Validated metadata remains the total when HTTP length is absent',
+        );
+        assert.ok(downloads[0].stagingPath?.endsWith('.part'));
+        assert.deepEqual(
+            progress.filter((v) => ['verify', 'install'].includes(v.stage)).map((v) => v.stage),
+            ['verify', 'install'],
+        );
+        assert.ok(
+            progress
+                .filter((v) => v.stage !== 'download')
+                .every((v) => v.receivedBytes === undefined),
+        );
+        assert.equal(updater.handoffInfo().executable, file);
         assert.ok(file.startsWith(directory + path.sep));
         assert.deepEqual(await readFile(file), binary);
         // Windows exposes only writable/read-only modes, not POSIX ownership permissions.

@@ -1,0 +1,24 @@
+📋 Description:
+Diagnostic Hub v0.5.1 fixes trusted Electron Serial discovery, clarifies ordered Automation and keeps eligible desktop runs working while minimized. Update progress now distinguishes measured downloads, verification, installation and requested versus observed handoff, with discoverable launchable app locations.
+Serial accepts every runtime-offered port without COM-number, USB-brand or optional-metadata gates. Chromium can still omit some OS-valid ports; a separate native backend expansion remains unimplemented. Physical COM11/UART/adapter acceptance is not claimed. Target UART enablement, wiring and target operation remain the user's responsibility.
+Automatic verified updates support Windows x64 and Linux x64. Mac Intel x64 and Apple Silicon arm64 use the verified manual installer with explicit unsupported automatic installation. Native exact-source Linux/Mac CI qualification is required before publication; Gatekeeper/signing policy and prior published assets are preserved. Physical Mac, browser quarantine, notarization and older-macOS acceptance are not claimed.
+
+🔧 Changes:
+- Accept Electron's real root-origin serialization while retaining trusted document/frame/owner permission checks, preserve the complete offered catalog and keep search usable after hotplug list shrink.
+- Correct selected-only Serial labels, remove the Serial-only pig tail and render a stationary soft pixel sun with gentle edge flames; preserve SSH artwork and reduced-motion behavior.
+- Separate optional step names from executable multiline payloads, add drag and keyboard reorder controls, and freeze ordering while armed.
+- Keep eligible native Automation active while minimized with a trusted background lease; preserve sleep, disconnect, ownership, timer-stall and clock-freshness guards with explicit rearming.
+- Keep Timing layout stable with calendar/time pickers, selectable zones, automatic date-specific offsets, explicit repeated-time choices and a live reference clock that never advances the chosen start.
+- Show truthful measured download bytes and indeterminate later stages, retain existing prestart cancellation semantics, and provide native validated Open folder/Copy path actions plus durable version/path/checksum handoff receipts.
+- Qualify actual Windows portable handoff, require a distinct future-version Linux AppImage in CI, and cover both Mac manual installer/guidance/bundle paths and normal launch observation without enabling unsupported automatic updates.
+- Preserve checksum, executable-format, atomic commit, report recovery and security-policy checks; add no application dependencies or host/device configuration changes.
+
+🔖 Commits:
+- The generator replaces this draft with the complete validated range since published v0.5.0.
+
+🔗 Links:
+[Full comparison](https://github.com/brucerry/embedded-linux-diagnostic-hub/compare/v0.5.0...v0.5.1)
+[Downloads and setup](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.1/docs/downloads.md)
+[Serial support and limitations](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.1/docs/serial.md)
+[Automation and QA exports](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.1/docs/automation.md)
+[Update platform coverage](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.1/docs/usage.md#update-platform-coverage)

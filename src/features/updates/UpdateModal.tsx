@@ -1,9 +1,17 @@
-import { ExternalLink, Download, LoaderCircle, RefreshCw } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import type { DesktopBridge, Snapshot, UpdateMode, UpdateStatus } from '../../../shared/types';
+import { ExternalLink, Download, LoaderCircle, RefreshCw, X, Copy } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type {
+    DesktopBridge,
+    Snapshot,
+    UpdateMode,
+    UpdateStatus,
+    UpdateProgress,
+    UpdateInfo,
+} from '../../../shared/types';
 import { RELEASES_URL } from '../../../shared/project';
 import { Modal } from '../../components/Modal';
 import { message } from '../../services/errors';
+import { UpdateLocation } from './UpdateLocation';
 
 export function UpdateModal({
     bridge,
@@ -18,17 +26,44 @@ export function UpdateModal({
     onStart: () => void;
     onClose: () => void;
 }) {
+    const progressRef = useRef<HTMLElement>(null);
     const [includePrereleases, setIncludePrereleases] = useState(true);
     const [status, setStatus] = useState<UpdateStatus | null>(null);
     const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        if (busy) progressRef.current?.closest<HTMLElement>('.modal')?.scrollTo({ top: 0 });
+    }, [busy]);
+
     const [error, setError] = useState('');
     const [mode, setMode] = useState<UpdateMode>(snapshot ? 'smart' : 'clean');
-    const [progress, setProgress] = useState('');
+    const [progress, setProgress] = useState<UpdateProgress>({ stage: 'preparing', message: '' });
+    const [info, setInfo] = useState<UpdateInfo | null>(null);
+    const [infoError, setInfoError] = useState('');
+    const readInfo = async () => {
+        try {
+            const value = await bridge.readUpdateInfo?.();
+            if (value) setInfo(value);
+            setInfoError('');
+        } catch (e) {
+            setInfoError(message(e));
+        }
+    };
+    const determinate =
+        progress.stage === 'download' &&
+        Number.isSafeInteger(progress.totalBytes) &&
+        progress.totalBytes! > 0 &&
+        Number.isSafeInteger(progress.receivedBytes) &&
+        progress.receivedBytes! >= 0 &&
+        progress.receivedBytes! <= progress.totalBytes!;
     async function check(include: boolean) {
         setBusy(true);
         setError('');
         setStatus(null);
-        setProgress('Checking GitHub…');
+        setProgress({
+            stage: 'preparing',
+            message: 'Checking update support and release availability…',
+        });
+        await readInfo();
         try {
             const result = await bridge.checkUpdates(include);
             setStatus(result);
@@ -41,7 +76,15 @@ export function UpdateModal({
     useEffect(() => {
         void check(true);
     }, []);
-    useEffect(() => bridge.onUpdateProgress?.(setProgress), [bridge]);
+    useEffect(
+        () =>
+            bridge.onUpdateProgress?.((value) =>
+                setProgress(
+                    typeof value === 'string' ? { stage: 'preparing', message: value } : value,
+                ),
+            ),
+        [bridge],
+    );
     return (
         <Modal title="Application updates" onClose={onClose} busy={busy}>
             <p>
@@ -66,7 +109,7 @@ export function UpdateModal({
                 <input
                     type="checkbox"
                     checked={includePrereleases}
-                    disabled={busy}
+                    disabled={busy || Boolean(status?.manualUpdate)}
                     onChange={(event) => {
                         setIncludePrereleases(event.target.checked);
                         void check(event.target.checked);
@@ -75,10 +118,47 @@ export function UpdateModal({
                 Include prereleases
             </label>
             {busy && (
-                <p role="status">
-                    <LoaderCircle size={16} className="spin" /> {progress}
-                </p>
+                <section ref={progressRef} className="update-progress" aria-label="Update progress">
+                    <p role="status">
+                        <LoaderCircle size={16} className="spin" /> {progress.message}
+                    </p>
+                    <progress
+                        aria-label={
+                            progress.stage === 'download'
+                                ? 'Release download progress'
+                                : 'Current update stage progress'
+                        }
+                        {...(determinate
+                            ? { value: progress.receivedBytes, max: progress.totalBytes }
+                            : {})}
+                    />
+                    {determinate && (
+                        <p>
+                            {Math.floor((progress.receivedBytes! / progress.totalBytes!) * 100)}% ·{' '}
+                            {progress.receivedBytes!.toLocaleString()} /{' '}
+                            {progress.totalBytes!.toLocaleString()} bytes downloaded. Verification
+                            follows.
+                        </p>
+                    )}
+                    {progress.stagingPath && (
+                        <p>
+                            Temporary staging file:<code>{progress.stagingPath}</code>
+                        </p>
+                    )}
+                    {progress.verifiedPath && (
+                        <p>
+                            Verified launchable app:<code>{progress.verifiedPath}</code>
+                        </p>
+                    )}
+                </section>
             )}
+            {info && (
+                <details className="update-locations">
+                    <summary>Application locations and previous update</summary>
+                    <UpdateLocation bridge={bridge} info={info} />
+                </details>
+            )}
+            {infoError && <p role="alert">Update location unavailable: {infoError}</p>}
             {status && (
                 <section className="fingerprint-panel">
                     <p>
@@ -106,6 +186,48 @@ export function UpdateModal({
                     ) : status.installationUnavailableReason ? null : (
                         <p role="status">No newer compatible release is available.</p>
                     )}
+                </section>
+            )}
+            {status?.manualUpdate && (
+                <section className="update-location" aria-label="Mac manual update guidance">
+                    <h3>
+                        Manual macOS update · current app architecture:{' '}
+                        {status.manualUpdate.architecture === 'arm64'
+                            ? 'Apple Silicon arm64'
+                            : 'Intel x64'}
+                    </h3>
+                    <p>
+                        The installer detects native machine architecture, including translated
+                        terminals. Quit Diagnostic Hub. Open GitHub releases and download
+                        download-run-macos.sh plus its checksum from the same release tag. Verify
+                        the saved helper with the command below, then run that saved installer
+                        locally as your ordinary user. It selects the newest stable release by
+                        default and verifies the archive checksum, architecture, bundle and ad-hoc
+                        integrity signature.
+                    </p>
+                    <p>
+                        Default installation destination:{' '}
+                        <code>{status.manualUpdate.defaultDestination}</code>
+                    </p>
+                    <code>{status.manualUpdate.verificationCommand}</code>
+                    <button
+                        className="button secondary"
+                        onClick={() =>
+                            void bridge
+                                .copyText(status.manualUpdate!.verificationCommand)
+                                .catch((err) => setError(message(err)))
+                        }
+                    >
+                        <Copy size={16} />
+                        Copy helper verification command
+                    </button>
+                    <p>
+                        The helper reports download, verification, installation and launch-request
+                        stages. A launch request is not confirmation of a running app. Confirm the
+                        opened app's version and location. Automatic in-app handoff is unavailable
+                        on both Mac architectures; the installer rolls back on failure and honors
+                        Gatekeeper and organization policy.
+                    </p>
                 </section>
             )}
             {status?.release && (
@@ -179,6 +301,7 @@ export function UpdateModal({
                     Check again
                 </button>
                 <button className="button secondary" disabled={busy} onClick={onClose}>
+                    <X size={16} aria-hidden="true" />
                     Cancel update
                 </button>
                 {status?.release && (
@@ -188,7 +311,7 @@ export function UpdateModal({
                         onClick={async () => {
                             setBusy(true);
                             setError('');
-                            setProgress('Preparing the update…');
+                            setProgress({ stage: 'preparing', message: 'Preparing the update…' });
                             onStart();
                             try {
                                 await bridge.startUpdate({
@@ -198,6 +321,7 @@ export function UpdateModal({
                             } catch (err) {
                                 setError(message(err));
                                 setBusy(false);
+                                await readInfo();
                             }
                         }}
                     >

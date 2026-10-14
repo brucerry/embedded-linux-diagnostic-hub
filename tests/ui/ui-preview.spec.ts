@@ -113,7 +113,7 @@ test('Automation visual acceptance: four concise stages, back/edit, safe running
     await flow.getByLabel('Serial completion prompt').fill('fixture# ');
     await flow.getByLabel('Serial automation line ending').selectOption('LF');
     await phase(flow, 'Commands');
-    await flow.getByLabel('Command 1 name').fill('Display sample');
+    await flow.getByLabel('Step 1 name (optional)').fill('Display sample');
     await flow.getByLabel('Command 1 script').fill('first line\nsecond line');
     await capture(page, 'automation-commands.png');
     await phase(flow, 'Timing');

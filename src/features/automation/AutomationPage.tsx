@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     AUTOMATION_LIMITS,
     armPlan,
+    calibratedNow,
     bytesBase64,
     serialPayload,
     validatePlan,
@@ -11,7 +12,7 @@ import {
     type ClockCalibration,
     type CommandStep,
 } from '../../../shared/automation';
-import { resolveWallTime } from '../../../shared/automation-time';
+import { resolveWallTime, wallTimeOptions } from '../../../shared/automation-time';
 import type { DesktopBridge } from '../../../shared/types';
 import type { DeviceClockResponse } from '../../../shared/diagnostics/device-clock';
 import { SerialSession } from '../serial/session';
@@ -37,7 +38,7 @@ interface Props {
 const GUIDE_STEPS = ['Connection', 'Commands', 'Timing', 'Review & Run'];
 const step = (): CommandStep => ({
     id: crypto.randomUUID(),
-    name: 'Command',
+    name: '',
     enabled: true,
     command: '',
     delaySeconds: 0,
@@ -72,6 +73,26 @@ export default function AutomationPage(props: Props) {
         [zone, setZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone),
         [offset, setOffset] = useState(''),
         [clockKind, setClockKind] = useState<'local' | 'device'>('local');
+    const [referenceTick, setReferenceTick] = useState(Date.now());
+    const [reorderNotice, setReorderNotice] = useState('');
+    const dragged = useRef<string | null>(null),
+        activityEpoch = useRef(0),
+        arming = useRef(false);
+    const zones = useMemo(
+        () => [...new Set(['UTC', zone, ...Intl.supportedValuesOf('timeZone')])].sort(),
+        [],
+    );
+    const scheduleOptions = useMemo(() => {
+        try {
+            return { matches: wallTimeOptions(date, zone), error: '' };
+        } catch (e) {
+            return { matches: [], error: e instanceof Error ? e.message : String(e) };
+        }
+    }, [date, zone]);
+    useEffect(() => {
+        const timer = window.setInterval(() => setReferenceTick(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, []);
     const [captureClock, setCaptureClock] = useState(false),
         [delayDraft, setDelayDraft] = useState<Record<string, string>>({});
     const [ending, setEnding] = useState<AutomationPlan['serial']['lineEnding']>('CR'),
@@ -124,14 +145,15 @@ export default function AutomationPage(props: Props) {
         );
     useEffect(() => props.serial.subscribe(setSerialStatus), [props.serial]);
     useEffect(() => {
-        const pause = () => {
-            if (document.hidden && runner.current?.busy) runner.current.cancel();
+        const interrupt = (reason: string) => {
+            activityEpoch.current++;
+            runner.current?.interrupt(reason);
         };
-        const exit = () => runner.current?.cancel();
-        document.addEventListener('visibilitychange', pause);
+        const exit = () => interrupt('Page exited. Arm explicitly to resume.');
+        const unsubscribe = window.diagnosticHub?.onAutomationInterrupted?.(interrupt);
         window.addEventListener('pagehide', exit);
         return () => {
-            document.removeEventListener('visibilitychange', pause);
+            unsubscribe?.();
             window.removeEventListener('pagehide', exit);
             exit();
         };
@@ -165,7 +187,7 @@ export default function AutomationPage(props: Props) {
         return validatePlan({
             captureDeviceTime: captureClock,
             transport,
-            steps,
+            steps: steps.map((s, i) => ({ ...s, name: s.name.trim() || 'Step ' + (i + 1) })),
             timeoutSeconds: value(timeout, 'Timeout'),
             repeatSeconds: repeat ? value(repeatSeconds, 'Repetition') : null,
             start,
@@ -230,7 +252,12 @@ export default function AutomationPage(props: Props) {
             .catch((e) => setError(e.message))
             .finally(() => setSampling(false));
     };
-    const start = (once = false) => {
+    const start = async (once = false) => {
+        if (arming.current || runner.current?.busy) return;
+        arming.current = true;
+        let lease: string | undefined;
+        const desktop = window.diagnosticHub;
+        const epoch = activityEpoch.current;
         setError('');
         try {
             const snapshot = build();
@@ -256,7 +283,9 @@ export default function AutomationPage(props: Props) {
                         : String(serial.current.generation),
                 available: () =>
                     snapshot.transport === 'ssh'
-                        ? latest.current.connected && latest.current.transport === active
+                        ? !latest.current.blocked &&
+                          latest.current.connected &&
+                          latest.current.transport === active
                         : serial.current.state === 'connected',
                 acquire: () =>
                     snapshot.transport === 'serial' ? serial.acquireAutomation() : () => {},
@@ -329,24 +358,85 @@ export default function AutomationPage(props: Props) {
             };
             latest.current.onBusy(true);
             setRunning(true);
-            void runner.current!.start(snapshot, backend).finally(() => {
-                setRunning(false);
-                latest.current.onBusy(false);
-            });
+            lease = await desktop?.acquireAutomationActivity?.();
+            if (
+                activityEpoch.current !== epoch ||
+                latest.current.blocked ||
+                !backend.available() ||
+                backend.connection() !== connection
+            )
+                throw Error(
+                    'Automation eligibility changed while arming. Arm explicitly to resume.',
+                );
+            await runner.current!.start(snapshot, backend);
         } catch (e) {
             setRunning(false);
             latest.current.onBusy(false);
             setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            if (lease) await desktop?.releaseAutomationActivity?.(lease).catch(() => {});
+            arming.current = false;
+            setRunning(false);
+            latest.current.onBusy(false);
         }
     };
     const edit = (id: string, patch: Partial<CommandStep>) =>
         setSteps((list) => list.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-    const move = (index: number, delta: number) =>
+    const move = (index: number, delta: number) => {
+        if (
+            running ||
+            arming.current ||
+            props.blocked ||
+            index + delta < 0 ||
+            index + delta >= steps.length
+        )
+            return;
+        setReorderNotice('Step moved to position ' + (index + delta + 1));
         setSteps((list) => {
             const next = [...list];
             [next[index], next[index + delta]] = [next[index + delta], next[index]];
             return next;
         });
+    };
+    const drop = (targetId: string) => {
+        const sourceId = dragged.current;
+        dragged.current = null;
+        if (running || arming.current || props.blocked || !sourceId || sourceId === targetId)
+            return;
+        const from = steps.findIndex((s) => s.id === sourceId),
+            to = steps.findIndex((s) => s.id === targetId);
+        if (from < 0 || to < 0) return;
+        setSteps((list) => {
+            const next = [...list];
+            const [item] = next.splice(from, 1);
+            next.splice(to, 0, item);
+            return next;
+        });
+        setReorderNotice('Step moved to position ' + (to + 1));
+    };
+    let reference = 'Unavailable';
+    try {
+        const now =
+            clockKind === 'device'
+                ? calibratedNow(
+                      calibration!,
+                      referenceTick,
+                      performance.now(),
+                      props.transport?.automationConnection?.() ?? '',
+                  )
+                : referenceTick;
+        reference = new Intl.DateTimeFormat(undefined, {
+            timeZone: zone,
+            dateStyle: 'medium',
+            timeStyle: 'long',
+            hourCycle: 'h23',
+        }).format(now);
+    } catch {
+        reference =
+            clockKind === 'device'
+                ? 'Verified device time unavailable or stale. Sample again.'
+                : 'Choose a valid timezone.';
+    }
     const filtered = rows.filter(
         (r) =>
             (status === 'all' || r.completion === status) &&
@@ -533,9 +623,49 @@ export default function AutomationPage(props: Props) {
                     aria-label="Commands"
                 >
                     {' '}
+                    <p className="automation-note">
+                        Step names label results. Enter executable text in each command editor
+                        below.
+                    </p>
+                    <p aria-live="polite" className="automation-reorder-notice">
+                        {reorderNotice}
+                    </p>
                     <ol className="automation-steps">
                         {steps.map((s, i) => (
-                            <li key={s.id}>
+                            <li
+                                key={s.id}
+                                onDragOver={(e) => {
+                                    if (dragged.current && !running) e.preventDefault();
+                                }}
+                                onDrop={(e) => {
+                                    e.preventDefault();
+                                    drop(s.id);
+                                }}
+                            >
+                                <span
+                                    className="automation-drag-handle"
+                                    draggable={!running && !props.blocked}
+                                    role="img"
+                                    aria-label={
+                                        'Drag step ' +
+                                        (i + 1) +
+                                        ' to reorder; use move buttons with keyboard'
+                                    }
+                                    onDragStart={(e) => {
+                                        if (running || props.blocked) {
+                                            e.preventDefault();
+                                            return;
+                                        }
+                                        dragged.current = s.id;
+                                        e.dataTransfer.effectAllowed = 'move';
+                                        e.dataTransfer.setData('text/plain', s.id);
+                                    }}
+                                    onDragEnd={() => {
+                                        dragged.current = null;
+                                    }}
+                                >
+                                    ⠿
+                                </span>
                                 <div className="automation-step-heading">
                                     <strong>{i + 1}</strong>
                                     <label>
@@ -549,7 +679,8 @@ export default function AutomationPage(props: Props) {
                                         Enabled
                                     </label>
                                     <input
-                                        aria-label={'Command ' + (i + 1) + ' name'}
+                                        aria-label={'Step ' + (i + 1) + ' name (optional)'}
+                                        placeholder="Step name (optional)"
                                         value={s.name}
                                         maxLength={120}
                                         onChange={(e) => edit(s.id, { name: e.target.value })}
@@ -558,7 +689,7 @@ export default function AutomationPage(props: Props) {
                                         <button
                                             className="button secondary"
                                             aria-label={'Move command ' + (i + 1) + ' up'}
-                                            disabled={i === 0}
+                                            disabled={running || props.blocked || i === 0}
                                             onClick={() => move(i, -1)}
                                         >
                                             ↑
@@ -566,7 +697,9 @@ export default function AutomationPage(props: Props) {
                                         <button
                                             className="button"
                                             aria-label={'Move command ' + (i + 1) + ' down'}
-                                            disabled={i === steps.length - 1}
+                                            disabled={
+                                                running || props.blocked || i === steps.length - 1
+                                            }
                                             onClick={() => move(i, 1)}
                                         >
                                             ↓
@@ -619,12 +752,7 @@ export default function AutomationPage(props: Props) {
                     <button
                         className="button"
                         disabled={steps.length >= 20}
-                        onClick={() =>
-                            setSteps((list) => [
-                                ...list,
-                                { ...step(), name: 'Command ' + (list.length + 1) },
-                            ])
-                        }
+                        onClick={() => setSteps((list) => [...list, step()])}
                     >
                         Add command
                     </button>
@@ -647,101 +775,158 @@ export default function AutomationPage(props: Props) {
                                 />
                             </label>
                             <label>
+                                Run mode
+                                <select
+                                    aria-label="Run mode"
+                                    value={scheduled ? 'scheduled' : 'immediate'}
+                                    disabled={running}
+                                    onChange={(e) => setScheduled(e.target.value === 'scheduled')}
+                                >
+                                    <option value="immediate">Start immediately</option>
+                                    <option value="scheduled">Start at chosen date and time</option>
+                                </select>
+                            </label>
+                            <label>
                                 <input
                                     type="checkbox"
                                     checked={repeat}
+                                    disabled={running}
                                     onChange={(e) => setRepeat(e.target.checked)}
                                 />
                                 Repeat completed flow
                             </label>
-                            {repeat && (
+                            <label>
+                                Repeat delay (s)
+                                <input
+                                    aria-label="Repetition delay"
+                                    disabled={!repeat || running}
+                                    value={repeatSeconds}
+                                    onChange={(e) => setRepeatSeconds(e.target.value)}
+                                />
+                            </label>
+                            <fieldset
+                                className="automation-schedule-fields"
+                                disabled={!scheduled || running}
+                            >
+                                <legend>Chosen start</legend>
                                 <label>
-                                    Repeat delay (s)
+                                    Start date
                                     <input
-                                        aria-label="Repetition delay"
-                                        value={repeatSeconds}
-                                        onChange={(e) => setRepeatSeconds(e.target.value)}
+                                        type="date"
+                                        aria-label="Scheduled start date"
+                                        value={date.split('T')[0]}
+                                        onChange={(e) => {
+                                            setDate(
+                                                e.target.value +
+                                                    'T' +
+                                                    (date.split('T')[1] || '00:00:00'),
+                                            );
+                                            setOffset('');
+                                        }}
                                     />
                                 </label>
-                            )}
-                            <label>
-                                <input
-                                    type="checkbox"
-                                    checked={scheduled}
-                                    onChange={(e) => setScheduled(e.target.checked)}
-                                />
-                                Schedule wall-clock start
-                            </label>
-                            {scheduled && (
-                                <>
-                                    <label>
-                                        Start date and time
-                                        <input
-                                            aria-label="Scheduled start date and time"
-                                            placeholder="YYYY-MM-DDTHH:mm:ss"
-                                            value={date}
-                                            onChange={(e) => setDate(e.target.value)}
-                                        />
-                                    </label>
-                                    <label>
-                                        Timezone
-                                        <input
-                                            aria-label="Start timezone"
-                                            value={zone}
-                                            onChange={(e) => setZone(e.target.value)}
-                                        />
-                                    </label>
-                                    <label>
-                                        UTC offset
-                                        <input
-                                            aria-label="Start UTC offset"
-                                            placeholder="+01:00 if needed"
-                                            value={offset}
-                                            onChange={(e) => setOffset(e.target.value)}
-                                        />
-                                    </label>
-                                    <label>
-                                        Start clock
-                                        <select
-                                            aria-label="Start clock"
-                                            value={clockKind}
-                                            onChange={(e) =>
-                                                setClockKind(e.target.value as 'local' | 'device')
-                                            }
-                                        >
-                                            <option value="local">Local host clock</option>
-                                            <option value="device">Verified device clock</option>
-                                        </select>
-                                    </label>
-                                    {clockKind === 'device' && (
-                                        <>
-                                            <button
-                                                className="button"
-                                                disabled={
-                                                    transport !== 'ssh' ||
-                                                    !connected ||
-                                                    running ||
-                                                    sampling
-                                                }
-                                                onClick={sampleClicked}
-                                            >
-                                                {sampling ? 'Sampling…' : 'Sample device clock'}
-                                            </button>
-                                            <p>
-                                                {calibration
-                                                    ? calibration.source +
-                                                      ' · ' +
-                                                      calibration.zone +
-                                                      ' · uncertainty ±' +
-                                                      Math.ceil(calibration.uncertaintyMs) +
-                                                      ' ms'
-                                                    : 'Device time unavailable. Use local time for Serial.'}{' '}
-                                                Samples refresh while armed.
-                                            </p>
-                                        </>
-                                    )}
-                                </>
-                            )}
+                                <label>
+                                    Start time
+                                    <input
+                                        type="time"
+                                        step="1"
+                                        aria-label="Scheduled start time"
+                                        value={date.split('T')[1] || ''}
+                                        onChange={(e) => {
+                                            setDate(
+                                                (date.split('T')[0] || '') + 'T' + e.target.value,
+                                            );
+                                            setOffset('');
+                                        }}
+                                    />
+                                </label>
+                                <label>
+                                    Timezone
+                                    <select
+                                        aria-label="Start timezone"
+                                        value={zone}
+                                        onChange={(e) => {
+                                            setZone(e.target.value);
+                                            setOffset('');
+                                        }}
+                                    >
+                                        {zones.map((z) => (
+                                            <option key={z} value={z}>
+                                                {z}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label>
+                                    Start clock
+                                    <select
+                                        aria-label="Start clock"
+                                        value={clockKind}
+                                        onChange={(e) =>
+                                            setClockKind(e.target.value as 'local' | 'device')
+                                        }
+                                    >
+                                        <option value="local">Local host clock</option>
+                                        <option value="device">Verified device clock</option>
+                                    </select>
+                                </label>
+                                <p className="automation-offset">
+                                    {scheduleOptions.matches.length === 1
+                                        ? 'Automatic UTC offset: ' +
+                                          scheduleOptions.matches[0].offset
+                                        : scheduleOptions.matches.length > 1
+                                          ? 'This local time occurs twice. Choose an occurrence.'
+                                          : date
+                                            ? scheduleOptions.error
+                                            : 'Choose a future calendar date and time.'}
+                                </p>
+                                <label>
+                                    Repeated time occurrence
+                                    <select
+                                        aria-label="Repeated time occurrence"
+                                        disabled={scheduleOptions.matches.length < 2}
+                                        value={offset}
+                                        onChange={(e) => setOffset(e.target.value)}
+                                    >
+                                        <option value="">Choose if this time repeats</option>
+                                        {scheduleOptions.matches.map((m, i) => (
+                                            <option key={m.offset} value={m.offset}>
+                                                {i === 0 ? 'Earlier' : 'Later'} · UTC{m.offset}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <button
+                                    className="button"
+                                    disabled={
+                                        clockKind !== 'device' ||
+                                        transport !== 'ssh' ||
+                                        !connected ||
+                                        running ||
+                                        sampling
+                                    }
+                                    onClick={sampleClicked}
+                                >
+                                    {sampling ? 'Sampling…' : 'Sample device clock'}
+                                </button>
+                                <p className="automation-note">
+                                    {calibration
+                                        ? calibration.source +
+                                          ' · ' +
+                                          calibration.zone +
+                                          ' · uncertainty ±' +
+                                          Math.ceil(calibration.uncertaintyMs) +
+                                          ' ms'
+                                        : 'Device scheduling requires a verified SSH clock sample. Serial uses local time.'}{' '}
+                                    Samples refresh while armed.
+                                </p>
+                            </fieldset>
+                            <p className="automation-current-time">
+                                Current {clockKind === 'device' ? 'verified device' : 'local host'}{' '}
+                                time in {zone}:{' '}
+                                <time aria-label="Current time reference">{reference}</time>. The
+                                chosen start stays fixed.
+                            </p>
                             {transport === 'ssh' && (
                                 <label>
                                     <input
@@ -754,7 +939,9 @@ export default function AutomationPage(props: Props) {
                             )}
                         </div>
                         <small className="automation-note">
-                            Hidden app, sleep or disconnect pauses work. Rearm manually.
+                            Desktop runs continue while minimized. Sleep, disconnect, ownership loss
+                            or clock uncertainty pauses work; rearm manually. Browser suspension can
+                            also pause timing.
                         </small>
                     </div>
                     <div className="automation-delay-list">
@@ -800,7 +987,9 @@ export default function AutomationPage(props: Props) {
                                   ' · ' +
                                   plan.start.clock +
                                   ' clock'
-                                : 'Immediate start'}{' '}
+                                : scheduled
+                                  ? 'Scheduled start draft: ' + date + ' in ' + zone
+                                  : 'Immediate start'}{' '}
                             ·{' '}
                             {repeat
                                 ? 'Start flow repeats after ' +
@@ -814,7 +1003,8 @@ export default function AutomationPage(props: Props) {
                             .map((s) => (
                                 <div key={s.id}>
                                     <strong>
-                                        {s.name} · delay {s.delaySeconds}s
+                                        {s.name || 'Step ' + (steps.indexOf(s) + 1)} · delay{' '}
+                                        {s.delaySeconds}s
                                     </strong>
                                     <pre>
                                         {JSON.stringify(

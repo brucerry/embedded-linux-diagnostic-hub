@@ -31,7 +31,7 @@ test('Serial flow edits remain deliberate, multiline bytes and QA exports use ca
     const flow = page.getByRole('region', { name: 'Automation', exact: true });
     await flow.getByLabel('Automation transport').selectOption('serial');
     await setup(flow, 'Commands');
-    await flow.getByLabel('Command 1 name').fill('Read console');
+    await flow.getByLabel('Step 1 name (optional)').fill('Read console');
     await setup(flow, 'Commands');
     await flow.getByLabel('Command 1 script').fill('first line');
     await flow.getByLabel('Command 1 script').press('Enter');
@@ -91,20 +91,22 @@ test('invalid scheduled dates, repeated local time and invalid delay keep draft 
     await setup(flow, 'Connection');
     await flow.getByLabel('Serial completion prompt').fill('# ');
     await setup(flow, 'Timing');
-    await flow.getByLabel('Schedule wall-clock start').check();
-    await flow.getByLabel('Start timezone').fill('UTC');
-    await flow.getByLabel('Scheduled start date and time').fill('2027-02-29T12:00:00');
-    await expect(flow.getByRole('alert')).toContainText('does not exist');
-    await expect(flow.getByLabel('Scheduled start date and time')).toHaveValue(
-        '2027-02-29T12:00:00',
+    await flow.getByLabel('Run mode', { exact: true }).selectOption('scheduled');
+    await flow.getByLabel('Start timezone').selectOption('UTC');
+    await flow.getByLabel('Scheduled start date', { exact: true }).fill('2020-02-29');
+    await flow.getByLabel('Scheduled start time', { exact: true }).fill('12:00:00');
+    await expect(flow.getByRole('alert')).toContainText('future');
+    await expect(flow.getByLabel('Scheduled start date', { exact: true })).toHaveValue(
+        '2020-02-29',
     );
     await setup(flow, 'Review');
     await expect(flow.getByRole('button', { name: 'Start flow', exact: true })).toBeDisabled();
     await setup(flow, 'Timing');
-    await flow.getByLabel('Start timezone').fill('America/New_York');
-    await flow.getByLabel('Scheduled start date and time').fill('2026-11-01T01:30:00');
+    await flow.getByLabel('Start timezone').selectOption('America/New_York');
+    await flow.getByLabel('Scheduled start date', { exact: true }).fill('2026-11-01');
+    await flow.getByLabel('Scheduled start time', { exact: true }).fill('01:30:00');
     await expect(flow.getByRole('alert')).toContainText('repeats');
-    await flow.getByLabel('Start UTC offset').fill('-05:00');
+    await flow.getByLabel('Repeated time occurrence').selectOption('-05:00');
     await flow.getByLabel('Command 1 delay').fill('Infinity');
     await expect(flow.getByRole('alert')).toContainText('delay');
     await expect(flow.getByLabel('Command 1 delay')).toHaveValue('Infinity');
@@ -213,9 +215,10 @@ for (const transport of ['ssh', 'serial'] as const)
                 await flow.getByLabel('Serial completion prompt').fill('# ');
             }
             await setup(flow, 'Timing');
-            await flow.getByLabel('Schedule wall-clock start').check();
-            await flow.getByLabel('Start timezone').fill('UTC');
-            await flow.getByLabel('Scheduled start date and time').fill('2028-02-29T12:00:05');
+            await flow.getByLabel('Run mode', { exact: true }).selectOption('scheduled');
+            await flow.getByLabel('Start timezone').selectOption('UTC');
+            await flow.getByLabel('Scheduled start date', { exact: true }).fill('2028-02-29');
+            await flow.getByLabel('Scheduled start time', { exact: true }).fill('12:00:05');
             await flow.getByLabel('Repeat completed flow').check();
             await setup(flow, 'Review');
             await expect(flow.locator('.automation-preview')).toContainText(
@@ -256,3 +259,49 @@ for (const transport of ['ssh', 'serial'] as const)
             expect(await calls()).toBe(1);
         },
     );
+
+test('optional names, mouse and keyboard ordering, stable timing and fixed chosen instant', async ({
+    page,
+}, testInfo) => {
+    await installSerial(page);
+    await page.clock.install({ time: new Date('2028-01-01T12:00:00Z') });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Automation', exact: true }).click();
+    const flow = page.getByRole('region', { name: 'Automation', exact: true });
+    await flow.getByLabel('Automation transport').selectOption('serial');
+    await flow.getByLabel('Serial completion prompt').fill('# ');
+    await setup(flow, 'Commands');
+    await expect(flow.getByLabel('Step 1 name (optional)')).toHaveValue('');
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('');
+    await flow.getByLabel('Command 1 script').fill('first');
+    await flow.getByRole('button', { name: 'Add command', exact: true }).click();
+    await flow.getByLabel('Command 2 script').fill('second');
+    await flow
+        .locator('.automation-drag-handle')
+        .first()
+        .dragTo(flow.locator('.automation-steps li').last());
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('second');
+    const up = flow.getByRole('button', { name: 'Move command 2 up', exact: true });
+    await up.focus();
+    await page.keyboard.press('Enter');
+    await expect(flow.getByLabel('Command 1 script')).toHaveValue('first');
+    await setup(flow, 'Timing');
+    const before = await flow.locator('.automation-settings').boundingBox();
+    await flow.getByLabel('Run mode', { exact: true }).selectOption('scheduled');
+    const after = await flow.locator('.automation-settings').boundingBox();
+    expect(Math.abs(before!.height - after!.height)).toBeLessThan(2);
+    await flow.getByLabel('Start timezone').selectOption('America/New_York');
+    await flow.getByLabel('Scheduled start date', { exact: true }).fill('2028-07-01');
+    await flow.getByLabel('Scheduled start time', { exact: true }).fill('09:15:00');
+    await expect(flow.locator('.automation-offset')).toContainText('-04:00');
+    const reference = await flow.getByLabel('Current time reference').innerText();
+    await page.clock.runFor(2000);
+    await expect(flow.getByLabel('Current time reference')).not.toHaveText(reference);
+    await expect(flow.getByLabel('Scheduled start date', { exact: true })).toHaveValue(
+        '2028-07-01',
+    );
+    await expect(flow.getByLabel('Scheduled start time', { exact: true })).toHaveValue('09:15:00');
+    await output(page, 'automation-stable-timing.png', testInfo);
+    await setup(flow, 'Review');
+    await expect(flow.locator('.automation-preview')).toContainText('2028-07-01T13:15:00.000Z');
+});

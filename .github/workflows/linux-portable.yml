@@ -47,6 +47,8 @@ jobs:
                   HUB_TEST_EXECUTABLE:
                       ${{ github.workspace }}/release/Diagnostic-Hub-linux-x64.AppImage
                   HUB_TEST_APPIMAGE: '1'
+            - name: Build distinct future-version AppImage handoff fixture
+              run: node scripts/build-update-fixture.mjs
             - name: Verify portable update download and actual AppImage relaunch
               run: xvfb-run -a npm run test:desktop-update
               env:
@@ -63,6 +65,12 @@ jobs:
                       release/Diagnostic-Hub-linux-x64.tar.gz
                       release/Diagnostic-Hub-linux-x64.tar.gz.sha256
                       release/linux-build-info.json
+                  if-no-files-found: error
+            - name: Retain isolated update handoff evidence separately
+              uses: actions/upload-artifact@v4
+              with:
+                  name: linux-update-handoff-evidence
+                  path: validation/update-handoff/
                   if-no-files-found: error
     gnome:
         needs: build

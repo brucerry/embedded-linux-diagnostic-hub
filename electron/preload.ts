@@ -5,6 +5,13 @@ import type { TerminalEvent } from '../shared/terminal';
 
 let automationConnection = '';
 const bridge: DesktopBridge = {
+    acquireAutomationActivity: () => ipcRenderer.invoke('hub:automation-activity-acquire'),
+    releaseAutomationActivity: (id) => ipcRenderer.invoke('hub:automation-activity-release', id),
+    onAutomationInterrupted: (callback) => {
+        const listener = (_event: unknown, reason: string) => callback(reason);
+        ipcRenderer.on('hub:automation-interrupted', listener);
+        return () => ipcRenderer.removeListener('hub:automation-interrupted', listener);
+    },
     automationConnection: () => automationConnection,
     runAutomation: async (request) =>
         validateCapture(await ipcRenderer.invoke('hub:automation-run', request)),
@@ -48,12 +55,18 @@ const bridge: DesktopBridge = {
     },
     checkUpdates: (includePrereleases) =>
         ipcRenderer.invoke('hub:check-updates', includePrereleases),
+    readUpdateInfo: () => ipcRenderer.invoke('hub:read-update-info'),
+    openUpdateFolder: (target) => ipcRenderer.invoke('hub:open-update-folder', target),
+    copyUpdatePath: (target) => ipcRenderer.invoke('hub:copy-update-path', target),
     startUpdate: (request) => ipcRenderer.invoke('hub:start-update', request),
     readUpdateReport: () => ipcRenderer.invoke('hub:read-update-report'),
     acknowledgeUpdateReport: (id) => ipcRenderer.invoke('hub:acknowledge-update-report', id),
     clearSessionData: () => ipcRenderer.invoke('hub:clear-session-data'),
     onUpdateProgress: (callback) => {
-        const listener = (_event: unknown, progress: string) => callback(progress);
+        const listener = (
+            _event: unknown,
+            progress: import('../shared/types').UpdateProgress | string,
+        ) => callback(progress);
         ipcRenderer.on('hub:update-progress', listener);
         return () => ipcRenderer.removeListener('hub:update-progress', listener);
     },

@@ -22,10 +22,10 @@ async function main() {
             "const {app,BrowserWindow,protocol,session}=require('electron');",
             "protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);",
             'app.whenReady().then(async()=>{',
-            "protocol.handle('app',()=>new Response('<!doctype html><title>Serial API gate</title>'));",
+            "protocol.handle('app',()=>new Response('<!doctype html><title>Serial API gate</title>',{headers:{'Content-Type':'text/html'}}));",
             'const original=session.defaultSession.setPermissionCheckHandler.bind(session.defaultSession);',
-            'session.defaultSession.setPermissionCheckHandler=(handler)=>{global.checkSerial=handler;original(handler);};',
-            'const w=new BrowserWindow({show:false,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});',
+            'session.defaultSession.setPermissionCheckHandler=(handler)=>{global.checkSerial=handler;global.serialPolicyChecks=[];original((owner,permission,origin,details)=>{const allowed=handler(owner,permission,origin,details);global.serialPolicyChecks.push({permission,origin,details,allowed});return global.forceSerialProbeDenied?false:allowed;});};',
+            'const w=new BrowserWindow({show:true,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});',
             'global.serialWindow=w;global.serialEvents=[];',
             'const send=w.webContents.send.bind(w.webContents);w.webContents.send=(channel,...args)=>{global.serialEvents.push({channel,args});send(channel,...args);};',
             'global.control=require(' +
@@ -49,6 +49,48 @@ async function main() {
             env,
         });
         const page = await desktop.firstWindow();
+        await desktop.evaluate(() => {
+            (globalThis as unknown as { forceSerialProbeDenied: boolean }).forceSerialProbeDenied =
+                true;
+        });
+        await page.evaluate(
+            "document.body.innerHTML='<button id=serial-policy-probe>Probe permission</button>';document.querySelector('#serial-policy-probe').onclick=()=>navigator.serial.requestPort().then(()=>window.serialProbeResult='unexpected grant').catch(e=>window.serialProbeResult={name:e.name,message:e.message});",
+        );
+        await page.locator('#serial-policy-probe').click();
+        await page.waitForFunction('window.serialProbeResult !== undefined');
+        const actualPolicyChecks = await desktop.evaluate(
+            () =>
+                (
+                    globalThis as unknown as {
+                        serialPolicyChecks: {
+                            permission: string;
+                            origin: string;
+                            allowed: boolean;
+                            details: {
+                                isMainFrame: boolean;
+                                securityOrigin: string;
+                                requestingUrl: string;
+                            };
+                        }[];
+                    }
+                ).serialPolicyChecks,
+        );
+        assert(
+            actualPolicyChecks.some(
+                (check) =>
+                    check.permission === 'serial' &&
+                    check.allowed &&
+                    check.details.isMainFrame &&
+                    check.details.requestingUrl === 'app://bundle/index.html' &&
+                    check.origin === 'app://bundle/' &&
+                    check.details.securityOrigin === 'app://bundle/',
+            ),
+            'The real Chromium callback must authorize only the trusted serialized root',
+        );
+        await desktop.evaluate(() => {
+            (globalThis as unknown as { forceSerialProbeDenied: boolean }).forceSerialProbeDenied =
+                false;
+        });
         const api = await page.evaluate(async () => {
             const nav = navigator as Navigator & { serial?: { getPorts(): Promise<unknown[]> } };
             return {
@@ -95,8 +137,7 @@ async function main() {
             const replies: string[] = [];
             const offered = {
                 portId: 'synthetic-port',
-                portName: 'COM_TEST',
-                displayName: 'Synthetic fixture',
+                portName: 'COM11',
             };
             const event = { preventDefault() {} };
             session.defaultSession.emit(
@@ -187,7 +228,14 @@ async function main() {
         assert.equal(proof.blocked, false);
         assert.equal(proof.staleAck, true);
         assert.equal(proof.timeoutStopped, true);
-        const evidence = { ...api, ...proof, physicalPortsOpened: 0, persistentGrantsCreated: 0 };
+        const evidence = {
+            ...api,
+            ...proof,
+            actualPolicyChecks,
+            realRequestForcedDenied: true,
+            physicalPortsOpened: 0,
+            persistentGrantsCreated: 0,
+        };
         console.log(JSON.stringify(evidence, null, 2));
         if (process.env.HUB_FEATURE_EVIDENCE) {
             await mkdir(process.env.HUB_FEATURE_EVIDENCE, { recursive: true });

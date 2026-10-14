@@ -77,11 +77,7 @@ export function offsetLabel(minutes: number) {
         String(Math.abs(minutes) % 60).padStart(2, '0')
     );
 }
-export function resolveWallTime(
-    text: string,
-    zone: string,
-    chosenOffset?: string,
-): { epochMs: number; zone: string; offset: string; alternatives: string[] } {
+export function wallTimeOptions(text: string, zone: string): { epochMs: number; offset: string }[] {
     const c = calendar(text),
         naive = stamp(c),
         f = formatter(zone),
@@ -95,12 +91,16 @@ export function resolveWallTime(
         .filter((x) => stamp(parts(f, x.epochMs)) === naive);
     if (!matches.length)
         throw Error('Start time: this local time does not exist because of a timezone/DST change.');
+    return matches.sort((a, b) => a.epochMs - b.epochMs);
+}
+export function resolveWallTime(
+    text: string,
+    zone: string,
+    chosenOffset?: string,
+): { epochMs: number; zone: string; offset: string; alternatives: string[] } {
+    const matches = wallTimeOptions(text, zone);
     if (matches.length > 1 && !chosenOffset)
-        throw Error(
-            'Start time: this local time repeats. Select an explicit UTC offset: ' +
-                matches.map((x) => x.offset).join(' or ') +
-                '.',
-        );
+        throw Error('Start time: this local time repeats. Choose the earlier or later occurrence.');
     const selected = chosenOffset ? matches.find((x) => x.offset === chosenOffset) : matches[0];
     if (!selected) throw Error('Start UTC offset: it does not match this date, time and timezone.');
     return { ...selected, zone, alternatives: matches.map((x) => x.offset) };

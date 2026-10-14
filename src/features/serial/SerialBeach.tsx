@@ -117,7 +117,6 @@ export function SerialBeach({ active }: { active: boolean }) {
                             <g transform="scale(1.35)">
                                 <Sprite pixels={pig} palette={palette} />
                             </g>
-                            <path d="M-7 16h10v5H-7zM-11 12h6v5h-6z" fill="#f8c2cc" />
                         </g>
                     </g>
                     <g className="serial-volleyball">
@@ -133,7 +132,7 @@ export function SerialBeach({ active }: { active: boolean }) {
             </svg>
             <svg
                 className="serial-sun"
-                viewBox="0 0 64 64"
+                viewBox="-8 -8 80 80"
                 shapeRendering="crispEdges"
                 focusable="false"
             >
@@ -142,7 +141,20 @@ export function SerialBeach({ active }: { active: boolean }) {
                         <path d="M24 6h16v2h8v4h6v8h4v24h-4v8h-6v4h-8v2H24v-2h-8v-4h-6v-8H6V20h4v-8h6V8h8z" />
                     </clipPath>
                 </defs>
-                <g transform="rotate(-18 32 32)">
+                <g className="serial-sun-flames">
+                    {Array.from({ length: 8 }, (_, index) => (
+                        <g key={index} transform={'rotate(' + index * 45 + ' 32 32)'}>
+                            <g
+                                className="serial-sun-flame"
+                                style={{ animationDelay: -index * 0.3 + 's' }}
+                            >
+                                <path d="M24 10V2h4v-6h4v4h4v-4h4v6h4v8z" fill="#efb684" />
+                                <path d="M28 10V4h4V0h4v4h4v6z" fill="#ffe6ad" />
+                            </g>
+                        </g>
+                    ))}
+                </g>
+                <g className="serial-sun-disc">
                     <g clipPath={'url(#' + sun + ')'}>
                         <path d="M0 0h64v64H0z" fill="#f7d392" />
                         <g className="serial-sun-surface">

@@ -1,4 +1,5 @@
 import { configureSerial } from './serial';
+import { AutomationActivity } from './automation-activity';
 import {
     app,
     BrowserWindow,
@@ -7,6 +8,7 @@ import {
     ipcMain,
     net,
     protocol,
+    powerMonitor,
     session,
     shell,
 } from 'electron';
@@ -25,6 +27,7 @@ import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
 import { UpdateCoordinator } from './update-coordinator';
 import { UpdateReports } from './update-reports';
+import { portableExecutable, UpdateReceipts } from './update-receipt';
 import { LINUX_DESKTOP_NAME, withNativeLinuxWindow } from './linux-window-identity';
 
 const development = process.argv.includes('--dev') && !app.isPackaged;
@@ -113,10 +116,24 @@ app.whenReady().then(async () => {
         app.isPackaged,
     );
     const reports = new UpdateReports(path.join(app.getPath('userData'), 'update-reports'));
+    const receipts = new UpdateReceipts(
+        path.join(app.getPath('userData'), 'updates'),
+        process.platform,
+    );
+    const runningExecutable = portableExecutable(
+        process.platform,
+        app.isPackaged,
+        process.execPath,
+        process.env,
+    );
     let serial: ReturnType<typeof configureSerial>;
+    let activity: AutomationActivity | undefined;
     const update = new UpdateCoordinator(updater, reports, {
         isConnecting: () => connecting,
-        quiesceSerial: () => serial.quiesce(),
+        quiesceSerial: () => {
+            activity?.interrupt('Update started. Arm explicitly after reconnecting.');
+            return serial.quiesce();
+        },
         isConnected: () => ssh.isConnected,
         waitForCollection: async () => {
             await collectionTask?.catch(() => {});
@@ -127,15 +144,25 @@ app.whenReady().then(async () => {
             window.webContents.send('hub:disconnected', 'update');
         },
         progress: (message) => window.webContents.send('hub:update-progress', message),
-        restart: (execPath) => {
-            app.relaunch({
-                execPath,
-                args: [
-                    ...(process.platform === 'linux' ? ['--appimage-extract-and-run'] : []),
-                    `--user-data-dir=${app.getPath('userData')}`,
-                ],
-            });
-            setImmediate(() => app.quit());
+        restart: async (execPath) => {
+            const info = updater.handoffInfo();
+            if (info.executable !== execPath)
+                throw Error('Update executable changed before restart.');
+            await receipts.write({ ...info, state: 'verified' });
+            try {
+                await receipts.write({ ...info, state: 'restart-requested' });
+                app.relaunch({
+                    execPath,
+                    args: [
+                        ...(process.platform === 'linux' ? ['--appimage-extract-and-run'] : []),
+                        `--user-data-dir=${app.getPath('userData')}`,
+                    ],
+                });
+                setImmediate(() => app.quit());
+            } catch (error) {
+                await receipts.write({ ...info, state: 'restart-failed' });
+                throw error;
+            }
         },
     });
 
@@ -169,6 +196,28 @@ app.whenReady().then(async () => {
         process.platform === 'linux'
             ? withNativeLinuxWindow((name) => app.setDesktopName(name), createWindow)
             : createWindow();
+    activity = new AutomationActivity(
+        (enabled) => {
+            if (!window.isDestroyed()) window.webContents.setBackgroundThrottling(enabled);
+        },
+        (reason) => {
+            if (!window.isDestroyed())
+                window.webContents.send('hub:automation-interrupted', reason);
+        },
+        () => update.active,
+    );
+    registerHandler('hub:automation-activity-acquire', () => activity!.acquire());
+    registerHandler('hub:automation-activity-release', (id) => activity!.release(id));
+    powerMonitor.on('suspend', () => activity!.suspend());
+    powerMonitor.on('resume', () => activity!.resume());
+    window.webContents.on('render-process-gone', () => {
+        activity!.clear();
+        ssh.clear();
+    });
+    window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
+        if (isMainFrame) activity!.clear();
+    });
+    window.on('closed', () => activity!.clear());
     serial = configureSerial(window, appUrl, () => update.active);
     registerHandler('hub:serial-select', (id, portId) => serial.select(id, portId));
     registerHandler('hub:serial-cleanup-ack', (id) => serial.acknowledge(id));
@@ -343,6 +392,15 @@ app.whenReady().then(async () => {
             serial.release();
         }
     });
+    registerHandler('hub:read-update-info', () =>
+        receipts.info(app.getVersion(), runningExecutable),
+    );
+    registerHandler('hub:open-update-folder', async (target) =>
+        shell.showItemInFolder(await receipts.selectedPath(target, runningExecutable)),
+    );
+    registerHandler('hub:copy-update-path', async (target) =>
+        clipboard.writeText(await receipts.selectedPath(target, runningExecutable)),
+    );
     registerHandler('hub:read-update-report', () => reports.read());
     registerHandler('hub:clear-session-data', () => {
         if (update.active) throw new Error('Wait for the update to finish before resetting data.');

@@ -5,6 +5,12 @@ export function serialOrigin(documentUrl: string): string {
     const url = new URL(documentUrl);
     return url.protocol + '//' + url.host;
 }
+function matchesSerialOrigin(value: string | undefined, documentUrl: string): boolean {
+    const expected = serialOrigin(documentUrl);
+    // Chromium serializes custom secure origins with a trailing root slash.
+    // Accept only that equivalent root, never discard paths, queries or credentials.
+    return value === expected || value === expected + '/';
+}
 export function allowsSerial(
     documentUrl: string,
     trustedContents: unknown,
@@ -17,8 +23,8 @@ export function allowsSerial(
         permission === 'serial' &&
         contents === trustedContents &&
         details.isMainFrame === true &&
-        origin === serialOrigin(documentUrl) &&
-        details.securityOrigin === serialOrigin(documentUrl) &&
+        matchesSerialOrigin(origin, documentUrl) &&
+        matchesSerialOrigin(details.securityOrigin, documentUrl) &&
         details.requestingUrl === documentUrl
     );
 }
@@ -48,7 +54,6 @@ export class SerialSelection {
     private clean(ports: SerialChoice[]) {
         const seen = new Set<string>();
         return ports
-            .slice(0, 128)
             .filter((p) => {
                 if (typeof p.id !== 'string' || !p.id || p.id.length > 512 || seen.has(p.id))
                     return false;

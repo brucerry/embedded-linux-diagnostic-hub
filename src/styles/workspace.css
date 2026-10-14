@@ -3126,6 +3126,15 @@ main {
 .serial-chooser-list {
     display: grid;
     gap: 10px;
+    max-height: 45vh;
+    overflow-y: auto;
+}
+.serial-chooser-paging {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 12px;
 }
 .serial-page .terminal-frame {
     background: #d5e9ee;
@@ -3261,8 +3270,11 @@ main {
 .serial-volleyball {
     animation: serial-ball-volley 4s linear infinite;
 }
-.serial-sun-surface {
-    animation: serial-solar-turn 4s linear infinite;
+.serial-sun-flame {
+    transform-box: fill-box;
+    transform-origin: center bottom;
+    opacity: 0.65;
+    animation: serial-flame-flicker 2.6s steps(4, end) infinite alternate;
 }
 .serial-beach.paused svg * {
     animation-play-state: paused;
@@ -3336,9 +3348,14 @@ main {
         transform: translate(286px, 161px) rotate(315deg);
     }
 }
-@keyframes serial-solar-turn {
+@keyframes serial-flame-flicker {
+    from {
+        transform: scaleY(0.82);
+        opacity: 0.5;
+    }
     to {
-        transform: translateX(-64px);
+        transform: scaleY(1.08);
+        opacity: 0.8;
     }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -3974,4 +3991,109 @@ select option:checked {
     .page-scroll-controls {
         display: none;
     }
+}
+
+.automation-schedule-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+    min-width: 0;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+}
+.automation-schedule-fields:disabled {
+    opacity: 0.65;
+}
+.automation-offset,
+.automation-current-time {
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+}
+.automation-reorder-notice {
+    min-height: 1.5em;
+    margin: 0;
+}
+.automation-drag-handle {
+    display: inline-block;
+    cursor: grab;
+    padding: 4px 12px;
+}
+.automation-drag-handle[draggable='false'] {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.update-location code,
+.update-progress code {
+    display: block;
+    overflow-wrap: anywhere;
+    margin: 8px 0;
+    font-size: 12px;
+}
+.update-location {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin: 12px 0;
+}
+.update-location .button {
+    margin: 4px 8px 4px 0;
+}
+.update-progress progress {
+    width: 100%;
+    height: 10px;
+}
+.update-receipt-notice {
+    margin: 12px 24px;
+}
+
+.automation-fields > .automation-schedule-fields {
+    grid-column: 1 / -1;
+    border-color: var(--line);
+}
+.automation-schedule-fields {
+    align-items: start;
+}
+.automation-schedule-fields > p {
+    grid-column: 1 / -1;
+    margin: 0;
+    min-height: 1.6em;
+}
+.automation-schedule-fields > label {
+    min-width: 0;
+}
+.automation-schedule-fields select {
+    width: 100%;
+}
+.automation-schedule-fields > .button {
+    align-self: end;
+}
+.update-progress {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #28313d;
+    border: 1px solid #4a5363;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 8px 16px #0002;
+}
+.update-progress p {
+    margin: 4px 0;
+}
+.update-locations {
+    margin: 12px 0;
+}
+.update-locations summary,
+.update-receipt-notice summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+.update-receipt-notice {
+    margin: 16px 0;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
 }

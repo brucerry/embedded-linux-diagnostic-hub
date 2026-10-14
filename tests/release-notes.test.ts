@@ -189,3 +189,62 @@ test('stable source draft preserves four literal sections and complete link line
     for (const line of source.split('Links:\n')[1].trim().split('\n'))
         assert.match(line, /^.+ - https:\/\/\S+$/);
 });
+
+test('emoji release sections preserve the four labels/order, facts and exact links', () => {
+    const body =
+        '📋 Description:\nFacts.\n\n🔧 Changes:\n- Fix.\n\n🔖 Commits:\n- Commit.\n\n🔗 Links:\nSetup - https://example.invalid/setup\n';
+    const changed = meaningfulReleaseLinks(body);
+    assert.ok(changed.startsWith(body.slice(0, body.indexOf('Setup -'))));
+    assert.ok(changed.includes('[Setup](https://example.invalid/setup)'));
+    assert.equal(meaningfulReleaseLinks(changed), changed);
+    assert.throws(() => meaningfulReleaseLinks(body.replace('🔧 Changes:', '🔧 Features:')));
+});
+test('future release generation decorates only established sections while legacy generation stays unchanged', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'hub-release-emoji-'));
+    const git = (...args: string[]) =>
+        execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    try {
+        git('init', '--initial-branch=main');
+        git('config', 'user.name', 'Test Author');
+        git('config', 'user.email', 'test@example.invalid');
+        await writeFile(path.join(root, 'change.txt'), 'base');
+        git('add', '.');
+        git('commit', '-m', 'chore: baseline');
+        git('tag', 'v0.5.0');
+        await writeFile(path.join(root, 'change.txt'), 'fix');
+        git('add', '.');
+        git('commit', '-m', 'fix: update behavior');
+        git('tag', 'v0.5.1');
+        const highlights =
+            '📋 Description:\nFacts.\n\n🔧 Changes:\n- Fix.\n\n🔖 Commits:\n- Draft.\n\n🔗 Links:\nSetup - https://example.invalid/setup\n';
+        const future = releasePageNotes({
+            repository: 'owner/repository',
+            currentTag: 'v0.5.1',
+            previousTag: 'v0.5.0',
+            highlights,
+            cwd: root,
+        });
+        assert.deepEqual(
+            future.match(/^(?:📋|🔧|🔖|🔗) (?:Description|Changes|Commits|Links):$/gm),
+            ['📋 Description:', '🔧 Changes:', '🔖 Commits:', '🔗 Links:'],
+        );
+        assert.ok(future.includes('fix: update behavior'));
+        assert.ok(future.includes('[Setup](https://example.invalid/setup)'));
+        const legacy = releasePageNotes({
+            repository: 'owner/repository',
+            currentTag: 'v0.5.0',
+            previousTag: null,
+            highlights: highlights.replace(/(?:📋|🔧|🔖|🔗) /g, ''),
+            cwd: root,
+        });
+        assert.ok(legacy.startsWith('Description:'));
+        assert.ok(!legacy.includes('📋 Description:'));
+    } finally {
+        if (
+            !path.resolve(root).startsWith(path.resolve(tmpdir()) + path.sep) ||
+            !path.basename(root).startsWith('hub-release-emoji-')
+        )
+            throw Error('Invalid cleanup');
+        await rm(root, { recursive: true, force: true });
+    }
+});

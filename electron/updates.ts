@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { gt, rcompare, valid } from 'semver';
-import type { UpdateStatus } from '../shared/types';
+import type { UpdateStatus, UpdateProgress } from '../shared/types';
 
 const REPO = 'brucerry/embedded-linux-diagnostic-hub';
 const API = `https://api.github.com/repos/${REPO}/releases?per_page=100`;
@@ -88,7 +88,19 @@ export class ReleaseUpdater {
                 installable: false,
                 release: null,
                 installationUnavailableReason:
-                    'Automatic updates are unavailable on this platform. Check GitHub releases for manually supported downloads.',
+                    this.platform === 'darwin'
+                        ? 'Automatic updates are unavailable on macOS. Quit Diagnostic Hub and use the verified Mac installer; normal signing and Gatekeeper policy still apply.'
+                        : 'Automatic updates are unavailable on this platform. Check GitHub releases for manually supported downloads.',
+                ...(this.platform === 'darwin' && (this.arch === 'x64' || this.arch === 'arm64')
+                    ? {
+                          manualUpdate: {
+                              platform: 'darwin' as const,
+                              architecture: this.arch,
+                              defaultDestination: '~/Applications/Diagnostic Hub.app',
+                              verificationCommand: 'shasum -a 256 -c download-run-macos.sh.sha256',
+                          },
+                      }
+                    : {}),
             };
         this.busy = true;
         this.candidate = null;
@@ -169,12 +181,13 @@ export class ReleaseUpdater {
         if (!this.candidate) throw new Error('Check for a newer compatible release first.');
     }
 
-    async download(): Promise<string> {
+    async download(progress: (value: UpdateProgress) => void = () => {}): Promise<string> {
         this.assertCanDownload();
         const candidate = this.candidate!;
         if (this.ready) {
             this.busy = true;
             try {
+                progress({ stage: 'verify', message: 'Rechecking the cached executable…' });
                 return await this.verify(this.ready);
             } catch (error) {
                 this.ready = null;
@@ -190,6 +203,7 @@ export class ReleaseUpdater {
         const file = path.join(folder, candidate.asset.name);
         const staging = `${file}.${randomUUID()}.part`;
         try {
+            progress({ stage: 'preparing', message: 'Reading release checksum…' });
             const checksumResponse = await this.get(candidate.checksum.browser_download_url);
             const checksum = (await this.text(checksumResponse, 4096)).trim();
             const match = /^([a-fA-F0-9]{64})\s+\*?([^\r\n]+)$/.exec(checksum);
@@ -199,10 +213,18 @@ export class ReleaseUpdater {
             await mkdir(folder, { recursive: true, mode: 0o700 });
             const response = await this.get(candidate.asset.browser_download_url, 300_000);
             if (!response.body) throw new Error('The release download is empty.');
+            progress({
+                stage: 'download',
+                message: 'Downloading release bytes…',
+                receivedBytes: 0,
+                totalBytes: candidate.asset.size,
+                stagingPath: staging,
+            });
             const handle = await open(staging, 'wx', 0o600);
             let size = 0;
             const hash = createHash('sha256');
             let header = Buffer.alloc(0);
+            let lastProgress = 0;
             try {
                 for await (const chunk of response.body) {
                     size += chunk.length;
@@ -213,10 +235,25 @@ export class ReleaseUpdater {
                         header = Buffer.concat([header, Buffer.from(chunk)]).subarray(0, 12);
                     // FileHandle.write may perform a partial write; writeFile handles the complete chunk.
                     await handle.writeFile(chunk);
+                    if (Date.now() - lastProgress >= 100 || size === candidate.asset.size) {
+                        progress({
+                            stage: 'download',
+                            message: 'Downloading release bytes…',
+                            receivedBytes: size,
+                            totalBytes: candidate.asset.size,
+                            stagingPath: staging,
+                        });
+                        lastProgress = Date.now();
+                    }
                 }
             } finally {
                 await handle.close();
             }
+            progress({
+                stage: 'verify',
+                message: 'Verifying size, SHA-256 and executable format…',
+                stagingPath: staging,
+            });
             if (size !== candidate.asset.size || hash.digest('hex') !== expected)
                 throw new Error('Release checksum verification failed. No update was installed.');
             const executable =
@@ -226,6 +263,11 @@ export class ReleaseUpdater {
                       header.subarray(8, 11).equals(Buffer.from([0x41, 0x49, 0x02]));
             if (!executable)
                 throw new Error('The release is not a compatible portable executable.');
+            progress({
+                stage: 'install',
+                message: 'Committing the verified executable…',
+                stagingPath: staging,
+            });
             await chmod(staging, 0o700);
             await rename(staging, file);
             this.ready = { file, hash: expected };
@@ -254,6 +296,15 @@ export class ReleaseUpdater {
         return ready.file;
     }
 
+    handoffInfo() {
+        if (!this.ready || !this.candidate) throw Error('Download and verify an update first.');
+        return {
+            previousVersion: this.currentVersion,
+            version: this.candidate.version,
+            executable: this.ready.file,
+            hash: this.ready.hash,
+        };
+    }
     async executable(): Promise<string> {
         if (this.busy || !this.ready) throw new Error('Download and verify an update first.');
         return this.verify(this.ready);

@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { inc } from 'semver';
+
 import { gatewayFixture } from './fixtures/gateway';
 import { stopProfileProcesses } from './fixtures/processes';
 
@@ -13,19 +13,36 @@ import { stopProfileProcesses } from './fixtures/processes';
 // It changes neither GitHub releases nor the user's application profile.
 async function main() {
     if (process.platform !== 'linux') throw Error('Run this AppImage relaunch test on Linux.');
-    const image = path.resolve('release/Diagnostic-Hub-linux-x64.AppImage');
-    const size = (await stat(image)).size;
+    const metadata = JSON.parse(
+        await readFile(
+            process.env.HUB_UPDATE_FIXTURE ?? 'validation/update-handoff/fixture.json',
+            'utf8',
+        ),
+    );
+    if (metadata.platform !== 'linux') throw Error('Linux future packaged fixture is required.');
+    const image = path.resolve(metadata.baseExecutable),
+        nextImage = path.resolve(metadata.futureExecutable);
+    const version: string = metadata.nextVersion;
+    const size = (await stat(nextImage)).size;
     const hash = createHash('sha256');
-    for await (const chunk of createReadStream(image)) hash.update(chunk);
-    const checksum = `${hash.digest('hex')}  Diagnostic-Hub-linux-x64.AppImage\n`;
+    for await (const chunk of createReadStream(nextImage)) hash.update(chunk);
+    const expectedHash = hash.digest('hex');
+    const checksum = `${expectedHash}  Diagnostic-Hub-linux-x64.AppImage\n`;
     const temporary = await mkdtemp(path.join(tmpdir(), 'hub-native-update-'));
     const profile = path.join(temporary, 'profile');
     const relaunchLog = path.join(temporary, 'relaunch.log');
     const diagnostics: string[] = [];
     const fixture = await gatewayFixture();
+    let releaseDownload: (() => void) | undefined;
     const server = http.createServer((req, res) => {
         if (req.url?.endsWith('.sha256')) res.end(checksum);
-        else createReadStream(image).pipe(res);
+        else {
+            const first = createReadStream(nextImage, { start: 0, end: 262143 });
+            first.pipe(res, { end: false });
+            first.on('end', () => {
+                releaseDownload = () => createReadStream(nextImage, { start: 262144 }).pipe(res);
+            });
+        }
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
@@ -66,7 +83,8 @@ async function main() {
             if (diagnostics.length > 100) diagnostics.shift();
         });
         const current = await desktop.evaluate(({ app }) => app.getVersion());
-        const version = inc(current, 'minor')!;
+        expect(current).toBe(metadata.baseVersion);
+        expect(version).not.toBe(current);
         await desktop.evaluate(
             ({ app }, data) => {
                 const request = globalThis.fetch;
@@ -119,6 +137,26 @@ async function main() {
         await expect(modal).toContainText(`v${version}`);
         await modal.getByRole('radio', { name: 'Save, update & reopen report' }).check();
         await modal.getByRole('button', { name: 'Start update' }).click();
+        await expect.poll(() => Boolean(releaseDownload)).toBe(true);
+        await expect
+            .poll(
+                async () =>
+                    Number(
+                        await modal
+                            .getByRole('progressbar', { name: 'Release download progress' })
+                            .getAttribute('value'),
+                    ) > 0,
+            )
+            .toBe(true);
+        expect(
+            await modal
+                .getByRole('progressbar', { name: 'Release download progress' })
+                .getAttribute('max'),
+        ).toBe(String(size));
+        const evidence = process.env.HUB_FEATURE_EVIDENCE ?? 'validation/update-handoff';
+        await mkdir(evidence, { recursive: true });
+        await page.screenshot({ path: path.join(evidence, 'linux-download.png'), fullPage: true });
+        releaseDownload!();
         const downloaded = path.join(
             profile,
             'updates',
@@ -144,6 +182,42 @@ async function main() {
         await relaunched.waitForURL('app://bundle/index.html');
         await expect(relaunched.getByRole('heading', { name: 'Device overview' })).toBeVisible();
         expect((await stat(downloaded)).size).toBe(size);
+        const info = await relaunched.evaluate(() => window.diagnosticHub!.readUpdateInfo!());
+        expect(info.currentVersion).toBe(version);
+        expect(info.currentPath).toBe(downloaded);
+        expect(info.receipt?.previousVersion).toBe(current);
+        expect(info.receipt?.executable).toBe(downloaded);
+        expect(info.receipt?.hash).toBe(expectedHash);
+        expect(info.handoffConfirmed).toBe(true);
+        await expect(relaunched.locator('.update-receipt-notice')).toContainText(
+            'New version confirmed running',
+        );
+        await writeFile(
+            path.join(evidence, 'linux-handoff-proof.json'),
+            JSON.stringify(
+                {
+                    platform: 'linux-x64',
+                    sourceFixture: true,
+                    publicReleaseMutated: false,
+                    previousVersion: current,
+                    currentVersion: info.currentVersion,
+                    durableAppImagePath: info.currentPath,
+                    sha256: expectedHash,
+                    bytes: size,
+                    handoffConfirmed: info.handoffConfirmed,
+                    reportMode: 'smart',
+                    sandbox,
+                    physicalPortsOpened: 0,
+                },
+                null,
+                2,
+            ) + '\n',
+        );
+        await relaunched.locator('.update-receipt-notice summary').click();
+        await relaunched.screenshot({
+            path: path.join(evidence, 'linux-confirmed.png'),
+            fullPage: true,
+        });
         await expect(relaunched.getByText('IMPORTED REPORT', { exact: true })).toBeVisible();
         await expect(
             relaunched.getByRole('button', { name: 'Connect device', exact: true }),
@@ -197,7 +271,13 @@ async function main() {
         await fixture.close();
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
-        await rm(temporary, { recursive: true, force: true });
+        const absolute = path.resolve(temporary);
+        if (
+            !absolute.startsWith(path.resolve(tmpdir()) + path.sep) ||
+            !path.basename(absolute).startsWith('hub-native-update-')
+        )
+            throw Error('Unexpected Linux cleanup path.');
+        await rm(absolute, { recursive: true, force: true });
     }
 }
 main().catch((error) => {

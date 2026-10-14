@@ -68,6 +68,12 @@ jobs:
                   HUB_NATIVE_CYCLES: '100'
                   HUB_TEST_EXECUTABLE:
                       ${{ github.workspace }}/release/win-unpacked/Diagnostic Hub.exe
+            - name: Build distinct future-version portable handoff fixture
+              run: node scripts/build-update-fixture.mjs
+            - name: Verify actual portable version, checksum, destination and relaunch
+              run: npx tsx tests/windows-update-handoff-smoke.ts
+              env:
+                  HUB_FEATURE_EVIDENCE: validation/update-handoff
             - run: npm run checksums
             - name: Record signing status
               shell: pwsh
@@ -86,6 +92,12 @@ jobs:
                       release/Diagnostic-Hub.exe
                       release/Diagnostic-Hub.exe.sha256
                       release/build-info.json
+                  if-no-files-found: error
+            - name: Retain isolated update handoff evidence separately
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-update-handoff-evidence
+                  path: validation/update-handoff/
                   if-no-files-found: error
             - name: Retain browser failure context and traces
               if: failure()

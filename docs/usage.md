@@ -98,7 +98,8 @@ the terminal text. The animation pauses when the terminal is hidden or blocked b
 
 Choose **Check for updates** in the desktop header; prereleases are supported. The available choices
 are **Update without saving**, **Save report & update**, and **Save, update & reopen report**.
-Cancel leaves the session unchanged.
+Cancel before starting leaves the session unchanged. Once an update transaction starts, cancellation
+is disabled; closing the dialog is not presented as cancelling the native transaction.
 
 Updates wait for active collection, disconnect SSH, verify the download and restart without
 reconnecting. Saved reports remain under `update-reports` in the user's application data folder.
@@ -112,3 +113,40 @@ v0.5.0 includes [Serial](serial.md), [WLAN/LAN insights](network-insights.md) an
 UART enablement/operation belongs to the user; physical ports and Linux/macOS drivers are separate
 qualification gates. Automation operator scripts are distinct from the fixed observational
 diagnostic catalogue.
+
+### Update progress and executable locations
+
+Download progress reports measured bytes against the validated release metadata size. Missing HTTP
+Content-Length does not remove that known total. Unknown totals and verification, commit and restart
+stages stay indeterminate; a completed download does not imply a successful launch.
+
+The Windows download helper's original cache under
+`%LOCALAPPDATA%\DiagnosticHub\downloads\v<version>` is separate from the in-app update destination:
+`<Electron userData>\updates\<version>\Diagnostic-Hub.exe`. With ordinary defaults this is under
+`%APPDATA%\Diagnostic Hub`; an explicit user-data-dir changes it. Linux automatic updates retain the
+verified AppImage in the corresponding userData updates directory. The original executable is kept.
+Temporary portable extraction and process.execPath are not the durable Windows EXE/AppImage.
+
+The update dialog provides native Open folder and Copy path actions for the current launchable app
+and saved verified update. A bounded native handoff receipt survives clean, preserve and smart
+modes. The reopened app displays versions and location status near the top: restart requested
+differs from confirmation that the expected version is running from the verified destination with
+matching checksum. Reopening an older executable still shows the saved new destination. Native
+actions accept only current/verified selectors, never arbitrary renderer filesystem paths. macOS
+retains manual update guidance.
+
+### Update platform coverage
+
+| Platform            | Mechanism                                                                  | Destination/status                                                                                      | Native qualification                                                             |
+| ------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Windows x64         | Automatic verified EXE handoff                                             | Measured download, separate verification/commit/restart; wrapper path and receipt                       | Actual local new-process version/path/checksum qualified                         |
+| Linux x64           | Automatic verified AppImage handoff                                        | Same stages; durable APPIMAGE, preserved profile and receipt                                            | Distinct future AppImage test wired into existing Linux CI; native run required  |
+| macOS x64           | Verified manual .app installer; automatic update disabled                  | Terminal stages and launch requested; default ~/Applications/Diagnostic Hub.app plus actual bundle path | Existing Intel CI installer/rollback and new native UI/path/normal-launch checks |
+| macOS arm64         | Same manual mechanism; native machine detected even in translated terminal | Same truthful stages and bundle paths                                                                   | Existing Apple Silicon CI runs the same native checks                            |
+| Other architectures | Automatic update unavailable                                               | Explicit unsupported status and releases link                                                           | No compatible automatic handoff claim                                            |
+
+For Mac, download helper/checksum from the same release tag, verify the saved helper, then run the
+saved installer locally as your ordinary user. The app copies only the verification command. Normal
+codesign/Gatekeeper policy, archive/source/architecture verification and failure rollback remain.
+Logical platform tests on Windows do not replace native Linux/Mac CI results. No quarantine,
+notarization, older macOS or physical-device acceptance is claimed.

@@ -40,6 +40,17 @@ export default function SerialPage(props: Props) {
         [enter, setEnter] = useState('CR');
     const [ports, setPorts] = useState<LocalSerialPort[]>([]),
         [chooser, setChooser] = useState<SerialChooser | null>(null);
+    const [chooserPage, setChooserPage] = useState(0);
+    const [chooserSearch, setChooserSearch] = useState('');
+    const filteredChoices =
+        chooser?.ports.filter((port) =>
+            (port.name + ' ' + (port.displayName ?? ''))
+                .toLocaleLowerCase()
+                .includes(chooserSearch.toLocaleLowerCase()),
+        ) ?? [];
+    const pageCount = Math.max(1, Math.ceil(filteredChoices.length / 64));
+    const pageIndex = Math.min(chooserPage, pageCount - 1);
+    const visibleChoices = filteredChoices.slice(pageIndex * 64, (pageIndex + 1) * 64);
     const [error, setError] = useState('');
     const [documentVisible, setDocumentVisible] = useState(!document.hidden);
     useEffect(() => {
@@ -67,15 +78,14 @@ export default function SerialPage(props: Props) {
             const info = port.getInfo();
             labels.current.set(
                 port,
-                pendingLabel.current ||
-                    'Authorized port ' +
-                        (labels.current.size + 1) +
-                        (info.usbVendorId !== undefined
-                            ? ' · USB ' +
-                              info.usbVendorId.toString(16).padStart(4, '0') +
-                              ':' +
-                              (info.usbProductId ?? 0).toString(16).padStart(4, '0')
-                            : ''),
+                'Authorized port ' +
+                    (labels.current.size + 1) +
+                    (info.usbVendorId !== undefined
+                        ? ' · USB ' +
+                          info.usbVendorId.toString(16).padStart(4, '0') +
+                          ':' +
+                          (info.usbProductId ?? 0).toString(16).padStart(4, '0')
+                        : ''),
             );
         }
         return labels.current.get(port)!;
@@ -281,8 +291,18 @@ export default function SerialPage(props: Props) {
                         disabled={!supported || locked}
                         onClick={() => {
                             pendingLabel.current = '';
+                            setChooserPage(0);
+                            setChooserSearch('');
                             action(async () => {
-                                await session.choose(() => api!.requestPort(), label);
+                                await session.choose(
+                                    () => api!.requestPort(),
+                                    (port) => {
+                                        const chosenName = pendingLabel.current;
+                                        pendingLabel.current = '';
+                                        if (chosenName) labels.current.set(port, chosenName);
+                                        return label(port);
+                                    },
+                                );
                                 refreshPorts();
                             });
                         }}
@@ -330,6 +350,10 @@ export default function SerialPage(props: Props) {
                         Deselect
                     </button>
                 </div>
+                <p className="terminal-description">
+                    Choose port discovers ports reported by this computer. The dropdown lists only
+                    previously authorized ports. Selection never opens a port.
+                </p>
                 <fieldset className="serial-settings" disabled={locked}>
                     <legend>UART settings</legend>
                     <label>
@@ -543,8 +567,21 @@ export default function SerialPage(props: Props) {
                     }}
                 >
                     <p>Choose one port on this computer. Selection does not open it.</p>
+                    {(chooser.ports.length > 64 || chooserSearch.length > 0) && (
+                        <label>
+                            Find serial port
+                            <input
+                                aria-label="Find serial port"
+                                value={chooserSearch}
+                                onChange={(event) => {
+                                    setChooserSearch(event.target.value);
+                                    setChooserPage(0);
+                                }}
+                            />
+                        </label>
+                    )}
                     <div className="serial-chooser-list">
-                        {chooser.ports.map((port) => (
+                        {visibleChoices.map((port) => (
                             <button
                                 key={port.id}
                                 className="button secondary"
@@ -558,9 +595,34 @@ export default function SerialPage(props: Props) {
                             </button>
                         ))}
                     </div>
+                    {pageCount > 1 && (
+                        <div className="serial-chooser-paging">
+                            <button
+                                className="button secondary"
+                                disabled={pageIndex === 0}
+                                onClick={() => setChooserPage(pageIndex - 1)}
+                            >
+                                Previous ports
+                            </button>
+                            <span role="status">
+                                Page {pageIndex + 1} of {pageCount} · {filteredChoices.length} ports
+                            </span>
+                            <button
+                                className="button secondary"
+                                disabled={pageIndex + 1 === pageCount}
+                                onClick={() => setChooserPage(pageIndex + 1)}
+                            >
+                                Next ports
+                            </button>
+                        </div>
+                    )}
+                    {chooser.ports.length > 0 && filteredChoices.length === 0 && (
+                        <p role="status">No offered ports match this search.</p>
+                    )}
                     {!chooser.ports.length && (
                         <p role="status">
-                            No selectable local ports were offered. Attach your adapter or cancel.
+                            No selectable ports were reported by this runtime. Check the OS
+                            driver/device status or cancel.
                         </p>
                     )}
                 </Modal>

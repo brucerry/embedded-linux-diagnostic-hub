@@ -81,6 +81,10 @@ export class FlowRunner {
     }
     private executing = false;
     private failureNotice = '';
+    interrupt(reason: string) {
+        this.failureNotice = reason;
+        this.cancel();
+    }
     cancel() {
         this.repeat = false;
         this.stopped = true;

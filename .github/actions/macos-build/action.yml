@@ -91,6 +91,17 @@ runs:
           shell: bash
           working-directory: ${{ inputs.source-dir }}
           run: npx tsx tests/desktop-smoke.ts
+        - name: Verify native manual-update guidance and launchable bundle paths
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: |
+              if [ -f tests/macos-manual-update-smoke.ts ]; then
+                  npx tsx tests/macos-manual-update-smoke.ts
+              else
+                  # Immutable older source cannot qualify a later UI/API.
+                  node -e "if(require('semver').gt(require('./package.json').version,'0.5.0'))throw Error('Required Mac manual-flow test is missing')"
+                  printf '%s\n' 'Legacy source: later Mac manual-guidance test unavailable; existing unsupported-update and installer checks retained.'
+              fi
         - name: Stress installed native windows and in-place terminal
           shell: bash
           working-directory: ${{ inputs.source-dir }}

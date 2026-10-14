@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { chromium, expect } from '@playwright/test';
 import { zipSync, strToU8 } from 'fflate';
 assert.equal(process.platform, 'darwin');
 const arch = process.arch;
@@ -220,6 +222,57 @@ if (process.env.GITHUB_ENV)
             '\n',
         { flag: 'a' },
     );
+// Exercise the real helper's normal LaunchServices request and independently observe the app.
+const reserve = http.createServer();
+await new Promise((resolve) => reserve.listen(0, '127.0.0.1', resolve));
+const debugPort = reserve.address().port;
+await new Promise((resolve) => reserve.close(() => resolve()));
+const launchProfile = path.join(root, 'manual-launch-profile');
+result = run({}, [
+    '--',
+    '--user-data-dir=' + launchProfile,
+    '--remote-debugging-port=' + debugPort,
+]);
+assert.equal(result.status, 0, result.stderr);
+assert.ok(result.stdout.includes('Launch requested; confirm'));
+assert.ok(result.stdout.includes(target));
+let receiver;
+try {
+    await expect
+        .poll(
+            async () => {
+                try {
+                    return (await fetch('http://127.0.0.1:' + debugPort + '/json/version')).ok;
+                } catch {
+                    return false;
+                }
+            },
+            { timeout: 30000 },
+        )
+        .toBe(true);
+    receiver = await chromium.connectOverCDP('http://127.0.0.1:' + debugPort);
+    const page = receiver.contexts()[0].pages()[0];
+    await page.waitForURL('app://bundle/index.html');
+    await expect(page.getByRole('heading', { name: 'Device overview' })).toBeVisible();
+    const info = await page.evaluate(() => window.diagnosticHub.readUpdateInfo());
+    assert.equal(info.currentVersion, version);
+    assert.equal(info.currentPath, target);
+    assert.equal(info.receipt, null);
+    assert.equal(info.handoffConfirmed, false);
+    console.log(
+        JSON.stringify({
+            manualHelperLaunchObserved: true,
+            arch,
+            version,
+            installedBundle: info.currentPath,
+            automaticHandoffClaimed: false,
+            normalLaunchServices: true,
+        }),
+    );
+    await page.evaluate(() => window.close()).catch(() => {});
+} finally {
+    await receiver?.close().catch(() => {});
+}
 await rm(bin, { recursive: true });
 await rm(fixture, { recursive: true });
 console.log(

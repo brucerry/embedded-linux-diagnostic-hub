@@ -55,13 +55,19 @@ export interface DesktopBridge
         Partial<import('./terminal').TerminalTransport>,
         Partial<import('./serial').SerialDesktopBridge>,
         Partial<import('./automation').AutomationTransport> {
+    acquireAutomationActivity?(): Promise<string>;
+    releaseAutomationActivity?(id: string): Promise<void>;
+    onAutomationInterrupted?(callback: (reason: string) => void): () => void;
     onWindowRestored?(callback: () => void): () => void;
     checkUpdates(includePrereleases: boolean): Promise<UpdateStatus>;
     startUpdate(request: UpdateRequest): Promise<void>;
     readUpdateReport(): Promise<UpdateRecovery | null>;
     acknowledgeUpdateReport(id: string): Promise<void>;
     clearSessionData(): Promise<void>;
-    onUpdateProgress?(callback: (progress: string) => void): () => void;
+    onUpdateProgress?(callback: (progress: UpdateProgress | string) => void): () => void;
+    readUpdateInfo?(): Promise<UpdateInfo>;
+    openUpdateFolder?(target: 'current' | 'verified'): Promise<void>;
+    copyUpdatePath?(target: 'current' | 'verified'): Promise<void>;
     onHostKeyVerification?(callback: (request: HostKeyVerification | null) => void): () => void;
     confirmHostKey?(id: string, accepted: boolean): Promise<boolean>;
     connect(options: ConnectOptions, attemptId?: string): Promise<void>;
@@ -94,11 +100,39 @@ export interface UpdateRecovery {
     snapshot?: Snapshot;
 }
 
+export interface UpdateProgress {
+    stage: 'preparing' | 'download' | 'verify' | 'install' | 'handoff' | 'failed';
+    message: string;
+    receivedBytes?: number;
+    totalBytes?: number;
+    stagingPath?: string;
+    verifiedPath?: string;
+}
+export interface UpdateReceipt {
+    previousVersion: string;
+    version: string;
+    executable: string;
+    hash: string;
+    state: 'verified' | 'restart-requested' | 'restart-failed' | 'confirmed';
+    updatedAt: string;
+}
+export interface UpdateInfo {
+    currentVersion: string;
+    currentPath: string | null;
+    receipt: UpdateReceipt | null;
+    handoffConfirmed: boolean;
+}
 export interface UpdateStatus {
     currentVersion: string;
     installable: boolean;
     readyPath?: string;
     installationUnavailableReason?: string;
+    manualUpdate?: {
+        platform: 'darwin';
+        architecture: 'x64' | 'arm64';
+        defaultDestination: string;
+        verificationCommand: string;
+    };
     release: {
         version: string;
         prerelease: boolean;
