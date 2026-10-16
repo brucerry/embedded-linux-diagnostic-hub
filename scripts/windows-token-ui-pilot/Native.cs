@@ -90,8 +90,9 @@ namespace DiagnosticHub.TokenUiPilot {
             value.UserSid=Info(token,1,(b,n)=>new SecurityIdentifier(Marshal.ReadIntPtr(b)).Value);
             var statistics=Info(token,10,(b,n)=>(Statistics)Marshal.PtrToStructure(b,typeof(Statistics)));
             value.AuthenticationId=statistics.AuthenticationId.ToString();value.TokenId=statistics.TokenId.ToString();value.ModifiedId=statistics.Modified.ToString();value.TokenType=statistics.Type;
-            value.SessionId=Number(token,12);value.ElevationType=Number(token,18);value.Elevated=Number(token,20)!=0;value.HasRestrictions=Number(token,21)!=0;value.UiAccess=Number(token,26)!=0;value.IsRestricted=IsTokenRestricted(token);
-            value.IntegrityRid=Info(token,25,(b,n)=>Int32.Parse(new SecurityIdentifier(Marshal.ReadIntPtr(b)).Value.Split('-').Last()));
+            value.NativeNumbers=new Dictionary<string,int>{{"TokenType(8)",Number(token,8)},{"TokenSessionId(12)",Number(token,12)},{"TokenElevationType(18)",Number(token,18)},{"TokenElevation(20)",Number(token,20)},{"TokenHasRestrictions(21)",Number(token,21)},{"TokenUIAccess(26)",Number(token,26)}};
+            value.SessionId=value.NativeNumbers["TokenSessionId(12)"];value.ElevationType=value.NativeNumbers["TokenElevationType(18)"];value.Elevated=value.NativeNumbers["TokenElevation(20)"]!=0;value.HasRestrictions=value.NativeNumbers["TokenHasRestrictions(21)"]!=0;value.UiAccess=value.NativeNumbers["TokenUIAccess(26)"]!=0;value.IsRestricted=IsTokenRestricted(token);
+            value.IntegritySid=Info(token,25,(b,n)=>new SecurityIdentifier(Marshal.ReadIntPtr(b)).Value);value.IntegrityRid=Int32.Parse(value.IntegritySid.Split('-').Last());
             using(var identity=new WindowsIdentity(token.DangerousGetHandle())) value.AdminRole=new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
             value.Groups=Info(token,2,(b,n)=>{var result=new Dictionary<string,uint>();int count=Marshal.ReadInt32(b),offset=Marshal.OffsetOf(typeof(GroupArray),"First").ToInt32(),size=Marshal.SizeOf(typeof(SidAttributes));Policy.Require(count>=0&&count<=4096&&offset+(long)count*size<=n,"Token groups bound");for(int i=0;i<count;i++){var item=(SidAttributes)Marshal.PtrToStructure(IntPtr.Add(b,offset+i*size),typeof(SidAttributes));result.Add(new SecurityIdentifier(item.Sid).Value,item.Attributes);}return result;});
             uint admin;value.AdminSidPresent=value.Groups.TryGetValue("S-1-5-32-544",out admin);value.AdminEnabled=(admin&4)!=0;value.AdminDenyOnly=(admin&16)!=0;
@@ -120,9 +121,36 @@ namespace DiagnosticHub.TokenUiPilot {
             IntPtr flags=Marshal.AllocHGlobal(12);try{uint size;Check(GetUserObjectInformation(station,1,flags,12,out size),"GetUserObjectInformation(flags)");return new DesktopFacts{Station=ObjectName(station),Desktop=ObjectName(desktop),InputDesktop=ObjectName(input),UserInteractive=Environment.UserInteractive,StationVisible=(Marshal.ReadInt32(flags,8)&1)!=0,InputAccessible=true};}finally{Marshal.FreeHGlobal(flags);CloseDesktop(input);}
         }
         internal static ContextFacts Current() { using(var process=Process.GetCurrentProcess()){var facts=ProcessFacts(process);return new ContextFacts{Process=facts,Profile=Profile(facts.Token.UserSid),Desktop=Desktop()};} }
-        internal static KernelHandle Restricted(TokenFacts parent) {
-            Hit();KernelHandle original;using(var process=Process.GetCurrentProcess())Check(OpenProcessToken(process.Handle,11,out original),"OpenProcessToken(primary query/duplicate/assign)");
-            using(original){IntPtr level;Check(SaferCreateLevel(2,0x20000,1,out level,IntPtr.Zero),"SaferCreateLevel(NORMALUSER)");try{KernelHandle result;Check(SaferComputeTokenFromLevel(level,original,out result,0,IntPtr.Zero),"SaferComputeTokenFromLevel(flags=0)");try{var before=Token(result);Policy.Require(before.IntegrityRid>=8192,"Refuse to raise a low-integrity token");if(before.IntegrityRid>8192){IntPtr sid;Check(ConvertStringSidToSid("S-1-16-8192",out sid),"ConvertStringSidToSid");int labelSize=Marshal.SizeOf(typeof(SidAttributes)),sidSize=GetLengthSid(sid);IntPtr label=Marshal.AllocHGlobal(labelSize+sidSize);try{var bytes=new byte[sidSize];Marshal.Copy(sid,bytes,0,sidSize);IntPtr embedded=IntPtr.Add(label,labelSize);Marshal.Copy(bytes,0,embedded,sidSize);Marshal.StructureToPtr(new SidAttributes{Sid=embedded,Attributes=32},label,false);Check(SetTokenInformation(result,25,label,labelSize+sidSize),"SetTokenInformation(new child integrity only)");}finally{Marshal.FreeHGlobal(label);LocalFree(sid);}}Policy.Require(Policy.Child(parent,Token(result),"restricted").Count==0,"Restricted token does not meet ordinary medium criteria");return result;}catch{result.Dispose();throw;}}finally{SaferCloseLevel(level);}}
+        internal static KernelHandle Restricted(TokenFacts parent, RestrictionFacts trace) {
+            Hit();Policy.Require(trace!=null,"Restriction trace is required");trace.Stage="open-input-token";
+            KernelHandle original;using(var process=Process.GetCurrentProcess())Check(OpenProcessToken(process.Handle,11,out original),"OpenProcessToken(primary query/duplicate/assign)");
+            using(original) {
+                trace.Input=Token(original);trace.Stage="open-safer-level";
+                IntPtr level;Check(SaferCreateLevel(2,0x20000,1,out level,IntPtr.Zero),"SaferCreateLevel(NORMALUSER)");
+                try {
+                    trace.Stage="compute-safer-token";KernelHandle result;
+                    Check(SaferComputeTokenFromLevel(level,original,out result,0,IntPtr.Zero),"SaferComputeTokenFromLevel(flags=0)");
+                    try {
+                        trace.Stage="read-before-integrity";var before=Token(result);trace.BeforeIntegrity=before;
+                        Policy.Require(before.IntegrityRid>=8192,"Refuse to raise a low-integrity token");
+                        if(before.IntegrityRid>8192) {
+                            trace.Stage="lower-new-token-integrity";
+                            IntPtr sid;Check(ConvertStringSidToSid("S-1-16-8192",out sid),"ConvertStringSidToSid");
+                            int labelSize=Marshal.SizeOf(typeof(SidAttributes)),sidSize=GetLengthSid(sid);IntPtr label=Marshal.AllocHGlobal(labelSize+sidSize);
+                            try {
+                                var bytes=new byte[sidSize];Marshal.Copy(sid,bytes,0,sidSize);IntPtr embedded=IntPtr.Add(label,labelSize);Marshal.Copy(bytes,0,embedded,sidSize);
+                                Marshal.StructureToPtr(new SidAttributes{Sid=embedded,Attributes=32},label,false);
+                                Check(SetTokenInformation(result,25,label,labelSize+sidSize),"SetTokenInformation(new child integrity only)");trace.IntegrityLowered=true;
+                            } finally {Marshal.FreeHGlobal(label);LocalFree(sid);}
+                        }
+                        trace.Stage="read-final-candidate";
+                        Policy.RecordRestrictionCandidate(trace,parent,Token(result));
+                        trace.Stage="validate-candidate";
+                        Policy.Require(trace.ValidationFailures.Length==0,"Restricted token does not meet ordinary medium criteria: "+String.Join(", ",trace.ValidationFailures));
+                        trace.Stage="accepted";return result;
+                    } catch {result.Dispose();trace.CandidateDisposeCalledOnFailure=true;throw;}
+                } finally {SaferCloseLevel(level);}
+            }
         }
         internal sealed class OwnedJob : IDisposable {
             KernelHandle job;

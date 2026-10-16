@@ -7,6 +7,8 @@ using System.Web.Script.Serialization;
 namespace DiagnosticHub.TokenUiPilot {
     public sealed class TokenFacts {
         public string UserSid, AuthenticationId, TokenId, ModifiedId;
+        public string IntegritySid;
+        public Dictionary<string, int> NativeNumbers;
         public int SessionId, TokenType, IntegrityRid, ElevationType;
         public bool Elevated, AdminRole, AdminSidPresent, AdminEnabled, AdminDenyOnly, UiAccess;
         public bool IsRestricted, HasRestrictions;
@@ -33,6 +35,13 @@ namespace DiagnosticHub.TokenUiPilot {
         public ProfileFacts Profile;
         public DesktopFacts Desktop;
     }
+    public sealed class RestrictionFacts {
+        public string Stage = "not-started";
+        public TokenFacts Input, BeforeIntegrity, Candidate;
+        public Dictionary<string, bool> PredicateResults;
+        public string[] ValidationFailures;
+        public bool IntegrityLowered, CandidateDisposeCalledOnFailure;
+    }
     public sealed class DriverResult {
         public ContextFacts Driver, Dummy;
         public ProcessFacts ObservedDummy, ObservedGuard;
@@ -55,6 +64,7 @@ namespace DiagnosticHub.TokenUiPilot {
         public int? Win32Error;
         public string CaseRoot, Nonce;
         public ContextFacts Parent;
+        public RestrictionFacts Restriction;
         public TokenFacts ParentAfter, Candidate;
         public ProcessFacts DriverSuspended;
         public DriverResult Driver;
@@ -92,6 +102,7 @@ namespace DiagnosticHub.TokenUiPilot {
             var copy = new JavaScriptSerializer().Deserialize<TokenFacts>(new JavaScriptSerializer().Serialize(token));
             copy.Groups = copy.Groups == null ? null : copy.Groups.OrderBy(v=>v.Key,StringComparer.Ordinal).ToDictionary(v=>v.Key,v=>v.Value);
             copy.Privileges = copy.Privileges == null ? null : copy.Privileges.OrderBy(v=>v.Key,StringComparer.Ordinal).ToDictionary(v=>v.Key,v=>v.Value);
+            copy.NativeNumbers = copy.NativeNumbers == null ? null : copy.NativeNumbers.OrderBy(v=>v.Key,StringComparer.Ordinal).ToDictionary(v=>v.Key,v=>v.Value);
             copy.EnabledPrivileges = copy.EnabledPrivileges == null ? null : copy.EnabledPrivileges.OrderBy(v=>v,StringComparer.Ordinal).ToArray();
             return new JavaScriptSerializer().Serialize(copy);
         }
@@ -106,6 +117,38 @@ namespace DiagnosticHub.TokenUiPilot {
             if (parent.EnabledPrivileges == null || child.EnabledPrivileges == null || child.EnabledPrivileges.Any(v => !parent.EnabledPrivileges.Contains(v, StringComparer.Ordinal))) errors.Add(label + ":privilege-expansion");
             if(parent.Groups == null || child.Groups == null || child.Groups.Any(v => (v.Value & 4) != 0 && (v.Value & 32) == 0 && (!parent.Groups.ContainsKey(v.Key) || (parent.Groups[v.Key] & 4) == 0 || (parent.Groups[v.Key] & 16) != 0))) errors.Add(label + ":enabled-group-expansion");
             return errors;
+        }
+        // Diagnostics only. Child remains the unchanged authority for candidate acceptance.
+        public static Dictionary<string, bool> CandidateChecks(TokenFacts parent, TokenFacts child) {
+            var checks = new Dictionary<string, bool>();
+            checks["facts-present"] = parent != null && child != null;
+            if (!checks["facts-present"]) return checks;
+            checks["same-user-sid"] = Same(parent.UserSid, child.UserSid);
+            checks["same-authentication-id"] = Same(parent.AuthenticationId, child.AuthenticationId);
+            checks["nonzero-session"] = child.SessionId > 0;
+            checks["same-session"] = child.SessionId == parent.SessionId;
+            checks["primary-token"] = child.TokenType == 1;
+            checks["medium-integrity"] = child.IntegrityRid == 8192;
+            checks["not-elevated"] = !child.Elevated;
+            checks["default-or-limited-elevation-type"] = child.ElevationType == 1 || child.ElevationType == 3;
+            checks["no-ui-access"] = !child.UiAccess;
+            checks["has-filtering-history"] = child.HasRestrictions;
+            checks["administrator-role-disabled"] = !child.AdminRole;
+            checks["administrator-sid-not-enabled"] = !child.AdminEnabled;
+            checks["administrator-sid-absent-or-deny-only"] = !child.AdminSidPresent || child.AdminDenyOnly;
+            checks["enabled-privileges-subset"] = parent.EnabledPrivileges != null && child.EnabledPrivileges != null && !child.EnabledPrivileges.Any(v => !parent.EnabledPrivileges.Contains(v, StringComparer.Ordinal));
+            checks["enabled-groups-subset"] = parent.Groups != null && child.Groups != null && !child.Groups.Any(v => (v.Value & 4) != 0 && (v.Value & 32) == 0 && (!parent.Groups.ContainsKey(v.Key) || (parent.Groups[v.Key] & 4) == 0 || (parent.Groups[v.Key] & 16) != 0));
+            return checks;
+        }
+        public static void RecordRestrictionCandidate(RestrictionFacts trace, TokenFacts parent, TokenFacts candidate) {
+            Require(trace != null, "Restriction trace is required");
+            trace.Candidate = candidate;
+            trace.PredicateResults = CandidateChecks(parent, candidate);
+            trace.ValidationFailures = Child(parent, candidate, "restricted").ToArray();
+        }
+        public static void AttachRestrictionCandidate(PilotResult result) {
+            if (result.Candidate == null && result.Restriction != null && result.Restriction.Candidate != null)
+                result.Candidate = result.Restriction.Candidate;
         }
         public static List<string> Profile(ProfileFacts expected, ProfileFacts actual, string label) {
             var e = new List<string>();

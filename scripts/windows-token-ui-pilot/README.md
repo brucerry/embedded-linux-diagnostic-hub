@@ -104,6 +104,21 @@ or manual activation.
 
 ## Operational effects and evidence
 
+Restriction evidence is recorded before candidate validation can throw. The receipt's `Restriction`
+object contains the last stage, queried input token, pre-integrity snapshot, final candidate, named
+predicate results and the unchanged `Policy.Child` failure list. Failure cleanup still disposes the
+owned candidate handle. The final candidate is attached to the receipt in `finally`, so rejection no
+longer discards the facts that explain it. Native scalar query values (including an independent
+TokenType query) and integrity SID accompany decoded fields. These are read-only observations, not
+alternative acceptance criteria.
+
+This corrects the evidence loss seen in f291 run38845703013, which retained only a generic rejection
+and `Candidate:null`. That run's exact failed candidate predicate cannot be reconstructed; parent
+facts alone cannot establish it. The new fields do not relax
+Medium/nonadmin/elevation/identity/session/privilege or parent ModifiedId checks, add a token
+fallback or retry an operation. Native reduction/launch behavior is unchanged. Any future run still
+needs review and explicit authorization for its exact changed commit.
+
 On the future disposable VM the code creates only a fresh owned case with compiler output, reviewed
 source copies, a retained ownership marker, JSON receipts, logs and one PNG. It creates temporary
 token/job/process/thread handles, one restricted driver, one same-token fixed System32 Windows

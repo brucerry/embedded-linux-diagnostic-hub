@@ -381,6 +381,70 @@ test('launch entry uses held privilege policy and keeps actual refusal/parent-mo
     assert.match(model, /TokenSnapshot\(parent\) != TokenSnapshot\(result\.ParentAfter\)/);
 });
 
+function restrictionDiagnosticsContract(nativeSource, programSource) {
+    const restricted = nativeSource.slice(
+        nativeSource.indexOf('internal static KernelHandle Restricted('),
+        nativeSource.indexOf('internal sealed class OwnedJob'),
+    );
+    assert.match(restricted, /trace\.Input=Token\(original\)/);
+    assert.match(restricted, /trace\.BeforeIntegrity=before/);
+    assert.ok(
+        restricted.indexOf('Policy.RecordRestrictionCandidate(trace,parent,Token(result))') <
+            restricted.indexOf('Policy.Require(trace.ValidationFailures.Length==0'),
+        'candidate facts must be recorded before rejection',
+    );
+    assert.ok(restricted.includes('Policy.RecordRestrictionCandidate(trace,parent,Token(result))'));
+    assert.match(restricted, /String\.Join\(", ",trace\.ValidationFailures\)/);
+    assert.match(
+        restricted,
+        /catch \{result\.Dispose\(\);trace\.CandidateDisposeCalledOnFailure=true;throw;\}/,
+    );
+    assert.match(programSource, /result\.Restriction=new RestrictionFacts\(\)/);
+    assert.match(
+        programSource,
+        /Native\.Restricted\(result\.Parent\.Process\.Token,result\.Restriction\)/,
+    );
+    assert.match(programSource, /finally \{\s+Policy\.AttachRestrictionCandidate\(result\);/);
+    assert.match(nativeSource, /"TokenType\(8\)",Number\(token,8\)/);
+    assert.match(nativeSource, /value\.IntegritySid=Info\(token,25/);
+}
+
+test('restriction diagnostics preserve queried facts and failure details before token disposal', () => {
+    restrictionDiagnosticsContract(native, program);
+    assert.match(
+        model,
+        /trace\.ValidationFailures = Child\(parent, candidate, "restricted"\)\.ToArray\(\)/,
+    );
+    assert.match(model, /trace\.PredicateResults = CandidateChecks\(parent, candidate\)/);
+});
+
+test('restriction diagnostics reject regressions that again discard failed candidate facts', () => {
+    assert.throws(() =>
+        restrictionDiagnosticsContract(
+            native.replace('Policy.RecordRestrictionCandidate(trace,parent,Token(result))', ''),
+            program,
+        ),
+    );
+    assert.throws(() =>
+        restrictionDiagnosticsContract(
+            native,
+            program.replace('Policy.AttachRestrictionCandidate(result);', ''),
+        ),
+    );
+    assert.throws(() =>
+        restrictionDiagnosticsContract(native.replace('trace.BeforeIntegrity=before', ''), program),
+    );
+    assert.throws(() =>
+        restrictionDiagnosticsContract(
+            native.replace(
+                'result.Dispose();trace.CandidateDisposeCalledOnFailure=true;throw;',
+                'throw;',
+            ),
+            program,
+        ),
+    );
+});
+
 test('helper requests no elevation or UIAccess; profiles are observed, not redirected', () => {
     assert.match(read(base + 'pilot.manifest'), /level="asInvoker" uiAccess="false"/);
     assert.match(native, /Registry\.Users\.OpenSubKey\(sid,false\)/);

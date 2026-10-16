@@ -36,6 +36,39 @@ namespace DiagnosticHub.TokenUiPilot {
             Refuses(()=>Policy.RenderOwnedFrame(owned,h=>{},h=>{throw new InvalidOperationException("renderer refused");},()=>saves++),"renderer exception must refuse");Policy.Require(saves==0,"renderer exception saved an image");count++;
             return count;
         }
+        static int RestrictionDiagnosticsControls() {
+            int count=0;var parent=Token();
+            var edits=new Dictionary<string,Action<TokenFacts>> {
+                {"same-user-sid",t=>t.UserSid="other"},{"same-authentication-id",t=>t.AuthenticationId="other"},
+                {"nonzero-session",t=>t.SessionId=0},{"same-session",t=>t.SessionId=2},
+                {"primary-token",t=>t.TokenType=2},{"medium-integrity",t=>t.IntegrityRid=12288},
+                {"not-elevated",t=>t.Elevated=true},{"default-or-limited-elevation-type",t=>t.ElevationType=2},
+                {"no-ui-access",t=>t.UiAccess=true},{"has-filtering-history",t=>t.HasRestrictions=false},
+                {"administrator-role-disabled",t=>t.AdminRole=true},{"administrator-sid-not-enabled",t=>t.AdminEnabled=true},
+                {"administrator-sid-absent-or-deny-only",t=>t.AdminDenyOnly=false},
+                {"enabled-privileges-subset",t=>t.EnabledPrivileges=new[]{"SeDebugPrivilege"}},
+                {"enabled-groups-subset",t=>t.Groups.Add("S-1-5-32-555",4)}
+            };
+            foreach(var edit in edits) {
+                var candidate=Token();edit.Value(candidate);var trace=new RestrictionFacts{Stage="validate-candidate",BeforeIntegrity=Copy(candidate)};
+                Policy.RecordRestrictionCandidate(trace,parent,candidate);
+                Refuses(()=>Policy.Require(trace.ValidationFailures.Length==0,String.Join(", ",trace.ValidationFailures)),"invalid candidate must still be refused");
+                Policy.Require(!trace.PredicateResults[edit.Key]&&trace.ValidationFailures.Length>0,"exact failed predicate lost");
+                var result=Good();result.Candidate=null;result.Restriction=trace;result.Error="candidate rejected";Policy.AttachRestrictionCandidate(result);
+                var saved=Copy(result);Policy.Require(saved.Candidate!=null&&!saved.Restriction.PredicateResults[edit.Key]&&saved.Restriction.ValidationFailures.Length>0&&Policy.Validate(saved).Count>0,"failure receipt lost facts or became passing");count++;
+            }
+            var valid=new RestrictionFacts();Policy.RecordRestrictionCandidate(valid,parent,Token());Policy.Require(valid.ValidationFailures.Length==0&&valid.PredicateResults.Values.All(v=>v),"valid diagnostic map disagrees with unchanged policy");count++;
+            var missing=new RestrictionFacts();Policy.RecordRestrictionCandidate(missing,parent,null);Policy.Require(!missing.PredicateResults["facts-present"]&&missing.ValidationFailures.Contains("restricted:missing-token"),"missing candidate diagnostic");count++;
+            var noParent=new RestrictionFacts();Policy.RecordRestrictionCandidate(noParent,null,Token());Policy.Require(!noParent.PredicateResults["facts-present"]&&noParent.ValidationFailures.Length>0,"missing input diagnostic");count++;
+            var both=Token();both.Elevated=true;both.AdminEnabled=true;both.IntegritySid="S-1-16-8192";both.NativeNumbers=new Dictionary<string,int>{{"TokenElevation(20)",1},{"TokenType(8)",1}};
+            var multi=new RestrictionFacts{Stage="validate-candidate",BeforeIntegrity=Token(),IntegrityLowered=true,CandidateDisposeCalledOnFailure=true};Policy.RecordRestrictionCandidate(multi,parent,both);
+            Policy.Require(!multi.PredicateResults["not-elevated"]&&!multi.PredicateResults["administrator-sid-not-enabled"]&&multi.ValidationFailures.Length==2,"multiple rejection reasons lost");count++;
+            var serialized=Copy(multi);Policy.Require(serialized.Candidate.NativeNumbers["TokenElevation(20)"]==1&&serialized.Candidate.IntegritySid=="S-1-16-8192"&&serialized.CandidateDisposeCalledOnFailure&&serialized.IntegrityLowered&&serialized.Stage=="validate-candidate","native diagnostics did not survive serialization");count++;
+            var partial=Good();partial.Candidate=null;partial.Restriction=new RestrictionFacts{Stage="lower-new-token-integrity",BeforeIntegrity=Token()};Policy.AttachRestrictionCandidate(partial);Policy.Require(partial.Candidate==null&&partial.Restriction.BeforeIntegrity!=null,"partial pre-integrity facts were mislabeled as final candidate");count++;
+            var existing=Good();var original=existing.Candidate;existing.Restriction=multi;Policy.AttachRestrictionCandidate(existing);Policy.Require(Object.ReferenceEquals(original,existing.Candidate),"later independent candidate snapshot was overwritten");count++;
+            for(int mask=0;mask<256;mask++) {var candidate=Token();candidate.Elevated=(mask&1)!=0;candidate.UiAccess=(mask&2)!=0;candidate.AdminRole=(mask&4)!=0;candidate.AdminEnabled=(mask&8)!=0;candidate.AdminDenyOnly=(mask&16)==0;candidate.HasRestrictions=(mask&32)==0;candidate.TokenType=(mask&64)==0?1:2;candidate.IntegrityRid=(mask&128)==0?8192:12288;Policy.Require(Policy.CandidateChecks(parent,candidate).Values.All(v=>v)==(Policy.Child(parent,candidate,"restricted").Count==0),"diagnostic map changed security decision");}count++;
+            return count;
+        }
         public static int Run() {
             int count=0; var good=Good(); Policy.Require(Policy.Validate(good).Count==0,"synthetic positive"); count++;
             var edits=new Action<PilotResult>[] {
@@ -71,8 +104,9 @@ namespace DiagnosticHub.TokenUiPilot {
             var absent=Copy(good);absent.Candidate.AdminSidPresent=false;absent.Candidate.AdminDenyOnly=false;Policy.Require(Policy.Validate(absent).Count==0,"admin SID absent candidate");count++;
             foreach(var pair in new[]{new[]{"","\"\""},new[]{"abc","\"abc\""},new[]{"C:\\with space\\","\"C:\\with space\\\\\""},new[]{"a\"b","\"a\\\"b\""}}){Policy.Require(Program.Quote(pair[0])==pair[1],"Windows argument quoting");count++;}
             int correctionChecks=CorrectionControls();count+=correctionChecks;
+            int restrictionDiagnosticsChecks=RestrictionDiagnosticsControls();count+=restrictionDiagnosticsChecks;
             Policy.Require(Native.OperationalCalls==0,"self-test reached native pilot APIs");
-            Console.WriteLine(new JavaScriptSerializer().Serialize(new { schema="token-ui-pilot-pure-self-tests-v1",passed=count,correctionChecks=correctionChecks,operationalNativeCalls=Native.OperationalCalls,restrictedProcessesLaunched=0,uiWindowsCreated=0,installerExecuted=false })); return 0;
+            Console.WriteLine(new JavaScriptSerializer().Serialize(new { schema="token-ui-pilot-pure-self-tests-v1",passed=count,correctionChecks=correctionChecks,restrictionDiagnosticsChecks=restrictionDiagnosticsChecks,operationalNativeCalls=Native.OperationalCalls,restrictedProcessesLaunched=0,uiWindowsCreated=0,installerExecuted=false })); return 0;
         }
     }
 }

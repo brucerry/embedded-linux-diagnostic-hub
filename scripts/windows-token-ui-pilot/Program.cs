@@ -64,7 +64,8 @@ namespace DiagnosticHub.TokenUiPilot {
                 ownership=new FileStream(Path.Combine(root,"pilot-control.lock"),FileMode.CreateNew,FileAccess.ReadWrite,FileShare.Read);
                 WriteNew(Path.Combine(root,"launch-context.json"),new LaunchContext{Nonce=nonce,HelperSha256=result.HelperSha256,CaseRoot=root,Parent=result.Parent});
                 result.Stage="restricted-token";
-                using(var restricted=Native.Restricted(result.Parent.Process.Token)) {
+                result.Restriction=new RestrictionFacts();
+                using(var restricted=Native.Restricted(result.Parent.Process.Token,result.Restriction)) {
                     result.Candidate=Native.Token(restricted);job=new Native.OwnedJob();
                     child=job.Start(restricted,OwnExe,"--driver "+Quote(root)+" "+Quote(nonce),root,result.Parent.Desktop.Station+"\\"+result.Parent.Desktop.Desktop);
                     using(var process=Process.GetProcessById(child.Pid))result.DriverSuspended=Native.ProcessFacts(process);
@@ -76,6 +77,7 @@ namespace DiagnosticHub.TokenUiPilot {
                 }
             } catch(Exception error) {RecordFailure(result,error);}
             finally {
+                Policy.AttachRestrictionCandidate(result);
                 try{if(job!=null&&job.Active!=0){result.ForcedTermination=true;job.Stop();if(child!=null)Native.Wait(child.Process,5000);var end=Stopwatch.StartNew();while(job.Active!=0&&end.ElapsedMilliseconds<5000)Thread.Sleep(50);result.JobActiveProcesses=job.Active;}}catch(Exception error){result.Error=(result.Error??"")+"; owned cleanup: "+Describe(error);}
                 if(job!=null&&job.SuspendedCleanupPid!=0){result.ForcedTermination=true;result.SuspendedCleanupPid=job.SuspendedCleanupPid;result.SuspendedCleanupJoined=job.SuspendedCleanupJoined;}
                 if(child!=null)child.Dispose();if(job!=null)job.Dispose();if(ownership!=null)ownership.Dispose();
