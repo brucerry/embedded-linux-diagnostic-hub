@@ -1,6 +1,8 @@
 name: Windows token and dummy UI feasibility pilot
 
 on:
+    push:
+        branches: [ci/windows-token-ui-pilot-20261016]
     workflow_dispatch:
         inputs:
             run_pilot:
@@ -17,7 +19,10 @@ jobs:
         runs-on: windows-latest
         timeout-minutes: 8
         env:
-            PILOT_EXECUTION_APPROVED: ${{ inputs.run_pilot && 'true' || 'false' }}
+            PILOT_EXECUTION_APPROVED:
+                ${{ ((github.event_name == 'push' && github.ref ==
+                'refs/heads/ci/windows-token-ui-pilot-20261016') || (github.event_name ==
+                'workflow_dispatch' && inputs.run_pilot)) && 'true' || 'false' }}
         steps:
             - uses: actions/checkout@v6
             - name: Check source contracts without native pilot execution
