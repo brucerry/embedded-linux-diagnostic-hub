@@ -1,0 +1,50 @@
+name: Windows token and dummy UI feasibility pilot
+
+on:
+    workflow_dispatch:
+        inputs:
+            run_pilot:
+                description: Run reviewed harmless token/dummy UI probe on disposable hosted VM
+                required: true
+                type: boolean
+                default: false
+
+permissions:
+    contents: read
+
+jobs:
+    prepare-or-pilot:
+        runs-on: windows-latest
+        timeout-minutes: 8
+        env:
+            PILOT_EXECUTION_APPROVED: ${{ inputs.run_pilot && 'true' || 'false' }}
+        steps:
+            - uses: actions/checkout@v6
+            - name: Check source contracts without native pilot execution
+              run: node --test tests/windows-token-ui-pilot/source-contract.test.mjs
+            - name: Parse preparation script without invoking the pilot
+              shell: pwsh
+              run: |
+                  $tokens = $null
+                  $errors = $null
+                  [void][Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/windows-token-ui-pilot/prepare.ps1", [ref]$tokens, [ref]$errors)
+                  if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+            - name: Select fresh evidence directory under actual user home
+              shell: pwsh
+              run: |
+                  $actualHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+                  $case = Join-Path $actualHome ("diagnostic-hub-token-ui-pilot-" + [Guid]::NewGuid().ToString('N'))
+                  "PILOT_CASE=$case" >> $env:GITHUB_ENV
+            - name: Compile and run pure synthetic tests; operational probe is opt-in
+              shell: pwsh
+              run: |
+                  $mode = if ($env:PILOT_EXECUTION_APPROVED -eq 'true') { 'HostedPilot' } else { 'SelfTest' }
+                  ./scripts/windows-token-ui-pilot/prepare.ps1 -Mode $mode -OutputDirectory $env:PILOT_CASE
+            - name: Preserve pilot-only evidence even on failure
+              if: ${{ always() && env.PILOT_CASE != '' }}
+              uses: actions/upload-artifact@v4
+              with:
+                  name: token-ui-pilot-v1-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: ${{ env.PILOT_CASE }}/
+                  if-no-files-found: error
+                  retention-days: 7
