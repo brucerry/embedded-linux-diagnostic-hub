@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Script } from 'node:vm';
@@ -14,12 +15,150 @@ const program = read(base + 'Program.cs');
 const prepare = read(base + 'prepare.ps1');
 const workflow = read('.github/workflows/windows-token-ui-pilot.yml');
 
-test('pilot guard remains exactly the unchanged worker expression', () => {
-    const guard = model.match(/const string GuardExpression = "([^"]+)";/)?.[1];
+const referenceBase = 'tests/windows-token-ui-pilot/fixtures/';
+const reviewedSourceSha = '11524f926e459f5af1ad091463f4b925de9decaad7a97e6090285ee5a2e179cd';
+const reviewedSourceBytes = 21656;
+const referenceBytes = readFileSync(path.join(root, referenceBase + 'setup-worker.ts.txt'));
+const provenance = JSON.parse(read(referenceBase + 'guard-source-provenance.json'));
+function workerGuard(source) {
+    const matches = [
+        ...source.matchAll(
+            /const elevated = ps\(\s*'([^']+)'\s*,?\s*\);\s*if \(elevated\.toLowerCase\(\) !== 'false'\)\s*throw Error\('Run setup as your ordinary user, without administrator elevation\.'\);/g,
+        ),
+    ];
+    assert.equal(matches.length, 1, 'one guard must reject every result other than false');
+    return matches[0][1];
+}
+function verifyGuardReference(bytes, evidence, modelSource, applicationSource) {
+    assert.ok(Buffer.isBuffer(bytes), 'reviewed guard fixture is mandatory');
+    assert.equal(bytes.length, reviewedSourceBytes);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), reviewedSourceSha);
+    assert.equal(evidence.schema, 'diagnostic-hub-reviewed-guard-source-v1');
+    assert.equal(evidence.fixture, 'setup-worker.ts.txt');
+    assert.equal(evidence.fixtureSha256, reviewedSourceSha);
+    assert.equal(evidence.fixtureBytes, reviewedSourceBytes);
+    assert.equal(evidence.source.path, 'electron/setup-worker.ts');
+    assert.equal(evidence.source.kind, 'frozen-review-source');
+    assert.equal(evidence.source.packet, 'platform-gates-1/review-packet');
+    assert.equal(
+        evidence.source.packetManifestSha256,
+        'cd2490e612a18bebca914a66a37ac58175f75d0d8240d4fbba641f31598620ba',
+    );
+    assert.equal(
+        evidence.source.snapshotFingerprintSha256,
+        'fc22d1e65793e68dfcf1519c88d6d530ebd6c226980d269f5480fb657374a5b4',
+    );
+    assert.equal(
+        evidence.source.sourceCommit,
+        null,
+        'do not invent a Git source commit for the frozen snapshot',
+    );
+    const guard = modelSource.match(/const string GuardExpression = "([^"]+)";/)?.[1];
     assert.ok(guard);
-    assert.ok(read('electron/setup-worker.ts').includes("'" + guard + "'"));
+    assert.equal(guard, workerGuard(bytes.toString('utf8')));
+    if (applicationSource !== undefined)
+        assert.equal(
+            workerGuard(applicationSource),
+            guard,
+            'present application source must agree with the reviewed guard',
+        );
+    return guard;
+}
+function readApplicationWorker(reader) {
+    try {
+        return reader();
+    } catch (error) {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+    }
+}
+
+test('pilot guard stays bound to mandatory reviewed worker source and its refusal rule', (t) => {
+    const applicationPath = path.join(root, 'electron/setup-worker.ts');
+    const applicationSource = readApplicationWorker(() => readFileSync(applicationPath, 'utf8'));
+    verifyGuardReference(referenceBytes, provenance, model, applicationSource);
+    t.diagnostic(
+        `Reviewed guard fixture SHA256 ${reviewedSourceSha}; application source ${applicationSource === undefined ? 'not part of standalone pilot' : 'also checked'}`,
+    );
     assert.match(program, /-NoLogo -NoProfile -NonInteractive -Command/);
     assert.match(program, /Quote\(Policy\.GuardExpression\)/);
+});
+
+test('guard reference rejects missing/tampered source, false provenance and changed pilot expression', () => {
+    assert.throws(() => verifyGuardReference(null, provenance, model));
+    const corrupt = Buffer.from(referenceBytes);
+    corrupt[0] ^= 1;
+    assert.throws(() => verifyGuardReference(corrupt, provenance, model));
+    for (const edit of [
+        (p) => (p.fixtureSha256 = '0'.repeat(64)),
+        (p) => (p.source.path = 'unrelated.ts'),
+        (p) => (p.source.snapshotFingerprintSha256 = '0'.repeat(64)),
+        (p) => (p.source.sourceCommit = '5112038e16798382f7801d2406044f34e9006889'),
+    ]) {
+        const invalid = structuredClone(provenance);
+        edit(invalid);
+        assert.throws(() => verifyGuardReference(referenceBytes, invalid, model));
+    }
+    assert.throws(() =>
+        verifyGuardReference(
+            referenceBytes,
+            provenance,
+            model.replace('::Administrator)', '::User)'),
+        ),
+    );
+});
+
+test('present application source cannot change the expression, weaken refusal or add ambiguous guards', () => {
+    const source = referenceBytes.toString('utf8');
+    verifyGuardReference(referenceBytes, provenance, model, source);
+    assert.throws(() =>
+        verifyGuardReference(
+            referenceBytes,
+            provenance,
+            model,
+            source.replace('::Administrator)', '::User)'),
+        ),
+    );
+    assert.throws(() =>
+        verifyGuardReference(
+            referenceBytes,
+            provenance,
+            model,
+            source.replace(
+                "elevated.toLowerCase() !== 'false'",
+                "elevated.toLowerCase() === 'true'",
+            ),
+        ),
+    );
+    assert.throws(() =>
+        verifyGuardReference(referenceBytes, provenance, model, source + '\n' + source),
+    );
+});
+
+test('only actual absence permits standalone context; other application-source read failures remain failures', () => {
+    assert.equal(
+        readApplicationWorker(() => {
+            throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+        }),
+        undefined,
+    );
+    for (const code of ['EACCES', 'ENOTDIR'])
+        assert.throws(
+            () =>
+                readApplicationWorker(() => {
+                    throw Object.assign(new Error(code), { code });
+                }),
+            { code },
+        );
+});
+
+test('reviewed installer source remains inert test data outside the dummy compile and launch path', () => {
+    assert.ok(provenance.fixture.endsWith('.txt'));
+    assert.doesNotMatch(
+        prepare + program + native,
+        /fixtures|setup-worker\.ts\.txt|guard-source-provenance/,
+    );
+    assert.match(prepare, /'Model\.cs', 'Native\.cs', 'Program\.cs', 'SelfTests\.cs'/);
 });
 
 const pilotBranch = 'ci/windows-token-ui-pilot-20261016';

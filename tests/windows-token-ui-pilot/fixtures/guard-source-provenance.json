@@ -1,0 +1,17 @@
+{
+    "schema": "diagnostic-hub-reviewed-guard-source-v1",
+    "fixture": "setup-worker.ts.txt",
+    "fixtureSha256": "11524f926e459f5af1ad091463f4b925de9decaad7a97e6090285ee5a2e179cd",
+    "fixtureBytes": 21656,
+    "source": {
+        "path": "electron/setup-worker.ts",
+        "kind": "frozen-review-source",
+        "packet": "platform-gates-1/review-packet",
+        "packetManifestSha256": "cd2490e612a18bebca914a66a37ac58175f75d0d8240d4fbba641f31598620ba",
+        "snapshotFingerprintSha256": "fc22d1e65793e68dfcf1519c88d6d530ebd6c226980d269f5480fb657374a5b4",
+        "sourceCommit": null
+    },
+    "purpose": "Bind the standalone dummy pilot expression and refusal rule to the reviewed installer guard source.",
+    "execution": "Read as inert test data only; never imported, compiled or launched.",
+    "qualification": "Source reference only; no installer implementation or native lifecycle qualification is claimed."
+}
