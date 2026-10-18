@@ -133,3 +133,51 @@ The API contract follows Microsoft documentation for
 and
 [SECURITY_INFORMATION read rights](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-information).
 The local tests validate projection and failure handling; they do not establish native API behavior.
+
+Run 39098706408 compiled and invoked the original observer, but its universal null/zero sizing probe
+stopped at class 20 with `Token information sizing failure/bound: 20`. No token projection, ancestor
+descriptor or AccessCheck fact was returned. The failed guard did not retain BOOL, GetLastError or
+ReturnLength, so the precise native cause cannot be recovered. A synthetic API trace in tests
+demonstrates a possible null-probe incompatibility; it is not the missing run data.
+
+The proposed query repair audits all 22 classes together. Each invocation makes one read-only
+GetTokenInformation call: nine DWORD/enum structures get 4 bytes, TOKEN_STATISTICS gets 56 bytes,
+and 12 variable classes get the existing 16 KiB cap. There is no null sizing call, growth
+allocation, retry or alternate API. A successful result must return at least its audited header and
+at most its capacity; fixed results must return exactly their known size. Oversize or truncated
+results stop without decoding. This addresses the universal sizing assumption without assuming the
+old host would have passed a direct fixed-size call.
+
+| Classes                  | Returned structure / x64 decoder minimum                                        | Capacity |
+| ------------------------ | ------------------------------------------------------------------------------- | -------- |
+| 8,9,18,20,21,24,26,27,29 | DWORD/32-bit enum or one-DWORD structure: 4 bytes                               | 4 bytes  |
+| 10                       | TOKEN_STATISTICS: 56 bytes; ModifiedId offset 48                                | 56 bytes |
+| 1,25                     | SID_AND_ATTRIBUTES header:16 bytes, then bounded SID                            | 16 KiB   |
+| 4,5                      | One SID pointer:8 bytes, then bounded SID                                       | 16 KiB   |
+| 6                        | One PACL pointer:8 bytes; null valid, otherwise entire ACL in returned buffer   | 16 KiB   |
+| 2,11,37,38               | Count: 4 bytes for zero; populated array starts 8, stride 16, then bounded SIDs | 16 KiB   |
+| 3                        | Count: 4 bytes; LUID_AND_ATTRIBUTES array stride 12, at most64 entries          | 16 KiB   |
+| 33,34                    | CLAIM_SECURITY_ATTRIBUTES_INFORMATION header:16 bytes; only count at 4 read     | 16 KiB   |
+
+Group/restricted limits of 128 and claim rejection remain unchanged. SID headers/bodies and default
+ACL headers/bodies must stay within the actual returned extent, beyond the containing header or
+array. SID revision 1 and at most15 subauthorities form this bounded profile; managed conversion
+uses a checked byte copy. No pointer/token memory is serialized. The minimum count extent for empty
+TOKEN_GROUPS is a decoder bound, not a claim that sizeof(TOKEN_GROUPS) is 4 on x64.
+
+BOOL failure captures Marshal.GetLastWin32Error immediately through the existing SetLastError
+P/Invoke declaration. Errors retain numeric class/phase/capacity/returned/error facts within the
+existing bounded message. Success never reads last-error, which can remain stale in .NET Framework;
+its diagnostic error is n/a. ReturnLength starts at zero, and error returns are never decoded.
+Allocations free in finally even if decoding throws. No admission, ACL, collection, candidate,
+command/report cap or workflow change is part of this repair. Revised C# remains uncompiled here;
+local executable API models validate the protocol/bounds and source wiring, not CLR/native behavior.
+
+Contracts:
+[GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation),
+[TOKEN_ELEVATION](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_elevation),
+[TOKEN_STATISTICS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_statistics),
+[TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class),
+[CLAIM_SECURITY_ATTRIBUTES_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-claim_security_attributes_information),
+and
+[.NET last-error semantics](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.dllimportattribute.setlasterror?view=netframework-4.8.1).

@@ -82,22 +82,71 @@ namespace HubOwnershipSnapshot {
         static void Win(bool value, string operation) { if (!value) throw new Win32Exception(Marshal.GetLastWin32Error(), operation); }
         static void Error(Result result,string error) { result.errorCount++; if(result.errors.Count<8)result.errors.Add(error.Length>256?error.Substring(0,256):error); }
         static void Budget(Stopwatch watch) { Require(watch.ElapsedMilliseconds < 5000, "Native metadata admission budget exceeded; no retry"); }
-        static T TokenValue<T>(IntPtr token, int kind, Func<IntPtr, uint, T> read) {
-            uint needed; bool first = Native.GetTokenInformation(token, kind, IntPtr.Zero, 0, out needed);
-            int error = Marshal.GetLastWin32Error();
-            Require(!first && error == 122 && needed > 0 && needed <= MaxBuffer, "Token information sizing failure/bound: " + kind);
-            IntPtr memory = Marshal.AllocHGlobal((int)needed);
-            try { uint actual; Win(Native.GetTokenInformation(token, kind, memory, needed, out actual), "GetTokenInformation " + kind); Require(actual <= needed, "Token information grew"); return read(memory, actual); }
-            finally { Marshal.FreeHGlobal(memory); }
+        // Windows x64 contracts only. Fixed structures never use a null sizing probe.
+        internal sealed class TokenLayout {
+            internal readonly uint Fixed, Minimum;
+            internal TokenLayout(uint fixedBytes,uint minimum) { Fixed=fixedBytes;Minimum=minimum; }
         }
-        static string Sid(IntPtr pointer) { Require(pointer != IntPtr.Zero, "Missing SID"); return new SecurityIdentifier(pointer).Value; }
-        static string PointerSid(IntPtr token, int kind) { return TokenValue(token, kind, (p,n) => { Require(n >= 8, "SID pointer bound"); return Sid(Marshal.ReadIntPtr(p)); }); }
+        internal static TokenLayout Layout(int kind) {
+            switch(kind) {
+                case 1: return new TokenLayout(0,16); // TOKEN_USER + SID
+                case 2: return new TokenLayout(0,4); // TOKEN_GROUPS; empty count needs no array
+                case 3: return new TokenLayout(0,4); // TOKEN_PRIVILEGES
+                case 4: return new TokenLayout(0,8); // TOKEN_OWNER + SID
+                case 5: return new TokenLayout(0,8); // TOKEN_PRIMARY_GROUP + SID
+                case 6: return new TokenLayout(0,8); // TOKEN_DEFAULT_DACL; null PACL is valid
+                case 8: return new TokenLayout(4,4); // TOKEN_TYPE
+                case 9: return new TokenLayout(4,4); // SECURITY_IMPERSONATION_LEVEL
+                case 10: return new TokenLayout(56,56); // TOKEN_STATISTICS; ModifiedId offset48
+                case 11: return new TokenLayout(0,4); // TOKEN_GROUPS restricting SIDs
+                case 18: return new TokenLayout(4,4); // TOKEN_ELEVATION_TYPE
+                case 20: return new TokenLayout(4,4); // TOKEN_ELEVATION: one DWORD
+                case 21: return new TokenLayout(4,4); // DWORD TokenHasRestrictions
+                case 24: return new TokenLayout(4,4); // DWORD TokenVirtualizationEnabled
+                case 25: return new TokenLayout(0,16); // TOKEN_MANDATORY_LABEL + SID
+                case 26: return new TokenLayout(4,4); // DWORD TokenUIAccess
+                case 27: return new TokenLayout(4,4); // TOKEN_MANDATORY_POLICY: one DWORD
+                case 29: return new TokenLayout(4,4); // DWORD TokenIsAppContainer
+                case 33: return new TokenLayout(0,16); // CLAIM_SECURITY_ATTRIBUTES_INFORMATION
+                case 34: return new TokenLayout(0,16); // CLAIM_SECURITY_ATTRIBUTES_INFORMATION
+                case 37: return new TokenLayout(0,4); // TOKEN_GROUPS device groups
+                case 38: return new TokenLayout(0,4); // TOKEN_GROUPS restricted device groups
+                default: throw new InvalidOperationException("Unreviewed token class; no query: "+kind);
+            }
+        }
+        static string QueryState(int kind,string phase,bool ok,int error,uint capacity,uint returned) {
+            return "GetTokenInformation kind="+kind+" phase="+phase+" ok="+(ok?"1":"0")+" capacity="+capacity+" returned="+returned+" win32="+(ok?"n/a":error.ToString(System.Globalization.CultureInfo.InvariantCulture))+"; no retry";
+        }
+        static T TokenValue<T>(IntPtr token, int kind, Func<IntPtr, uint, T> read) {
+            TokenLayout layout=Layout(kind); uint capacity=layout.Fixed==0?(uint)MaxBuffer:layout.Fixed;
+            // One bounded call for every class: no zero-length probe, resize or retry.
+            IntPtr memory=Marshal.AllocHGlobal((int)capacity);
+            try {
+                uint actual=0; bool ok=Native.GetTokenInformation(token,kind,memory,capacity,out actual);
+                int error=ok?0:Marshal.GetLastWin32Error(); // Success must not inspect a stale Framework last-error.
+                Require(ok && actual>=layout.Minimum && actual<=capacity && (layout.Fixed==0 || actual==layout.Fixed),QueryState(kind,layout.Fixed==0?"bounded":"fixed",ok,error,capacity,actual));
+                return read(memory,actual); // Never decode beyond the successful call's returned extent.
+            } finally { Marshal.FreeHGlobal(memory); }
+        }
+        static void Within(IntPtr buffer,uint length,IntPtr value,uint bytes,uint minimumOffset,string what) {
+            ulong start=unchecked((ulong)buffer.ToInt64()),at=unchecked((ulong)value.ToInt64());
+            Require(length>=bytes && at>=start && at-start>=minimumOffset && at-start<=length-bytes,what+" outside returned token buffer");
+        }
+        static string Sid(IntPtr buffer,uint length,IntPtr value,uint minimumOffset) {
+            Within(buffer,length,value,8,minimumOffset,"SID header");
+            int count=Marshal.ReadByte(value,1);Require(Marshal.ReadByte(value)==1 && count<=15,"SID revision/subauthority bound");
+            uint bytes=(uint)(8+count*4);Within(buffer,length,value,bytes,minimumOffset,"SID body");
+            byte[] copy=new byte[bytes];Marshal.Copy(value,copy,0,(int)bytes);return new SecurityIdentifier(copy,0).Value;
+        }
+        static string PointerSid(IntPtr token,int kind) {
+            return TokenValue(token,kind,(p,n)=> {uint header=kind==1 || kind==25?16u:8u;return Sid(p,n,Marshal.ReadIntPtr(p),header);});
+        }
         static uint Scalar(IntPtr token, int kind) { return TokenValue(token, kind, (p,n) => { Require(n >= 4, "Token scalar bound"); return unchecked((uint)Marshal.ReadInt32(p)); }); }
         static SidAttributes[] Groups(IntPtr token, int kind) {
             return TokenValue(token, kind, (p,n) => {
                 Require(n >= 4, "Group count bound"); int count = Marshal.ReadInt32(p); Require(count >= 0 && count <= MaxGroups && (count == 0 || 8L + count * 16L <= n), "Group array bound");
                 SidAttributes[] rows = new SidAttributes[count];
-                for (int i=0;i<count;i++) { IntPtr row = IntPtr.Add(p,8+i*16); rows[i] = new SidAttributes { sid=Sid(Marshal.ReadIntPtr(row)), attributes=unchecked((uint)Marshal.ReadInt32(row,8)) }; }
+                for (int i=0;i<count;i++) { IntPtr row = IntPtr.Add(p,8+i*16); rows[i] = new SidAttributes { sid=Sid(p,n,Marshal.ReadIntPtr(row),(uint)(8+count*16)), attributes=unchecked((uint)Marshal.ReadInt32(row,8)) }; }
                 return rows;
             });
         }
@@ -118,7 +167,8 @@ namespace HubOwnershipSnapshot {
         static string DefaultDacl(IntPtr token,string owner,string group) {
             return TokenValue(token,6,(p,n)=> {
                 Require(n>=8,"Default DACL pointer bound"); IntPtr acl=Marshal.ReadIntPtr(p); if(acl==IntPtr.Zero)return null;
-                int length=(ushort)Marshal.ReadInt16(acl,2);Require(length>=8 && length<=MaxBuffer,"Default DACL length bound");
+                Within(p,n,acl,8,8,"Default DACL header");
+                int length=(ushort)Marshal.ReadInt16(acl,2);Require(length>=8 && length<=MaxBuffer,"Default DACL length bound");Within(p,n,acl,(uint)length,8,"Default DACL body");
                 byte[] bytes=new byte[length];Marshal.Copy(acl,bytes,0,length);RawAcl raw=new RawAcl(bytes,0);Require(raw.Count<=128,"Default DACL ACE bound");
                 foreach(GenericAce ace in raw)Require(ace.AceType==AceType.AccessAllowed || ace.AceType==AceType.AccessDenied,"Default DACL unsupported; values withheld");
                 return new RawSecurityDescriptor(ControlFlags.DiscretionaryAclPresent,new SecurityIdentifier(owner),new SecurityIdentifier(group),null,raw).GetSddlForm(AccessControlSections.Access);
@@ -156,7 +206,7 @@ namespace HubOwnershipSnapshot {
                 // Documented claim/device counts only. Reserved classes35/36/39 are not queried.
                 // Their absence is not certified; no claim values/device identity lists are exported.
                 int[] kinds={33,34,37,38}; uint[] counts=new uint[kinds.Length];
-                for(int c=0;c<kinds.Length;c++) { Budget(watch); int kind=kinds[c]; counts[c]=TokenValue(token,kind,(p,n)=>{Require(n>=(kind==37 || kind==38?4:8),"Claim/device context count bound");return unchecked((uint)Marshal.ReadInt32(p,kind==37 || kind==38?0:4));}); }
+                for(int c=0;c<kinds.Length;c++) { Budget(watch); int kind=kinds[c]; counts[c]=TokenValue(token,kind,(p,n)=>{Require(n>=(kind==37 || kind==38?4:16),"Claim/device context count bound");return unchecked((uint)Marshal.ReadInt32(p,kind==37 || kind==38?0:4));}); }
                 context.unsupportedContextCounts=counts;result.tokenProjectionComplete=true;
                 foreach(uint count in counts)Require(count==0,"Claims/device context unsupported; values withheld");
                 // Caller supplies a fixed, unique root-to-leaf closure with pre-observed object IDs.
