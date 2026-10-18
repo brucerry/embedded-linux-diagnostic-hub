@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { pilotLimits } from './hosted-pilot-contract.mjs';
+import { requireIdentityPlan, reportingRefusal } from './startup-identity-report.mjs';
 const now = () => Number(process.hrtime.bigint() / 1000000n);
 /** A single durable credit with a finite pending/total diagnostic envelope. */
 export function runtimeDiagnostics(send, hold) {
@@ -12,34 +13,55 @@ export function runtimeDiagnostics(send, hold) {
         rows = 0,
         bytes = 0,
         pending = 0;
-    const emit = (stage, data) => {
-        const size = Buffer.byteLength(JSON.stringify({ stage, data }));
-        if (failed) return Promise.reject(failed);
-        assert(
-            size <= 65536 &&
-                ++rows <= 1024 &&
-                bytes + size <= pilotLimits.evidenceBytes &&
-                pending + size <= 262144,
-            'Runtime diagnostic envelope',
-        );
-        bytes += size;
-        pending += size;
+    const budget = (stage, count, charge, queued, encoded) => {
+        for (const [counter, requested, current, limit] of [
+            ['frameBytes', encoded, 0, 65536],
+            ['rows', count, rows, 1024],
+            ['totalBytes', charge, bytes, pilotLimits.evidenceBytes],
+            ['pendingBytes', queued, pending, 262144],
+        ])
+            if (requested + current > limit)
+                throw reportingRefusal(stage, counter, encoded, current, limit);
+    };
+    const enqueue = (work, queued) => {
+        pending += queued;
         const task = tail.then(() => {
             if (failed) throw failed;
-            return send(stage, data);
+            return work();
         });
         tail = task.then(
             () => {
-                pending -= size;
+                pending -= queued;
             },
             (e) => {
-                pending -= size;
+                pending -= queued;
                 failed ??= e;
                 hold(e);
             },
         );
         void task.catch(() => {});
         return task;
+    };
+    const emit = (stage, data) => {
+        const size = Buffer.byteLength(JSON.stringify({ stage, data }));
+        if (failed) return Promise.reject(failed);
+        budget(stage, 1, size, size, size);
+        rows++;
+        bytes += size;
+        return enqueue(() => send(stage, data), size);
+    };
+    emit.publishIdentity = (plan) => {
+        requireIdentityPlan(plan);
+        if (failed) return Promise.reject(failed);
+        const b = plan.budget;
+        budget(plan.manifest.stage, b.rows, b.chargedBytes, b.peakBytes, b.peakBytes);
+        rows += b.rows;
+        bytes += b.chargedBytes;
+        // One atomic queue operation, one current frame, one durable credit. Other
+        // diagnostics cannot split a report; the complete logical+wire cost is reserved.
+        return enqueue(async () => {
+            for (const frame of plan.frames()) await send(frame.stage, frame.data);
+        }, b.peakBytes);
     };
     return {
         emit,

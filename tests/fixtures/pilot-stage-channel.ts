@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { reportingRefusal } from '../../scripts/lib/startup-identity-report.mjs';
 /** A send callback is transport acceptance only. The owner ACKs after its fsync. */
 export function stageChannel(
     nonce: string,
@@ -36,7 +37,9 @@ export function stageChannel(
             stage,
             data,
         };
-        assert(Buffer.byteLength(JSON.stringify(m)) <= 65536);
+        const encodedBytes = Buffer.byteLength(JSON.stringify(m));
+        if (encodedBytes > 65536)
+            throw reportingRefusal(stage, 'completeFrameBytes', encodedBytes, 0, 65536);
         await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(
                 () => reject(Error('Durable evidence ACK missing')),

@@ -1,3 +1,4 @@
+import { reportStartupIdentity } from '../../scripts/lib/startup-identity-report.mjs';
 import type { ReviewedNativeCoverage } from './memory-product-native-contract';
 import { productStartup } from './memory-product-startup';
 import { shutdownHistory, rememberProcessRoles } from './memory-product-shutdown';
@@ -451,8 +452,8 @@ export async function createQualificationDriver(context: {
         });
         memoryScope.roles = scope.roles;
         memoryScope.runtimeIdentity = scope.runtimeIdentity;
-        await context.emit('aggregate-actual-process-launches', scope.raw);
-        await context.emit('aggregate-input-identity', {
+        await reportStartupIdentity(context.emit, 'aggregate-actual-process-launches', scope.raw);
+        await reportStartupIdentity(context.emit, 'aggregate-input-identity', {
             sourceSHA256,
             harness,
             configuredBrowserExecutable: browserExecutable,

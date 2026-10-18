@@ -187,3 +187,31 @@ qualification-profile directory, then run
 `node --import tsx --test tests/windows-pilot-module-entry.test.mts`. The control verifies that
 profile's manifest, preload, bundle and source-lock identity; it does not create an SSH bundle or
 run native application payloads.
+
+Startup identity and raw launch reports use lossless multipart publication for
+`aggregate-native-input-identity`, `aggregate-input-identity`, `aggregate-actual-process-launches`
+and `actual-native-product`. A schema-1 `startup-identity-manifest` binds the original stage, exact
+UTF-8 JSON byte length, part count and SHA-256. Ordered `startup-identity-part` frames carry
+canonical base64 slices of at most 32 KiB. The original logical record is at most 4 MiB. Every
+artifact, role, executable hash, raw command line and metric attribution is retained in the
+reconstructed `{stage,data}` JSON.
+
+Before publication, the producer reserves the complete logical plus encoded reporting cost and row
+count within the existing 10 MiB/1024-row envelope. Only one bounded frame is outstanding; the
+262144-byte pending guard, 65536-byte complete-frame guard and all deadlines remain unchanged. The
+native diagnostic queue publishes a whole report atomically, awaiting each durable ACK. The parent
+reserves the logical and prefixed journal cost before accepting its manifest, validates each part
+and exact reconstruction, and ACKs only after the bounded frame is fsynced. It keeps the
+manifest/parts in the journal rather than writing an oversized reconstructed record.
+
+Use `startupIdentityDecoder` from `scripts/lib/startup-identity-report.mjs` to reconstruct the
+allowlisted original stage from journal frames. The decoder requires exact schemas, byte/count
+bounds, ordering, unique parts, canonical base64, SHA-256, valid UTF-8, canonical JSON and matching
+original stage. Missing or malformed parts cannot precede baseline/cycle/final admission and do not
+supply closure proof. Existing unknown-custody holds and shared cleanup validation remain required.
+Bounded refusal errors name the stage, encoded size and failed counter without logging oversized
+data.
+
+The earlier controlled emitter fixture was 137333 bytes; the original rejected Windows JSON was not
+retained. Local production-factory/channel/parser controls establish reporting behavior only. They
+do not qualify a native cycle or authorize another Windows attempt.

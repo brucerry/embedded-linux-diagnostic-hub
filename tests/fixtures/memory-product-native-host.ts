@@ -1,3 +1,4 @@
+import { reportStartupIdentity } from '../../scripts/lib/startup-identity-report.mjs';
 import assert from 'node:assert/strict';
 import { settledElectronExecutable } from '../../scripts/lib/pilot-dependencies.mjs';
 import { NativePilotStartup } from './native-pilot-startup';
@@ -563,7 +564,7 @@ export async function createProductNative(options: {
             captureExpected ||= Boolean(result.capture);
             return result;
         };
-        await options.emit('actual-native-product', {
+        await reportStartupIdentity(options.emit, 'actual-native-product', {
             version: metadata.version,
             process: application.process().pid,
             preferences: await application.evaluate(({ BrowserWindow }) => {

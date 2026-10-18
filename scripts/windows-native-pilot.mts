@@ -33,6 +33,7 @@ import {
     refuseMarker,
 } from './lib/windows-preflight.mjs';
 import { PilotEvidence } from './lib/pilot-evidence.mjs';
+import { pilotEvidenceReceiver } from './lib/pilot-evidence-channel.mjs';
 import { PilotDiskObserver } from './lib/pilot-disk-observer.mjs';
 import { runWinpsSecurityContract } from './lib/pilot-winps-contract.mjs';
 import { runSecurityCommand, requireSecurityProcess } from './lib/pilot-security-command.mjs';
@@ -553,43 +554,20 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                     o.hold(e);
                     throw e;
                 }
-                child.on('message', (m) => {
-                    try {
-                        assert(
-                            m?.kind === 'pilot-evidence' &&
-                                m.nonce === nonce &&
-                                m.bindingSHA256 === o.hash &&
-                                m.sequence === state.sequence++,
-                        );
-                        assert(Buffer.byteLength(JSON.stringify(m)) <= 65536);
-                        record(stage + ':' + m.stage, m.data);
-                        if (m.stage === 'runtime-ready') {
-                            assert(
-                                productClock.now() < state.runtimeDeadline,
-                                'Late runtime readiness cannot reopen admission',
-                            );
-                            state.runtimeReady = true;
-                        }
-                        if (m.stage === 'stage-held') o.hold(m.data.reason ?? 'Stage startup held');
-                        if (m.stage === 'stage-final') {
-                            assert(!state.final);
-                            state.final = m.data;
-                        }
-                        child.send(
-                            {
-                                kind: 'pilot-durable-ack',
-                                nonce,
-                                bindingSHA256: o.hash,
-                                sequence: m.sequence,
-                            },
-                            (e) => {
-                                if (e) o.hold(e);
-                            },
-                        );
-                    } catch (e) {
-                        o.hold(e);
-                    }
+                const receiver = pilotEvidenceReceiver({
+                    nonce,
+                    bindingSHA256: o.hash,
+                    stage,
+                    state,
+                    record,
+                    reserve,
+                    recordReserved: (s, d) => evidence.append(s, d),
+                    send: (m, callback) => child.send(m, callback),
+                    hold: (e) => o.hold(e),
+                    clock: () => productClock.now(),
                 });
+                child.on('message', receiver.receive);
+
                 return child;
             },
             waitStage: async (child, o) =>

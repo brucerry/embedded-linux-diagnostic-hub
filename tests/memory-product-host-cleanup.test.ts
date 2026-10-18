@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { transformSync } from 'esbuild';
+import { reportStartupIdentity } from '../scripts/lib/startup-identity-report.mjs';
 import { runNativeCleanup } from './fixtures/memory-product-native-cleanup';
 import { createProductParentClosureWitness } from './fixtures/memory-product-parent-closure';
 import { productStartup } from './fixtures/memory-product-startup';
@@ -159,6 +160,8 @@ function host(file: string, control: Control = {}) {
                 },
             };
         if (name === 'node:module') return { createRequire: () => resolver };
+        if (name === '../../scripts/lib/startup-identity-report.mjs')
+            return { reportStartupIdentity };
         if (name === '../../scripts/lib/pilot-dependencies.mjs')
             return {
                 settledElectronExecutable() {

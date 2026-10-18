@@ -1,3 +1,4 @@
+import { reportStartupIdentity } from '../../scripts/lib/startup-identity-report.mjs';
 import { nativeGenerationCase } from './memory-product-native-contract';
 import { exerciseNativeSaveCases } from './memory-product-native-save-ui';
 import type { ReviewedNativeCoverage } from './memory-product-native-contract';
@@ -218,7 +219,7 @@ export async function createNativeAggregateDriver(context: {
             runtimeIdentity: scope.runtimeIdentity,
             unsupported: memoryScope.unsupported,
         };
-        await context.emit('aggregate-native-input-identity', {
+        await reportStartupIdentity(context.emit, 'aggregate-native-input-identity', {
             sourceSHA256,
             artifacts,
             scope,
