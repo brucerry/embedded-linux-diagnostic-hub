@@ -177,6 +177,8 @@ export async function exerciseProductSerial(
         exportedBytes += viewer.exportedBytes;
     }
     if (context.faults) {
+        // Keep the primary captures' output-search token out of fault-only captures.
+        await page.evaluate(() => window.memoryProduct.serial.configure({ tail: '' }));
         for (const [method, label] of [
             ['begin', 'start'],
             ['append', 'append'],
