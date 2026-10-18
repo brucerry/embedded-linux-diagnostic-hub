@@ -723,8 +723,8 @@ const snapshotFixture = () => {
         chains: [[0, 1]],
     };
     const value = {
-        schema: 1,
-        profile: 'local-ntfs-common-dacl-snapshot-v1',
+        schema: 2,
+        profile: 'local-ntfs-reduced-token-snapshot-v2',
         token: {
             source: 'process',
             user: sid,
@@ -734,13 +734,8 @@ const snapshotFixture = () => {
             defaultDaclSddl: 'D:(A;;FA;;;BA)',
             userAttributes: 0,
             tokenType: 1,
-            impersonationLevel: 0,
-            elevationType: 2,
-            elevated: 1,
-            mandatoryPolicy: 1,
-            hasRestrictions: 1,
+            impersonationLevel: null,
             isAppContainer: 0,
-            uiAccess: 0,
             virtualizationEnabled: 0,
             groups: [
                 { sid: 'S-1-5-32-544', attributes: 7 },
@@ -1057,4 +1052,110 @@ test('early native failure may return no token or nodes but cannot claim complet
     value.errorCount = 0;
     value.errors = [];
     assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+});
+
+for (const field of ['elevationType', 'elevated', 'hasRestrictions', 'uiAccess', 'mandatoryPolicy'])
+    test(`reduced snapshot rejects removed descriptive field ${field} even with zero default`, () => {
+        const { sid, plan, value } = snapshotFixture();
+        value.token[field] = 0;
+        assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+    });
+for (const version of [
+    { schema: 1, profile: 'local-ntfs-common-dacl-snapshot-v1' },
+    { schema: 1, profile: 'local-ntfs-reduced-token-snapshot-v2' },
+    { schema: 2, profile: 'local-ntfs-common-dacl-snapshot-v1' },
+])
+    test('reduced snapshot rejects old or mixed schema/profile', () => {
+        const { sid, plan, value } = snapshotFixture();
+        Object.assign(value, version);
+        assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+    });
+for (const key of Object.keys(snapshotFixture().value.token))
+    test(`reduced snapshot requires explicit retained field ${key}`, () => {
+        const { sid, plan, value } = snapshotFixture();
+        delete value.token[key];
+        assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+    });
+for (const level of [2, 3])
+    test(`reduced snapshot accepts actual supported impersonation level ${level}`, () => {
+        const { sid, plan, value } = snapshotFixture();
+        value.token.tokenType = 2;
+        value.token.impersonationLevel = level;
+        assert.equal(
+            parseOwnershipSnapshot(JSON.stringify(value), plan, sid).token.impersonationLevel,
+            level,
+        );
+    });
+for (const level of [null, 0, 1, 4, 4294967295, 2.5, '2'])
+    test(`reduced snapshot refuses invalid impersonation level ${level} even in partial data`, () => {
+        for (const errors of [0, 1]) {
+            const { sid, plan, value } = snapshotFixture();
+            value.token.tokenType = 2;
+            value.token.impersonationLevel = level;
+            value.errorCount = errors;
+            value.errors = errors ? ['unsupported'] : [];
+            assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+        }
+    });
+for (const level of [0, 1, 2, 3])
+    test(`primary-token level cannot be fabricated as ${level}`, () => {
+        const { sid, plan, value } = snapshotFixture();
+        value.token.impersonationLevel = level;
+        assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+    });
+test('reduced snapshot keeps real restricting SID and privilege/integrity information without filtered-ever default', () => {
+    const { sid, plan, value } = snapshotFixture();
+    const parsed = parseOwnershipSnapshot(JSON.stringify(value), plan, sid);
+    assert.equal(parsed.token.impersonationLevel, null);
+    assert.deepEqual(parsed.token.restrictedSids, value.token.restrictedSids);
+    assert.equal(parsed.token.integrity, 'S-1-16-12288');
+    assert.equal(parsed.token.relevantPrivileges.length, 5);
+    assert(!Object.hasOwn(parsed.token, 'hasRestrictions'));
+});
+test('compiled C# fixture is prepared against the production helper and does not call native observation APIs', () => {
+    const native = fs.readFileSync(
+        new URL('../scripts/lib/windows-ownership-snapshot.cs', import.meta.url),
+        'utf8',
+    );
+    const fixture = fs.readFileSync(
+        new URL('./fixtures/windows-token-query-contract.cs', import.meta.url),
+        'utf8',
+    );
+    const runner = fs.readFileSync(
+        new URL('./windows-token-query-native-contract.ps1', import.meta.url),
+        'utf8',
+    );
+    assert.match(native, /SupportedToken\(tokenType,level\)/);
+    assert.match(native, /type==2 && \(level==2 \|\| level==3\)/);
+    assert.doesNotMatch(native, /level>=2/);
+    assert.match(native, /Native.AccessCheck\(memory,duplicate,/);
+    assert.match(native, /ValidateTokenContext\(context\)/);
+    assert.match(native, /ValidateContextCounts\(counts\)/);
+    assert.match(fixture, /Observer.ScalarWithReply/);
+    assert.match(fixture, /poison\[i\]=0xE7/);
+    assert.match(fixture, /memory.Done\(1\)/);
+    assert.match(fixture, /new uint\[\]\{0,1,2,3,5,UInt32.MaxValue\}/);
+    assert.doesNotMatch(fixture, /Observer.Inspect\(|Native\.|ReadNativeToken\(/);
+    assert.match(runner, /Add-Type -Path @\(\$observer, \$fixture\)/);
+    assert.match(runner, /DeterministicTests\]::Run/);
+    assert.doesNotMatch(runner, /Set-Acl|ExecutionPolicy|Install-/);
+});
+
+test('partial projection never fabricates completed context counts or a completed null token', () => {
+    for (const token of [
+        null,
+        { ...snapshotFixture().value.token, unsupportedContextCounts: null },
+    ]) {
+        const { sid, plan, value } = snapshotFixture();
+        value.token = token;
+        value.errorCount = 1;
+        value.errors = ['stopped'];
+        assert.throws(() => parseOwnershipSnapshot(JSON.stringify(value), plan, sid));
+        value.tokenProjectionComplete = false;
+        assert.equal(
+            ownershipSnapshotSummary(parseOwnershipSnapshot(JSON.stringify(value), plan, sid), plan)
+                .snapshotComplete,
+            false,
+        );
+    }
 });

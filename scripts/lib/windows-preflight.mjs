@@ -397,6 +397,70 @@ export function ownershipSnapshotPlan(paths) {
     assert(Buffer.byteLength(JSON.stringify(plan)) <= 24576, 'Ownership plan JSON bound.');
     return plan;
 }
+/** Exact bounded compiled-fixture envelope; valid failed suites remain observable. */
+export function parseTokenContractReport(text, expected) {
+    assert(
+        typeof text === 'string' && Buffer.byteLength(text) <= 32768,
+        'Compiled contract JSON bound.',
+    );
+    const value = JSON.parse(text.replace(/^\uFEFF/, ''));
+    const exact = (object, keys) => {
+        assert(object && typeof object === 'object' && !Array.isArray(object));
+        assert.deepEqual(Object.keys(object).sort(), keys.sort());
+    };
+    exact(value, ['schema', 'observerSHA256', 'fixtureSHA256', 'result']);
+    assert.equal(value.schema, 1);
+    for (const key of ['observerSHA256', 'fixtureSHA256']) {
+        assert(typeof value[key] === 'string' && /^[a-f0-9]{64}$/.test(value[key]));
+        assert.equal(value[key], expected[key], 'Compiled contract source hash mismatch: ' + key);
+    }
+    const result = value.result;
+    exact(result, [
+        'schema',
+        'suite',
+        'passed',
+        'failed',
+        'compiledCSharpExecuted',
+        'windowsTokenApisCalled',
+        'directorySelected',
+        'admissionChanged',
+        'errors',
+    ]);
+    assert.equal(result.schema, 1);
+    assert.equal(result.suite, 'reduced-token-v2-injected-replies');
+    assert.equal(result.compiledCSharpExecuted, true);
+    for (const key of ['windowsTokenApisCalled', 'directorySelected', 'admissionChanged'])
+        assert.equal(result[key], false);
+    for (const key of ['passed', 'failed'])
+        assert(
+            Number.isInteger(result[key]) && result[key] >= 0 && result[key] <= 76,
+            'Compiled contract count bound: ' + key,
+        );
+    assert.equal(
+        result.passed + result.failed,
+        76,
+        `Compiled contract case total: passed=${result.passed},failed=${result.failed}; expected76.`,
+    );
+    assert(
+        Array.isArray(result.errors) &&
+            result.errors.length <= 8 &&
+            result.errors.every((v) => typeof v === 'string' && v.length > 0 && v.length <= 256),
+        'Compiled contract errors bound.',
+    );
+    assert.equal(
+        result.errors.length,
+        Math.min(result.failed, 8),
+        'Compiled contract error/count mismatch.',
+    );
+    return value;
+}
+export function requireTokenContractSuccess(value) {
+    assert(value, 'Required compiled contract observation missing or rejected.');
+    assert(
+        value.result.passed === 76 && value.result.failed === 0 && value.result.errors.length === 0,
+        `Required compiled contracts failed: passed=${value.result.passed},failed=${value.result.failed}.`,
+    );
+}
 /** Validate a native snapshot without turning a snapshot into directory authorization. */
 export function parseOwnershipSnapshot(text, plan, expectedPrincipal) {
     assert(Buffer.byteLength(text) <= 32768, 'Native snapshot JSON bound.');
@@ -424,8 +488,8 @@ export function parseOwnershipSnapshot(text, plan, expectedPrincipal) {
         'errors',
         'errorCount',
     ]);
-    assert.equal(value.schema, 1);
-    assert.equal(value.profile, 'local-ntfs-common-dacl-snapshot-v1');
+    assert.equal(value.schema, 2);
+    assert.equal(value.profile, 'local-ntfs-reduced-token-snapshot-v2');
     assert.equal(
         value.accessScope,
         'AccessCheck MAXIMUM_ALLOWED with actual impersonation token; DACL snapshot, not full kernel or all-principal privacy proof',
@@ -467,15 +531,10 @@ export function parseOwnershipSnapshot(text, plan, expectedPrincipal) {
             'primaryGroup',
             'integrity',
             'defaultDaclSddl',
-            'uiAccess',
             'virtualizationEnabled',
             'userAttributes',
             'tokenType',
             'impersonationLevel',
-            'elevationType',
-            'elevated',
-            'mandatoryPolicy',
-            'hasRestrictions',
             'isAppContainer',
             'groups',
             'restrictedSids',
@@ -495,19 +554,16 @@ export function parseOwnershipSnapshot(text, plan, expectedPrincipal) {
                 (typeof token.defaultDaclSddl === 'string' &&
                     token.defaultDaclSddl.length <= 16384),
         );
-        assert(uint(token.uiAccess) && uint(token.virtualizationEnabled));
+        assert(uint(token.virtualizationEnabled));
         if (expectedPrincipal !== undefined) assert.equal(token.user, expectedPrincipal);
-        for (const key of [
-            'userAttributes',
-            'tokenType',
-            'impersonationLevel',
-            'elevationType',
-            'elevated',
-            'mandatoryPolicy',
-            'hasRestrictions',
-            'isAppContainer',
-        ])
+        for (const key of ['userAttributes', 'tokenType', 'isAppContainer'])
             assert(uint(token[key]));
+        assert(
+            token.tokenType === 1
+                ? token.impersonationLevel === null
+                : token.tokenType === 2 &&
+                      (token.impersonationLevel === 2 || token.impersonationLevel === 3),
+        );
         for (const key of ['groups', 'restrictedSids']) {
             assert(Array.isArray(token[key]) && token[key].length <= 128);
             token[key].forEach((row) => {
@@ -533,6 +589,12 @@ export function parseOwnershipSnapshot(text, plan, expectedPrincipal) {
             assert(uint(row.attributes));
         });
     }
+    if (value.tokenProjectionComplete)
+        assert(
+            value.token &&
+                Array.isArray(value.token.unsupportedContextCounts) &&
+                value.token.unsupportedContextCounts.length === 4,
+        );
     assert(Array.isArray(value.nodes) && value.nodes.length <= plan.paths.length);
     value.nodes.forEach((node, i) => {
         exact(node, [
@@ -614,7 +676,9 @@ export function parseOwnershipSnapshot(text, plan, expectedPrincipal) {
                 value.token.isAppContainer === 0 &&
                 value.token.virtualizationEnabled === 0 &&
                 (value.token.tokenType === 1 ||
-                    (value.token.tokenType === 2 && value.token.impersonationLevel >= 2)),
+                    (value.token.tokenType === 2 &&
+                        (value.token.impersonationLevel === 2 ||
+                            value.token.impersonationLevel === 3))),
         );
         assert(
             value.snapshotConsistent &&

@@ -4,7 +4,7 @@ import test from 'node:test';
 
 // Executable contract/API model, not a C# interpreter or Windows qualification.
 // The oracle below comes from the documented structures and the bounded x64 profile.
-const fixed = [8, 9, 18, 20, 21, 24, 26, 27, 29];
+const fixed = [8, 9, 24, 29];
 const expected = new Map<number, [number, number]>([
     ...fixed.map((kind): [number, [number, number]] => [kind, [4, 4]]),
     [10, [56, 56]],
@@ -77,7 +77,7 @@ function noStaleError(reply: Omit<Reply, 'error'>): Reply {
     });
 }
 
-test('native class table covers exactly all22queried documented classes with audited fixed/header sizes', () => {
+test('native class table covers exactly all17queried documented classes with audited fixed/header sizes', () => {
     assert.deepEqual(
         [...layouts].sort((a, b) => a[0] - b[0]),
         [...expected].sort((a, b) => a[0] - b[0]),
@@ -140,29 +140,6 @@ for (const [kind, [known, minimum]] of expected) {
             assert.equal(a.allocated, a.freed);
         });
 }
-test('modeled class20null-sizing incompatibility demonstrates old guard failure; proposed query uses4bytes directly', () => {
-    // Synthetic trace, not reconstructed Win32 return values from run39098706408.
-    const api = (capacity: number): Reply =>
-        capacity === 0
-            ? { ok: false, error: 87, returned: 0 }
-            : noStaleError({ ok: true, returned: 4 });
-    const old = api(0);
-    assert.equal(!old.ok && old.error === 122 && old.returned > 0, false);
-    let calls = 0;
-    assert.equal(
-        queryModel(
-            20,
-            (c) => {
-                calls++;
-                assert.equal(c.capacity, 4);
-                return api(c.capacity);
-            },
-            (b) => b.length,
-        ),
-        4,
-    );
-    assert.equal(calls, 1);
-});
 for (const kind of fixed.concat(10))
     test(`fixed class${kind}API failure preserves actual numeric last-error and never retries`, () => {
         let calls = 0,
@@ -243,7 +220,7 @@ test('variable success at16KiBcap and smaller result uses returned extent; decod
     );
 });
 test('unknown/reserved/linked class does not invoke API or allocate', () => {
-    for (const kind of [0, 7, 19, 35, 36, 39, 999]) {
+    for (const kind of [0, 7, 18, 19, 20, 21, 26, 27, 35, 36, 39, 999]) {
         const a = { allocated: 0, freed: 0 };
         assert.throws(
             () =>
@@ -260,26 +237,28 @@ test('unknown/reserved/linked class does not invoke API or allocate', () => {
         assert.deepEqual(a, { allocated: 0, freed: 0 });
     }
 });
-test('native wrapper captures last-error immediately only after BOOL failure and frees before propagation', () => {
-    const body = native.slice(
+test('native adapter captures last-error only on failure; common query seam validates before decoding and releases in finally', () => {
+    const adapter = native.slice(
+        native.indexOf('static TokenReply ReadNativeToken'),
         native.indexOf('static T TokenValue<T>'),
-        native.indexOf('static void Within'),
     );
-    assert.equal(
-        (
-            body.match(
-                /bool ok=Native.GetTokenInformation[^;]+;\s*int error=ok\?0:Marshal.GetLastWin32Error\(\);/g,
-            ) || []
-        ).length,
-        1,
+    assert.match(
+        adapter,
+        /bool ok=Native.GetTokenInformation[^;]+;\s*int error=ok\?0:Marshal.GetLastWin32Error\(\);/,
+    );
+    const body = native.slice(
+        native.indexOf('internal static T QueryToken<T>'),
+        native.indexOf('internal static bool SupportedToken'),
     );
     assert.match(body, /layout.Fixed==0\?\(uint\)MaxBuffer:layout.Fixed/);
-    assert.doesNotMatch(body, /IntPtr.Zero|out needed/);
     assert.match(body, /layout.Fixed==0 \|\| actual==layout.Fixed/);
     assert.match(body, /return read\(memory,actual\)/);
-    assert.match(body, /finally \{ Marshal.FreeHGlobal\(memory\); \}/);
+    assert.match(body, /finally \{ release\(memory\); \}/);
     assert.doesNotMatch(body, /while|for\s*\(/);
-    assert.match(native, /win32=.*ok\?"n\/a"/);
+    assert.match(
+        native,
+        /QueryToken\(token,kind,read,ReadNativeToken,Marshal.AllocHGlobal,Marshal.FreeHGlobal\)/,
+    );
 });
 
 // Buffer decoder boundary model: pointer offsets represent addresses relative to the returned buffer.
@@ -371,7 +350,7 @@ test('failure reads its saved numeric error once; success never reads error even
     assert.throws(
         () =>
             queryModel(
-                20,
+                24,
                 () => {
                     calls++;
                     return failure;
@@ -379,14 +358,14 @@ test('failure reads its saved numeric error once; success never reads error even
                 () => null,
                 a,
             ),
-        /kind=20 phase=fixed ok=0 capacity=4 returned=0 win32=87/,
+        /kind=24 phase=fixed ok=0 capacity=4 returned=0 win32=87/,
     );
     assert.equal(reads, 1);
     assert.equal(calls, 1);
     assert.deepEqual(a, { allocated: 1, freed: 1 });
     assert.equal(
         queryModel(
-            20,
+            24,
             () => ({ ok: true, returned: 4, error: 5 }),
             (bytes) => bytes.length,
         ),
@@ -394,3 +373,27 @@ test('failure reads its saved numeric error once; success never reads error even
     );
     assert.match(native, /uint actual=0; bool ok=Native.GetTokenInformation/);
 });
+for (const kind of fixed)
+    for (const returned of [0, 1, 2, 3, 5])
+        test(`retained scalar${kind} rejects poisoned tail at returned length${returned}`, () => {
+            let decoded = false;
+            const a = { allocated: 0, freed: 0 };
+            assert.throws(() =>
+                queryModel(
+                    kind,
+                    (c) => {
+                        assert(c.buffer);
+                        c.buffer.fill(0xe7);
+                        c.buffer[0] = 1;
+                        return noStaleError({ ok: true, returned });
+                    },
+                    () => {
+                        decoded = true;
+                        return 1;
+                    },
+                    a,
+                ),
+            );
+            assert.equal(decoded, false);
+            assert.deepEqual(a, { allocated: 1, freed: 1 });
+        });

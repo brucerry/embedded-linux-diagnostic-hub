@@ -101,15 +101,15 @@ of the actual calling token and filesystem generic mapping. It never assigns/imp
 duplicate, obtains a linked/elevated token, adjusts privileges, or opens any directory for writes.
 
 The token projection is limited to current user/group attributes, restricting SIDs, default owner/
-primary group/default DACL, integrity/mandatory policy/elevation state and five relevant privilege
-states. Documented user/device-claim and device-group presence is counted only; nonempty contexts
-stop without exporting claim values. Reserved token-information classes35/36/39 are not queried;
-their absence is not certified. Conditional/object/unknown DACL or resource-policy states,
-unsupported filesystems, sharing failures, identity/descriptor/token drift and API/buffer failures
-produce an indeterminate snapshot. All acquired handles receive independent close attempts.
+primary group/default DACL, integrity SID and five relevant privilege states. Documented
+user/device-claim and device-group presence is counted only; nonempty contexts stop without
+exporting claim values. Reserved token-information classes35/36/39 are not queried; their absence is
+not certified. Conditional/object/unknown DACL or resource-policy states, unsupported filesystems,
+sharing failures, identity/descriptor/token drift and API/buffer failures produce an indeterminate
+snapshot. All acquired handles receive independent close attempts.
 
 Bounds are five candidates,24 directories,128 groups/restricted SIDs/ACEs,64 token privileges read
-internally but only five projected,16KiB native buffers,32KiB aggregate descriptors,24KiB request
+internally but only five projected,16 KiB native buffers,32KiB aggregate descriptors,24KiB request
 and32KiB result JSON. Native work admits at most five seconds, inside the unchanged ten-second
 command bound; neither bounds an already blocked synchronous kernel call by itself. No retry,
 privilege enablement, installation, candidate expansion, data-content read, or recursive inventory
@@ -134,50 +134,101 @@ and
 [SECURITY_INFORMATION read rights](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-information).
 The local tests validate projection and failure handling; they do not establish native API behavior.
 
-Run 39098706408 compiled and invoked the original observer, but its universal null/zero sizing probe
-stopped at class 20 with `Token information sizing failure/bound: 20`. No token projection, ancestor
-descriptor or AccessCheck fact was returned. The failed guard did not retain BOOL, GetLastError or
-ReturnLength, so the precise native cause cannot be recovered. A synthetic API trace in tests
-demonstrates a possible null-probe incompatibility; it is not the missing run data.
+The reduced snapshot uses schema 2 / profile `local-ntfs-reduced-token-snapshot-v2`. Run 39100208791
+established a successful class 21 API return of one byte into a four-byte buffer. The previous guard
+refused before decoding; its class 21 value is unknown. Documentation described DWORD, while this
+run reported one byte. That conflict does not justify reading unreturned bytes or accepting a
+one-byte reply globally. The prior source and failed artifact remain sealed.
 
-The proposed query repair audits all 22 classes together. Each invocation makes one read-only
-GetTokenInformation call: nine DWORD/enum structures get 4 bytes, TOKEN_STATISTICS gets 56 bytes,
-and 12 variable classes get the existing 16 KiB cap. There is no null sizing call, growth
-allocation, retry or alternate API. A successful result must return at least its audited header and
-at most its capacity; fixed results must return exactly their known size. Oversize or truncated
-results stop without decoding. This addresses the universal sizing assumption without assuming the
-old host would have passed a direct fixed-size call.
+This profile removes the five unused descriptive classes 18,20,21,26,27 together: elevation type,
+elevation, filtered-ever status, UIAccess and mandatory-policy fields are absent from the DTO and
+strict parser. No replacement status API or zero/default observation is added. The exact retained
+allowlist is 1,2,3,4,5,6,8,9,10,11,24,25,29,33,34,37,38. Class 9 is conditional on a real
+impersonation token. Primary tokens carry a null impersonation level because that query was not
+made; impersonation tokens require level 2 or 3. Unknown token types and levels are refused before
+token duplication.
 
-| Classes                  | Returned structure / x64 decoder minimum                                        | Capacity |
-| ------------------------ | ------------------------------------------------------------------------------- | -------- |
-| 8,9,18,20,21,24,26,27,29 | DWORD/32-bit enum or one-DWORD structure: 4 bytes                               | 4 bytes  |
-| 10                       | TOKEN_STATISTICS: 56 bytes; ModifiedId offset 48                                | 56 bytes |
-| 1,25                     | SID_AND_ATTRIBUTES header:16 bytes, then bounded SID                            | 16 KiB   |
-| 4,5                      | One SID pointer:8 bytes, then bounded SID                                       | 16 KiB   |
-| 6                        | One PACL pointer:8 bytes; null valid, otherwise entire ACL in returned buffer   | 16 KiB   |
-| 2,11,37,38               | Count: 4 bytes for zero; populated array starts 8, stride 16, then bounded SIDs | 16 KiB   |
-| 3                        | Count: 4 bytes; LUID_AND_ATTRIBUTES array stride 12, at most64 entries          | 16 KiB   |
-| 33,34                    | CLAIM_SECURITY_ATTRIBUTES_INFORMATION header:16 bytes; only count at 4 read     | 16 KiB   |
+| Classes    | x64 result / decoder minimum                                                 | Single-call capacity |
+| ---------- | ---------------------------------------------------------------------------- | -------------------- |
+| 8,9,24,29  | Four-byte enum or documented DWORD; exactly 4 returned bytes required        | 4 bytes              |
+| 10         | TOKEN_STATISTICS; exactly 56 returned bytes; ModifiedId offset 48            | 56 bytes             |
+| 1,25       | SID_AND_ATTRIBUTES header 16, then bounded SID                               | 16 KiB               |
+| 4,5        | SID-pointer header 8, then bounded SID                                       | 16 KiB               |
+| 6          | PACL-pointer header 8; null is valid, otherwise entire ACL bounded           | 16 KiB               |
+| 2,11,37,38 | Count 4 for empty; positive groups use offset 8 / stride 16 and bounded SIDs | 16 KiB               |
+| 3          | Count 4; privilege entries stride 12, at most64 entries                      | 16 KiB               |
+| 33,34      | CLAIM_SECURITY_ATTRIBUTES_INFORMATION header 16; only count at 4 read        | 16 KiB               |
 
-Group/restricted limits of 128 and claim rejection remain unchanged. SID headers/bodies and default
-ACL headers/bodies must stay within the actual returned extent, beyond the containing header or
-array. SID revision 1 and at most15 subauthorities form this bounded profile; managed conversion
-uses a checked byte copy. No pointer/token memory is serialized. The minimum count extent for empty
-TOKEN_GROUPS is a decoder bound, not a claim that sizeof(TOKEN_GROUPS) is 4 on x64.
+The real duplicated token still reaches AccessCheck. Group attributes, actual restricting SIDs, five
+privilege states and integrity SID remain. An observed empty restricting-SID list does not stand in
+for the removed filtered-ever status. Nonzero AppContainer or virtualization, nonempty claim/device
+context and unsupported ACL/policy cases still stop before directory work. Class 24/29 runtime
+behavior remains unqualified by the retained early-stopping run. There is no byte-length exception,
+padding, resize, retry, new token class or replacement descriptive API.
 
-BOOL failure captures Marshal.GetLastWin32Error immediately through the existing SetLastError
-P/Invoke declaration. Errors retain numeric class/phase/capacity/returned/error facts within the
-existing bounded message. Success never reads last-error, which can remain stale in .NET Framework;
-its diagnostic error is n/a. ReturnLength starts at zero, and error returns are never decoded.
-Allocations free in finally even if decoding throws. No admission, ACL, collection, candidate,
-command/report cap or workflow change is part of this repair. Revised C# remains uncompiled here;
-local executable API models validate the protocol/bounds and source wiring, not CLR/native behavior.
+Every successful result must satisfy its retained class's minimum/maximum/exact extent before any
+decode. SID and ACL headers/bodies remain inside ReturnLength, beyond their containing header or
+array; successful scalar lengths 0/1/2/3/>4 are refused before reading. BOOL failure captures
+numeric last-error immediately; success never reads stale Framework last-error and reports n/a.
+Allocations release in finally. The partial DTO is published only after the basic retained reads
+complete; unqueried claim/device counts remain null and cannot claim projectionComplete. Removed
+fields never reappear as defaults. The old schema/profile, old fields and unknown fields are
+rejected.
+
+`tests/windows-token-query-native-contract.ps1` prepares deterministic compiled-C# evidence for a
+later explicitly authorized Windows x64 validation. Add-Type compiles the exact production observer
+and `tests/fixtures/windows-token-query-contract.cs` together, then invokes injected replies only.
+The fixture uses the production query/scalar/identity/context guards, poisons unused buffer tails,
+checks length/API/decoder/query failure cleanup, and checks the 17-class contract and removed DTO.
+It calls neither Observer.Inspect nor native token/directory/AccessCheck APIs. Per-call internal
+seams have no global hook, configuration flag or production selector; production always supplies the
+existing native adapter. The runner records source/fixture hashes and test results. The integration
+below invokes it through the existing Windows PowerShell child boundary in a fresh WinPS 5.1
+process; workflow YAML stays unchanged. The fixture does not change module paths or security policy
+itself. Neither revised C# nor this fixture has been compiled/executed locally; JS models/source
+assertions are supplemental and cannot substitute for that evidence.
+
+All candidate paths, limits, directory pins, identity/descriptor/token rechecks, actual closure,
+metadata durability, owner-admission and collection gates remain unchanged. Even a complete v2
+snapshot cannot approve directory privacy, trusted principals, kernel/MIC/CAP behavior or later-I/O
+custody. No push or hosted run is part of this source preparation.
 
 Contracts:
-[GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation),
-[TOKEN_ELEVATION](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_elevation),
-[TOKEN_STATISTICS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_statistics),
 [TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class),
-[CLAIM_SECURITY_ATTRIBUTES_INFORMATION](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-claim_security_attributes_information),
+[GetTokenInformation output bounds](https://raw.githubusercontent.com/microsoft/win32metadata/main/generation/WinSDK/RecompiledIdlHeaders/um/securitybaseapi.h),
+[impersonation levels](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-security_impersonation_level),
+[restricted-token semantics](https://learn.microsoft.com/en-us/windows/win32/secauthz/restricted-tokens),
 and
 [.NET last-error semantics](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.dllimportattribute.setlasterror?view=netframework-4.8.1).
+
+The integration successor makes the compiled fixture a hard prerequisite of the existing snapshot.
+The fixed runner path is passed through an environment value to a PowerShell call-operator wrapper;
+it uses the existing absolute System32 WinPS 5.1 executable, NoProfile/NonInteractive flags,
+child-only module-path isolation, unchanged execution policy, clipped 10 second timeout and 64 KiB
+command cap. The fixture and snapshot use two separate fresh children. No workflow YAML, job, input,
+retry, collection option or dependency change is involved.
+
+Node pins the observer, fixture and runner source hashes from the reviewed tree, checks the complete
+source fingerprint before execution, records the hashed x64 PowerShell executable, and rechecks
+source/file/executable identity after a passing fixture. The runner still checks observer/fixture
+hashes before and after compilation/tests. Its bounded 32 KiB JSON envelope must have exact keys,
+matching expected source hashes, outer/inner schema 1, suite reduced-token-v2-injected-replies,
+compiledCSharpExecuted true, and false native-API/selection/admission declarations. Counts must be
+nonnegative integers totaling 76; errors are bounded to eight 256 character strings, consistent with
+failed cases. Those declarations bind reviewed fixture output; they are not a native-API activity
+counter or proof of kernel behavior.
+
+A structurally valid failed suite is journaled with its per-case errors. The runner no longer throws
+after printing that report: Node requires exactly 76 passed, 0 failed and no errors outside step(),
+whose exception handler otherwise returns null. Missing/rejected observations and failed suites
+escape to the existing outer catch/finally, which records failure and syncs/closes the journal.
+Platform/compiler/hash failures retain strict nonzero-exit handling. Malformed JSON, bad hashes or
+counts, timeout, signal, cancellation, source/executable drift and budget exhaustion cannot reach
+Observer.Inspect or subsequent metadata-I/O admission. Only successful qualification permits the
+single existing snapshot child. The owner gate and remaining admission decisions remain unchanged.
+
+Local control-flow tests use the actual gate and command helper with an injected spawn port, real
+disposable identities and real journal/report durability. They verify retained 75/1 failure details,
+zero snapshot/I-O calls on every rejection, and one separate snapshot only after 76/0. They execute
+no PowerShell, C# compiler, Windows token API or native application. Actual compilation, the 76 C#
+cases and complete native snapshot behavior still require independently reviewed Windows validation.

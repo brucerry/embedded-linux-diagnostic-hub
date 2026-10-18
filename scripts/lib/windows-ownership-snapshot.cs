@@ -17,7 +17,8 @@ namespace HubOwnershipSnapshot {
     public sealed class PrivilegeFact { public string name; public bool present; public uint attributes; }
     public sealed class TokenFacts {
         public string source, user, owner, primaryGroup, integrity, defaultDaclSddl;
-        public uint userAttributes, tokenType, impersonationLevel, elevationType, elevated, mandatoryPolicy, hasRestrictions, isAppContainer, uiAccess, virtualizationEnabled;
+        public uint userAttributes, tokenType, isAppContainer, virtualizationEnabled;
+        public uint? impersonationLevel;
         public SidAttributes[] groups, restrictedSids;
         public PrivilegeFact[] relevantPrivileges;
         public uint[] unsupportedContextCounts;
@@ -32,8 +33,8 @@ namespace HubOwnershipSnapshot {
         public int[] unsupportedAceTypes, unsupportedSaclTypes;
     }
     public sealed class Result {
-        public int schema = 1;
-        public string profile = "local-ntfs-common-dacl-snapshot-v1";
+        public int schema = 2;
+        public string profile = "local-ntfs-reduced-token-snapshot-v2";
         public TokenFacts token;
         public NodeFact[] nodes = new NodeFact[0];
         public bool tokenProjectionComplete, snapshotConsistent, tokenRechecked, pinsHeldDuringSnapshot, handleClosureComplete;
@@ -99,13 +100,8 @@ namespace HubOwnershipSnapshot {
                 case 9: return new TokenLayout(4,4); // SECURITY_IMPERSONATION_LEVEL
                 case 10: return new TokenLayout(56,56); // TOKEN_STATISTICS; ModifiedId offset48
                 case 11: return new TokenLayout(0,4); // TOKEN_GROUPS restricting SIDs
-                case 18: return new TokenLayout(4,4); // TOKEN_ELEVATION_TYPE
-                case 20: return new TokenLayout(4,4); // TOKEN_ELEVATION: one DWORD
-                case 21: return new TokenLayout(4,4); // DWORD TokenHasRestrictions
                 case 24: return new TokenLayout(4,4); // DWORD TokenVirtualizationEnabled
                 case 25: return new TokenLayout(0,16); // TOKEN_MANDATORY_LABEL + SID
-                case 26: return new TokenLayout(4,4); // DWORD TokenUIAccess
-                case 27: return new TokenLayout(4,4); // TOKEN_MANDATORY_POLICY: one DWORD
                 case 29: return new TokenLayout(4,4); // DWORD TokenIsAppContainer
                 case 33: return new TokenLayout(0,16); // CLAIM_SECURITY_ATTRIBUTES_INFORMATION
                 case 34: return new TokenLayout(0,16); // CLAIM_SECURITY_ATTRIBUTES_INFORMATION
@@ -117,16 +113,37 @@ namespace HubOwnershipSnapshot {
         static string QueryState(int kind,string phase,bool ok,int error,uint capacity,uint returned) {
             return "GetTokenInformation kind="+kind+" phase="+phase+" ok="+(ok?"1":"0")+" capacity="+capacity+" returned="+returned+" win32="+(ok?"n/a":error.ToString(System.Globalization.CultureInfo.InvariantCulture))+"; no retry";
         }
-        static T TokenValue<T>(IntPtr token, int kind, Func<IntPtr, uint, T> read) {
+        internal struct TokenReply { internal bool Ok; internal uint Returned; internal int Error; }
+        internal delegate TokenReply TokenRead(IntPtr token,int kind,IntPtr memory,uint capacity);
+        static TokenReply ReadNativeToken(IntPtr token,int kind,IntPtr memory,uint capacity) {
+            uint actual=0; bool ok=Native.GetTokenInformation(token,kind,memory,capacity,out actual);
+            int error=ok?0:Marshal.GetLastWin32Error(); // Capture only on BOOL failure, before any other call.
+            return new TokenReply { Ok=ok,Returned=actual,Error=error };
+        }
+        static T TokenValue<T>(IntPtr token,int kind,Func<IntPtr,uint,T> read) {
+            return QueryToken(token,kind,read,ReadNativeToken,Marshal.AllocHGlobal,Marshal.FreeHGlobal);
+        }
+        // Per-call internal seams for compiled deterministic tests; no global hook or production selector.
+        internal static T QueryToken<T>(IntPtr token,int kind,Func<IntPtr,uint,T> read,TokenRead query,Func<int,IntPtr> allocate,Action<IntPtr> release) {
             TokenLayout layout=Layout(kind); uint capacity=layout.Fixed==0?(uint)MaxBuffer:layout.Fixed;
-            // One bounded call for every class: no zero-length probe, resize or retry.
-            IntPtr memory=Marshal.AllocHGlobal((int)capacity);
+            IntPtr memory=allocate((int)capacity);
             try {
-                uint actual=0; bool ok=Native.GetTokenInformation(token,kind,memory,capacity,out actual);
-                int error=ok?0:Marshal.GetLastWin32Error(); // Success must not inspect a stale Framework last-error.
-                Require(ok && actual>=layout.Minimum && actual<=capacity && (layout.Fixed==0 || actual==layout.Fixed),QueryState(kind,layout.Fixed==0?"bounded":"fixed",ok,error,capacity,actual));
-                return read(memory,actual); // Never decode beyond the successful call's returned extent.
-            } finally { Marshal.FreeHGlobal(memory); }
+                Require(memory!=IntPtr.Zero,"Missing token buffer");
+                TokenReply reply=query(token,kind,memory,capacity);uint actual=reply.Returned;
+                Require(reply.Ok && actual>=layout.Minimum && actual<=capacity && (layout.Fixed==0 || actual==layout.Fixed),QueryState(kind,layout.Fixed==0?"bounded":"fixed",reply.Ok,reply.Error,capacity,actual));
+                return read(memory,actual); // No decoder can see a failed or short reply.
+            } finally { release(memory); }
+        }
+        internal static bool SupportedToken(uint type,uint? level) {
+            return type==1?level==null:type==2 && (level==2 || level==3);
+        }
+        internal static void ValidateTokenContext(TokenFacts context) {
+            Require(context.virtualizationEnabled==0,"Virtualized token profile unsupported");
+            Require(context.isAppContainer==0,"AppContainer profile is unsupported; no guessed access result");
+        }
+        internal static void ValidateContextCounts(uint[] counts) {
+            Require(counts!=null && counts.Length==4,"Missing documented context counts");
+            foreach(uint count in counts)Require(count==0,"Claims/device context unsupported; values withheld");
         }
         static void Within(IntPtr buffer,uint length,IntPtr value,uint bytes,uint minimumOffset,string what) {
             ulong start=unchecked((ulong)buffer.ToInt64()),at=unchecked((ulong)value.ToInt64());
@@ -141,7 +158,13 @@ namespace HubOwnershipSnapshot {
         static string PointerSid(IntPtr token,int kind) {
             return TokenValue(token,kind,(p,n)=> {uint header=kind==1 || kind==25?16u:8u;return Sid(p,n,Marshal.ReadIntPtr(p),header);});
         }
-        static uint Scalar(IntPtr token, int kind) { return TokenValue(token, kind, (p,n) => { Require(n >= 4, "Token scalar bound"); return unchecked((uint)Marshal.ReadInt32(p)); }); }
+        static uint Scalar(IntPtr token,int kind) {
+            return ScalarWithReply(token,kind,ReadNativeToken,Marshal.AllocHGlobal,Marshal.FreeHGlobal);
+        }
+        internal static uint ScalarWithReply(IntPtr token,int kind,TokenRead query,Func<int,IntPtr> allocate,Action<IntPtr> release) {
+            Require(Layout(kind).Fixed==4,"Not a retained four-byte scalar");
+            return QueryToken(token,kind,(p,n)=>unchecked((uint)Marshal.ReadInt32(p)),query,allocate,release);
+        }
         static SidAttributes[] Groups(IntPtr token, int kind) {
             return TokenValue(token, kind, (p,n) => {
                 Require(n >= 4, "Group count bound"); int count = Marshal.ReadInt32(p); Require(count >= 0 && count <= MaxGroups && (count == 0 || 8L + count * 16L <= n), "Group array bound");
@@ -199,16 +222,16 @@ namespace HubOwnershipSnapshot {
                     int code=Marshal.GetLastWin32Error(); Require(code==1008,"Thread token query failed; no identity fallback"); source="process";
                     Win(Native.OpenProcessToken(Native.GetCurrentProcess(),0xA,out token),"OpenProcessToken");
                 }
-                long modified=Modified(token); uint tokenType=Scalar(token,8),level=tokenType==2?Scalar(token,9):0; Require(tokenType==1 || (tokenType==2 && level>=2),"Identification/anonymous token profile is unsupported");
+                long modified=Modified(token); uint tokenType=Scalar(token,8);uint? level=tokenType==2?(uint?)Scalar(token,9):null; Require(SupportedToken(tokenType,level),"Unsupported token type/impersonation level");
                 Win(Native.DuplicateToken(token,2,out duplicate),"DuplicateToken for AccessCheck only");
-                TokenFacts context=new TokenFacts { source=source,tokenType=tokenType,impersonationLevel=level,userAttributes=TokenValue(token,1,(p,n)=>{Require(n>=16,"User attributes bound");return unchecked((uint)Marshal.ReadInt32(p,8));}),user=PointerSid(token,1),owner=PointerSid(token,4),primaryGroup=PointerSid(token,5),groups=Groups(token,2),restrictedSids=Groups(token,11),integrity=PointerSid(token,25),elevationType=Scalar(token,18),elevated=Scalar(token,20),hasRestrictions=Scalar(token,21),mandatoryPolicy=Scalar(token,27),isAppContainer=Scalar(token,29),relevantPrivileges=Privileges(token) };
-                result.token=context;context.defaultDaclSddl=DefaultDacl(token,context.owner,context.primaryGroup);context.uiAccess=Scalar(token,26);context.virtualizationEnabled=Scalar(token,24);Require(context.virtualizationEnabled==0,"Virtualized token profile unsupported"); Require(context.isAppContainer==0,"AppContainer profile is unsupported; no guessed access result");
+                TokenFacts context=new TokenFacts { source=source,tokenType=tokenType,impersonationLevel=level,userAttributes=TokenValue(token,1,(p,n)=>{Require(n>=16,"User attributes bound");return unchecked((uint)Marshal.ReadInt32(p,8));}),user=PointerSid(token,1),owner=PointerSid(token,4),primaryGroup=PointerSid(token,5),groups=Groups(token,2),restrictedSids=Groups(token,11),integrity=PointerSid(token,25),isAppContainer=Scalar(token,29),relevantPrivileges=Privileges(token) };
+                context.defaultDaclSddl=DefaultDacl(token,context.owner,context.primaryGroup);context.virtualizationEnabled=Scalar(token,24);result.token=context;ValidateTokenContext(context);
                 // Documented claim/device counts only. Reserved classes35/36/39 are not queried.
                 // Their absence is not certified; no claim values/device identity lists are exported.
                 int[] kinds={33,34,37,38}; uint[] counts=new uint[kinds.Length];
                 for(int c=0;c<kinds.Length;c++) { Budget(watch); int kind=kinds[c]; counts[c]=TokenValue(token,kind,(p,n)=>{Require(n>=(kind==37 || kind==38?4:16),"Claim/device context count bound");return unchecked((uint)Marshal.ReadInt32(p,kind==37 || kind==38?0:4));}); }
                 context.unsupportedContextCounts=counts;result.tokenProjectionComplete=true;
-                foreach(uint count in counts)Require(count==0,"Claims/device context unsupported; values withheld");
+                ValidateContextCounts(counts);
                 // Caller supplies a fixed, unique root-to-leaf closure with pre-observed object IDs.
                 HashSet<string> seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase); int totalDescriptorBytes=0;
                 for(int i=0;i<paths.Length;i++) {
