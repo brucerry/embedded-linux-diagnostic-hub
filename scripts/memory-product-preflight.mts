@@ -19,12 +19,20 @@ import {
     fileIdentity,
     dependencyFacts,
     metadataFileProbe,
+    existingOwnershipPaths,
+    ownershipSnapshotPlan,
+    parseOwnershipSnapshot,
+    ownershipSnapshotSummary,
     PreflightJournal,
     writeReport,
 } from './lib/windows-preflight.mjs';
 
 export const aclScript =
     '$ErrorActionPreference="Stop";$id=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$paths=ConvertFrom-Json $env:HUB_PREFLIGHT_PATHS;$rows=@(foreach($p in $paths){$a=Get-Acl -LiteralPath $p;[pscustomobject]@{path=$p;owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;sddl=$a.Sddl}});[pscustomobject]@{principal=$id;rows=$rows}|ConvertTo-Json -Depth 4 -Compress';
+export const ownershipContextScript =
+    '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;$i=[Security.Principal.WindowsIdentity]::GetCurrent();try{$p=[Security.Principal.WindowsPrincipal]::new($i);$paths=ConvertFrom-Json $env:HUB_PREFLIGHT_PATHS;$rows=@(foreach($f in $paths){$a=Get-Acl -LiteralPath $f;$o=$a.GetOwner([Security.Principal.SecurityIdentifier]);$sd=[Security.AccessControl.RawSecurityDescriptor]::new($a.Sddl);if($sd.DiscretionaryAcl -and $sd.DiscretionaryAcl.Count -gt 128){throw "DACL ACE observation bound"};$aces=@(foreach($e in $sd.DiscretionaryAcl){$k=$e -is [Security.AccessControl.KnownAce];[pscustomobject]@{type=[int]$e.AceType;flags=[int]$e.AceFlags;known=$k;mask=$(if($k){[long]$e.AccessMask}else{$null});sid=$(if($k){$e.SecurityIdentifier.Value}else{$null})}});[pscustomobject]@{path=$f;owner=$o.Value;ownerRoleEnabled=$p.IsInRole($o);sddl=$a.Sddl;daclPresent=[bool]($sd.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent);daclNull=($null -eq $sd.DiscretionaryAcl);daclCanonical=$a.AreAccessRulesCanonical;aces=$aces}});[pscustomobject]@{principal=$i.User.Value;tokenOwner=$i.Owner.Value;accessCheckPerformed=$false;privatePathApproved=$false;rows=$rows}|ConvertTo-Json -Depth 6 -Compress}finally{$i.Dispose()}';
+export const ownershipSnapshotScript =
+    '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;Add-Type -Path $env:HUB_PREFLIGHT_OWNER_CS -ReferencedAssemblies @("System.dll","System.Core.dll");$p=ConvertFrom-Json $env:HUB_PREFLIGHT_OWNER_PLAN;$r=[HubOwnershipSnapshot.Observer]::Inspect([string[]]@($p.paths),[string[]]@($p.volumes),[string[]]@($p.files));$j=$r|ConvertTo-Json -Depth 12 -Compress;if([Text.Encoding]::UTF8.GetByteCount($j) -gt 32768){throw "Native snapshot result bound; no retry"};$j';
 export function parseAclObservation(text, paths) {
     const value = JSON.parse(text.replace(/^\uFEFF/, ''));
     assert(/^S-1-5-/.test(value.principal));
@@ -246,6 +254,25 @@ export async function productPreflight(
                 [reportRoot, tmp],
             ),
         );
+        const candidates = await step('existing-ownership-paths', () =>
+            existingOwnershipPaths(reportRoot, tmp),
+        );
+        if (candidates?.paths.length)
+            await step('ownership-snapshot', () => {
+                const plan = ownershipSnapshotPlan(candidates.paths),
+                    snapshot = parseOwnershipSnapshot(
+                        command(powershell, ownershipSnapshotScript, {
+                            HUB_PREFLIGHT_OWNER_CS: path.join(
+                                root,
+                                'scripts/lib/windows-ownership-snapshot.cs',
+                            ),
+                            HUB_PREFLIGHT_OWNER_PLAN: JSON.stringify(plan),
+                        }),
+                        plan,
+                        single?.principal ?? multi?.principal,
+                    );
+                return { plan, snapshot, review: ownershipSnapshotSummary(snapshot, plan) };
+            });
         const ownerConfirmed = Boolean(
             single &&
             multi &&

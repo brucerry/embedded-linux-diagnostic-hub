@@ -66,3 +66,70 @@ References:
 [Microsoft about_PSModulePath](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.5#starting-windows-powershell-from-powershell-7)
 and
 [Windows PowerShell CLI flags](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1).
+
+Ownership diagnostics retain the original exact-user owner admission policy while collecting
+read-only context for review. Windows may use a group SID as the token's default owner; owner/user
+inequality alone does not establish unsafe access, and equality does not establish a private DACL.
+The earlier ownership-context probe recorded token user/default-owner SIDs, role checks and raw DACL
+entries as review leads. Its exported helper remains for regression coverage; production now uses
+the single bounded snapshot described below. Privacy approval, root selection, directory creation,
+ACL mutation, elevation and fallback remain absent. Null/absent DACLs and inherit-only entries
+remain explicit.
+
+The fixed existing-directory inventory covers the output root, canonical OS temp, RUNNER_TEMP,
+LOCALAPPDATA/Temp and USERPROFILE/AppData/Local/Temp when already present and physical. It never
+searches recursively, creates an alternative, changes TEMP/TMP, or relocates the canonical marker.
+Missing, aliased, over-depth or unobservable candidates are unavailable. All output uses the
+existing command, journal and report bounds; malformed/partial identity or ACL data is rejected. A
+successful diagnostic observation cannot change ownerConfirmed or admit a metadata probe.
+
+OpenSpec's trusted-ownership clauses concern application identities, leases, acknowledged writes and
+truthful platform states; they do not prescribe owner-SID equality as an NTFS trust policy. A future
+policy must address token user/default owner/enabled groups, applicable ordered DACL rules,
+untrusted writers and parent-directory replacement, not just membership in Administrators. An
+already restricted physical temp directory is preferable to a broad writable root if its actual
+identity, DACL and ancestry can be qualified without changing security. No suitable alternative or
+group-owner trust policy is established by this diagnostic patch.
+
+The consolidated ownership snapshot replaces the earlier ownership-context subprocess with one
+bounded read-only Windows x64/local-NTFS observer. The same five candidates expand only to their
+root-to-leaf ancestors: at most24 unique directories, with pre-observed volume/file IDs. It opens
+existing directories for READ_CONTROL/attributes, without delete sharing, rejects reparse points,
+and holds the handles through descriptor/identity rechecks. It reads owner/group/DACL and mandatory
+label plus resource-policy presence, and calls native AccessCheck(MAXIMUM_ALLOWED) with a duplicate
+of the actual calling token and filesystem generic mapping. It never assigns/impersonates the
+duplicate, obtains a linked/elevated token, adjusts privileges, or opens any directory for writes.
+
+The token projection is limited to current user/group attributes, restricting SIDs, default owner/
+primary group/default DACL, integrity/mandatory policy/elevation state and five relevant privilege
+states. Documented user/device-claim and device-group presence is counted only; nonempty contexts
+stop without exporting claim values. Reserved token-information classes35/36/39 are not queried;
+their absence is not certified. Conditional/object/unknown DACL or resource-policy states,
+unsupported filesystems, sharing failures, identity/descriptor/token drift and API/buffer failures
+produce an indeterminate snapshot. All acquired handles receive independent close attempts.
+
+Bounds are five candidates,24 directories,128 groups/restricted SIDs/ACEs,64 token privileges read
+internally but only five projected,16KiB native buffers,32KiB aggregate descriptors,24KiB request
+and32KiB result JSON. Native work admits at most five seconds, inside the unchanged ten-second
+command bound; neither bounds an already blocked synchronous kernel call by itself. No retry,
+privilege enablement, installation, candidate expansion, data-content read, or recursive inventory
+is a fallback. The existing journal/report/job caps are unchanged.
+
+AccessCheck results are discretionary rights for this actual token, with integrity labels retained
+for review; they are not a full kernel-open or all-principal privacy determination. In particular,
+there is no approved trusted/untrusted-principal policy, and read handles close before any later
+preflight I/O. Delete-sharing pins do not freeze DACL changes, exclude privileged actors, or protect
+future operations after close. Therefore even a consistent snapshot reports privatePathApproved:
+false, protectionAfterReturn:false and an indeterminate directory decision. No diagnostic result
+changes the original owner gate or authorizes collection. These architectural/policy gaps require a
+reviewed resolution, not an indefinite series of probes. There is no local C# compiler/PowerShell
+runtime here; native compilation, interop and Windows semantics are not qualified by JS fixtures.
+
+The API contract follows Microsoft documentation for
+[AccessCheck](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-accesscheck),
+[GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation),
+[TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class),
+[CreateFileW sharing/lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew),
+and
+[SECURITY_INFORMATION read rights](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-information).
+The local tests validate projection and failure handling; they do not establish native API behavior.
