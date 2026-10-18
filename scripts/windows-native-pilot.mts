@@ -37,6 +37,7 @@ import { PilotDiskObserver } from './lib/pilot-disk-observer.mjs';
 import { runWinpsSecurityContract } from './lib/pilot-winps-contract.mjs';
 import { runSecurityCommand, requireSecurityProcess } from './lib/pilot-security-command.mjs';
 import { prepareAndFreezePilotDependencies } from './lib/pilot-dependencies.mjs';
+import { preparePilotElectron } from './lib/pilot-electron-preparation.mjs';
 export { runHostedPilot };
 export async function nativePilotMain(args = process.argv.slice(2), environment = process.env) {
     requirePilotRuntimeReady(environment);
@@ -146,12 +147,6 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             'Real WinPS production provider contract must pass before Electron/dependency enrollment.',
         );
         admitEarly();
-        const prepared = prepareAndFreezePilotDependencies(root, {
-            environment,
-            check: admitEarly,
-            record: entryRecord,
-        });
-        const deps = prepared.dependencies;
         const where = (name) => {
             admitEarly();
             const r = spawnSync('where.exe', [name], {
@@ -173,7 +168,32 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             path.resolve(path.dirname(git), '../..'),
         ].find((p) => fs.existsSync(path.join(p, 'usr/bin/winpty.dll')));
         assert(gitRoot);
-        const bin = path.join(gitRoot, 'usr/bin'),
+        const bin = path.join(gitRoot, 'usr/bin');
+        await preparePilotElectron(root, {
+            parent: context.parent,
+            evidenceRoot: out,
+            tools: {
+                winps: powershell,
+                pwsh,
+                git,
+                bash: path.join(bin, 'bash.exe'),
+                cygpath: path.join(bin, 'cygpath.exe'),
+                winptyDll: path.join(bin, 'winpty.dll'),
+                winptyAgent: path.join(bin, 'winpty-agent.exe'),
+            },
+            environment,
+            signal: early.signal,
+            workDeadline: startedAt + pilotLimits.totalMs - pilotLimits.reserveMs,
+            check: admitEarly,
+            record: entryRecord,
+            hold,
+        });
+        const prepared = prepareAndFreezePilotDependencies(root, {
+            environment,
+            check: admitEarly,
+            record: entryRecord,
+        });
+        const deps = prepared.dependencies,
             runtime = { platform: process.platform, arch: process.arch };
         assert.equal(process.version, 'v24.22.0');
         assert.equal(process.arch, 'x64');

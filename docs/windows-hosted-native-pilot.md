@@ -1,10 +1,12 @@
 # Finite hosted Windows readiness pilot
 
-This candidate is prepared for independent source and policy review. It has not been executed on
-Windows. The manual `windows_native_pilot` selector is separate from `windows_preflight_only`;
-selecting both refuses before dependency restoration or native startup. Ordinary workflow triggers
-and the standing build remain available with both selectors false. Full collection remains disabled,
-with its ordinary Windows principal predicate unchanged.
+This successor is prepared for independent source and policy review. Native stages remain
+unqualified. The actual standalone provider contract passed on run 39121769420; that historical
+receipt grants no capability on a fresh runner. The manual `windows_native_pilot` selector is
+separate from `windows_preflight_only`; selecting both refuses before dependency restoration or
+native startup. Ordinary workflow triggers and the standing build remain available with both
+selectors false. Full collection remains disabled, with its ordinary Windows principal predicate
+unchanged.
 
 The pilot requires four explicit identities: the frozen source digest, the digest of
 `scripts/lib/hosted-pilot-policy.json`, and exact externally reviewed native coverage JSON plus its
@@ -23,17 +25,43 @@ Before any future native enrollment, the entry runs the real System32 x64 Window
 provider contract in the same job. Its 30 cases include the exact old two-directory failure, three
 green provider shapes and 26 rejection cases. Raw JSON, launch tuple, interpreter/provider
 identities, type/count traces, stdout/stderr and command completion are durably recorded before
-assertions. The next proposed execution is only the separately selected standalone contract job,
-with no Electron resolution, PTY, native payload or canonical-marker acquisition. Its actual result
-must be independently reviewed before another native pilot is proposed.
+assertions. The independently accepted standalone result covers only the provider path. Every future
+native entry must repeat this prerequisite before dependency preparation or canonical-marker
+acquisition.
 
-Electron dependency preparation now verifies an existing pinned Windows install or fails missing. It
-does not import the lazy Electron index or start an installer. The complete dependency digest is
-frozen only after this preparation, and later identity rechecks remain strict. The WinPS
-prerequisite and preparation stay inside the original core work deadline. The 1 MiB contract
-evidence and 512 KiB early-entry journal are charged within the existing 10 MiB evidence cap; they
-do not increase disk thresholds. Early failures retain their input, raw transport and descriptor
-closure evidence.
+Fresh `npm ci` does not install Electron 44.5.1's binary. Before enrollment, an explicit owned Node
+child invokes the exact pinned official `electron/install.js`, after package/installer/checksum and
+immediate launch-prerequisite checks. No lazy Electron index, upgrade or global npm setting is used.
+The child first waits for the parent's process identity and admission gate. The official
+downloader's win32/x64 archive must match the pinned package checksum; its cache is an exclusive
+nonce child of canonical profile Temp. The installer's ordinary `electron-download-*` scratch
+remains under the unchanged default Temp parent. The parent records observed scratch, extraction and
+residual paths, then removes only its bound cache fixture after joined child/descendant/pipe
+closure. Residual opaque temporary roots retain referenced ownership rather than being deleted as
+ambient files.
+
+Preparation gets at most 180 seconds, including a 30-second closure reserve, inside the original
+600-second core budget and remaining work deadline. Both streams retain at most 65,536 bytes.
+Periodic finite inventories retain timestamps, scan duration and gaps. The existing dependency
+installation envelope stays 2 GiB/30,000 files; disposable cache/download scratch uses the existing
+246 MiB/8192-file observed threshold and 256 MiB job/512 MiB cohort bounds, including evidence. The
+separate pre-existing dependency installation envelope is not represented as payload reservation.
+These observations are lower bounds, not pre-write native quotas or proof that no transient or
+external write occurred. No TEMP/TMP change or permission repair is made.
+
+The audit checks Node/loader, the native archive extractor, esbuild, rolldown/lightningcss Windows
+bindings, Playwright's Electron API, Git/Bash/cygpath/winpty, WinPS CIM module and pwsh's bundled
+Add-Type/Roslyn assemblies together before download. The owned installer worker loads required
+modules before invoking the installer; it does not build, launch a browser or install tools. A
+second owned child uses the settled x64 PE with `ELECTRON_RUN_AS_NODE=1` solely to read actual
+44.5.1/platform/architecture and built-in SQLite availability. Its exit, inherited-pipe closure and
+descendants must join. Only then does the original verify-existing-or-fail-missing resolver validate
+`path.txt`, `dist/version` and the executable, followed by the complete dependency/runtime identity
+freeze. Later full rechecks remain strict. Fresh WinPS and preparation use the same immutable core
+clock; the pilot's two stages and their existing budgets are unchanged. The 1 MiB contract evidence
+and 512 KiB early-entry journal are charged within the existing 10 MiB evidence cap; they do not
+increase disk thresholds. Early failures retain their input, raw transport and descriptor closure
+evidence.
 
 One fresh GitHub-hosted Windows manual attempt uses pinned Node 24.22.0 x64 and lockfile
 dependencies. The live owner binds run, attempt 1, repository, commit, source, coverage, policy,

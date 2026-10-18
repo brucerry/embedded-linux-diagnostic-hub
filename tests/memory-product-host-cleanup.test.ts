@@ -159,6 +159,13 @@ function host(file: string, control: Control = {}) {
                 },
             };
         if (name === 'node:module') return { createRequire: () => resolver };
+        if (name === '../../scripts/lib/pilot-dependencies.mjs')
+            return {
+                settledElectronExecutable() {
+                    calls.push('settled-electron');
+                    throw Error('Unexpected Electron lookup in a cleanup-only control.');
+                },
+            };
         if (name === '@playwright/test') return types;
         if (name === './memory-product-startup') return { productStartup };
         if (name === './memory-resource-processes') return { ProcessSampler: Sampler };

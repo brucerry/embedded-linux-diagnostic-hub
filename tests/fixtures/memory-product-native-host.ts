@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { settledElectronExecutable } from '../../scripts/lib/pilot-dependencies.mjs';
 import { NativePilotStartup } from './native-pilot-startup';
 import { nativePilotLaunchRoutes, pilotEarlyAppPaths, pilotPathMap } from './native-pilot-paths';
 import { spawn } from 'node:child_process';
@@ -357,7 +358,9 @@ export async function createProductNative(options: {
     admit();
     const launchOptions = {
         chromiumSandbox: true,
-        executablePath: require('electron'),
+        executablePath: options.pilot
+            ? settledElectronExecutable(path.resolve(import.meta.dirname, '../..'), process.env)
+            : require('electron'),
         args: [
             root,
             '--user-data-dir=' + path.resolve(options.profile),

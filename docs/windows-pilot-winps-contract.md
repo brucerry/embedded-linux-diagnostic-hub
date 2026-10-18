@@ -40,9 +40,11 @@ rerun. Timeout or VM teardown is not closure proof.
 
 The contract is also a prerequisite in any later native entry. Its success would qualify only this
 provider path on that hosted attempt. It would not approve native execution, full-pair capacity,
-shipping, security isolation or a retry. The native dependency gate separately verifies an
-already-settled Electron 44.5.1 installation before freezing all dependencies; a missing install
-fails rather than causing a hidden bootstrap.
+shipping, security isolation or a retry. A later native entry separately requires explicit bounded
+preparation through the pinned official Electron 44.5.1 installer, joined version/SQLite
+verification and the existing settled-install gate before freezing all dependencies. The standalone
+contract never invokes that preparation. A missing or mismatched settled install still fails; the
+lazy Electron index is never used.
 
 Mac deterministic tests exercise Node validation, wire/evidence ordering, real disposable
 descriptors and cleanup with controlled reply ports. They are not a replacement for the required
