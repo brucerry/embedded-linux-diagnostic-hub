@@ -367,7 +367,7 @@ export function ownershipReviewSummary(value) {
     };
 }
 /** One fixed ancestor closure: no discovery, content reads or path substitution. */
-export function ownershipSnapshotPlan(paths) {
+export function fixedAncestorPlan(paths) {
     assert(paths.length > 0 && paths.length <= 5 && new Set(paths).size === paths.length);
     const plan = { schema: 1, paths: [], volumes: [], files: [], chains: [] };
     for (const candidate of paths) {
@@ -397,6 +397,8 @@ export function ownershipSnapshotPlan(paths) {
     assert(Buffer.byteLength(JSON.stringify(plan)) <= 24576, 'Ownership plan JSON bound.');
     return plan;
 }
+// Historical name retained for dormant native-fixture tests.
+export const ownershipSnapshotPlan = fixedAncestorPlan;
 /** Exact bounded compiled-fixture envelope; valid failed suites remain observable. */
 export function parseTokenContractReport(text, expected) {
     assert(

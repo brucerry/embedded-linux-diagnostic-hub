@@ -12,13 +12,13 @@ import {
     writeReport,
     preflightLimits,
 } from '../scripts/lib/windows-preflight.mjs';
+import { runPreflightCommand } from '../scripts/memory-product-preflight.mts';
 import {
     runQualifiedOwnershipSnapshot,
-    runPreflightCommand,
     tokenContractInputs,
     tokenContractScript,
     ownershipSnapshotScript,
-} from '../scripts/memory-product-preflight.mts';
+} from './fixtures/windows-token-analysis-legacy.mts';
 const envelope = () => ({
     schema: 1,
     observerSHA256: tokenContractInputs.observer.sha256,
@@ -463,15 +463,9 @@ test('runner returns structured failed suite without post-report throw; producti
     assert.match(runner, /throw 'Windows PowerShell 5.1/);
     assert.match(runner, /Compiled fixture source changed/);
     const source = fs.readFileSync(
-        new URL('../scripts/memory-product-preflight.mts', import.meta.url),
+        new URL('./fixtures/windows-token-analysis-legacy.mts', import.meta.url),
         'utf8',
     );
-    const entry = source.slice(source.indexOf('export async function productPreflight'));
-    assert(
-        entry.indexOf('await runQualifiedOwnershipSnapshot(') <
-            entry.indexOf('const ownerConfirmed'),
-    );
-    assert(entry.indexOf('await runQualifiedOwnershipSnapshot(') < entry.indexOf("'metadata-io-'"));
     assert.equal((source.match(/await step\('ownership-snapshot'/g) || []).length, 1);
     assert.equal((source.match(/await step\('compiled-token-contracts'/g) || []).length, 1);
     assert.match(tokenContractScript, /& \$env:HUB_PREFLIGHT_TOKEN_CONTRACT_PS1/);

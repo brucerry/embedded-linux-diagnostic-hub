@@ -24,12 +24,14 @@ import {
 } from '../scripts/lib/windows-preflight.mjs';
 import {
     aclScript,
-    ownershipContextScript,
-    ownershipSnapshotScript,
     runPreflightCommand,
     parseAclObservation,
     productPreflight,
 } from '../scripts/memory-product-preflight.mts';
+import {
+    ownershipContextScript,
+    ownershipSnapshotScript,
+} from './fixtures/windows-token-analysis-legacy.mts';
 const scratch = () =>
     fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-preflight-control-'));
 for (const fault of [null, 'sync', 'close'])
@@ -991,7 +993,7 @@ test('native observer source declares bounded read-only calls and one-shot proje
     assert.match(ownershipSnapshotScript, /32768/);
     assert.doesNotMatch(ownershipSnapshotScript, /Set-Acl|Start-Process|while|Invoke-Expression/);
     const production = fs.readFileSync(
-        new URL('../scripts/memory-product-preflight.mts', import.meta.url),
+        new URL('./fixtures/windows-token-analysis-legacy.mts', import.meta.url),
         'utf8',
     );
     assert.equal((production.match(/await step\('ownership-snapshot'/g) || []).length, 1);

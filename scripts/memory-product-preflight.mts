@@ -20,37 +20,19 @@ import {
     dependencyFacts,
     metadataFileProbe,
     existingOwnershipPaths,
-    ownershipSnapshotPlan,
-    parseOwnershipSnapshot,
-    parseTokenContractReport,
-    requireTokenContractSuccess,
-    ownershipSnapshotSummary,
     PreflightJournal,
     writeReport,
 } from './lib/windows-preflight.mjs';
 
+import {
+    directoryFactsPlan,
+    directoryIdentity,
+    parseDirectoryDescriptorReport,
+    directoryEvidence,
+    requireDirectoryFactsComplete,
+} from './lib/directory-security-facts.mjs';
 export const aclScript =
     '$ErrorActionPreference="Stop";$id=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$paths=ConvertFrom-Json $env:HUB_PREFLIGHT_PATHS;$rows=@(foreach($p in $paths){$a=Get-Acl -LiteralPath $p;[pscustomobject]@{path=$p;owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;sddl=$a.Sddl}});[pscustomobject]@{principal=$id;rows=$rows}|ConvertTo-Json -Depth 4 -Compress';
-export const ownershipContextScript =
-    '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;$i=[Security.Principal.WindowsIdentity]::GetCurrent();try{$p=[Security.Principal.WindowsPrincipal]::new($i);$paths=ConvertFrom-Json $env:HUB_PREFLIGHT_PATHS;$rows=@(foreach($f in $paths){$a=Get-Acl -LiteralPath $f;$o=$a.GetOwner([Security.Principal.SecurityIdentifier]);$sd=[Security.AccessControl.RawSecurityDescriptor]::new($a.Sddl);if($sd.DiscretionaryAcl -and $sd.DiscretionaryAcl.Count -gt 128){throw "DACL ACE observation bound"};$aces=@(foreach($e in $sd.DiscretionaryAcl){$k=$e -is [Security.AccessControl.KnownAce];[pscustomobject]@{type=[int]$e.AceType;flags=[int]$e.AceFlags;known=$k;mask=$(if($k){[long]$e.AccessMask}else{$null});sid=$(if($k){$e.SecurityIdentifier.Value}else{$null})}});[pscustomobject]@{path=$f;owner=$o.Value;ownerRoleEnabled=$p.IsInRole($o);sddl=$a.Sddl;daclPresent=[bool]($sd.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent);daclNull=($null -eq $sd.DiscretionaryAcl);daclCanonical=$a.AreAccessRulesCanonical;aces=$aces}});[pscustomobject]@{principal=$i.User.Value;tokenOwner=$i.Owner.Value;accessCheckPerformed=$false;privatePathApproved=$false;rows=$rows}|ConvertTo-Json -Depth 6 -Compress}finally{$i.Dispose()}';
-export const ownershipSnapshotScript =
-    '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;Add-Type -Path $env:HUB_PREFLIGHT_OWNER_CS -ReferencedAssemblies @("System.dll","System.Core.dll");$p=ConvertFrom-Json $env:HUB_PREFLIGHT_OWNER_PLAN;$r=[HubOwnershipSnapshot.Observer]::Inspect([string[]]@($p.paths),[string[]]@($p.volumes),[string[]]@($p.files));$j=$r|ConvertTo-Json -Depth 12 -Compress;if([Text.Encoding]::UTF8.GetByteCount($j) -gt 32768){throw "Native snapshot result bound; no retry"};$j';
-export const tokenContractScript =
-    '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;& $env:HUB_PREFLIGHT_TOKEN_CONTRACT_PS1';
-export const tokenContractInputs = Object.freeze({
-    observer: Object.freeze({
-        path: 'scripts/lib/windows-ownership-snapshot.cs',
-        sha256: '481711fbf9ce1f9b02deeb0a13dbe22ffc222652feaf0c1a6de8d7dadcf48032',
-    }),
-    fixture: Object.freeze({
-        path: 'tests/fixtures/windows-token-query-contract.cs',
-        sha256: '5f7f575dc61eb64d7a9dba212b4bb7aa436caa56778404332e7100ae329f62e2',
-    }),
-    runner: Object.freeze({
-        path: 'tests/windows-token-query-native-contract.ps1',
-        sha256: '4000962456bac29eb4fd6f709e07141c52109c1b77c527f00dcfdf459337d3e5',
-    }),
-});
 export function parseAclObservation(text, paths) {
     const value = JSON.parse(text.replace(/^\uFEFF/, ''));
     assert(/^S-1-5-/.test(value.principal));
@@ -90,91 +72,109 @@ export function runPreflightCommand(
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
 }
-/** Required fixture gate. Rejections escape step() before any snapshot or later I/O. */
-export async function runQualifiedOwnershipSnapshot({
+export const directoryFactsScript =
+    '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;& $env:HUB_PREFLIGHT_DIRECTORY_FACTS_PS1';
+export const directoryFactsInput = Object.freeze({
+    path: 'scripts/lib/windows-directory-facts.ps1',
+    sha256: '5a7ee25e75d77772c766477016561c65612e2bfde5bc7a2ab807d28172957499',
+});
+export async function observeDirectoryFacts({
     root,
     powershell,
     sourceSHA256,
     candidates,
-    principal,
     command,
     step,
     admit,
 }) {
-    const compiled = await step('compiled-token-contracts', async () => {
-        assert(
-            typeof sourceSHA256 === 'string' && /^[a-f0-9]{64}$/.test(sourceSHA256),
-            'Valid source identity required for compiled contracts.',
-        );
-        assert.equal(root, fs.realpathSync(root));
-        assert.equal(root, path.resolve(root));
-        assert.equal(
-            await sourceFingerprint(root),
-            sourceSHA256,
-            'Source changed before compiled contracts.',
-        );
-        const sources = Object.fromEntries(
-            Object.entries(tokenContractInputs).map(([key, input]) => {
-                const identity = fileIdentity(path.join(root, input.path), { check: admit });
+    const observation = await step('directory-security-facts', async () => {
+        let plan = null,
+            response = null;
+        const before = [],
+            after = [],
+            failures = [];
+        let attempted = false,
+            scriptIdentity = null,
+            executable = null;
+        const failure = (stage, error) => {
+            if (failures.length < 3) failures.push({ stage, error: String(error).slice(0, 512) });
+        };
+        try {
+            admit();
+            assert(
+                typeof sourceSHA256 === 'string' && /^[a-f0-9]{64}$/.test(sourceSHA256),
+                'Valid source identity required.',
+            );
+            assert.equal(
+                await sourceFingerprint(root),
+                sourceSHA256,
+                'Source changed before directory facts.',
+            );
+            plan = directoryFactsPlan(candidates);
+            for (let i = 0; i < plan.paths.length; i++) {
+                admit();
+                const id = directoryIdentity(plan.paths[i]);
+                assert.equal(id.dev, plan.volumes[i]);
+                assert.equal(id.ino, plan.files[i]);
+                before.push(id);
+            }
+            scriptIdentity = fileIdentity(path.join(root, directoryFactsInput.path), {
+                check: admit,
+            });
+            assert.equal(
+                scriptIdentity.sha256,
+                directoryFactsInput.sha256,
+                'Directory script hash mismatch.',
+            );
+            executable = fileIdentity(powershell, { pe: true, check: admit });
+            assert.equal(executable.pe.architecture, 'x64');
+            attempted = true;
+            response = parseDirectoryDescriptorReport(
+                command(powershell, directoryFactsScript, {
+                    HUB_PREFLIGHT_DIRECTORY_FACTS_PS1: path.join(root, directoryFactsInput.path),
+                    HUB_PREFLIGHT_DIRECTORY_PATHS: JSON.stringify(plan.paths),
+                }),
+                plan.paths,
+            );
+        } catch (error) {
+            failure('observation', error);
+        }
+        if (attempted) {
+            try {
+                for (const literal of plan.paths) {
+                    admit();
+                    after.push(directoryIdentity(literal));
+                }
+            } catch (error) {
+                failure('post-identity', error);
+            }
+            try {
+                admit();
                 assert.equal(
-                    identity.sha256,
-                    input.sha256,
-                    'Reviewed contract input hash mismatch: ' + key,
+                    await sourceFingerprint(root),
+                    sourceSHA256,
+                    'Source changed after directory facts.',
                 );
-                return [key, identity];
-            }),
-        );
-        const powershell51 = fileIdentity(powershell, { pe: true, check: admit });
-        assert.equal(powershell51.pe.architecture, 'x64');
-        const report = parseTokenContractReport(
-            command(powershell, tokenContractScript, {
-                HUB_PREFLIGHT_TOKEN_CONTRACT_PS1: path.join(root, tokenContractInputs.runner.path),
-            }),
-            {
-                observerSHA256: tokenContractInputs.observer.sha256,
-                fixtureSHA256: tokenContractInputs.fixture.sha256,
-            },
-        );
-        return { sourceSHA256, sources, powershell51, report };
+                assert.deepEqual(
+                    fileIdentity(path.join(root, directoryFactsInput.path), { check: admit }),
+                    scriptIdentity,
+                );
+                assert.deepEqual(fileIdentity(powershell, { pe: true, check: admit }), executable);
+            } catch (error) {
+                failure('source/runtime-recheck', error);
+            }
+        }
+        return directoryEvidence({ sourceSHA256, plan, before, after, response, failures });
     });
-    // step() catches failures and returns null. Both prerequisites MUST remain outside it.
-    assert(compiled, 'Required compiled token contracts unavailable; no snapshot or I/O.');
-    requireTokenContractSuccess(compiled.report);
-    admit();
-    assert.equal(
-        await sourceFingerprint(root),
-        sourceSHA256,
-        'Source changed after compiled contracts.',
-    );
-    for (const [key, identity] of Object.entries(compiled.sources))
-        assert.deepEqual(
-            fileIdentity(path.join(root, tokenContractInputs[key].path), { check: admit }),
-            identity,
-            'Contract input rebound after execution.',
-        );
-    assert.deepEqual(
-        fileIdentity(powershell, { pe: true, check: admit }),
-        compiled.powershell51,
-        'Windows PowerShell rebound after compiled contracts.',
-    );
-    admit();
-    if (candidates?.paths.length)
-        await step('ownership-snapshot', () => {
-            const plan = ownershipSnapshotPlan(candidates.paths),
-                snapshot = parseOwnershipSnapshot(
-                    command(powershell, ownershipSnapshotScript, {
-                        HUB_PREFLIGHT_OWNER_CS: path.join(
-                            root,
-                            'scripts/lib/windows-ownership-snapshot.cs',
-                        ),
-                        HUB_PREFLIGHT_OWNER_PLAN: JSON.stringify(plan),
-                    }),
-                    plan,
-                    principal,
-                );
-            return { plan, snapshot, review: ownershipSnapshotSummary(snapshot, plan) };
-        });
-    return compiled;
+    requireDirectoryFactsComplete(observation); // Outside step(): partial facts remain journaled, then stop.
+    return observation;
+}
+export function recordJournalClosure(report, closure) {
+    report.journalClosure = closure ?? null;
+    if (closure && (!closure.synced || !closure.closed || closure.errors.length)) {
+        report.status = 'BLOCKED_PREFLIGHT';
+        report.failures.push('Preflight journal durability/closure failed.');
+    }
 }
 export async function productPreflight(
     outputRoot,
@@ -361,12 +361,11 @@ export async function productPreflight(
         const candidates = await step('existing-ownership-paths', () =>
             existingOwnershipPaths(reportRoot, tmp),
         );
-        await runQualifiedOwnershipSnapshot({
+        await observeDirectoryFacts({
             root,
             powershell,
             sourceSHA256: report.sourceSHA256,
             candidates,
-            principal: single?.principal ?? multi?.principal,
             command,
             step,
             admit,
@@ -510,11 +509,9 @@ export async function productPreflight(
         report.failures.push(String(error).slice(0, 4096));
     } finally {
         const closure = journal?.close();
-        report.journalClosure = closure ?? null;
+        recordJournalClosure(report, closure);
         report.cancelled = cancelled;
         report.elapsedMs = clock.now() - started;
-        if (closure && (!closure.synced || !closure.closed || closure.errors.length))
-            report.failures.push('Preflight journal durability/closure failed.');
         try {
             if (reportRoot) {
                 checkAncestry(report.ancestry);

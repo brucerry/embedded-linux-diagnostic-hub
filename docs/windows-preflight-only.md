@@ -67,168 +67,70 @@ References:
 and
 [Windows PowerShell CLI flags](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1).
 
-Ownership diagnostics retain the original exact-user owner admission policy while collecting
-read-only context for review. Windows may use a group SID as the token's default owner; owner/user
-inequality alone does not establish unsafe access, and equality does not establish a private DACL.
-The earlier ownership-context probe recorded token user/default-owner SIDs, role checks and raw DACL
-entries as review leads. Its exported helper remains for regression coverage; production now uses
-the single bounded snapshot described below. Privacy approval, root selection, directory creation,
-ACL mutation, elevation and fallback remain absent. Null/absent DACLs and inherit-only entries
-remain explicit.
+The current directory observation uses schema 1 / profile `literal-directory-security-facts-v1`. It
+reuses the successful Get-Acl -LiteralPath boundary and requests only owner, group and DACL
+sections. Its five fixed candidate labels expand only to their existing root-to-leaf ancestors, with
+at most 24 planned path spellings. There is no recursive discovery or fallback root. The provider
+must return filesystem DirectorySecurity; no NTFS or other filesystem qualification is inferred from
+a successful descriptor read.
 
-The fixed existing-directory inventory covers the output root, canonical OS temp, RUNNER_TEMP,
-LOCALAPPDATA/Temp and USERPROFILE/AppData/Local/Temp when already present and physical. It never
-searches recursively, creates an alternative, changes TEMP/TMP, or relocates the canonical marker.
-Missing, aliased, over-depth or unobservable candidates are unavailable. All output uses the
-existing command, journal and report bounds; malformed/partial identity or ACL data is rejected. A
-successful diagnostic observation cannot change ownerConfirmed or admit a metadata probe.
+One fresh isolated Windows PowerShell 5.1 child runs the fixed hash-pinned script with JSON literal
+paths in environment data. It uses the unchanged NoProfile/NonInteractive/shell:false boundary,
+child-only PSModulePath isolation, current execution policy, 10 second / 64 KiB command cap and
+shared 300 second budget with 30 second reserve. It loads no C# and calls no explicit
+token,duplication, AccessCheck,Authz or new native-interop code. Existing unrelated preflight
+inspection steps stay unchanged. The historical token observer and 76-case fixture remain separate
+dormant test material, with their successful compiled result retained in run 39102874140; they are
+not basic-directory prerequisites and their unavailable context is not reinterpreted as empty.
 
-OpenSpec's trusted-ownership clauses concern application identities, leases, acknowledged writes and
-truthful platform states; they do not prescribe owner-SID equality as an NTFS trust policy. A future
-policy must address token user/default owner/enabled groups, applicable ordered DACL rules,
-untrusted writers and parent-directory replacement, not just membership in Administrators. An
-already restricted physical temp directory is preferable to a broad writable root if its actual
-identity, DACL and ancestry can be qualified without changing security. No suitable alternative or
-group-owner trust policy is established by this diagnostic patch.
+Each bounded provider row contains owner/group SIDs, owner/group/DACL-only SDDL and explicit DACL
+state: absent, null, empty, nonempty or unavailable. The DACL state comes from the provider object's
+in-memory binary descriptor control flags and DACL pointer/count, not an SDDL roundtrip. The full
+binary descriptor is not emitted. Missing/null ACLs have null count/data, an empty ACL has an
+observed count 0 and empty list, and conversion failure remains unavailable. Ordered ACE headers and
+canonical base64 binary are retained as opaque provider-returned data, including unfamiliar,
+conditional and object entries. The code does not sort, discard, evaluate or infer applicability
+from ACEs. If a provider/SDDL/ACE conversion fails, bounded previously retrieved text and facts stay
+partial and no empty ACL is fabricated. A provider parser supplies structural decoding; Node checks
+schema, bounds, row order and opaque headers, not a new SDDL semantics engine.
 
-The consolidated ownership snapshot replaces the earlier ownership-context subprocess with one
-bounded read-only Windows x64/local-NTFS observer. The same five candidates expand only to their
-root-to-leaf ancestors: at most24 unique directories, with pre-observed volume/file IDs. It opens
-existing directories for READ_CONTROL/attributes, without delete sharing, rejects reparse points,
-and holds the handles through descriptor/identity rechecks. It reads owner/group/DACL and mandatory
-label plus resource-policy presence, and calls native AccessCheck(MAXIMUM_ALLOWED) with a duplicate
-of the actual calling token and filesystem generic mapping. It never assigns/impersonates the
-duplicate, obtains a linked/elevated token, adjusts privileges, or opens any directory for writes.
+Node independently checks physical lstat/realpath identities before and after the command. The
+report records device/file IDs and labels the comparison no-drift-detected, drift-detected or
+not-complete. That equality cannot exclude ABA, bind the read to a kernel handle, establish atomic
+custody or protect later I/O. Omitted/unavailable post-identities remain null. Unknown token context
+is declared not-collected; effective access is not-evaluated; SACL, labels, resource attributes and
+CAP are not-requested. privatePathApproved,collectionApproval,admissionChanged,atomicCustody and
+protectionAfterReturn remain false. No rights masks or fake AccessCheck results are reported.
 
-The token projection is limited to current user/group attributes, restricting SIDs, default owner/
-primary group/default DACL, integrity SID and five relevant privilege states. Documented
-user/device-claim and device-group presence is counted only; nonempty contexts stop without
-exporting claim values. Reserved token-information classes35/36/39 are not queried; their absence is
-not certified. Conditional/object/unknown DACL or resource-policy states, unsupported filesystems,
-sharing failures, identity/descriptor/token drift and API/buffer failures produce an indeterminate
-snapshot. All acquired handles receive independent close attempts.
+Limits remain 24 rows, 128 ACEs, 16 KiB per binary descriptor and UTF8 descriptor text, 32 KiB
+aggregates, 32 KiB serialized provider result and assembled directory report. Overflow stops; it
+does not truncate an SDDL/ACE into a complete fact. If assembly cannot retain whole descriptors
+within its bound, it explicitly omits those records and preserves bounded filesystem identities in
+an incomplete report. The existing report/journal caps remain. Process timeout/signal/nonzero/parse
+failures retain available pre/post identities with descriptorAvailability unavailable, not a
+fabricated empty list.
 
-Bounds are five candidates,24 directories,128 groups/restricted SIDs/ACEs,64 token privileges read
-internally but only five projected,16 KiB native buffers,32KiB aggregate descriptors,24KiB request
-and32KiB result JSON. Native work admits at most five seconds, inside the unchanged ten-second
-command bound; neither bounds an already blocked synchronous kernel call by itself. No retry,
-privilege enablement, installation, candidate expansion, data-content read, or recursive inventory
-is a fallback. The existing journal/report/job caps are unchanged.
+Drift,reparse points,missing paths,access/parse/bounds errors,source or executable changes,
+cancellation and deadline exhaustion leave a journaled partial observation and escape outside step()
+before subsequent probes. No retry,privilege enablement,policy adjustment or alternate root occurs.
+Journal sync/close uncertainty blocks the parent attempt; a completed acquisition is not a durable
+or trusted attempt by itself. Existing ownerConfirmed and its metadata-I/O branch remain byte-exact;
+the earlier owner probes still record their principal SID solely for that unchanged gate. Directory
+facts never choose a root,accept Administrators ownership,unblock collection or establish a trusted
+principal policy. Same-host continuing custody/approval for later I/O remains unresolved.
 
-AccessCheck results are discretionary rights for this actual token, with integrity labels retained
-for review; they are not a full kernel-open or all-principal privacy determination. In particular,
-there is no approved trusted/untrusted-principal policy, and read handles close before any later
-preflight I/O. Delete-sharing pins do not freeze DACL changes, exclude privileged actors, or protect
-future operations after close. Therefore even a consistent snapshot reports privatePathApproved:
-false, protectionAfterReturn:false and an indeterminate directory decision. No diagnostic result
-changes the original owner gate or authorizes collection. These architectural/policy gaps require a
-reviewed resolution, not an indefinite series of probes. There is no local C# compiler/PowerShell
-runtime here; native compilation, interop and Windows semantics are not qualified by JS fixtures.
+Local deterministic controls exercise the actual directory orchestration/command port with injected
+spawn results and real disposable identities,journal sync/close and report writes. They cover DACL
+states,opaque retention,partial access failure,malformed/oversized
+responses,reparse/drift,cancellation, source/runtime changes and cleanup failures. They do not run
+PowerShell or qualify this new script on Windows. Sealed source/failure review is required before
+any push or hosted attempt.
 
-The API contract follows Microsoft documentation for
-[AccessCheck](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-accesscheck),
-[GetTokenInformation](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation),
-[TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class),
-[CreateFileW sharing/lifetime](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew),
+References:
+[Get-Acl](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/get-acl?view=powershell-5.1),
+[security descriptor sections](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.accesscontrolsections?view=netframework-4.8.1),
 and
-[SECURITY_INFORMATION read rights](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-information).
-The local tests validate projection and failure handling; they do not establish native API behavior.
+[null/empty DACL distinctions](https://learn.microsoft.com/en-us/windows/win32/secauthz/null-dacls-and-empty-dacls).
 
-The reduced snapshot uses schema 2 / profile `local-ntfs-reduced-token-snapshot-v2`. Run 39100208791
-established a successful class 21 API return of one byte into a four-byte buffer. The previous guard
-refused before decoding; its class 21 value is unknown. Documentation described DWORD, while this
-run reported one byte. That conflict does not justify reading unreturned bytes or accepting a
-one-byte reply globally. The prior source and failed artifact remain sealed.
-
-This profile removes the five unused descriptive classes 18,20,21,26,27 together: elevation type,
-elevation, filtered-ever status, UIAccess and mandatory-policy fields are absent from the DTO and
-strict parser. No replacement status API or zero/default observation is added. The exact retained
-allowlist is 1,2,3,4,5,6,8,9,10,11,24,25,29,33,34,37,38. Class 9 is conditional on a real
-impersonation token. Primary tokens carry a null impersonation level because that query was not
-made; impersonation tokens require level 2 or 3. Unknown token types and levels are refused before
-token duplication.
-
-| Classes    | x64 result / decoder minimum                                                 | Single-call capacity |
-| ---------- | ---------------------------------------------------------------------------- | -------------------- |
-| 8,9,24,29  | Four-byte enum or documented DWORD; exactly 4 returned bytes required        | 4 bytes              |
-| 10         | TOKEN_STATISTICS; exactly 56 returned bytes; ModifiedId offset 48            | 56 bytes             |
-| 1,25       | SID_AND_ATTRIBUTES header 16, then bounded SID                               | 16 KiB               |
-| 4,5        | SID-pointer header 8, then bounded SID                                       | 16 KiB               |
-| 6          | PACL-pointer header 8; null is valid, otherwise entire ACL bounded           | 16 KiB               |
-| 2,11,37,38 | Count 4 for empty; positive groups use offset 8 / stride 16 and bounded SIDs | 16 KiB               |
-| 3          | Count 4; privilege entries stride 12, at most64 entries                      | 16 KiB               |
-| 33,34      | CLAIM_SECURITY_ATTRIBUTES_INFORMATION header 16; only count at 4 read        | 16 KiB               |
-
-The real duplicated token still reaches AccessCheck. Group attributes, actual restricting SIDs, five
-privilege states and integrity SID remain. An observed empty restricting-SID list does not stand in
-for the removed filtered-ever status. Nonzero AppContainer or virtualization, nonempty claim/device
-context and unsupported ACL/policy cases still stop before directory work. Class 24/29 runtime
-behavior remains unqualified by the retained early-stopping run. There is no byte-length exception,
-padding, resize, retry, new token class or replacement descriptive API.
-
-Every successful result must satisfy its retained class's minimum/maximum/exact extent before any
-decode. SID and ACL headers/bodies remain inside ReturnLength, beyond their containing header or
-array; successful scalar lengths 0/1/2/3/>4 are refused before reading. BOOL failure captures
-numeric last-error immediately; success never reads stale Framework last-error and reports n/a.
-Allocations release in finally. The partial DTO is published only after the basic retained reads
-complete; unqueried claim/device counts remain null and cannot claim projectionComplete. Removed
-fields never reappear as defaults. The old schema/profile, old fields and unknown fields are
-rejected.
-
-`tests/windows-token-query-native-contract.ps1` prepares deterministic compiled-C# evidence for a
-later explicitly authorized Windows x64 validation. Add-Type compiles the exact production observer
-and `tests/fixtures/windows-token-query-contract.cs` together, then invokes injected replies only.
-The fixture uses the production query/scalar/identity/context guards, poisons unused buffer tails,
-checks length/API/decoder/query failure cleanup, and checks the 17-class contract and removed DTO.
-It calls neither Observer.Inspect nor native token/directory/AccessCheck APIs. Per-call internal
-seams have no global hook, configuration flag or production selector; production always supplies the
-existing native adapter. The runner records source/fixture hashes and test results. The integration
-below invokes it through the existing Windows PowerShell child boundary in a fresh WinPS 5.1
-process; workflow YAML stays unchanged. The fixture does not change module paths or security policy
-itself. Neither revised C# nor this fixture has been compiled/executed locally; JS models/source
-assertions are supplemental and cannot substitute for that evidence.
-
-All candidate paths, limits, directory pins, identity/descriptor/token rechecks, actual closure,
-metadata durability, owner-admission and collection gates remain unchanged. Even a complete v2
-snapshot cannot approve directory privacy, trusted principals, kernel/MIC/CAP behavior or later-I/O
-custody. No push or hosted run is part of this source preparation.
-
-Contracts:
-[TOKEN_INFORMATION_CLASS](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class),
-[GetTokenInformation output bounds](https://raw.githubusercontent.com/microsoft/win32metadata/main/generation/WinSDK/RecompiledIdlHeaders/um/securitybaseapi.h),
-[impersonation levels](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-security_impersonation_level),
-[restricted-token semantics](https://learn.microsoft.com/en-us/windows/win32/secauthz/restricted-tokens),
-and
-[.NET last-error semantics](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.dllimportattribute.setlasterror?view=netframework-4.8.1).
-
-The integration successor makes the compiled fixture a hard prerequisite of the existing snapshot.
-The fixed runner path is passed through an environment value to a PowerShell call-operator wrapper;
-it uses the existing absolute System32 WinPS 5.1 executable, NoProfile/NonInteractive flags,
-child-only module-path isolation, unchanged execution policy, clipped 10 second timeout and 64 KiB
-command cap. The fixture and snapshot use two separate fresh children. No workflow YAML, job, input,
-retry, collection option or dependency change is involved.
-
-Node pins the observer, fixture and runner source hashes from the reviewed tree, checks the complete
-source fingerprint before execution, records the hashed x64 PowerShell executable, and rechecks
-source/file/executable identity after a passing fixture. The runner still checks observer/fixture
-hashes before and after compilation/tests. Its bounded 32 KiB JSON envelope must have exact keys,
-matching expected source hashes, outer/inner schema 1, suite reduced-token-v2-injected-replies,
-compiledCSharpExecuted true, and false native-API/selection/admission declarations. Counts must be
-nonnegative integers totaling 76; errors are bounded to eight 256 character strings, consistent with
-failed cases. Those declarations bind reviewed fixture output; they are not a native-API activity
-counter or proof of kernel behavior.
-
-A structurally valid failed suite is journaled with its per-case errors. The runner no longer throws
-after printing that report: Node requires exactly 76 passed, 0 failed and no errors outside step(),
-whose exception handler otherwise returns null. Missing/rejected observations and failed suites
-escape to the existing outer catch/finally, which records failure and syncs/closes the journal.
-Platform/compiler/hash failures retain strict nonzero-exit handling. Malformed JSON, bad hashes or
-counts, timeout, signal, cancellation, source/executable drift and budget exhaustion cannot reach
-Observer.Inspect or subsequent metadata-I/O admission. Only successful qualification permits the
-single existing snapshot child. The owner gate and remaining admission decisions remain unchanged.
-
-Local control-flow tests use the actual gate and command helper with an injected spawn port, real
-disposable identities and real journal/report durability. They verify retained 75/1 failure details,
-zero snapshot/I-O calls on every rejection, and one separate snapshot only after 76/0. They execute
-no PowerShell, C# compiler, Windows token API or native application. Actual compilation, the 76 C#
-cases and complete native snapshot behavior still require independently reviewed Windows validation.
+The provider binary getter reads the already loaded managed descriptor, not permanent storage:
+[GetSecurityDescriptorBinaryForm](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.objectsecurity.getsecuritydescriptorbinaryform?view=netframework-4.8.1).
