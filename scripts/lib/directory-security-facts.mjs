@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { metadataIdentity, fixedAncestorPlan } from './windows-preflight.mjs';
 export const directoryFactsScope = Object.freeze({
     schema: 1,
@@ -67,6 +68,76 @@ const exact = (object, keys) => {
 const nullableSid = (v) =>
     v === null || (typeof v === 'string' && /^S-1-\d+(?:-\d+)+$/.test(v) && v.length <= 184);
 const boundedError = (v) => typeof v === 'string' && v.length > 0 && Buffer.byteLength(v) <= 512;
+export const directorySerializationCases = 25;
+/** Transport-only evidence; never decoded as paths or promoted to descriptor facts. */
+export function providerReplyRecords(result) {
+    const chunks = [];
+    const stream = (name, text) => {
+        const present = typeof text === 'string',
+            bytes = Buffer.from(present ? text : '', 'utf8'),
+            truncated = bytes.length > 65536,
+            segments = truncated
+                ? [
+                      { offset: 0, bytes: bytes.subarray(0, 32768) },
+                      { offset: bytes.length - 32768, bytes: bytes.subarray(bytes.length - 32768) },
+                  ]
+                : [{ offset: 0, bytes }];
+        let chunkIndex = 0,
+            retainedBytes = 0;
+        for (const segment of segments)
+            for (let offset = 0; offset < segment.bytes.length; offset += 32768) {
+                const part = segment.bytes.subarray(offset, offset + 32768);
+                chunks.push({
+                    kind: 'directory-provider-transport-chunk',
+                    stream: name,
+                    chunkIndex: chunkIndex++,
+                    offset: segment.offset + offset,
+                    bytes: part.length,
+                    base64: part.toString('base64'),
+                });
+                retainedBytes += part.length;
+            }
+        return {
+            present,
+            bytes: bytes.length,
+            sha256: createHash('sha256').update(bytes).digest('hex'),
+            retainedBytes,
+            truncated,
+            chunks: chunkIndex,
+        };
+    };
+    const stdout = stream('stdout', result.stdout),
+        stderr = stream('stderr', result.stderr),
+        retainedBytes = stdout.retainedBytes + stderr.retainedBytes;
+    assert(retainedBytes <= 131072 && chunks.length <= 4);
+    const records = [
+        {
+            kind: 'unvalidated-directory-provider-transport',
+            encoding: 'base64-of-spawn-decoded-utf8',
+            status: Number.isInteger(result.status) ? result.status : null,
+            signal: typeof result.signal === 'string' ? result.signal.slice(0, 64) : null,
+            processError: result.error ? String(result.error).slice(0, 512) : null,
+            chunkBytes: 32768,
+            stdout,
+            stderr,
+        },
+        ...chunks,
+        { kind: 'directory-provider-transport-complete', chunks: chunks.length, retainedBytes },
+    ].map((record, recordIndex, all) => ({
+        schema: 1,
+        acceptedAsDescriptorReport: false,
+        recordIndex,
+        recordCount: all.length,
+        ...record,
+    }));
+    for (const record of records)
+        assert(Buffer.byteLength(JSON.stringify(record)) <= 49152, 'Provider record bound.');
+    assert(
+        Buffer.byteLength(JSON.stringify(records)) <= 180224,
+        'Provider transport aggregate bound.',
+    );
+    return records;
+}
 export function parseDirectoryDescriptorReport(text, paths) {
     assert(
         typeof text === 'string' && Buffer.byteLength(text) <= 32768,
@@ -81,7 +152,27 @@ export function parseDirectoryDescriptorReport(text, paths) {
         'rows',
         'stoppedAt',
         'error',
+        'serializationContract',
     ]);
+    const contract = report.serializationContract;
+    exact(contract, ['schema', 'suite', 'passed', 'failed', 'error']);
+    assert.equal(contract.schema, 1);
+    assert.equal(contract.suite, 'directory-input-serialization-v1');
+    assert(
+        Number.isInteger(contract.passed) &&
+            contract.passed >= 0 &&
+            contract.passed <= directorySerializationCases,
+    );
+    assert(contract.failed === 0 || contract.failed === 1);
+    if (contract.failed === 0) {
+        assert.equal(contract.passed, directorySerializationCases);
+        assert.equal(contract.error, null);
+    } else {
+        assert(boundedError(contract.error));
+        assert.equal(report.complete, false);
+        assert.equal(report.rows.length, 0);
+        assert.equal(report.stoppedAt, 0);
+    }
     for (const [key, value] of Object.entries(directoryFactsScope))
         assert.deepEqual(report[key], value, 'Directory scope mismatch: ' + key);
     assert(typeof report.complete === 'boolean');
@@ -239,6 +330,7 @@ export function directoryEvidence({ sourceSHA256, plan, before, after, response,
         descriptorAvailability: response ? 'reported' : 'unavailable',
         providerComplete: response?.complete ?? null,
         providerStoppedAt: response?.stoppedAt ?? null,
+        serializationContract: response?.serializationContract ?? null,
         rows,
         failures: [...failures],
         complete: Boolean(

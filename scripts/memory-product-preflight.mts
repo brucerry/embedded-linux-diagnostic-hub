@@ -28,6 +28,7 @@ import {
     directoryFactsPlan,
     directoryIdentity,
     parseDirectoryDescriptorReport,
+    providerReplyRecords,
     directoryEvidence,
     requireDirectoryFactsComplete,
 } from './lib/directory-security-facts.mjs';
@@ -53,6 +54,7 @@ export function runPreflightCommand(
         environment = process.env,
         spawn = spawnSync,
         timeout = preflightLimits.commandMs,
+        onResult,
     } = {},
 ) {
     const env = { ...environment, ...extra };
@@ -67,6 +69,7 @@ export function runPreflightCommand(
         maxBuffer: preflightLimits.commandBytes,
         env,
     });
+    onResult?.(result); // Retain bounded transport evidence before any process/JSON assertion.
     assert.equal(result.error, undefined);
     assert.equal(result.signal, null);
     assert.equal(result.status, 0, result.stderr);
@@ -76,7 +79,7 @@ export const directoryFactsScript =
     '$ErrorActionPreference="Stop";Set-StrictMode -Version Latest;& $env:HUB_PREFLIGHT_DIRECTORY_FACTS_PS1';
 export const directoryFactsInput = Object.freeze({
     path: 'scripts/lib/windows-directory-facts.ps1',
-    sha256: '5a7ee25e75d77772c766477016561c65612e2bfde5bc7a2ab807d28172957499',
+    sha256: '994e71eef0932e5a07f123cfca1c9e72322e15def52402fee24d8a35e50952bc',
 });
 export async function observeDirectoryFacts({
     root,
@@ -84,6 +87,7 @@ export async function observeDirectoryFacts({
     sourceSHA256,
     candidates,
     command,
+    observe,
     step,
     admit,
 }) {
@@ -130,10 +134,23 @@ export async function observeDirectoryFacts({
             assert.equal(executable.pe.architecture, 'x64');
             attempted = true;
             response = parseDirectoryDescriptorReport(
-                command(powershell, directoryFactsScript, {
-                    HUB_PREFLIGHT_DIRECTORY_FACTS_PS1: path.join(root, directoryFactsInput.path),
-                    HUB_PREFLIGHT_DIRECTORY_PATHS: JSON.stringify(plan.paths),
-                }),
+                command(
+                    powershell,
+                    directoryFactsScript,
+                    {
+                        HUB_PREFLIGHT_DIRECTORY_FACTS_PS1: path.join(
+                            root,
+                            directoryFactsInput.path,
+                        ),
+                        HUB_PREFLIGHT_DIRECTORY_PATHS: JSON.stringify(plan.paths),
+                    },
+                    {
+                        onResult: (result) => {
+                            for (const record of providerReplyRecords(result))
+                                observe('directory-provider-reply', record);
+                        },
+                    },
+                ),
                 plan.paths,
             );
         } catch (error) {
@@ -282,10 +299,11 @@ export async function productPreflight(
         });
         report.sourceSHA256 = await step('source', () => sourceFingerprint(root));
         admit();
-        const command = (exe, script, extra = {}) => {
+        const command = (exe, script, extra = {}, { onResult } = {}) => {
             admit();
             const stdout = runPreflightCommand(exe, script, extra, {
                 windowsPowerShell: exe === powershell,
+                onResult,
                 timeout: Math.min(
                     preflightLimits.commandMs,
                     deadline - preflightLimits.reserveMs - clock.now(),
@@ -367,6 +385,7 @@ export async function productPreflight(
             sourceSHA256: report.sourceSHA256,
             candidates,
             command,
+            observe,
             step,
             admit,
         });

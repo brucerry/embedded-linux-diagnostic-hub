@@ -134,3 +134,58 @@ and
 
 The provider binary getter reads the already loaded managed descriptor, not permanent storage:
 [GetSecurityDescriptorBinaryForm](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.objectsecurity.getsecuritydescriptorbinaryform?view=netframework-4.8.1).
+
+Run 39105545037 exposed a Windows PowerShell 5.1 input-array boundary: wrapping the
+`ConvertFrom-Json` command in `@(...)` made the first row's path an array, serialized as a
+`Count`/`value` object containing all 14 planned spellings. Strict Node parsing refused it. The
+failed packet and run evidence are preserved; no full ancestor-descriptor report was obtained.
+
+The decoder now assigns `ConvertFrom-Json -InputObject` directly, requires a root array of 1–24
+actual strings, validates every element before adding it to a typed string list, and returns that
+`string[]` as one pipeline object using unary comma. The caller assigns directly to `string[]`.
+There is no cast of unvalidated objects, nested-array flattening, `Count`/`value` extraction, path
+substitution or parser relaxation. The fixed five labels, ancestor allowlist and exact Node row
+comparison remain unchanged. The input JSON byte cap remains 24 KiB.
+
+Before any Get-Acl in that same child, 25 pure PowerShell contract cases invoke the exact production
+decoder and serializer. They cover empty refusal, single/multiple/maximum inputs, the actual failed
+14-path wrapper, malformed/nested/non-string/oversize inputs, zero/one/multiple report and ACE
+arrays, null versus absent/unavailable ACL fields, literal escaping, order and scalar types. The
+script returns an explicit contract result; failure prevents provider admission. JSON output uses
+`ConvertTo-Json -InputObject`, and row/ACE arrays come directly from typed lists. Bound rollback
+removes the whole current row from its list. This candidate has not executed these contracts in
+Windows PowerShell; local injected replies do not qualify that behavior. No extra process or
+workflow is added.
+
+A separate `directory-provider-reply` record sequence captures stdout/stderr before exit, signal,
+timeout, cancellation or JSON validation can discard them. It contains base64 of spawn-decoded
+UTF-8, byte counts and full SHA-256 digests, with process status/error. Each stream retains up to
+the existing 64 KiB command limit, including complete malformed provider JSON within its 32 KiB
+bound. Output beyond retention is explicitly truncated with bounded head/tail bytes and original
+byte offsets. Nothing in these records is interpreted as a descriptor or path.
+
+The sequence contains small metadata, at most four 32 KiB decoded data chunks, and a final capture
+completion record. Every record has an ordered index and expected record count; chunks also carry
+stream/index/offset/byte count. Each record is at most 48 KiB before journal wrapping, below the
+unchanged 64 KiB per-row cap. The original aggregate limit remains 128 KiB decoded bytes / 176 KiB
+JSON. Existing 256 KiB aggregate journal, 128 journal rows, 512 KiB report and 32 KiB
+assembled-facts limits remain unchanged. A write/sync failure stops capture before its completion
+record and blocks continuation; in-memory/final-report copies do not prove a record was journaled.
+Reconstruction must check the actual complete sequential journal records, offsets, lengths,
+completion and full hashes for untruncated streams. Partial or malformed tails remain incomplete
+evidence.
+
+Independent candidate10 review found that quoted positive decoder paths were illegal on the target
+.NETFramework, and that its single maximum transport record exceeded the journal row cap.
+Candidate11 changes only the two positive path literals to legal paths (spaces/brackets/dollar
+retained), leaving the production path validation and 25-case count unchanged. Quote escaping
+remains in serializer-only SDDL text. Capture now uses the bounded sequence above. Local controls
+reconstruct four stream-size cases from actual journal entries, and exercise actual write,
+partial-write and sync-failure prefixes. No native contract execution, publication or CI is claimed
+by those controls.
+
+References:
+[Windows PowerShell 5.1 ConvertFrom-Json](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/convertfrom-json?view=powershell-5.1),
+[collection return and unary comma](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_return?view=powershell-5.1#return-values-and-the-pipeline),
+and
+[ConvertTo-Json InputObject](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/convertto-json?view=powershell-5.1).
