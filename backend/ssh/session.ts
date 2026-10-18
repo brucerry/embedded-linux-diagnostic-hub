@@ -193,6 +193,7 @@ export class SshSession {
         connection: string,
         assertFresh: () => void,
         remoteDisposal?: () => GatewayConsoleDisposal | null,
+        readinessDiagnostic?: import('./persistent-console').ConsoleBinding['readinessDiagnostic'],
     ) {
         const client = this.client,
             options = this.options;
@@ -233,6 +234,7 @@ export class SshSession {
                 },
                 current,
                 assertFresh,
+                readinessDiagnostic,
             ),
             store,
             100,

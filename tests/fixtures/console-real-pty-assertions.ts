@@ -19,6 +19,26 @@ export async function exerciseRealPtyAssertions(
         diagnostic?: (value: string) => void;
     } = {},
 ) {
+    let primary: unknown;
+    let actorOpenPending = false;
+    const timing = (phase: string, extra: Record<string, unknown> = {}) => {
+        if (!options.diagnostic) return;
+        try {
+            options.diagnostic(
+                JSON.stringify({
+                    schema: 1,
+                    kind: 'pty-timing',
+                    phase,
+                    clockDomain: 'node-performance',
+                    monoMs: performance.now(),
+                    pid: process.pid,
+                    ...extra,
+                }),
+            );
+        } catch (error) {
+            options.holdUnknown?.(error);
+        }
+    };
     let held: unknown;
     const holdUnknown =
         options.holdUnknown ??
@@ -47,6 +67,7 @@ export async function exerciseRealPtyAssertions(
         profileIdentity: import('node:fs').BigIntStats | undefined;
     let actor: PersistentSshConsole | undefined;
     const cleanup = async () => {
+        timing('cleanup-enter', { primary: primary ? String(primary).slice(0, 512) : null });
         const errors: unknown[] = [];
         for (const close of [
             () => actor?.cancel(),
@@ -87,6 +108,7 @@ export async function exerciseRealPtyAssertions(
         assert.equal(await fs.realpath(profile), profile);
         options.check?.();
         await fs.rm(profile, { recursive: true, force: true });
+        timing('cleanup-known-closed');
     };
     const abort = () => {
         void actor?.cancel().catch(options.holdUnknown ?? (() => {}));
@@ -120,8 +142,12 @@ export async function exerciseRealPtyAssertions(
             store,
             session.automationConnection,
             () => {},
+            undefined,
+            (value) => timing(String(value.phase), { ...value }),
         );
         actor = bound.actor;
+        timing('actor-open-before', { readyTimeoutMs: 7000 });
+        actorOpenPending = true;
         await actor.open(
             {
                 flowId: 'real-os-pty',
@@ -133,6 +159,8 @@ export async function exerciseRealPtyAssertions(
             bound.signal,
             7000,
         );
+        actorOpenPending = false;
+        timing('actor-open-return');
         assert.equal(session.consoleBusy, true);
         await assert.rejects(session.collect(), /paused for automation/);
         await assert.rejects(
@@ -217,8 +245,19 @@ export async function exerciseRealPtyAssertions(
             Buffer.concat(pty.state.inputs).toString(),
             "cd /\rpwd\rll\rfixture_hi\rread -p 'OS_CONFIRM [Enter]?'; printf 'REAL_CONFIRMED\\n'\r\r\rpwd\r",
         );
+    } catch (error) {
+        primary = error;
+        timing(actorOpenPending ? 'actor-open-error' : 'actor-or-assertions-error', {
+            error: String(error).slice(0, 512),
+            stack: error instanceof Error ? (error.stack?.slice(0, 2048) ?? null) : null,
+        });
+        throw error;
     } finally {
         options.signal?.removeEventListener('abort', abort);
         await cleanup();
+        if (actor?.readinessDiagnosticFailure) {
+            options.holdUnknown?.(actor.readinessDiagnosticFailure);
+            if (!primary) throw actor.readinessDiagnosticFailure;
+        }
     }
 }

@@ -33,7 +33,11 @@ function deferred<T>() {
     };
 }
 type StopReason = 'complete' | 'cancelled' | 'timeout' | 'transport-error';
+export type ConsoleReadinessDiagnostic = Readonly<Record<string, string | number | boolean | null>>;
 type Waiter = {
+    readiness: boolean;
+    armedAtMono: number;
+    timeoutMs: number;
     criterion: ConsoleCompletion;
     decoder: TextDecoder;
     utf8: Utf8Boundary;
@@ -46,6 +50,8 @@ type Waiter = {
     timer?: ReturnType<typeof setTimeout>;
 };
 export interface ConsoleBinding {
+    /** Optional bounded observer; it never supplies readiness or control decisions. */
+    readinessDiagnostic?: (value: ConsoleReadinessDiagnostic) => void;
     /** The authenticated session supplies exclusive ownership and its immutable generation check. */
     acquire(): () => void;
     assertCurrent(): void;
@@ -59,8 +65,10 @@ export function interactiveShellBinding(
     acquire: ConsoleBinding['acquire'],
     assertCurrent: ConsoleBinding['assertCurrent'],
     assertFresh: ConsoleBinding['assertFresh'],
+    readinessDiagnostic?: ConsoleBinding['readinessDiagnostic'],
 ): ConsoleBinding {
     return {
+        ...(readinessDiagnostic ? { readinessDiagnostic } : {}),
         acquire,
         assertCurrent,
         assertFresh,
@@ -74,6 +82,10 @@ export function interactiveShellBinding(
 /** One ordered journal actor and one shell for a flow; no automatic input or inferred exit status. */
 export class PersistentSshConsole {
     private channel?: ClientChannel;
+    private readinessTrace?: Waiter;
+    private firstChannelBytes = false;
+    private diagnosticFailure?: unknown;
+    private retainedDiagnosticBytes = 0;
     private opened = deferred<void>();
     private closed = deferred<void>();
     private outputEnded = deferred<void>();
@@ -116,6 +128,49 @@ export class PersistentSshConsole {
     ) {
         if (!Number.isInteger(quietMs) || quietMs < 50 || quietMs > 1000)
             throw Error('Console quiet interval must be 50–1000 ms.');
+    }
+    /** Observer failure is retained for the owning fixture, without changing the first console error. */
+    get readinessDiagnosticFailure() {
+        return this.diagnosticFailure;
+    }
+    private readinessNote(
+        phase: string,
+        waiter = this.readinessTrace,
+        monoMs = performance.now(),
+        extra: Record<string, string | number | boolean | null> = {},
+    ) {
+        if (!this.binding.readinessDiagnostic || !waiter?.readiness) return;
+        try {
+            this.binding.readinessDiagnostic(
+                Object.freeze({
+                    schema: 1,
+                    phase,
+                    clockDomain: 'node-performance',
+                    monoMs,
+                    armedAtMono: waiter.armedAtMono,
+                    deadlineMono: waiter.deadline,
+                    timeoutMs: waiter.timeoutMs,
+                    quietMs: this.quietMs,
+                    criterionRole: waiter.criterion.role,
+                    lastReceivedMono: Number.isFinite(waiter.lastReceivedMono)
+                        ? waiter.lastReceivedMono
+                        : null,
+                    observedBytes: this.observedBytes,
+                    retainedBytes: this.retainedDiagnosticBytes,
+                    pendingBytes: this.pendingBytes,
+                    pendingOperations: this.pendingOperations,
+                    utf8Complete: waiter.utf8.complete,
+                    ansiComplete: waiter.tail.complete,
+                    suffixMatch: waiter.criterion.literals.some((s) =>
+                        waiter.tail.value.endsWith(s),
+                    ),
+                    stopReason: this.stopReason ?? null,
+                    ...extra,
+                }),
+            );
+        } catch (error) {
+            this.diagnosticFailure ??= error instanceof Error ? error : Error(String(error));
+        }
     }
     get snapshot() {
         return this.store.snapshot;
@@ -200,6 +255,12 @@ export class PersistentSshConsole {
         const observation = this.observation++,
             receivedAt = this.at(),
             mono = performance.now();
+        if (origin === 'channel' && !this.firstChannelBytes) {
+            this.firstChannelBytes = true;
+            this.readinessNote('first-input-channel-bytes', this.readinessTrace, mono, {
+                bytes: input.length,
+            });
+        }
         this.pause();
         if (
             !Number.isSafeInteger(this.observedBytes) ||
@@ -228,6 +289,7 @@ export class PersistentSshConsole {
                 await this.store.start(this.segment, receivedAt);
             }
             await this.store.observe(bytes, receivedAt, origin);
+            if (this.binding.readinessDiagnostic) this.retainedDiagnosticBytes += bytes.length;
             this.receivedUtf8.append(bytes);
             this.receivedTail.append(this.receivedDecoder.decode(bytes, { stream: true }));
             const waiter = this.waiter;
@@ -260,7 +322,7 @@ export class PersistentSshConsole {
         clearTimeout(waiter.timer);
         waiter.reject(error);
     }
-    private waiting(criterion: ConsoleCompletion, timeoutMs: number) {
+    private waiting(criterion: ConsoleCompletion, timeoutMs: number, readiness = false) {
         if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300000)
             throw Error('Console timeout must be 100–300000 ms.');
         if (this.waiter) throw Error('A console criterion is already pending.');
@@ -275,8 +337,16 @@ export class PersistentSshConsole {
                 deadline: performance.now() + timeoutMs,
                 resolve,
                 reject,
+                readiness,
+                armedAtMono: 0,
+                timeoutMs,
             };
+            waiter.armedAtMono = waiter.deadline - timeoutMs;
             this.waiter = waiter;
+            if (readiness && this.binding.readinessDiagnostic) {
+                this.readinessTrace = waiter;
+                this.readinessNote('readiness-wait-armed', waiter, waiter.armedAtMono);
+            }
             const tick = () => {
                 if (this.waiter !== waiter) return;
                 try {
@@ -287,6 +357,7 @@ export class PersistentSshConsole {
                 }
                 const now = performance.now();
                 if (now >= waiter.deadline) {
+                    if (waiter.readiness) this.readinessNote('ready-expiry', waiter, now);
                     this.stop('timeout');
                     return;
                 }
@@ -300,6 +371,7 @@ export class PersistentSshConsole {
                     !this.pendingBytes &&
                     now - waiter.lastReceivedMono >= this.quietMs
                 ) {
+                    if (waiter.readiness) this.readinessNote('ready-match', waiter, now);
                     this.boundary = true;
                     this.pause();
                     this.waiter = undefined;
@@ -334,10 +406,21 @@ export class PersistentSshConsole {
                 await this.store.start(this.segment, this.at());
             });
             this.check();
-            const match = this.waiting(criterion, timeoutMs);
+            const match = this.waiting(criterion, timeoutMs, true);
             this.openStarted = true;
             try {
+                if (this.binding.readinessDiagnostic) this.readinessNote('shell-open-request');
                 this.binding.open((error, channel) => {
+                    if (this.binding.readinessDiagnostic)
+                        this.readinessNote(
+                            'shell-open-callback',
+                            this.readinessTrace,
+                            performance.now(),
+                            {
+                                channelAvailable: Boolean(channel),
+                                error: error ? String(error).slice(0, 256) : null,
+                            },
+                        );
                     if (error || !channel) {
                         this.channelClosed = true;
                         this.closed.resolve();
@@ -610,6 +693,7 @@ export class PersistentSshConsole {
             this.abortListenerOwned = false;
             this.release?.();
             this.release = undefined;
+            this.readinessTrace = undefined;
             if (metadataError) throw metadataError;
             if (remoteUnacknowledged)
                 throw new CaptureStorageError(

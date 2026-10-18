@@ -215,3 +215,35 @@ data.
 The earlier controlled emitter fixture was 137333 bytes; the original rejected Windows JSON was not
 retained. Local production-factory/channel/parser controls establish reporting behavior only. They
 do not qualify a native cycle or authorize another Windows attempt.
+
+The focused PTY diagnostic records helper phase timestamps using `Stopwatch.GetTimestamp()` and
+frequency in the `helper-stopwatch` clock domain, with the helper PID. It brackets existing identity
+checks, Add-Type, the closure contract, winpty open, pipe connection, Bash spawn, pump start and
+Bash wait. Node fixture events and the optional console-readiness observer use the unchanged
+`performance.now()` origin in the `node-performance` domain. Compare durations within a clock domain
+and PID; journal arrival order alone does not supply a cross-process timestamp.
+
+The readiness observer emits only arm, shell request/callback, first channel bytes and terminal
+match or expiry. Records contain the original deadline, 7000 ms readiness wait, 100 ms quiet
+interval, parser completeness, suffix-match boolean and observed/retained/pending counts. They
+contain no channel output or prompt literal. Observer failures are retained separately and routed to
+the fixture's existing ownership hold without replacing the first console error. Fixture events mark
+preparation, actor open return/error and cleanup; the original error/stack is bounded. Existing
+timeout, cancellation, late-output retention and disarmed-after-timeout behavior remain unchanged.
+No timer is reset or increased and no helper warmup or retry is added.
+
+Before readiness is armed, the fixture reports hashes of its seven relevant source files alongside
+the already bound tool identities. The existing dependency hash walk also reports seven fixed
+content partitions: tsx, esbuild, its Windows x64 binary package, ssh2, Electron, `.bin`, and every
+other file. Each uses the same sorted relative-path/NUL/content-hash/LF representation as the
+original aggregate identity, with file and byte counts. This adds no dependency scan or file read;
+the original aggregate hash and validation stay unchanged. It localizes a difference to a fixed
+partition, not to an individual file. It does not establish identical ambient CLR/compiler
+assemblies, caches, antivirus or scheduler state, nor the cause of variable startup latency.
+
+These additional observations use the existing bounded diagnostic channel and evidence budgets. The
+3000 ms steps, 15000 ms managed Bash wait, 25000 ms whole first stage, immutable 600 s core, 60 s
+cleanup reserve and 15 minute workflow ceiling remain unchanged. Local virtual-clock replay is
+evidence about console semantics, not a Windows or compiler latency reproduction. A diagnostic
+successor still requires independent exact-source review, source-bound coverage and separate
+publication/execution authorization. Collection remains disabled.

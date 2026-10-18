@@ -11,6 +11,10 @@ using Microsoft.Win32.SafeHandles;
 
 public static class HubWinptyFixture {
     const string Library = "hub-fixture-winpty";
+    static void Timing(string phase) {
+        Console.Error.WriteLine("HUB_OS_PTY_TIMING {\"schema\":1,\"phase\":\""+phase+"\",\"clockDomain\":\"helper-stopwatch\",\"pid\":"+Environment.ProcessId+",\"ticks\":\""+System.Diagnostics.Stopwatch.GetTimestamp().ToString(System.Globalization.CultureInfo.InvariantCulture)+"\",\"frequency\":\""+System.Diagnostics.Stopwatch.Frequency.ToString(System.Globalization.CultureInfo.InvariantCulture)+"\"}");
+    }
+
     static HubWinptyFixture() {
         var library = Environment.GetEnvironmentVariable("HUB_TEST_WINPTY_DLL");
         if (String.IsNullOrEmpty(library) || !Path.IsPathRooted(library) || !File.Exists(library))
@@ -73,25 +77,35 @@ public static class HubWinptyFixture {
         IntPtr config=IntPtr.Zero,agent=IntPtr.Zero,agentOwned=IntPtr.Zero,spawn=IntPtr.Zero,process=IntPtr.Zero,thread=IntPtr.Zero,error;
         FileStream input=null,output=null;Pump send=null,drain=null;Stream source=null;
         bool bashJoined=false,agentJoined=false,inputJoined=false,outputJoined=false,outputDrained=false,pipesClosed=true,handlesClosed=true,termination=true,timedOut=false;
+        int firstOutput=0;
         uint code=1,bashPid=0,agentPid=0;long bashCreated=0,agentCreated=0;Exception primary=null;
         try {
             config=winpty_config_new(0,out error);if(config==IntPtr.Zero)throw Failure("config",error);
             winpty_config_set_initial_size(config,120,40);winpty_config_set_agent_timeout(config,5000);
+            Timing("winpty_open-before");
             agent=winpty_open(config,out error);if(agent==IntPtr.Zero)throw Failure("open",error);
+            Timing("winpty_open-after");
             var borrowed=winpty_agent_process(agent);
             if(!DuplicateHandle(GetCurrentProcess(),borrowed,GetCurrentProcess(),out agentOwned,0,false,2))throw new IOException("Owned agent handle duplication failed");
             agentPid=GetProcessId(agentOwned);agentCreated=Created(agentOwned);
             winpty_config_free(config);config=IntPtr.Zero;
+            Timing("pipe-connect-before");
             input=Pipe(winpty_conin_name(agent),FileAccess.Write);output=Pipe(winpty_conout_name(agent),FileAccess.Read);
+            Timing("pipe-connect-after");
             var target=Console.OpenStandardOutput();var pipeOutput=output;
-            drain=new Pump(p=>{var b=new byte[8192];int n;while((n=pipeOutput.Read(b,0,b.Length))>0){target.Write(b,0,n);target.Flush();}p.Eof=true;});
+            drain=new Pump(p=>{var b=new byte[8192];int n;while((n=pipeOutput.Read(b,0,b.Length))>0){if(Interlocked.CompareExchange(ref firstOutput,1,0)==0)Timing("first-output");target.Write(b,0,n);target.Flush();}p.Eof=true;});
             spawn=winpty_spawn_config_new(3,bashExecutable,commandLine,directory,IntPtr.Zero,out error);if(spawn==IntPtr.Zero)throw Failure("spawn config",error);
+            Timing("Bash-spawn-before");
             uint createError;if(!winpty_spawn(agent,spawn,out process,out thread,out createError,out error))throw Failure("spawn ("+createError+")",error);
+            Timing("Bash-spawn-after");
             winpty_spawn_config_free(spawn);spawn=IntPtr.Zero;bashPid=GetProcessId(process);bashCreated=Created(process);
             Console.Error.WriteLine("HUB_OS_PTY_OPEN {\"childPid\":"+bashPid+",\"childCreated\":\""+bashCreated+"\",\"agentPid\":"+agentPid+",\"agentCreated\":\""+agentCreated+"\",\"cols\":120,\"rows\":40}");
             source=Console.OpenStandardInput();var pipeInput=input;var stdin=source;
             send=new Pump(p=>{var b=new byte[8192];int n;while(!p.Stopping&&(n=stdin.Read(b,0,b.Length))>0){if(p.Stopping)break;pipeInput.Write(b,0,n);pipeInput.Flush();}if(!p.Stopping){pipeInput.WriteByte(4);pipeInput.Flush();}p.Eof=true;});
+            Timing("pumps-started");
+            Timing("Bash-wait-start");
             uint wait=WaitForSingleObject(process,(uint)timeoutMs);
+            Timing("Bash-wait-end");
             if(wait==258){timedOut=true;termination=TerminateProcess(process,124);if(!termination)throw new IOException("Bash termination failed");wait=WaitForSingleObject(process,2000);}
             if(wait!=0)termination=false;bashJoined=wait==0;if(!bashJoined)throw new IOException("Bash wait unconfirmed: "+wait);
             if(!GetExitCodeProcess(process,out code)||code==259){termination=false;throw new IOException("Bash exit code unavailable");}

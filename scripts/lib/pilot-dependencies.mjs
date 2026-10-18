@@ -60,7 +60,9 @@ export function prepareAndFreezePilotDependencies(
         hiddenBootstrapAllowed: false,
         preparation: 'verify-existing-or-fail-missing',
     });
-    const dependencies = freeze(path.join(root, 'node_modules'), check);
+    const dependencies = freeze(path.join(root, 'node_modules'), check, {
+        contentPartitions: true,
+    });
     check();
     record('dependency-identity-frozen', dependencies);
     return { electron, dependencies };

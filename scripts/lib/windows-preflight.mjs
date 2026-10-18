@@ -111,7 +111,19 @@ export function fileIdentity(file, { pe = false, check = () => {} } = {}) {
     }
     return { ...before, sha256: hash.digest('hex'), ...(pe ? { pe: peMachine(header) } : {}) };
 }
-export function dependencyFacts(root, check) {
+export function dependencyFacts(root, check, { contentPartitions = false } = {}) {
+    const names = [
+        'tsx',
+        'esbuild',
+        '@esbuild/win32-x64',
+        'ssh2',
+        'electron',
+        '.bin',
+        'all-other-files',
+    ];
+    const partitions = contentPartitions
+        ? new Map(names.map((name) => [name, { hash: createHash('sha256'), files: 0, bytes: 0 }]))
+        : null;
     const hash = createHash('sha256');
     let files = 0,
         bytes = 0;
@@ -131,14 +143,42 @@ export function dependencyFacts(root, check) {
                     files <= preflightLimits.dependencyFiles &&
                         bytes <= preflightLimits.dependencyBytes,
                 );
-                hash.update(
-                    path.relative(root, file).replaceAll('\\', '/') + '\0' + row.sha256 + '\n',
-                );
+                const relative = path.relative(root, file).replaceAll('\\', '/');
+                const line = relative + '\0' + row.sha256 + '\n';
+                hash.update(line);
+                if (partitions) {
+                    const name =
+                        names.slice(0, -1).find((name) => relative.startsWith(name + '/')) ??
+                        'all-other-files';
+                    const partition = partitions.get(name);
+                    partition.hash.update(line);
+                    partition.files++;
+                    partition.bytes += Number(row.size);
+                }
             }
         }
     }
     walk(root);
-    return { root, files, bytes, sha256: hash.digest('hex') };
+    return {
+        root,
+        files,
+        bytes,
+        sha256: hash.digest('hex'),
+        ...(partitions
+            ? {
+                  contentPartitions: {
+                      schema: 1,
+                      algorithm: 'sorted-relative-path-NUL-contentSHA256-LF',
+                      partitions: [...partitions].map(([name, p]) => ({
+                          name,
+                          files: p.files,
+                          bytes: p.bytes,
+                          sha256: p.hash.digest('hex'),
+                      })),
+                  },
+              }
+            : {}),
+    };
 }
 export function closeDescriptor(fd, io = fs) {
     const errors = [];

@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { installedPtyIdentity, ptyBridgeArguments } from './winpty-identity';
 import { finalPtyClosure } from './pty-closure';
 import type { Session } from 'ssh2';
@@ -28,6 +29,24 @@ export async function osPtyFixture(
                 { kind: 'real-pty-closure-unknown', reason: String(reason) },
                 () => {},
             );
+    };
+    const timing = (phase: string, extra: Record<string, unknown> = {}) => {
+        if (!options.diagnostic) return;
+        try {
+            options.diagnostic(
+                JSON.stringify({
+                    schema: 1,
+                    kind: 'pty-timing',
+                    phase,
+                    clockDomain: 'node-performance',
+                    monoMs: performance.now(),
+                    pid: process.pid,
+                    ...extra,
+                }),
+            );
+        } catch (error) {
+            holdUnknown(error);
+        }
     };
     options.signal?.throwIfAborted();
     // Discover installed tools on the actual host. No personal cache paths or installation.
@@ -137,6 +156,28 @@ export async function osPtyFixture(
             '',
         ].join('\n'),
     );
+    if (options.diagnostic) {
+        const source = [];
+        for (const relative of [
+            'tests/fixtures/winpty-bridge.ps1',
+            'tests/fixtures/winpty-bridge.cs',
+            'tests/fixtures/os-pty.ts',
+            'tests/fixtures/console-real-pty-assertions.ts',
+            'backend/ssh/persistent-console.ts',
+            'backend/ssh/session.ts',
+            'src/features/automation/serial-completion.ts',
+        ]) {
+            options.check?.();
+            const bytes = await fs.readFile(path.resolve(relative));
+            source.push({
+                path: relative,
+                bytes: bytes.length,
+                sha256: createHash('sha256').update(bytes).digest('hex'),
+            });
+        }
+        timing('fixture-preparation-complete', { source, toolIdentities });
+    }
+    let firstStdout = false;
     const state = {
         toolIdentities,
         opens: 0,
@@ -184,6 +225,10 @@ export async function osPtyFixture(
             channel.on('error', () => {});
             child.stdin.on('error', () => {});
             child.stdout.on('data', (bytes: Buffer) => {
+                if (!firstStdout) {
+                    firstStdout = true;
+                    timing('firststdout-observed', { childPid: child.pid, bytes: bytes.length });
+                }
                 state.outputBytes += bytes.length;
                 state.outputTail = (state.outputTail + bytes.toString()).slice(-4096);
                 if (!channel.destroyed && !channel.write(bytes)) child.stdout.pause();
