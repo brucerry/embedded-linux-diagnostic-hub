@@ -9,15 +9,17 @@ The probe restores no dependencies itself: the job restores only the lockfile wi
 24.22.0 x64. It inspects Electron44.5.1 files without launching them. It records actual
 image/runtime, source, complete dependency/loader hashes, canonical temporary directory, marker
 absence, current SID/owner/SDDL and single/multiple-path PowerShell5.1 serialization. Only fresh
-nonce-named metadata files exercise O_RDWR read/fsync/close/reopen, including injected sync/close
-failures and cleanup. It records free capacity and installed Git/pwsh/bash/cygpath/winpty DLL/agent
-paths, hashes and PE architecture, or explicit absence. C# compilation may inspect the bridge method
-without invoking it. The existing derived JS-only SSH bundle is prepared and identified; no native
-application starts.
+nonce-named metadata files inside a verified fresh hosted-CI fixture exercise O_RDWR
+read/fsync/close/reopen, including injected sync/close failures and cleanup. The current proposed
+[fixture policy](hosted-ci-metadata-fixture-policy.md) replaces owner-SID equality as that narrowly
+scoped I/O admission rule; it does not approve collection or user-machine privacy. It records free
+capacity and installed Git/pwsh/bash/cygpath/winpty DLL/agent paths, hashes and PE architecture, or
+explicit absence. C# compilation may inspect the bridge method without invoking it. The existing
+derived JS-only SSH bundle is prepared and identified; no native application starts.
 
-All observations are unreviewed. Missing tools, mismatched owners, unavailable metrics and failures
-remain explicit; no ACL, owner, policy, credential, driver or canonical-marker change makes them
-pass. Any existing canonical marker blocks admission. Logs/reports are bounded before writes;
+All new observations are unreviewed. Missing tools, owner observations, unavailable metrics and
+failures remain explicit; no ACL, owner, policy, credential, driver or canonical-marker change makes
+them pass. Any existing canonical marker blocks admission. Logs/reports are bounded before writes;
 disposable file handles are independently synced/closed and partial facts are retained when
 possible. Source aliases, expired admission and rebinding block further work. The probe has a
 five-minute shared work budget including a 30-second cleanup reserve inside the 15-minute hosted
@@ -67,73 +69,42 @@ References:
 and
 [Windows PowerShell CLI flags](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1).
 
-The current directory observation uses schema 1 / profile `literal-directory-security-facts-v1`. It
-reuses the successful Get-Acl -LiteralPath boundary and requests only owner, group and DACL
-sections. Its five fixed candidate labels expand only to their existing root-to-leaf ancestors, with
-at most 24 planned path spellings. There is no recursive discovery or fallback root. The provider
-must return filesystem DirectorySecurity; no NTFS or other filesystem qualification is inferred from
-a successful descriptor read.
+The accepted historical directory-only run 39107781069 completed schema1/profile
+`literal-directory-security-facts-v1` for all14planned paths. Its source, provider rows, raw
+transport and independent review remain sealed. The old five-label ancestor scan and native/token
+fixture material remain dormant test inputs; the production entry does not repeat that scan or any
+broad token inventory.
 
-One fresh isolated Windows PowerShell 5.1 child runs the fixed hash-pinned script with JSON literal
-paths in environment data. It uses the unchanged NoProfile/NonInteractive/shell:false boundary,
-child-only PSModulePath isolation, current execution policy, 10 second / 64 KiB command cap and
-shared 300 second budget with 30 second reserve. It loads no C# and calls no explicit
-token,duplication, AccessCheck,Authz or new native-interop code. Existing unrelated preflight
-inspection steps stay unchanged. The historical token observer and 76-case fixture remain separate
-dormant test material, with their successful compiled result retained in run 39102874140; they are
-not basic-directory prerequisites and their unavailable context is not reinterpreted as empty.
+The current proposed fixture path reads only its fixed canonical profile Temp parent and fresh
+exclusive nonce child, using that same hash-pinned System32 WinPS5.1 script, exact decoder,
+serializer and 25-case interpreter gate. The NoProfile/NonInteractive/shell:false boundary,
+child-only PSModulePath isolation, execution policy, source/runtime rechecks and command/budget caps
+remain. The provider returns only owner/group/DACL facts, preserving ordered ACE bytes without an
+AccessCheck result. Its strict parser remains unchanged. The separate explicitly named
+[hosted-CI fixture policy](hosted-ci-metadata-fixture-policy.md) recognizes only the exact inherited
+three-principal standard-allow ACL shape for this parent/child pair; it is not a general permissions
+or user-machine security classifier.
 
-Each bounded provider row contains owner/group SIDs, owner/group/DACL-only SDDL and explicit DACL
-state: absent, null, empty, nonempty or unavailable. The DACL state comes from the provider object's
-in-memory binary descriptor control flags and DACL pointer/count, not an SDDL roundtrip. The full
-binary descriptor is not emitted. Missing/null ACLs have null count/data, an empty ACL has an
-observed count 0 and empty list, and conversion failure remains unavailable. Ordered ACE headers and
-canonical base64 binary are retained as opaque provider-returned data, including unfamiliar,
-conditional and object entries. The code does not sort, discard, evaluate or infer applicability
-from ACEs. If a provider/SDDL/ACE conversion fails, bounded previously retrieved text and facts stay
-partial and no empty ACL is fabricated. A provider parser supplies structural decoding; Node checks
-schema, bounds, row order and opaque headers, not a new SDDL semantics engine.
+The controller records the physical parent and newly created child identities, checks all bound
+ancestry and identities around descriptor acquisition and every payload step, and refuses drift,
+reparse points, missing/unavailable/partial/malformed descriptors, source/runtime changes,
+cancellation or exhausted work admission. These are path-based observations, not atomic handles or
+ABA protection. Owner equality remains an observation rather than the I/O predicate. The previously
+unexecuted metadata controls now require this separate CI-only fixture admission, never just
+Administrators ownership of an arbitrary directory.
 
-Node independently checks physical lstat/realpath identities before and after the command. The
-report records device/file IDs and labels the comparison no-drift-detected, drift-detected or
-not-complete. That equality cannot exclude ABA, bind the read to a kernel handle, establish atomic
-custody or protect later I/O. Omitted/unavailable post-identities remain null. Unknown token context
-is declared not-collected; effective access is not-evaluated; SACL, labels, resource attributes and
-CAP are not-requested. privatePathApproved,collectionApproval,admissionChanged,atomicCustody and
-protectionAfterReturn remain false. No rights masks or fake AccessCheck results are reported.
+Provider limits remain at most24rows,128ACEs,16KiBper binary descriptor/text,32KiBaggregates and
+32KiBserialized output; the production fixture batch has exactly2paths. The existing indexed raw
+transport, journal and report caps remain unchanged. Any failed fixture/control or unconfirmed
+handle/cleanup/journal closure blocks the parent attempt. Cleanup can remove only its exact
+still-bound empty child after owned handles close. Collection approval stays false; a prior VM or a
+successful synthetic fixture cannot authorize later workload custody or user-machine storage.
 
-Limits remain 24 rows, 128 ACEs, 16 KiB per binary descriptor and UTF8 descriptor text, 32 KiB
-aggregates, 32 KiB serialized provider result and assembled directory report. Overflow stops; it
-does not truncate an SDDL/ACE into a complete fact. If assembly cannot retain whole descriptors
-within its bound, it explicitly omits those records and preserves bounded filesystem identities in
-an incomplete report. The existing report/journal caps remain. Process timeout/signal/nonzero/parse
-failures retain available pre/post identities with descriptorAvailability unavailable, not a
-fabricated empty list.
-
-Drift,reparse points,missing paths,access/parse/bounds errors,source or executable changes,
-cancellation and deadline exhaustion leave a journaled partial observation and escape outside step()
-before subsequent probes. No retry,privilege enablement,policy adjustment or alternate root occurs.
-Journal sync/close uncertainty blocks the parent attempt; a completed acquisition is not a durable
-or trusted attempt by itself. Existing ownerConfirmed and its metadata-I/O branch remain byte-exact;
-the earlier owner probes still record their principal SID solely for that unchanged gate. Directory
-facts never choose a root,accept Administrators ownership,unblock collection or establish a trusted
-principal policy. Same-host continuing custody/approval for later I/O remains unresolved.
-
-Local deterministic controls exercise the actual directory orchestration/command port with injected
-spawn results and real disposable identities,journal sync/close and report writes. They cover DACL
-states,opaque retention,partial access failure,malformed/oversized
-responses,reparse/drift,cancellation, source/runtime changes and cleanup failures. They do not run
-PowerShell or qualify this new script on Windows. Sealed source/failure review is required before
-any push or hosted attempt.
-
-References:
-[Get-Acl](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/get-acl?view=powershell-5.1),
-[security descriptor sections](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.accesscontrolsections?view=netframework-4.8.1),
-and
-[null/empty DACL distinctions](https://learn.microsoft.com/en-us/windows/win32/secauthz/null-dacls-and-empty-dacls).
-
-The provider binary getter reads the already loaded managed descriptor, not permanent storage:
-[GetSecurityDescriptorBinaryForm](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.objectsecurity.getsecuritydescriptorbinaryform?view=netframework-4.8.1).
+Local deterministic controls run the actual fixture controller, descriptor-command port, journal,
+file probes and cleanup against disposable files, injecting only the Windows command. The existing
+WinPS script passed25nativecases in the accepted prior run; new Windows child inheritance and
+functional I/O under this policy have not executed. Exact policy/source review and separate
+publication/run authorization remain required.
 
 Run 39105545037 exposed a Windows PowerShell 5.1 input-array boundary: wrapping the
 `ConvertFrom-Json` command in `@(...)` made the first row's path an array, serialized as a
@@ -144,8 +115,8 @@ The decoder now assigns `ConvertFrom-Json -InputObject` directly, requires a roo
 actual strings, validates every element before adding it to a typed string list, and returns that
 `string[]` as one pipeline object using unary comma. The caller assigns directly to `string[]`.
 There is no cast of unvalidated objects, nested-array flattening, `Count`/`value` extraction, path
-substitution or parser relaxation. The fixed five labels, ancestor allowlist and exact Node row
-comparison remain unchanged. The input JSON byte cap remains 24 KiB.
+substitution or parser relaxation. Strict exact Node row comparison remains unchanged; the
+production batch now has only the two fixed fixture paths. The input JSON byte cap remains 24 KiB.
 
 Before any Get-Acl in that same child, 25 pure PowerShell contract cases invoke the exact production
 decoder and serializer. They cover empty refusal, single/multiple/maximum inputs, the actual failed

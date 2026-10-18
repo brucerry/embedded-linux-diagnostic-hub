@@ -659,8 +659,11 @@ test('production path is directory-only; historical token/compiled fixtures rema
         source,
         /runQualifiedOwnershipSnapshot|tokenContractInputs|ownershipSnapshotScript|GetTokenInformation|AccessCheck/,
     );
-    assert.match(source, /await observeDirectoryFacts/);
-    assert(source.indexOf('await observeDirectoryFacts(') < source.indexOf('const ownerConfirmed'));
+    assert.match(source, /await runHostedMetadataFixture/);
+    assert.doesNotMatch(source, /await observeDirectoryFacts\(/);
+    assert(
+        source.indexOf('await runHostedMetadataFixture(') > source.indexOf('const ownerConfirmed'),
+    );
     assert.match(ps, /Get-Acl -LiteralPath \$literal -ErrorAction Stop/);
     assert.match(ps, /GetSecurityDescriptorSddlForm\(\$sections\)/);
     assert.match(ps, /RawSecurityDescriptor/);

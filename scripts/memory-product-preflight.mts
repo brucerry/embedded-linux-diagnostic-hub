@@ -15,14 +15,17 @@ import {
     ancestryIdentity,
     checkAncestry,
     refuseMarker,
-    metadataIdentity,
     fileIdentity,
     dependencyFacts,
-    metadataFileProbe,
-    existingOwnershipPaths,
     PreflightJournal,
     writeReport,
 } from './lib/windows-preflight.mjs';
+
+import {
+    hostedMetadataFixturePolicy,
+    hostedFixtureContext,
+    runHostedMetadataFixture,
+} from './lib/hosted-ci-metadata-fixture.mjs';
 
 import {
     directoryFactsPlan,
@@ -185,6 +188,57 @@ export async function observeDirectoryFacts({
     });
     requireDirectoryFactsComplete(observation); // Outside step(): partial facts remain journaled, then stop.
     return observation;
+}
+export async function inspectHostedFixtureDescriptors({
+    root,
+    powershell,
+    sourceSHA256,
+    paths,
+    command,
+    observe,
+    step,
+    admit,
+}) {
+    return step('metadata-fixture-descriptors', async () => {
+        admit();
+        assert.equal(paths.length, 2);
+        assert.equal(
+            await sourceFingerprint(root),
+            sourceSHA256,
+            'Source changed before fixture descriptor read.',
+        );
+        const script = path.join(root, directoryFactsInput.path),
+            scriptIdentity = fileIdentity(script, { check: admit }),
+            executable = fileIdentity(powershell, { pe: true, check: admit });
+        assert.equal(scriptIdentity.sha256, directoryFactsInput.sha256);
+        assert.equal(executable.pe.architecture, 'x64');
+        const response = parseDirectoryDescriptorReport(
+            command(
+                powershell,
+                directoryFactsScript,
+                {
+                    HUB_PREFLIGHT_DIRECTORY_FACTS_PS1: script,
+                    HUB_PREFLIGHT_DIRECTORY_PATHS: JSON.stringify(paths),
+                },
+                {
+                    onResult: (result) => {
+                        for (const record of providerReplyRecords(result))
+                            observe('directory-provider-reply', record);
+                    },
+                },
+            ),
+            paths,
+        );
+        admit();
+        assert.equal(
+            await sourceFingerprint(root),
+            sourceSHA256,
+            'Source changed after fixture descriptor read.',
+        );
+        assert.deepEqual(fileIdentity(script, { check: admit }), scriptIdentity);
+        assert.deepEqual(fileIdentity(powershell, { pe: true, check: admit }), executable);
+        return response;
+    });
 }
 export function recordJournalClosure(report, closure) {
     report.journalClosure = closure ?? null;
@@ -376,19 +430,6 @@ export async function productPreflight(
                 [reportRoot, tmp],
             ),
         );
-        const candidates = await step('existing-ownership-paths', () =>
-            existingOwnershipPaths(reportRoot, tmp),
-        );
-        await observeDirectoryFacts({
-            root,
-            powershell,
-            sourceSHA256: report.sourceSHA256,
-            candidates,
-            command,
-            observe,
-            step,
-            admit,
-        });
         const ownerConfirmed = Boolean(
             single &&
             multi &&
@@ -398,21 +439,52 @@ export async function productPreflight(
         );
         observe('owner-observation', {
             ownerConfirmed,
+            ownerSIDEqualityRequired: false,
+            fixturePolicy: hostedMetadataFixturePolicy.name,
             ACLChanged: false,
             ownerChanged: false,
             atomicHandleCapabilityClaim: false,
         });
-        if (ownerConfirmed)
-            for (const fault of [null, 'sync', 'close'])
-                await step('metadata-io-' + (fault ?? 'nominal'), () => {
-                    const proof = metadataFileProbe(reportRoot, { fault, check: admit });
-                    assert(proof.controlPassed, JSON.stringify(proof));
-                    return proof;
-                });
-        else
-            report.failures.push(
-                'Metadata I/O probes not admitted: current owner/principal unconfirmed.',
-            );
+        assert(
+            single && multi && single.principal === multi.principal,
+            'Consistent current runner SID observations required.',
+        );
+        const context = hostedFixtureContext(tmp);
+        observe('metadata-fixture-policy', hostedMetadataFixturePolicy);
+        observe('metadata-fixture-context', {
+            policy: context.policy,
+            parent: context.parent,
+            parentIdentity: context.parentIdentity,
+            ancestry: context.ancestry,
+            host: context.host,
+            canonicalTmp: context.canonicalTmp,
+            preservedEnvironment: context.preservedEnvironment,
+        });
+        const fixture = await runHostedMetadataFixture({
+            context,
+            principal: multi.principal,
+            inspect: (paths) =>
+                inspectHostedFixtureDescriptors({
+                    root,
+                    powershell,
+                    sourceSHA256: report.sourceSHA256,
+                    paths,
+                    command,
+                    observe,
+                    step,
+                    admit,
+                }),
+            admit,
+            cleanupCheck: () => {
+                checkAncestry(report.ancestry);
+                refuseMarker(tmp);
+            },
+            observe,
+        });
+        assert(
+            fixture.controlPassed,
+            'Hosted synthetic metadata fixture blocked: ' + JSON.stringify(fixture),
+        );
         await step('capacity', () => {
             const stat = fs.statfsSync(tmp, { bigint: true });
             return {

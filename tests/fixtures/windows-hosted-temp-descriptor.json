@@ -1,0 +1,34 @@
+{
+    "sourceRun": 39107781069,
+    "principal": "S-1-5-21-4239583824-265399229-1323058055-500",
+    "descriptor": {
+        "path": "C:\\Users\\runneradmin\\AppData\\Local\\Temp",
+        "availability": "observed",
+        "owner": "S-1-5-32-544",
+        "group": "S-1-5-21-4239583824-265399229-1323058055-513",
+        "sddl": "O:BAG:S-1-5-21-4239583824-265399229-1323058055-513D:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;LA)",
+        "descriptorBytes": 152,
+        "daclPresent": true,
+        "daclNull": false,
+        "daclState": "nonempty",
+        "aceCount": 3,
+        "aces": [
+            {
+                "type": 0,
+                "flags": 19,
+                "binary": "ABMUAP8BHwABAQAAAAAABRIAAAA="
+            },
+            {
+                "type": 0,
+                "flags": 19,
+                "binary": "ABMYAP8BHwABAgAAAAAABSAAAAAgAgAA"
+            },
+            {
+                "type": 0,
+                "flags": 19,
+                "binary": "ABMkAP8BHwABBQAAAAAABRUAAABQ6rL8vavRD4dD3E70AQAA"
+            }
+        ],
+        "error": null
+    }
+}

@@ -165,7 +165,10 @@ export function closeDescriptor(fd, io = fs) {
     return { synced, closed, errors };
 }
 /** Only a fresh nonce-named disposable metadata file; no app/storage/native backend is opened. */
-export function metadataFileProbe(root, { fault = null, check = () => {}, io = fs } = {}) {
+export function metadataFileProbe(
+    root,
+    { fault = null, check = () => {}, cleanupCheck = check, io = fs } = {},
+) {
     assert([null, 'sync', 'close'].includes(fault));
     check();
     const file = path.join(root, 'metadata-' + randomUUID() + '.tmp'),
@@ -229,7 +232,7 @@ export function metadataFileProbe(root, { fault = null, check = () => {}, io = f
         if (fd !== undefined) proof.handles.push(closeDescriptor(fd, io));
         if (created && proof.handles.every((h) => h.closed)) {
             try {
-                check();
+                cleanupCheck();
                 io.unlinkSync(file);
                 proof.removed = true;
             } catch (error) {
