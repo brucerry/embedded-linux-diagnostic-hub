@@ -26,6 +26,7 @@ export async function collectProductPreparation(
         events = process,
         supervisorNonce = null,
         startedAt = clock.now(),
+        entry: custody = null,
     } = {},
 ) {
     assert.equal(manifest.jobs.length, 2);
@@ -37,9 +38,15 @@ export async function collectProductPreparation(
             expectedParentCode: 0,
         });
     });
-    const started = startedAt,
+    const started = custody?.cohort.startedAt ?? startedAt,
         cohortDeadline = started + limits.cohortMs;
-    const records = [];
+    const records = [],
+        preparedDescriptors = [];
+    let preparedClosureUnknown = false;
+    const rememberPrepared = (logs) => {
+        for (const entry of logs ?? [])
+            if (!preparedDescriptors.includes(entry)) preparedDescriptors.push(entry);
+    };
     let failure = null,
         active = null,
         leaseOwned = false,
@@ -86,6 +93,7 @@ export async function collectProductPreparation(
             fail(value.reason ?? 'Supervisor cancellation.');
         else fail('Invalid supervisor cancellation identity.');
     };
+    const stopEntry = custody?.onCancel(fail);
     for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.on(event, interrupt);
     events.on('message', message);
     const ownerClock = {
@@ -117,7 +125,10 @@ export async function collectProductPreparation(
     }
     try {
         if (failure) throw Error(failure);
+        custody?.assertAdmissible();
         await ports.verify('preflight');
+        if (failure) throw Error(failure);
+        custody?.assertAdmissible();
         ports.lease.acquire();
         leaseOwned = true;
         record('owner.json', ports.owner);
@@ -139,31 +150,54 @@ export async function collectProductPreparation(
             if (failure) break;
             let session;
             try {
+                let jobIdentity;
+                const allocateJob = () => {
+                    if (jobIdentity) return jobIdentity;
+                    assert.equal(failure, null, 'Admission cancelled before job allocation.');
+                    custody?.assertAdmissible();
+                    const deadlineMs = Math.min(clock.now() + limits.jobMs, cohortDeadline);
+                    assert.ok(
+                        deadlineMs - clock.now() >= 1860000,
+                        'Insufficient unchanged 30-minute workload plus cleanup reserve.',
+                    );
+                    const job = productJob(
+                        JSON.stringify({
+                            schema: 1,
+                            nonce: randomUUID(),
+                            budgetMs: limits.jobMs,
+                            reserveMs: limits.reserveMs,
+                            deadlineMs,
+                        }),
+                        clock,
+                    );
+                    jobIdentity = job;
+                    return job;
+                };
+                const finalAdmission = (job) => {
+                    assert.equal(failure, null, 'Admission cancelled before actual spawn.');
+                    custody?.assertAdmissible(job);
+                    assert(
+                        clock.now() < job.deadlineMs - job.reserveMs &&
+                            clock.now() < cohortDeadline,
+                        'Existing job/cohort deadline expired before actual spawn.',
+                    );
+                };
+                const prepared = ports.prepare
+                    ? await ports.prepare(spec, allocateJob, (error) => fail(error), finalAdmission)
+                    : undefined;
+                rememberPrepared(prepared?.logs);
                 session = ports.begin(
                     spec,
-                    () => {
-                        assert.equal(failure, null, 'Admission cancelled before spawn.');
-                        const deadlineMs = Math.min(clock.now() + limits.jobMs, cohortDeadline);
-                        assert.ok(
-                            deadlineMs - clock.now() >= 1860000,
-                            'Insufficient unchanged 30-minute workload plus cleanup reserve.',
-                        );
-                        const job = productJob(
-                            JSON.stringify({
-                                schema: 1,
-                                nonce: randomUUID(),
-                                budgetMs: limits.jobMs,
-                                reserveMs: limits.reserveMs,
-                                deadlineMs,
-                            }),
-                            clock,
-                        );
-                        return job;
-                    },
+                    allocateJob,
                     (error) => fail(error),
+                    finalAdmission,
+                    prepared,
                 );
             } catch (error) {
-                admissionUncertain = !error.noChildStarted;
+                rememberPrepared(error.preparedLogs);
+                // noChildStarted proves only admission, never descriptor durability/closure.
+                if (error.fdClosure?.complete !== true) preparedClosureUnknown = true;
+                admissionUncertain ||= !error.noChildStarted;
                 fail(error);
                 break;
             }
@@ -328,6 +362,23 @@ export async function collectProductPreparation(
             fail(e);
         }
     }
+    const preparedClosure = {
+        complete:
+            !preparedClosureUnknown &&
+            preparedDescriptors.every(
+                (entry) => entry.synced === true && entry.closed === true && !entry.errors.length,
+            ),
+        closureUnknown: preparedClosureUnknown,
+        handles: preparedDescriptors.map((entry) => ({
+            name: entry.name ?? null,
+            syncObserved: entry.synced === true,
+            closeObserved: entry.closed === true,
+            closeAttempted: entry.attempted === true,
+            errors: [...entry.errors],
+        })),
+    };
+    const preparedEvidenceClosed = record('prepared-descriptors.json', preparedClosure);
+    if (!preparedClosure.complete) fail('Prepared log durability/closure unconfirmed.');
     if (!journalClosed) fail('Journal incomplete, not durable or not closed.');
     if (!ports.evidenceComplete()) fail('Evidence writes/closures unconfirmed.');
     const result = {
@@ -338,6 +389,7 @@ export async function collectProductPreparation(
         collectorSHA256: manifest.collectorSHA256,
         manifestSHA256: ports.manifestSHA256,
         journalClosed,
+        preparedClosure,
         policyReviewed: false,
         thresholdsSelected: false,
         collectionOnly: true,
@@ -360,6 +412,8 @@ export async function collectProductPreparation(
         admissionCertain: !admissionUncertain,
         evidenceClosed:
             journalClosed &&
+            preparedEvidenceClosed &&
+            preparedClosure.complete &&
             ports.evidenceComplete() &&
             records.every((r) => r.streams.complete === true),
         inputsUnchanged: pinsUnchanged,
@@ -394,6 +448,7 @@ export async function collectProductPreparation(
         completion.leaseRetained ||
         completion.leaseOwnershipUnverified ||
         admissionUncertain ||
+        !preparedClosure.complete ||
         !proof.directParentsClosed ||
         !proof.leafReceiptsClosed
     ) {
@@ -403,6 +458,7 @@ export async function collectProductPreparation(
     }
     for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.off(event, interrupt);
     events.off('message', message);
+    stopEntry?.();
     return {
         ...completion,
         status: failure ? 'INVALID_PRODUCT_COLLECTION' : completion.status,

@@ -1,3 +1,4 @@
+import { fork } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { isolatedGateway } from './memory-resource-gateway-process';
@@ -6,6 +7,7 @@ import type { ProductTargetControl, ProductTargetSnapshot } from './memory-produ
 /** Real product gateway in its own process plus a private synthetic authenticated SSH target. */
 export async function createProductGateway(context: {
     signal?: AbortSignal;
+    startup?: import('./native-pilot-startup').NativePilotStartup;
     workDeadlineMs?: number;
     origin: string;
     gcMode: string;
@@ -15,6 +17,18 @@ export async function createProductGateway(context: {
     assert.ok(context.profile, 'A private qualification profile identity is required.');
     const gateway = await isolatedGateway(context.origin, context.gcMode, context.emit, {
         signal: context.signal,
+        ...(context.startup
+            ? {
+                  forkChild: ((...args: Parameters<typeof import('node:child_process').fork>) =>
+                      context.startup!.spawn(
+                          'gateway-' + String(args[1]),
+                          () => fork(...args),
+                          () => {
+                              /* OwnedHost's bound AbortSignal forwards its nonce-specific cancel-startup. */
+                          },
+                      )) as typeof fork,
+              }
+            : {}),
         workDeadlineMs: context.workDeadlineMs,
         hostFiles: {
             'ssh-fixture-node': fileURLToPath(

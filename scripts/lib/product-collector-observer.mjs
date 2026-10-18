@@ -12,6 +12,7 @@ export async function observeCollector(
         record = () => {},
         streams = [],
         startedAt = clock.now(),
+        entry = null,
     } = {},
 ) {
     const started = startedAt,
@@ -55,7 +56,9 @@ export async function observeCollector(
         state.errors.push('Outer observer interrupted/disconnected.');
         cancel('Outer observation interrupted.');
     };
-    for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.on(event, interrupt);
+    const stopEntry = entry?.onCancel(interrupt);
+    if (!entry)
+        for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.on(event, interrupt);
     let resolve;
     const closed = new Promise((done) => (resolve = done));
     child.once('spawn', () => {
@@ -112,7 +115,9 @@ export async function observeCollector(
     } catch (error) {
         state.errors.push(String(error));
     }
-    for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.off(event, interrupt);
+    if (!entry)
+        for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.off(event, interrupt);
+    stopEntry?.();
     return {
         ...state,
         elapsedMs: clock.now() - started,

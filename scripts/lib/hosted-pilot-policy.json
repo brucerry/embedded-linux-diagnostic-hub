@@ -1,0 +1,30 @@
+{
+    "schema": 1,
+    "name": "github-hosted-windows-finite-native-pilot-v2",
+    "repository": "brucerry/embedded-linux-diagnostic-hub",
+    "stages": ["real-os-pty", "native-electron-store"],
+    "treeBytes": 257949696,
+    "treeFiles": 8192,
+    "jobBytes": 268435456,
+    "cohortBytes": 536870912,
+    "evidenceBytes": 10485760,
+    "totalMs": 600000,
+    "cleanupReserveMs": 60000,
+    "ptyTestMs": 25000,
+    "nativeCycles": 1,
+    "payloadBytes": 65536,
+    "normalGC": true,
+    "hardNativeDiskCap": false,
+    "transientPeakKnown": false,
+    "capacityQualifiedForFullPair": false,
+    "collectionApproval": false,
+    "securityChanges": false,
+    "trustedBoundary": "fresh disposable GitHub-hosted Windows VM; reviewed code/actions/dependencies; SYSTEM, Administrators, exact runner SID",
+    "excludedThreats": "hostile co-resident processes, malicious same-user code or administrators",
+    "residualScratch": [
+        "Windows/.NET PowerShell compiler scratch",
+        "native SQLite/platform scratch outside explicit app paths",
+        "OS-managed caches and logs"
+    ],
+    "observationScope": "logical sizes of private and evidence trees plus separately reported known tsx scratch; inter-sample excursions and unknown external writes are not measured as zero"
+}

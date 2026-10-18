@@ -50,6 +50,8 @@ export async function createNativeAggregateDriver(context: {
     profile: string;
     viewer?: boolean;
     component?: boolean;
+    pilot?: Record<string, any>;
+    startup?: import('./native-pilot-startup').NativePilotStartup;
     signal?: AbortSignal;
     workDeadlineMs?: number;
     emit(stage: string, data: unknown): Promise<void>;
@@ -170,6 +172,8 @@ export async function createNativeAggregateDriver(context: {
     try {
         admit();
         host = await createProductNative({
+            pilot: context.pilot,
+            startup: context.startup,
             signal: context.signal,
             workDeadlineMs: context.workDeadlineMs,
             profile: context.profile,
@@ -179,6 +183,7 @@ export async function createNativeAggregateDriver(context: {
         });
         admit();
         gateway = await createProductGateway({
+            startup: context.startup,
             signal: context.signal,
             workDeadlineMs: context.workDeadlineMs,
             profile: path.join(path.dirname(context.profile), 'target-profile'),

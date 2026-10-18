@@ -10,6 +10,11 @@ import { transformSync } from 'esbuild';
 import { runNativeCleanup } from './fixtures/memory-product-native-cleanup';
 import { createProductParentClosureWitness } from './fixtures/memory-product-parent-closure';
 import { productStartup } from './fixtures/memory-product-startup';
+import {
+    nativePilotLaunchRoutes,
+    pilotEarlyAppPaths,
+    pilotPathMap,
+} from './fixtures/native-pilot-paths';
 import { BrowserDownloadEvents } from './fixtures/memory-product-browser-downloads';
 
 const fixtureRoot =
@@ -161,6 +166,8 @@ function host(file: string, control: Control = {}) {
         if (name === './memory-product-browser-downloads') return { BrowserDownloadEvents };
         if (name === './memory-product-parent-closure')
             return { createProductParentClosureWitness };
+        if (name === './native-pilot-paths')
+            return { nativePilotLaunchRoutes, pilotEarlyAppPaths, pilotPathMap };
         if (name === 'esbuild') return {};
         if (name.startsWith('./memory-product-') || name === './memory-resource-ssh-profile')
             return {};

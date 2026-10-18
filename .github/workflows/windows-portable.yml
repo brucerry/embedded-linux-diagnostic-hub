@@ -14,6 +14,27 @@ on:
                 type: boolean
                 required: false
                 default: false
+            windows_native_pilot:
+                description: 'One reviewed finite native readiness pilot; collection stays disabled'
+                type: boolean
+                required: false
+                default: false
+            pilot_source_sha256:
+                description: 'Independently reviewed frozen pilot source digest'
+                type: string
+                required: false
+            pilot_policy_sha256:
+                description: 'Independently reviewed hosted-pilot-policy.json digest'
+                type: string
+                required: false
+            pilot_coverage_sha256:
+                description: 'Independently reviewed native coverage JSON digest'
+                type: string
+                required: false
+            pilot_coverage_json:
+                description: 'Exact independently reviewed finite-pilot native coverage JSON'
+                type: string
+                required: false
     push:
         branches: [main]
     pull_request:
@@ -24,13 +45,17 @@ permissions:
 concurrency:
     group:
         windows-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch'
-        && inputs.windows_preflight_only && '-preflight' || '' }}
+        && inputs.windows_preflight_only && '-preflight' || github.event_name == 'workflow_dispatch'
+        && inputs.windows_native_pilot && '-native-pilot' || '' }}
     cancel-in-progress:
-        ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only) }}
+        ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
+        inputs.windows_native_pilot)) }}
 
 jobs:
     build:
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only) }}
+        if:
+            ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
+            inputs.windows_native_pilot)) }}
         runs-on: windows-latest
         timeout-minutes: 30
         steps:
@@ -124,7 +149,9 @@ jobs:
 
     windows-preflight-only:
         name: Windows metadata preflight (nonqualifying)
-        if: github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only
+        if:
+            github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only &&
+            !inputs.windows_native_pilot
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -167,5 +194,63 @@ jobs:
               with:
                   name: windows-metadata-preflight-${{ github.run_id }}-${{ github.run_attempt }}
                   path: ${{ runner.temp }}/diagnostic-hub-windows-preflight/
+                  if-no-files-found: warn
+                  retention-days: 14
+
+    windows-native-pilot:
+        name: Finite Windows native readiness pilot (nonqualifying)
+        if: github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot
+        runs-on: windows-latest
+        timeout-minutes: 15
+        env:
+            HUB_WINDOWS_NATIVE_PILOT: '1'
+            HUB_NATIVE_PILOT_COVERAGE_JSON: ${{ inputs.pilot_coverage_json }}
+            PILOT_EXPECTED_SOURCE: ${{ inputs.pilot_source_sha256 }}
+            PILOT_EXPECTED_POLICY: ${{ inputs.pilot_policy_sha256 }}
+            PILOT_COVERAGE_SHA256: ${{ inputs.pilot_coverage_sha256 }}
+            PILOT_METADATA_SELECTED: ${{ inputs.windows_preflight_only }}
+        steps:
+            - name: Refuse combined selectors, unreviewed identities and replacement attempts
+              shell: pwsh
+              run: |
+                  if ($env:PILOT_METADATA_SELECTED -eq 'true') { throw 'Pilot and metadata-only selectors are mutually exclusive.' }
+                  if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'One pilot attempt; no replacement reruns.' }
+                  foreach ($digest in @($env:PILOT_EXPECTED_SOURCE, $env:PILOT_EXPECTED_POLICY, $env:PILOT_COVERAGE_SHA256)) {
+                      if ($digest -cnotmatch '^[a-f0-9]{64}$') { throw 'Exact independently reviewed digest required.' }
+                  }
+                  if (-not $env:HUB_NATIVE_PILOT_COVERAGE_JSON) { throw 'Reviewed finite-pilot coverage JSON required.' }
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  architecture: x64
+                  cache: npm
+            - name: Restore lockfile dependencies without native workload dispatch
+              run: npm ci
+            - name: Create a fresh nonsecret pilot report directory and resolve actual loader
+              shell: pwsh
+              run: |
+                  $root = Join-Path $env:RUNNER_TEMP 'diagnostic-hub-finite-native-pilot'
+                  if (Test-Path -LiteralPath $root) { throw 'Fresh pilot report root required.' }
+                  New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+                  $canonical = node -p "require('node:fs').realpathSync(process.argv[1])" "$root"
+                  if ($LASTEXITCODE -ne 0) { throw 'Physical pilot report root required.' }
+                  $loader = node -p "require('node:url').pathToFileURL(require.resolve('tsx')).href"
+                  if ($LASTEXITCODE -ne 0) { throw 'Actual loader required.' }
+                  "PILOT_ROOT=$canonical" >> $env:GITHUB_ENV
+                  "PILOT_LOADER=$loader" >> $env:GITHUB_ENV
+            - name: Run exactly one same-owner PTY then finite native cycle
+              shell: pwsh
+              run: |
+                  node --import $env:PILOT_LOADER scripts/windows-native-pilot.mts "--out=$env:PILOT_ROOT" "--expected-source=$env:PILOT_EXPECTED_SOURCE" "--expected-policy=$env:PILOT_EXPECTED_POLICY" "--coverage-sha256=$env:PILOT_COVERAGE_SHA256"
+                  if ($LASTEXITCODE -ne 0) { throw 'Pilot failed or ownership is unconfirmed; retain evidence, no retry.' }
+            - name: Retain bounded nonsecret pilot facts, including failed attempts
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-finite-native-pilot-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: ${{ runner.temp }}/diagnostic-hub-finite-native-pilot/
                   if-no-files-found: warn
                   retention-days: 14

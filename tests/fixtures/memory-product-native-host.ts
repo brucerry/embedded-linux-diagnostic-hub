@@ -1,3 +1,8 @@
+import assert from 'node:assert/strict';
+import { NativePilotStartup } from './native-pilot-startup';
+import { nativePilotLaunchRoutes, pilotEarlyAppPaths, pilotPathMap } from './native-pilot-paths';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { productStartup } from './memory-product-startup';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -66,20 +71,16 @@ const mainProbe = String.raw`
     });
 `;
 
-export async function createProductNative(options: {
-    signal?: AbortSignal;
-    workDeadlineMs?: number;
+export async function prepareProductNativeBuild(options: {
     profile: string;
     gcMode: string;
     coldStart?: boolean;
+    signal?: AbortSignal;
+    workDeadlineMs?: number;
+    pilot?: Record<string, any>;
     emit(stage: string, data: unknown): Promise<void>;
 }) {
     const admit = productStartup(options);
-    admit();
-    if (!options.profile || !path.isAbsolute(options.profile))
-        throw Error('Private product native profile must be an explicit absolute path.');
-    if (!['normal', 'forced'].includes(options.gcMode))
-        throw Error('Unsupported product native GC mode.');
     const sourceRoot = path.resolve(import.meta.dirname, '../..'),
         require = createRequire(import.meta.url);
     const root = path.resolve(options.profile, '..', 'native-app'),
@@ -114,24 +115,40 @@ export async function createProductNative(options: {
             ),
         );
     const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
-    await options.emit(
-        'native-renderer-build',
-        await run(
-            [
-                vite,
-                'build',
-                '--mode',
-                'desktop',
-                '--config',
-                'tests/fixtures/memory-product.vite.mts',
-            ],
-            {
-                ...process.env,
-                HUB_PRODUCT_BUILD_OUT: renderer,
-                HUB_PRODUCT_AGGREGATE_COLD_START: options.coldStart ? '1' : '0',
-            },
-        ),
-    );
+    if (options.pilot) {
+        process.env.HUB_PRODUCT_BUILD_OUT = renderer;
+        process.env.HUB_PRODUCT_AGGREGATE_COLD_START = options.coldStart ? '1' : '0';
+        const { build: viteBuild } = await import('vite');
+        await viteBuild({
+            configFile: path.join(sourceRoot, 'tests/fixtures/memory-product.vite.mts'),
+            configLoader: 'runner',
+            mode: 'desktop',
+        });
+        await options.emit('native-renderer-build', {
+            configLoader: 'runner',
+            configFile: 'tests/fixtures/memory-product.vite.mts',
+            outDir: renderer,
+        });
+    } else {
+        await options.emit(
+            'native-renderer-build',
+            await run(
+                [
+                    vite,
+                    'build',
+                    '--mode',
+                    'desktop',
+                    '--config',
+                    'tests/fixtures/memory-product.vite.mts',
+                ],
+                {
+                    ...process.env,
+                    HUB_PRODUCT_BUILD_OUT: renderer,
+                    HUB_PRODUCT_AGGREGATE_COLD_START: options.coldStart ? '1' : '0',
+                },
+            ),
+        );
+    }
     admit();
     const profile = await sshQualificationProfile();
     admit();
@@ -168,8 +185,17 @@ export async function createProductNative(options: {
                         if (source.split(needle).length !== 2)
                             throw Error('Native lifecycle observer boundary changed.');
                         source = source.replace(needle, mainProbe + '\n' + needle);
+                        const early = options.pilot
+                            ? `import {app as __pilotApp} from 'electron';
+const __pilot=JSON.parse(process.env.HUB_NATIVE_PILOT_PATHS!);
+if(__pilotApp.isReady())throw Error('Pilot paths configured late');
+__pilotApp.setPath('temp',__pilot.temp);__pilotApp.setPath('crashDumps',__pilot.crashDumps);__pilotApp.setAppLogsPath(__pilot.logs);
+(globalThis as any).__memoryPilotPaths={temp:__pilotApp.getPath('temp'),crashDumps:__pilotApp.getPath('crashDumps'),logs:__pilotApp.getPath('logs')};
+`
+                            : '';
                         return {
                             contents:
+                                early +
                                 "import {writeNativeReceipt as __memoryWriteSnapshot} from '../tests/fixtures/memory-product-native-evidence';\nimport {workerReadFault as __memoryNativeReadFault} from '../tests/fixtures/memory-product-worker-faults';\nimport {NativeSaveControl as __memoryNativeSaveControl} from '../tests/fixtures/memory-product-native-save-control';\n" +
                                 source,
                             loader: 'ts',
@@ -224,8 +250,12 @@ export async function createProductNative(options: {
             },
         ],
     });
-    for (const file of ['main.cjs', 'preload.cjs'])
-        await run(['--check', path.join(desktop, file)]);
+    for (const file of ['main.cjs', 'preload.cjs']) {
+        if (options.pilot) {
+            const { Script } = await import('node:vm');
+            new Script(await fs.readFile(path.join(desktop, file), 'utf8'), { filename: file });
+        } else await run(['--check', path.join(desktop, file)]);
+    }
     admit();
     const metadata = JSON.parse(await fs.readFile(path.join(sourceRoot, 'package.json'), 'utf8'));
     await fs.writeFile(
@@ -237,6 +267,87 @@ export async function createProductNative(options: {
             main: 'dist-electron/main.cjs',
         }),
     );
+
+    return { root, metadata, downloads, profile };
+}
+export async function createProductNative(options: {
+    signal?: AbortSignal;
+    workDeadlineMs?: number;
+    pilot?: Record<string, any>;
+    startup?: NativePilotStartup;
+    profile: string;
+    gcMode: string;
+    coldStart?: boolean;
+    emit(stage: string, data: unknown): Promise<void>;
+}) {
+    const admit = productStartup(options);
+    admit();
+    if (!options.profile || !path.isAbsolute(options.profile))
+        throw Error('Private product native profile must be an explicit absolute path.');
+    if (!['normal', 'forced'].includes(options.gcMode))
+        throw Error('Unsupported product native GC mode.');
+    const require = createRequire(import.meta.url);
+    let prepared;
+    if (options.pilot) {
+        options.pilot.check();
+        assert(options.startup, 'Pilot startup owner required before build');
+        const startup = options.startup;
+        const loader = pathToFileURL(require.resolve('tsx')).href;
+        const child = startup.spawn(
+            'native-build-owner',
+            () =>
+                spawn(
+                    process.execPath,
+                    [
+                        '--require',
+                        path.join(path.dirname(process.env.HUB_MEMORY_SSH_PROFILE!), 'preload.cjs'),
+                        '--import',
+                        loader,
+                        path.join(import.meta.dirname, 'native-pilot-build-worker.ts'),
+                        JSON.stringify({
+                            profile: options.profile,
+                            gcMode: options.gcMode,
+                            coldStart: options.coldStart,
+                            workDeadlineMs: options.workDeadlineMs,
+                            root: options.pilot!.root,
+                            nonce: options.pilot!.nonce,
+                        }),
+                    ],
+                    {
+                        cwd: path.resolve(import.meta.dirname, '../..'),
+                        windowsHide: true,
+                        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+                        env: { ...process.env, HUB_NATIVE_PILOT_STAGE: '1' },
+                    },
+                ),
+            (c) => {
+                if (c.connected) c.send({ kind: 'cancel-native-pilot-build' });
+                else startup.options.hold('Build cancellation IPC unavailable');
+            },
+        );
+        let result: any;
+        let evidenceTask = Promise.resolve();
+        child.on('message', (message: any) => {
+            if (message?.kind === 'native-build-event')
+                evidenceTask = evidenceTask
+                    .then(() => options.emit(message.stage, message.data))
+                    .then(() => {
+                        if (child.connected) child.send({ kind: 'native-build-event-ack' });
+                    })
+                    .catch((e) => {
+                        startup.options.hold(e);
+                        throw e;
+                    });
+            if (message?.kind === 'native-build-result') result = message.result;
+        });
+        const row = startup.children.get(child)!;
+        await row.closed;
+        await evidenceTask;
+        assert.equal(row.code, 0, 'Owned native build failed');
+        assert(result, 'Native build receipt missing');
+        prepared = result;
+    } else prepared = await prepareProductNativeBuild(options);
+    const { root, metadata, downloads, profile } = prepared;
     const exitFile = path.resolve(options.profile, '..', 'native-will-quit.json');
     const environment = Object.fromEntries(
         Object.entries(process.env).filter(
@@ -244,7 +355,7 @@ export async function createProductNative(options: {
         ),
     ) as Record<string, string>;
     admit();
-    const application = await _electron.launch({
+    const launchOptions = {
         chromiumSandbox: true,
         executablePath: require('electron'),
         args: [
@@ -256,8 +367,29 @@ export async function createProductNative(options: {
             ...environment,
             HUB_PRODUCT_NATIVE_EXIT: exitFile,
             HUB_PRODUCT_NATIVE_DOWNLOADS: downloads,
+            ...(options.pilot
+                ? { HUB_NATIVE_PILOT_PATHS: JSON.stringify(pilotEarlyAppPaths(options.pilot)) }
+                : {}),
         },
-    });
+        ...(options.pilot ? nativePilotLaunchRoutes(options.pilot) : {}),
+    };
+    const application = options.pilot
+        ? await options.startup!.opaque(
+              'playwright-electron-launch',
+              () => _electron.launch(launchOptions),
+              (app) => {
+                  options.startup!.adopt('electron-main', app.process(), () => {
+                      void app.close().catch((e) => options.startup!.options.hold(e));
+                  });
+              },
+              (app) => app.close(),
+          )
+        : await _electron.launch(launchOptions);
+    if (options.pilot) {
+        const actual = await application.evaluate(() => (globalThis as any).__memoryPilotPaths);
+        assert.deepEqual(actual, pilotEarlyAppPaths(options.pilot));
+        await options.emit('native-early-paths', actual);
+    }
     const child = application.process();
     const actualClose = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
         (resolve) => child.once('close', (code, signal) => resolve({ code, signal })),

@@ -37,7 +37,7 @@ if(process.env.HUB_MEMORY_SSH_PROFILE&&path.resolve(process.env.HUB_MEMORY_SSH_P
 process.env.HUB_MEMORY_SSH_PROFILE=manifestPath;
 registerHooks({resolve(specifier,context,nextResolve){if(specifier==='ssh2')return{url:pathToFileURL(path.join(__dirname,'ssh2.cjs')).href,shortCircuit:true};if(specifier.startsWith('ssh2/'))throw Error('SSH qualification uses the main bundled entry only.');return nextResolve(specifier,context);}});
 `;
-export async function prepareMemoryRuntime(root = process.cwd()) {
+export async function prepareMemoryRuntime(root = process.cwd(), outputParent) {
     assert.match(
         process.versions.node,
         /^24\./,
@@ -158,8 +158,9 @@ export async function prepareMemoryRuntime(root = process.cwd()) {
         excludedAccelerators: ['cpu-features', 'sshcrypto.node'],
     };
     const id = digest(JSON.stringify(core));
-    const profileRoot = path.resolve(root, 'validation/memory-runtime', id);
-    assert.ok(profileRoot.startsWith(path.resolve(root, 'validation/memory-runtime') + path.sep));
+    const parent = outputParent ?? path.resolve(root, 'validation/memory-runtime');
+    const profileRoot = path.resolve(parent, id);
+    assert.ok(profileRoot.startsWith(path.resolve(parent) + path.sep));
     let existing = false;
     try {
         await fs.mkdir(profileRoot, { recursive: false });

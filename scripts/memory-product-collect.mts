@@ -26,6 +26,12 @@ import {
 import { inspectProductRaw } from './lib/product-collector-inspection.mjs';
 import { sourceFingerprint } from '../tests/fixtures/memory-resource-identity';
 import { parseNativeCoverage } from '../tests/fixtures/memory-product-native-contract';
+import {
+    CollectionEntry,
+    createOwnershipHold,
+    prepareProductSpawn,
+    prepareProductLogs,
+} from './lib/product-entry-custody.mjs';
 import { productClock } from '../tests/fixtures/memory-product-owner';
 
 const sourceRoot = fs.realpathSync(path.resolve(import.meta.dirname, '..')),
@@ -151,6 +157,9 @@ function environment(m) {
     return { ...env, PATH: m.childPATH, HUB_MEMORY_SSH_PROFILE: m.sshProfile.path };
 }
 export async function verifyProductManifest(m) {
+    throw Error(
+        'Collection disabled pending independent same-host approval/custody protocol review. Metadata from a previous hosted job cannot approve this host.',
+    );
     assert.equal(process.platform, 'win32', 'Native Windows producer required.');
     assert.equal(process.arch, 'x64');
     assert.equal(
@@ -196,20 +205,8 @@ export async function verifyProductManifest(m) {
         principalSID: m.principalSID,
     };
 }
-function entries(guard, names) {
-    const list = [];
-    try {
-        for (const name of names) {
-            const file = path.join(guard.root, name);
-            guard.check(file);
-            list.push({ fd: fs.openSync(file, 'wx', 0o600), errors: [], attempted: false });
-        }
-        return list;
-    } catch (error) {
-        error.fdClosure = closeEntries(list);
-        error.noChildStarted = true;
-        throw error;
-    }
+function entries(guard, names, io = fs) {
+    return prepareProductLogs(guard, names, io);
 }
 function recordPort(guard) {
     let complete = true,
@@ -227,287 +224,450 @@ function recordPort(guard) {
     };
     return { record, complete: () => complete };
 }
-export async function runCollector(m, manifestSHA256, nonce) {
-    assert.match(nonce ?? '', /^[a-f0-9-]{36}$/);
-    assert.equal(process.connected, true, 'Collector requires its actual outer IPC owner.');
-    await verifyProductManifest(m);
-    const ownerCheck = windowsPrincipalObserver(m),
-        rootGuard = new RootGuard(m.outputRoot, { ownerCheck }),
-        directory = rootGuard.mkdir('collector'),
-        guard = new RootGuard(directory, { ownerCheck });
-    const owner = {
-        schema: 1,
-        nonce,
-        sourceSHA256: m.sourceSHA256,
-        manifestSHA256,
-        pid: process.pid,
-        outputRoot: m.outputRoot,
-        kind: m.kind,
-        hostedRun: {
-            repository: process.env.GITHUB_REPOSITORY,
-            sha: process.env.GITHUB_SHA,
-            run: process.env.GITHUB_RUN_ID,
-            attempt: process.env.GITHUB_RUN_ATTEMPT,
-        },
-    };
-    const lease = new ProductLease(canonicalMarker(), owner, { ownerCheck }),
-        journal = new ProductJournal(guard, path.join(directory, 'journal.jsonl')),
-        records = recordPort(guard);
-    const collectorSHA256 = hashFile(fileURLToPath(import.meta.url));
-    m = { ...m, collectorSHA256 };
-    const ports = {
-        owner,
-        manifestSHA256,
-        lease,
-        journal,
-        verify: () => verifyProductManifest(m),
-        record: records.record,
-        evidenceComplete: records.complete,
-        begin(spec, admit, onFailure) {
-            let job;
-            try {
-                job = admit();
-            } catch (error) {
-                error.noChildStarted = true;
-                throw error;
-            }
-            const jobDirectory = guard.mkdir('job-' + spec.ordinal),
-                logs = entries(guard, [
-                    'parent-' + spec.ordinal + '.stdout.log',
-                    'parent-' + spec.ordinal + '.stderr.log',
-                ]);
-            const streams = logs.map((e) => streamCollector(e.fd, { onFailure }));
-            const argv = [
-                '--require',
-                m.sshPreload,
-                '--import',
-                pathToFileURL(m.tsx.path).href,
-                path.join(sourceRoot, 'tests/fixtures/memory-resource-soak.ts'),
-                '--child=1',
-                '--product-job=' + JSON.stringify(job),
-                '--calibration=1',
-                '--lane=desktop',
-                '--gc=normal',
-                '--viewer=1',
-                '--driver=' + path.join(sourceRoot, 'tests/fixtures/memory-product-aggregate.ts'),
-                '--source-sha256=' + m.sourceSHA256,
-                '--coverage-contract=' + m.coverage.path,
-                '--coverage-contract-sha256=' + m.coverage.sha256,
-                '--out=' + jobDirectory,
-                ...(spec.observerMode === 'no-sampler' ? ['--no-sampler=1'] : []),
-            ];
-            let child;
-            try {
-                child = spawn(m.node.path, argv, {
-                    cwd: sourceRoot,
-                    windowsHide: true,
-                    env: environment(m),
-                    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-                });
-            } catch (error) {
-                error.fdClosure = closeEntries(logs);
-                error.noChildStarted = true;
-                throw error;
-            }
-            let monitor;
-            return {
-                child,
-                job,
-                argv,
-                cwd: sourceRoot,
-                cancel(reason) {
-                    if (!child.connected) throw Error('Actual child IPC unavailable.');
-                    child.send({ kind: 'cancel-product-job', nonce: job.nonce, reason });
-                },
-                setup() {
-                    for (const [name, i] of [
-                        ['stdout', 0],
-                        ['stderr', 1],
-                    ]) {
-                        child[name].on('data', (bytes) => streams[i].write(bytes));
-                        child[name].on('error', onFailure);
-                    }
-                    monitor = setInterval(() => {
-                        try {
-                            guard.check(jobDirectory);
-                            treeInventory(jobDirectory, {
-                                maxBytes: limits.jobBytes - 10 * 1024 ** 2,
-                            });
-                        } catch (error) {
-                            onFailure(error);
-                        }
-                    }, 1000);
-                    child.once('close', () => clearInterval(monitor));
-                },
-                closeLogs() {
-                    clearInterval(monitor);
-                    const closure = closeEntries(logs);
-                    return {
-                        ...closure,
-                        streams: streams.map((s) => s.snapshot()),
-                        complete: closure.complete && streams.every((s) => !s.snapshot().truncated),
-                    };
-                },
-                inspect(parentLifecycle) {
-                    assert.equal(parentLifecycle.closeObserved, true);
-                    const tree = treeInventory(jobDirectory, {
-                            maxBytes: limits.jobBytes - 10 * 1024 ** 2,
-                        }),
-                        directories = fs.readdirSync(jobDirectory);
-                    assert.equal(directories.length, 1);
-                    const run = path.join(jobDirectory, directories[0]);
-                    const relativeTimeline = path
-                            .relative(jobDirectory, path.join(run, 'timeline.jsonl'))
-                            .replaceAll('\\', '/'),
-                        relativeExit = path
-                            .relative(jobDirectory, path.join(run, 'native-will-quit.json'))
-                            .replaceAll('\\', '/');
-                    assert(
-                        Object.hasOwn(tree.files, relativeTimeline) &&
-                            Object.hasOwn(tree.files, relativeExit),
-                    );
-                    const specs = Object.entries(tree.files).map(([relative, size]) => ({
-                        name:
-                            relative === relativeTimeline
-                                ? 'timeline'
-                                : relative === relativeExit
-                                  ? 'nativeExit'
-                                  : relative,
-                        path: path.join(jobDirectory, relative),
-                        max: Math.max(1, size),
-                    }));
-                    for (let i = 0; i < specs.length; i += 32)
-                        ownerCheck.many(specs.slice(i, i + 32).map((s) => s.path));
-                    const durable = readDurableArtifacts(specs, {
-                        check: (file) => guard.check(file),
-                    });
-                    for (let i = 0; i < specs.length; i += 32)
-                        ownerCheck.many(specs.slice(i, i + 32).map((s) => s.path));
-                    const result = inspectProductRaw(durable.raw, {
-                        sourceSHA256: m.sourceSHA256,
-                        adapterSHA256: hashFile(
-                            path.join(sourceRoot, 'tests/fixtures/memory-product-aggregate.ts'),
-                        ),
-                        contractSHA256: m.coverage.sha256,
-                        job,
-                        parentLifecycle,
-                        noSampler: spec.observerMode === 'no-sampler',
-                    });
-                    return {
-                        ...result,
-                        valid: result.valid && durable.durability.complete,
-                        ownershipComplete: result.ownershipComplete && durable.durability.complete,
-                        rawDurability: durable.durability,
-                        inventory: durable.inventory,
-                        privateTree: tree,
-                    };
-                },
-            };
-        },
-        summary(rows) {
-            records.record('pair-summary.json', {
-                collectionOnly: true,
-                policyQualified: false,
-                thresholdsSelected: false,
-                rows: rows.map((r) => ({
-                    ordinal: r.ordinal,
-                    observerMode: r.observerMode,
-                    receipt: r.inspection.receipt,
-                    rawTimelineSHA256: r.inspection.rawTimelineSHA256,
-                })),
-            });
-        },
-        holdUnknown(state) {
-            records.record('ownership-held.json', state);
-            return new Promise(() => {
-                setInterval(() => {}, 1000);
-            });
-        },
-    };
-    const result = await collectProductPreparation(m, ports, { supervisorNonce: nonce });
-    if (!result.completionDurable || result.status !== 'COLLECTED_UNREVIEWED_WINDOWS_PAIR')
-        process.exitCode = 1;
-    if (process.connected) process.disconnect();
-    return result;
-}
-export async function runOuter(m, manifestSHA256, manifestPath) {
-    const startedAt = productClock.now();
-    await verifyProductManifest(m);
-    assert.deepEqual(
-        fs.readdirSync(m.outputRoot),
-        [],
-        'One fresh reviewed empty evidence root, no retries.',
-    );
-    const ownerCheck = windowsPrincipalObserver(m),
-        rootGuard = new RootGuard(m.outputRoot, { ownerCheck }),
-        directory = rootGuard.mkdir('outer'),
-        guard = new RootGuard(directory, { ownerCheck }),
-        records = recordPort(guard),
-        logs = entries(guard, ['collector.stdout.log', 'collector.stderr.log']),
-        nonce = randomUUID();
-    let child;
-    const streams = logs.map((e) =>
-        streamCollector(e.fd, {
-            onFailure: (error) => {
-                if (child?.connected)
-                    child.send({ kind: 'cancel-product-collection', nonce, reason: String(error) });
-            },
-        }),
-    );
+function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
+    let journal;
     try {
-        child = spawn(
-            m.node.path,
-            [
-                '--import',
-                pathToFileURL(m.tsx.path).href,
-                fileURLToPath(import.meta.url),
-                '--collector=1',
-                '--nonce=' + nonce,
-                '--manifest=' + manifestPath,
-                '--manifest-sha256=' + manifestSHA256,
-            ],
-            {
-                cwd: sourceRoot,
-                env: environmentForCollector(),
-                windowsHide: true,
-                stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        entry.assertAdmissible();
+        const ownerCheck = windowsPrincipalObserver(m);
+        const rootGuard = new RootGuard(m.outputRoot, { ownerCheck });
+        entry.assertAdmissible();
+        const directory = rootGuard.mkdir('collector');
+        entry.assertAdmissible();
+        const guard = new RootGuard(directory, { ownerCheck });
+        entry.assertAdmissible();
+        const owner = {
+            schema: 1,
+            nonce,
+            sourceSHA256: m.sourceSHA256,
+            manifestSHA256,
+            pid: process.pid,
+            outputRoot: m.outputRoot,
+            kind: m.kind,
+            hostedRun: {
+                repository: process.env.GITHUB_REPOSITORY,
+                sha: process.env.GITHUB_SHA,
+                run: process.env.GITHUB_RUN_ID,
+                attempt: process.env.GITHUB_RUN_ATTEMPT,
             },
-        );
+        };
+        const lease = new ProductLease(canonicalMarker(), owner, { ownerCheck });
+        entry.assertAdmissible();
+        journal = new ProductJournal(guard, path.join(directory, 'journal.jsonl'));
+        const records = recordPort(guard);
+        const collectorSHA256 = hashFile(fileURLToPath(import.meta.url));
+        m = { ...m, collectorSHA256 };
+        const ports = {
+            owner,
+            manifestSHA256,
+            lease,
+            journal,
+            verify: () => verifyProductManifest(m),
+            record: records.record,
+            evidenceComplete: records.complete,
+            async prepare(spec, admit, onFailure, finalAdmission) {
+                const prepared = prepareProductSpawn(spec, admit, finalAdmission, {
+                    deferSpawn: true,
+                    directory: (spec) => guard.mkdir('job-' + spec.ordinal),
+                    logs: (spec) =>
+                        entries(guard, [
+                            'parent-' + spec.ordinal + '.stdout.log',
+                            'parent-' + spec.ordinal + '.stderr.log',
+                        ]),
+                    command(_spec, job, jobDirectory) {
+                        return [
+                            '--require',
+                            m.sshPreload,
+                            '--import',
+                            pathToFileURL(m.tsx.path).href,
+                            path.join(sourceRoot, 'tests/fixtures/memory-resource-soak.ts'),
+                            '--child=1',
+                            '--product-job=' + JSON.stringify(job),
+                            '--calibration=1',
+                            '--lane=desktop',
+                            '--gc=normal',
+                            '--viewer=1',
+                            '--driver=' +
+                                path.join(sourceRoot, 'tests/fixtures/memory-product-aggregate.ts'),
+                            '--source-sha256=' + m.sourceSHA256,
+                            '--coverage-contract=' + m.coverage.path,
+                            '--coverage-contract-sha256=' + m.coverage.sha256,
+                            '--out=' + jobDirectory,
+                            ...(spec.observerMode === 'no-sampler' ? ['--no-sampler=1'] : []),
+                        ];
+                    },
+                    options: () => ({
+                        cwd: sourceRoot,
+                        windowsHide: true,
+                        env: environment(m),
+                        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+                    }),
+                    spawn: (argv, options) => spawn(m.node.path, argv, options),
+                });
+                // Deliver queued IPC/signals from blocking Windows preparation before final admission.
+                try {
+                    await new Promise((resolve) => setImmediate(resolve));
+                } catch (error) {
+                    error.noChildStarted = true;
+                    error.preparedLogs = prepared.logs;
+                    error.fdClosure = closeEntries(prepared.logs);
+                    throw error;
+                }
+                return prepared;
+            },
+            begin(_spec, _allocate, onFailure, _finalAdmission, prepared) {
+                const launch = prepared.commit();
+                const { child, job, directory: jobDirectory, logs, command: argv } = launch;
+                const streams = logs.map((e) => streamCollector(e.fd, { onFailure }));
+                let monitor;
+                return {
+                    child,
+                    job,
+                    argv,
+                    cwd: sourceRoot,
+                    cancel(reason) {
+                        if (!child.connected) throw Error('Actual child IPC unavailable.');
+                        child.send({ kind: 'cancel-product-job', nonce: job.nonce, reason });
+                    },
+                    setup() {
+                        for (const [name, i] of [
+                            ['stdout', 0],
+                            ['stderr', 1],
+                        ]) {
+                            child[name].on('data', (bytes) => streams[i].write(bytes));
+                            child[name].on('error', onFailure);
+                        }
+                        monitor = setInterval(() => {
+                            try {
+                                guard.check(jobDirectory);
+                                treeInventory(jobDirectory, {
+                                    maxBytes: limits.jobBytes - 10 * 1024 ** 2,
+                                });
+                            } catch (error) {
+                                onFailure(error);
+                            }
+                        }, 1000);
+                        child.once('close', () => clearInterval(monitor));
+                    },
+                    closeLogs() {
+                        clearInterval(monitor);
+                        const closure = closeEntries(logs);
+                        return {
+                            ...closure,
+                            streams: streams.map((s) => s.snapshot()),
+                            complete:
+                                closure.complete && streams.every((s) => !s.snapshot().truncated),
+                        };
+                    },
+                    inspect(parentLifecycle) {
+                        assert.equal(parentLifecycle.closeObserved, true);
+                        const tree = treeInventory(jobDirectory, {
+                                maxBytes: limits.jobBytes - 10 * 1024 ** 2,
+                            }),
+                            directories = fs.readdirSync(jobDirectory);
+                        assert.equal(directories.length, 1);
+                        const run = path.join(jobDirectory, directories[0]);
+                        const relativeTimeline = path
+                                .relative(jobDirectory, path.join(run, 'timeline.jsonl'))
+                                .replaceAll('\\', '/'),
+                            relativeExit = path
+                                .relative(jobDirectory, path.join(run, 'native-will-quit.json'))
+                                .replaceAll('\\', '/');
+                        assert(
+                            Object.hasOwn(tree.files, relativeTimeline) &&
+                                Object.hasOwn(tree.files, relativeExit),
+                        );
+                        const specs = Object.entries(tree.files).map(([relative, size]) => ({
+                            name:
+                                relative === relativeTimeline
+                                    ? 'timeline'
+                                    : relative === relativeExit
+                                      ? 'nativeExit'
+                                      : relative,
+                            path: path.join(jobDirectory, relative),
+                            max: Math.max(1, size),
+                        }));
+                        for (let i = 0; i < specs.length; i += 32)
+                            ownerCheck.many(specs.slice(i, i + 32).map((s) => s.path));
+                        const durable = readDurableArtifacts(specs, {
+                            check: (file) => guard.check(file),
+                        });
+                        for (let i = 0; i < specs.length; i += 32)
+                            ownerCheck.many(specs.slice(i, i + 32).map((s) => s.path));
+                        const result = inspectProductRaw(durable.raw, {
+                            sourceSHA256: m.sourceSHA256,
+                            adapterSHA256: hashFile(
+                                path.join(sourceRoot, 'tests/fixtures/memory-product-aggregate.ts'),
+                            ),
+                            contractSHA256: m.coverage.sha256,
+                            job,
+                            parentLifecycle,
+                            noSampler: spec.observerMode === 'no-sampler',
+                        });
+                        return {
+                            ...result,
+                            valid: result.valid && durable.durability.complete,
+                            ownershipComplete:
+                                result.ownershipComplete && durable.durability.complete,
+                            rawDurability: durable.durability,
+                            inventory: durable.inventory,
+                            privateTree: tree,
+                        };
+                    },
+                };
+            },
+            summary(rows) {
+                records.record('pair-summary.json', {
+                    collectionOnly: true,
+                    policyQualified: false,
+                    thresholdsSelected: false,
+                    rows: rows.map((r) => ({
+                        ordinal: r.ordinal,
+                        observerMode: r.observerMode,
+                        receipt: r.inspection.receipt,
+                        rawTimelineSHA256: r.inspection.rawTimelineSHA256,
+                    })),
+                });
+            },
+            holdUnknown(state) {
+                return createOwnershipHold(state, records.record).outcome;
+            },
+        };
+        return ports;
     } catch (error) {
-        closeEntries(logs);
+        if (journal)
+            try {
+                journal.close();
+                assert(journal.proof());
+            } catch (cleanup) {
+                error.ownershipHold = createOwnershipHold(
+                    {
+                        phase: 'collector-prepare-close-unknown',
+                        error: String(error),
+                        cleanup: String(cleanup),
+                    },
+                    () => {},
+                );
+            }
         throw error;
     }
-    const observed = await observeCollector(child, {
+}
+export async function runCollector(
+    m,
+    manifestSHA256,
+    nonce,
+    cohort,
+    {
+        events = process,
+        clock = productClock,
+        verify = verifyProductManifest,
+        prepare = prepareCollectorPorts,
+    } = {},
+) {
+    const entry = new CollectionEntry({
         nonce,
-        startedAt,
-        record: records.record,
-        streams,
+        cohort,
+        events,
+        clock,
+        requireIPC: true,
+        requireCohort: true,
     });
-    const closure = closeEntries(logs);
-    const result = {
-        ...observed,
-        logClosure: closure,
-        outerEvidenceDurable: records.complete(),
-        nativeWindowsQualified: false,
-        policyQualified: false,
-    };
-    records.record('outer-completion.json', result);
-    if (
-        !closure.complete ||
-        !records.complete() ||
-        observed.errors.length ||
-        observed.timedOut ||
-        !observed.spawnObserved ||
-        !observed.exitObserved ||
-        !observed.closeObserved ||
-        observed.code !== 0 ||
-        observed.closeCode !== 0 ||
-        observed.signal !== null ||
-        observed.closeSignal !== null ||
-        streams.some((s) => s.snapshot().truncated)
-    )
-        process.exitCode = 1;
-    return result;
+    let ports,
+        controllerStarted = false;
+    try {
+        await entry.verify(() => verify(m));
+        ports = prepare(m, manifestSHA256, nonce, entry);
+        entry.assertAdmissible();
+        controllerStarted = true;
+        const result = await collectProductPreparation(m, ports, {
+            supervisorNonce: nonce,
+            entry,
+            clock,
+            events,
+            startedAt: entry.cohort.startedAt,
+        });
+        assert(!result.leaseRetained && !result.leaseOwnershipUnverified);
+        entry.dispose({ closed: true });
+        if (!result.completionDurable || result.status !== 'COLLECTED_UNREVIEWED_WINDOWS_PAIR')
+            events.exitCode = 1;
+        if (events.connected) events.disconnect();
+        return result;
+    } catch (error) {
+        if (error.ownershipHold) return error.ownershipHold.outcome;
+        if (controllerStarted)
+            return createOwnershipHold(
+                { phase: 'collector-entry-or-controller-failed', error: String(error) },
+                ports?.record ?? (() => {}),
+            ).outcome;
+        if (ports) {
+            try {
+                ports.journal.close();
+                assert(ports.journal.proof());
+            } catch (cleanup) {
+                return createOwnershipHold(
+                    {
+                        phase: 'entry-journal-close-unknown',
+                        error: String(error),
+                        cleanup: String(cleanup),
+                    },
+                    ports.record,
+                ).outcome;
+            }
+        }
+        entry.dispose({ closed: true });
+        throw error;
+    }
+}
+export async function runOuter(
+    m,
+    manifestSHA256,
+    manifestPath,
+    {
+        events = process,
+        clock = productClock,
+        verify = verifyProductManifest,
+        logIO = fs,
+        principalObserver = windowsPrincipalObserver,
+        ownershipHold = createOwnershipHold,
+        spawnChild = spawn,
+    } = {},
+) {
+    const entry = new CollectionEntry({ events, clock });
+    let logs = [],
+        child,
+        records,
+        actualClosed = false;
+    try {
+        const startedAt = entry.cohort.startedAt;
+        await entry.verify(() => verify(m));
+        entry.assertAdmissible();
+        assert.deepEqual(
+            fs.readdirSync(m.outputRoot),
+            [],
+            'One fresh reviewed empty evidence root, no retries.',
+        );
+        const ownerCheck = principalObserver(m);
+        const rootGuard = new RootGuard(m.outputRoot, { ownerCheck });
+        entry.assertAdmissible();
+        const directory = rootGuard.mkdir('outer');
+        entry.assertAdmissible();
+        const guard = new RootGuard(directory, { ownerCheck });
+        entry.assertAdmissible();
+        records = recordPort(guard);
+        logs = entries(guard, ['collector.stdout.log', 'collector.stderr.log'], logIO);
+        const nonce = entry.nonce;
+        const streams = logs.map((e) =>
+            streamCollector(e.fd, {
+                onFailure: (error) => {
+                    if (child?.connected)
+                        child.send({
+                            kind: 'cancel-product-collection',
+                            nonce,
+                            reason: String(error),
+                        });
+                },
+            }),
+        );
+        const collectorEnv = environmentForCollector();
+        await new Promise((resolve) => setImmediate(resolve));
+        try {
+            entry.assertAdmissible();
+            child = spawnChild(
+                m.node.path,
+                [
+                    '--import',
+                    pathToFileURL(m.tsx.path).href,
+                    fileURLToPath(import.meta.url),
+                    '--collector=1',
+                    '--nonce=' + nonce,
+                    '--cohort=' + JSON.stringify(entry.cohort),
+                    '--manifest=' + manifestPath,
+                    '--manifest-sha256=' + manifestSHA256,
+                ],
+                {
+                    cwd: sourceRoot,
+                    env: collectorEnv,
+                    windowsHide: true,
+                    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+                },
+            );
+        } catch (error) {
+            const closure = closeEntries(logs, logIO);
+            if (!closure.complete)
+                return ownershipHold(
+                    { phase: 'outer-pre-spawn-close-unknown', error: String(error) },
+                    records.record,
+                ).outcome;
+            entry.dispose({ closed: true });
+            throw error;
+        }
+        child.once('close', () => {
+            actualClosed = true;
+        });
+        const observed = await observeCollector(child, {
+            nonce,
+            startedAt,
+            record: records.record,
+            streams,
+            clock,
+            events,
+            entry,
+        });
+        const closure = closeEntries(logs, logIO);
+        if (!closure.complete)
+            return ownershipHold({ phase: 'outer-log-close-unknown', closure }, records.record)
+                .outcome;
+        const result = {
+            ...observed,
+            logClosure: closure,
+            outerEvidenceDurable: records.complete(),
+            nativeWindowsQualified: false,
+            policyQualified: false,
+        };
+        records.record('outer-completion.json', result);
+        if (
+            !closure.complete ||
+            !records.complete() ||
+            observed.errors.length ||
+            observed.timedOut ||
+            !observed.spawnObserved ||
+            !observed.exitObserved ||
+            !observed.closeObserved ||
+            observed.code !== 0 ||
+            observed.closeCode !== 0 ||
+            observed.signal !== null ||
+            observed.closeSignal !== null ||
+            streams.some((s) => s.snapshot().truncated)
+        )
+            process.exitCode = 1;
+        entry.dispose({ closed: true });
+        return result;
+    } catch (error) {
+        // Assignment never completes when a later log open fails. Preserve the helper's
+        // acquired entries and failed/unknown proof; an empty local list proves nothing.
+        logs = [...new Set([...logs, ...(error.preparedLogs ?? [])])];
+        const closure = closeEntries(logs, logIO),
+            carriedClosureComplete =
+                !Object.hasOwn(error, 'fdClosure') || error.fdClosure?.complete === true;
+        if ((child && !actualClosed) || !closure.complete || !carriedClosureComplete)
+            return ownershipHold(
+                {
+                    phase: 'outer-custody-unknown',
+                    error: String(error),
+                    closure,
+                    preparedLogClosure: error.fdClosure ?? null,
+                    handles: logs.map((entry) => ({
+                        name: entry.name,
+                        syncObserved: entry.synced === true,
+                        closeObserved: entry.closed === true,
+                        closeAttempted: entry.attempted === true,
+                        errors: [...entry.errors],
+                    })),
+                },
+                records?.record ?? (() => {}),
+            ).outcome;
+        entry.dispose({ closed: true });
+        throw error;
+    }
     function environmentForCollector() {
         const env = environment(m);
         delete env.HUB_MEMORY_SSH_PROFILE;
@@ -515,8 +675,8 @@ export async function runOuter(m, manifestSHA256, manifestPath) {
     }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    const { m, manifestSHA256, manifestPath, args } = loadProductManifest(process.argv.slice(2));
-    await (args.get('collector') === '1'
-        ? runCollector(m, manifestSHA256, args.get('nonce'))
-        : runOuter(m, manifestSHA256, manifestPath));
+    console.error(
+        'Collection disabled: first use the separately reviewed preflight-only workflow. Same-host approval/custody remains unresolved.',
+    );
+    process.exitCode = 1;
 }

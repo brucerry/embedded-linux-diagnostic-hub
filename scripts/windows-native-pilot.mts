@@ -1,0 +1,519 @@
+// @ts-nocheck
+/** Separately fenced finite pilot. No product collector is imported or dispatched. */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { sourceFingerprint } from '../tests/fixtures/memory-resource-identity';
+import { parseNativeCoverage } from '../tests/fixtures/memory-product-native-contract';
+import { NativePilotStartup } from '../tests/fixtures/native-pilot-startup';
+import { pilotPathMap } from '../tests/fixtures/native-pilot-paths';
+import { productClock } from '../tests/fixtures/memory-product-owner';
+import {
+    requirePilotRuntimeReady,
+    pilotLimits,
+    bindingDigest,
+} from './lib/hosted-pilot-contract.mjs';
+import { pilotHostedContext, parsePilotSecurity } from './lib/hosted-pilot-security.mjs';
+import { runHostedPilot } from './lib/hosted-pilot-run.mjs';
+import { ProductLease } from './lib/product-collector-files.mjs';
+import { createOwnershipHold } from './lib/product-entry-custody.mjs';
+import { closeEntries, writeAll } from './lib/product-collector-evidence.mjs';
+import {
+    fileIdentity,
+    dependencyFacts,
+    digest,
+    metadataIdentity,
+    ancestryIdentity,
+    checkAncestry,
+    refuseMarker,
+} from './lib/windows-preflight.mjs';
+import { PilotEvidence } from './lib/pilot-evidence.mjs';
+import { PilotDiskObserver } from './lib/pilot-disk-observer.mjs';
+export { runHostedPilot };
+export async function nativePilotMain(args = process.argv.slice(2), environment = process.env) {
+    requirePilotRuntimeReady(environment);
+    const startedAt = productClock.now(),
+        early = new AbortController();
+    const earlyCancel = () => early.abort(Error('Pilot entry cancelled before enrollment'));
+    for (const e of ['SIGTERM', 'SIGINT', 'disconnect']) process.on(e, earlyCancel);
+    let owner, held, evidence, timer, privateRoot, paths, signal;
+    const hold = (state, record) => {
+        held ??= createOwnershipHold(state, record);
+        signal?.abort(Error('Pilot owner holds unknown custody'));
+        return held;
+    };
+    try {
+        const expectedKeys = ['out', 'expected-source', 'expected-policy', 'coverage-sha256'];
+        const options = Object.fromEntries(
+            args.map((a) => {
+                assert(/^--[^=]+=.+$/.test(a));
+                return a.slice(2).split(/=(.*)/s).slice(0, 2);
+            }),
+        );
+        assert.equal(args.length, expectedKeys.length);
+        assert.deepEqual(Object.keys(options).sort(), expectedKeys.sort());
+        for (const k of ['expected-source', 'expected-policy', 'coverage-sha256'])
+            assert(/^[a-f0-9]{64}$/.test(options[k]));
+        const root = path.resolve(import.meta.dirname, '..'),
+            require = createRequire(import.meta.url),
+            context = pilotHostedContext(environment);
+        const admitEarly = () => {
+            early.signal.throwIfAborted();
+            context.check();
+            assert(productClock.now() < startedAt + pilotLimits.totalMs - pilotLimits.reserveMs);
+        };
+        admitEarly();
+        assert.equal(await sourceFingerprint(root), options['expected-source']);
+        admitEarly();
+        const policyFile = path.join(root, 'scripts/lib/hosted-pilot-policy.json'),
+            policyBytes = fs.readFileSync(policyFile);
+        assert.equal(digest(policyBytes), options['expected-policy']);
+        const coverageJSON = environment.HUB_NATIVE_PILOT_COVERAGE_JSON;
+        assert(typeof coverageJSON === 'string' && Buffer.byteLength(coverageJSON) <= 8192);
+        parseNativeCoverage(
+            Buffer.from(coverageJSON),
+            options['coverage-sha256'],
+            options['expected-source'],
+        );
+        const out = options.out;
+        assert(path.isAbsolute(out) && fs.realpathSync(out) === out);
+        assert.deepEqual(fs.readdirSync(out), [], 'Fresh nonsecret evidence directory required');
+        const evidenceAncestors = ancestryIdentity(out),
+            evidenceId = metadataIdentity(out);
+        assert(evidenceId.directory);
+        const deps = dependencyFacts(path.join(root, 'node_modules'), admitEarly);
+        const where = (name) => {
+            admitEarly();
+            const r = spawnSync('where.exe', [name], {
+                windowsHide: true,
+                encoding: 'utf8',
+                timeout: 2000,
+                maxBuffer: 8192,
+            });
+            assert(!r.error && r.status === 0);
+            const p = r.stdout.split(/\r?\n/).find((p) => path.isAbsolute(p) && !/["\r\n]/.test(p));
+            assert(p);
+            return fs.realpathSync(p);
+        };
+        const git = where('git.exe'),
+            powershell = where('powershell.exe'),
+            pwsh = where('pwsh.exe');
+        let gitRoot = [
+            path.resolve(path.dirname(git), '..'),
+            path.resolve(path.dirname(git), '../..'),
+        ].find((p) => fs.existsSync(path.join(p, 'usr/bin/winpty.dll')));
+        assert(gitRoot);
+        const bin = path.join(gitRoot, 'usr/bin'),
+            runtime = { platform: process.platform, arch: process.arch };
+        assert.equal(process.version, 'v24.22.0');
+        assert.equal(process.arch, 'x64');
+        const runtimePaths = {
+            node: process.execPath,
+            tsx: require.resolve('tsx'),
+            electron: require('electron'),
+            powershell: pwsh,
+            git,
+            bash: path.join(bin, 'bash.exe'),
+            cygpath: path.join(bin, 'cygpath.exe'),
+            winptyDll: path.join(bin, 'winpty.dll'),
+            winptyAgent: path.join(bin, 'winpty-agent.exe'),
+        };
+        for (const [name, p] of Object.entries(runtimePaths)) {
+            const id = fileIdentity(fs.realpathSync(p), {
+                pe: !['tsx'].includes(name),
+                check: admitEarly,
+            });
+            if (id.pe) assert.equal(id.pe.architecture, 'x64');
+            runtime[name] = {
+                path: id.path,
+                sha256: id.sha256,
+                ...(name === 'node'
+                    ? { version: process.version }
+                    : name === 'electron'
+                      ? { version: require('electron/package.json').version }
+                      : {}),
+            };
+        }
+        const psIdentity = fileIdentity(powershell, { pe: true, check: admitEarly }),
+            securityScript = path.join(root, 'scripts/lib/hosted-pilot-security.ps1'),
+            scriptIdentity = fileIdentity(securityScript);
+        const security = (plans, principal) => {
+            const env = { ...environment, HUB_NATIVE_PILOT_SECURITY_PATHS: JSON.stringify(plans) };
+            for (const k of Object.keys(env)) if (k.toUpperCase() === 'PSMODULEPATH') delete env[k];
+            const r = spawnSync(
+                powershell,
+                ['-NoProfile', '-NonInteractive', '-File', securityScript],
+                { encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 65536, env },
+            );
+            assert(!r.error && r.status === 0 && r.signal === null, r.stderr);
+            assert.deepEqual(fileIdentity(securityScript), scriptIdentity);
+            assert.deepEqual(fileIdentity(powershell, { pe: true }), psIdentity);
+            return parsePilotSecurity(r.stdout, plans, principal);
+        };
+        refuseMarker(context.parent);
+        const nonce = randomUUID();
+        privateRoot = path.join(context.parent, 'diagnostic-hub-native-pilot-' + nonce);
+        fs.mkdirSync(privateRoot);
+        paths = pilotPathMap(privateRoot, nonce, true);
+        const plans = [
+                { path: context.parent, kind: 'directory' },
+                { path: privateRoot, kind: 'directory' },
+            ],
+            initial = security(plans);
+        const binding = {
+            schema: 1,
+            kind: 'windows-hosted-native-readiness-pilot-v1',
+            collectionApproval: false,
+            host: context.host,
+            nonce,
+            principalSID: initial.principal,
+            sourceSHA256: options['expected-source'],
+            coveragePolicySHA256: options['coverage-sha256'],
+            pilotPolicySHA256: options['expected-policy'],
+            dependenciesSHA256: deps.sha256,
+            runtime,
+            roots: Object.fromEntries(
+                [
+                    ['canonicalTemp', context.parent, initial.rows[0].descriptorSHA256],
+                    ['privateRoot', privateRoot, initial.rows[1].descriptorSHA256],
+                    ['evidenceRoot', out, digest(JSON.stringify(evidenceId))],
+                ].map(([k, p, descriptorSHA256]) => {
+                    const id = metadataIdentity(p);
+                    return [k, { path: p, dev: id.dev, ino: id.ino, descriptorSHA256 }];
+                }),
+            ),
+            startedAt,
+            deadline: startedAt + pilotLimits.totalMs,
+            limits: pilotLimits,
+        };
+        // evidenceRoot's digest is a nonsecret physical-identity binding, explicitly not ACL admission.
+        binding.roots.evidenceRoot.identitySHA256 = binding.roots.evidenceRoot.descriptorSHA256;
+        delete binding.roots.evidenceRoot.descriptorSHA256;
+        const lease = new ProductLease(
+            path.join(context.parent, 'diagnostic-hub-v060-check.lock'),
+            {
+                kind: 'finite-native-pilot-owner',
+                nonce,
+                bindingSHA256: bindingDigest(binding),
+                run: context.host.run,
+                attempt: '1',
+            },
+        );
+        let charged = 0;
+        const reserve = (n) => {
+            assert(charged + n <= pilotLimits.evidenceBytes);
+            charged += n;
+        };
+        evidence = new PilotEvidence(out, {
+            check: () => {
+                context.check();
+                checkAncestry(evidenceAncestors);
+            },
+        });
+        const record = (stage, data) => {
+            reserve(Buffer.byteLength(JSON.stringify({ stage, data })) + 256);
+            evidence.append(stage, data);
+        };
+        signal = new AbortController();
+        const startup = new NativePilotStartup({
+            signal: signal.signal,
+            deadline: binding.deadline - pilotLimits.reserveMs,
+            cleanupDeadline: binding.deadline,
+            emit: async (s, d) => record(s, d),
+            hold: (e) => owner?.hold(e),
+        });
+        const stages = new Map();
+        let markerProof;
+        const observer = new PilotDiskObserver(
+            [
+                { path: privateRoot, kind: 'private' },
+                { path: out, kind: 'evidence' },
+                { path: path.join(context.parent, 'tsx-0'), kind: 'tool', optional: true },
+            ],
+            {
+                check: () => {
+                    paths.check();
+                    context.check();
+                    checkAncestry(evidenceAncestors);
+                },
+                emit: (r) => {
+                    try {
+                        record('disk-observation', r);
+                    } catch (e) {
+                        owner?.hold(e);
+                        throw e;
+                    }
+                },
+                stop: (e) => owner?.cancel(e),
+            },
+        );
+        const observe = (stage) => {
+            try {
+                return observer.scan(stage);
+            } catch (e) {
+                if (e.observedThresholdExceeded) {
+                    owner?.cancel(e);
+                    return e.observation;
+                }
+                throw e;
+            }
+        };
+        const recheck = async () => {
+            if (markerProof) {
+                lease.check();
+                assert.deepEqual(
+                    security([...plans, { path: lease.file, kind: 'file' }], binding.principalSID)
+                        .rows[2],
+                    markerProof,
+                );
+            }
+            context.check();
+            paths.check();
+            checkAncestry(evidenceAncestors);
+            assert.equal(await sourceFingerprint(root), binding.sourceSHA256);
+            assert.equal(
+                dependencyFacts(path.join(root, 'node_modules'), () => context.check()).sha256,
+                binding.dependenciesSHA256,
+            );
+            for (const [name, p] of Object.entries(runtimePaths))
+                assert.equal(fileIdentity(fs.realpathSync(p)).sha256, runtime[name].sha256);
+            assert.equal(digest(fs.readFileSync(policyFile)), binding.pilotPolicySHA256);
+            assert.deepEqual(
+                security(plans, binding.principalSID).rows.map((r) => r.descriptorSHA256),
+                initial.rows.map((r) => r.descriptorSHA256),
+            );
+            return true;
+        };
+        admitEarly();
+        const result = await runHostedPilot(binding, {
+            lease,
+            events: process,
+            clock: productClock,
+            record,
+            hold,
+            executionGate: () => requirePilotRuntimeReady(environment),
+            onOwner: (o) => {
+                owner = o;
+                timer = setInterval(() => {
+                    try {
+                        observe('periodic');
+                    } catch (e) {
+                        o.cancel(e);
+                    }
+                }, 1000);
+                if (early.signal.aborted) o.cancel(early.signal.reason);
+            },
+            verify: async (b) => {
+                const marker = security(
+                    [...plans, { path: lease.file, kind: 'file' }],
+                    b.principalSID,
+                );
+                markerProof = marker.rows[2];
+                record('marker-FileSecurity-readback', {
+                    bindingSHA256: bindingDigest(b),
+                    marker: marker.rows[2],
+                    identity: metadataIdentity(lease.file),
+                    bytesSHA256: digest(lease.bytes),
+                });
+                await recheck();
+                early.signal.throwIfAborted();
+                return b;
+            },
+            closeEvidence: async () => evidence.close(),
+            beforeStage: async (stage) => {
+                observe('before-' + stage);
+            },
+            spawnStage: (stage, o) => {
+                const child = startup.spawn(
+                    'stage-' + stage,
+                    () =>
+                        spawn(
+                            process.execPath,
+                            [
+                                '--import',
+                                pathToFileURL(runtime.tsx.path).href,
+                                path.join(root, 'scripts/windows-native-pilot-stage.mts'),
+                                JSON.stringify({ binding, stage, coverageJSON }),
+                            ],
+                            {
+                                cwd: root,
+                                windowsHide: true,
+                                stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+                                env: { ...environment, HUB_NATIVE_PILOT_STAGE: '1' },
+                            },
+                        ),
+                    (c) => {
+                        if (c.connected)
+                            c.send({
+                                kind: 'cancel-hosted-pilot-stage',
+                                nonce,
+                                bindingSHA256: o.hash,
+                                reason: 'Outer startup cancellation',
+                            });
+                        else o.hold('Stage cancellation IPC unavailable');
+                    },
+                );
+                const state = {
+                    stage,
+                    sequence: 0,
+                    final: null,
+                    logs: [],
+                    streams: { stdout: 0, stderr: 0 },
+                };
+                stages.set(child, state);
+                // Register writable descriptors before opening the next one.
+                try {
+                    for (const name of ['stdout', 'stderr']) {
+                        const entry = {
+                            fd: fs.openSync(
+                                path.join(out, stage + '-' + name + '.log'),
+                                'wx',
+                                0o600,
+                            ),
+                            errors: [],
+                            attempted: false,
+                            synced: false,
+                            closed: false,
+                        };
+                        state.logs.push(entry);
+                        child[name].on('data', (b) => {
+                            try {
+                                assert(state.streams[name] + b.length <= pilotLimits.streamBytes);
+                                reserve(b.length);
+                                writeAll(entry.fd, b);
+                                state.streams[name] += b.length;
+                            } catch (e) {
+                                o.hold(e);
+                            }
+                        });
+                    }
+                } catch (e) {
+                    o.hold(e);
+                    throw e;
+                }
+                child.on('message', (m) => {
+                    try {
+                        assert(
+                            m?.kind === 'pilot-evidence' &&
+                                m.nonce === nonce &&
+                                m.bindingSHA256 === o.hash &&
+                                m.sequence === state.sequence++,
+                        );
+                        assert(Buffer.byteLength(JSON.stringify(m)) <= 65536);
+                        record(stage + ':' + m.stage, m.data);
+                        if (m.stage === 'stage-final') {
+                            assert(!state.final);
+                            state.final = m.data;
+                        }
+                        child.send(
+                            {
+                                kind: 'pilot-durable-ack',
+                                nonce,
+                                bindingSHA256: o.hash,
+                                sequence: m.sequence,
+                            },
+                            (e) => {
+                                if (e) o.hold(e);
+                            },
+                        );
+                    } catch (e) {
+                        o.hold(e);
+                    }
+                });
+                return child;
+            },
+            waitStage: async (child, o) => {
+                const row = startup.children.get(child);
+                let t;
+                try {
+                    await Promise.race([
+                        row.closed,
+                        new Promise(
+                            (_, reject) =>
+                                (t = setTimeout(
+                                    () =>
+                                        reject(
+                                            Error(
+                                                'Stage closure unknown at immutable cleanup deadline',
+                                            ),
+                                        ),
+                                    Math.max(1, binding.deadline - productClock.now()),
+                                )),
+                        ),
+                    ]);
+                } catch (e) {
+                    o.hold(e);
+                    throw e;
+                } finally {
+                    clearTimeout(t);
+                }
+            },
+            joinStage: async (child) => {
+                const state = stages.get(child);
+                const logs = closeEntries(state.logs);
+                assert.equal(logs.complete, true);
+                assert(
+                    state.final?.startup.complete === true &&
+                        state.final.descendantsClosed === true &&
+                        state.final.leafReceiptsClosed === true,
+                );
+                assert.equal(state.final.stage, state.stage);
+                if (state.final.passed !== true) owner.cancel('Owned stage reported failure');
+                await startup.joinChild(child);
+                observe('post-close');
+                return {
+                    descendantsClosed: true,
+                    leafReceiptsClosed: true,
+                    logsClosed: true,
+                    final: state.final,
+                };
+            },
+            recheckInputs: recheck,
+            cleanupRoots: async () => {
+                clearInterval(timer);
+                await startup.join();
+                observe('final-before-cleanup');
+                paths.check();
+                fs.rmSync(privateRoot, { recursive: true });
+                return !fs.existsSync(privateRoot);
+            },
+        });
+        return { ...result, observations: observer.snapshot() };
+    } catch (e) {
+        if (
+            owner &&
+            owner.ports.lease.state().created &&
+            owner.state !== 'released' &&
+            owner.state !== 'held'
+        )
+            owner.hold(e);
+        if (evidence && (!owner || !owner.ports.lease.state().created)) {
+            const closure = evidence.close();
+            if (!closure.complete)
+                hold(
+                    { kind: 'pilot-pre-enrollment-evidence-unknown', reason: String(e) },
+                    () => {},
+                );
+        }
+        if (held) await held.outcome;
+        throw e;
+    } finally {
+        clearInterval(timer);
+        for (const e of ['SIGTERM', 'SIGINT', 'disconnect']) process.off(e, earlyCancel);
+    }
+}
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+    nativePilotMain()
+        .then((r) => {
+            console.log(JSON.stringify(r));
+            if (!r.passed) process.exitCode = 1;
+        })
+        .catch((e) => {
+            console.error(String(e));
+            process.exitCode = 1;
+        });
