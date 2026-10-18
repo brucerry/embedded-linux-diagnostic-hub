@@ -7,6 +7,12 @@ export class NativePilotStartup {
     readonly unknown: string[] = [];
     readonly cleanupDeadline: number;
     private joining = false;
+    private halted = false;
+    private admissionClosed = false;
+    private diagnosticTasks = new Set<Promise<unknown>>();
+    private diagnosticFailure: unknown;
+    private diagnosticBytes = 0;
+    private diagnosticRows = 0;
     private joinFailure: string | undefined;
     private joinTask: Promise<any> | undefined;
     constructor(
@@ -20,6 +26,7 @@ export class NativePilotStartup {
             identity?: (child: ChildProcess) => Promise<any>;
             proveDescendants?: (child: ChildProcess) => Promise<void>;
             timeoutMs?: number;
+            diagnostics?: boolean;
         },
     ) {
         this.cleanupDeadline = options.cleanupDeadline ?? options.deadline;
@@ -34,7 +41,10 @@ export class NativePilotStartup {
         options.signal.addEventListener('abort', () => this.cancel(), { once: true });
     }
     admit() {
-        assert(!this.joining && !this.joinFailure, 'Startup join has closed admission');
+        assert(
+            !this.joining && !this.joinFailure && !this.admissionClosed && !this.halted,
+            'Startup join has closed admission',
+        );
         this.options.signal.throwIfAborted();
         assert(Number(process.hrtime.bigint() / 1000000n) < this.options.deadline);
     }
@@ -67,20 +77,50 @@ export class NativePilotStartup {
         assert(this.children.size < 32);
         this.children.set(child, row);
         row.stop = stop;
-        child.once('spawn', () => (row.spawn = true));
-        child.once('exit', (code, signal) => Object.assign(row, { exit: true, code, signal }));
+        row.stopRequested = false;
+        row.diagnosticStreams = { stdout: 0, stderr: 0 };
+        this.note('child-adopted', { label, pid: row.pid, spawn: row.spawn });
+        child.once('spawn', () => {
+            row.spawn = true;
+            this.note('child-spawn', { label, pid: row.pid });
+        });
+        child.once('exit', (code, signal) => {
+            Object.assign(row, { exit: true, code, signal });
+            this.note('child-exit', { label, pid: row.pid, code, signal });
+        });
         child.once('close', (code, signal) => {
             Object.assign(row, { close: true, closeCode: code, closeSignal: signal });
+            this.note('child-pipe-close', {
+                label,
+                pid: row.pid,
+                code,
+                signal,
+                streams: row.streams,
+                retained: row.diagnosticStreams,
+            });
             close();
         });
         child.on('error', (e) => {
             row.error = String(e);
+            this.note('child-error', { label, pid: row.pid, error: String(e).slice(0, 1024) });
             this.options.hold(e);
         });
         for (const name of ['stdout', 'stderr'] as const)
             child[name]?.on('data', (b: Buffer) => {
                 row.outputBytes += b.length;
                 row.streams[name] += b.length;
+                if (this.options.diagnostics && !this.halted) {
+                    const bytes = b.subarray(0, Math.max(0, 65536 - row.diagnosticStreams[name]));
+                    for (let offset = 0; offset < bytes.length; offset += 4096)
+                        this.note('child-output', {
+                            label,
+                            pid: row.pid,
+                            stream: name,
+                            offset: row.diagnosticStreams[name] + offset,
+                            base64: bytes.subarray(offset, offset + 4096).toString('base64'),
+                        });
+                    row.diagnosticStreams[name] += bytes.length;
+                }
                 if (row.streams[name] > 1048576) {
                     row.error = 'Startup output threshold';
                     this.cancel();
@@ -98,6 +138,7 @@ export class NativePilotStartup {
                 'Actual startup root identity missing',
             );
             row.identity = id;
+            this.note('child-identity', { label, pid: row.pid, identity: id });
         });
         row.descendants = () =>
             this.observe(row, () =>
@@ -123,7 +164,7 @@ export class NativePilotStartup {
             }
         }, 250);
         child.once('close', () => this.stopObservations(row));
-        if (this.options.signal.aborted) stop();
+        if (this.options.signal.aborted) this.cancel();
         return child;
     }
     spawn(label: string, factory: () => ChildProcess, stop: (child: ChildProcess) => unknown) {
@@ -179,14 +220,117 @@ export class NativePilotStartup {
         }
     }
     cancel() {
-        for (const row of this.children.values())
-            if (!row.close)
+        this.admissionClosed = true;
+        for (const row of this.children.values()) {
+            this.stopObservations(row);
+            if (!row.close && !row.stopRequested) {
+                row.stopRequested = true;
+                this.note('cancel-request', { label: row.label, pid: row.pid });
                 try {
-                    row.stop();
+                    const result = row.stop();
+                    this.note('cancel-transport', {
+                        label: row.label,
+                        pid: row.pid,
+                        returned: true,
+                        value: typeof result === 'boolean' ? result : null,
+                    });
                 } catch (e) {
                     row.error = String(e);
                     this.options.hold(e);
                 }
+            }
+        }
+    }
+    /** Terminal hold closes new queries/work; already admitted observations stay owned. */
+    stopQueryAdmission() {
+        this.halted = true;
+        this.admissionClosed = true;
+        for (const row of this.children.values()) this.stopObservations(row);
+    }
+    halt(reason: unknown) {
+        if (!this.halted)
+            this.note('held', {
+                reason: String(reason).slice(0, 1024),
+                children: this.children.size,
+            });
+        this.stopQueryAdmission();
+        this.cancel();
+    }
+    snapshot() {
+        return {
+            admissionClosed: this.admissionClosed,
+            queryAdmissionClosed: this.halted,
+            children: [...this.children.values()].map((row) => ({
+                label: row.label,
+                pid: row.pid,
+                identity: row.identity,
+                spawn: row.spawn,
+                exit: row.exit,
+                close: row.close,
+                stopRequested: row.stopRequested,
+                error: row.error,
+                observations: row.observations.size,
+            })),
+        };
+    }
+    terminateChild(child: ChildProcess, reason: unknown) {
+        const row = this.children.get(child);
+        assert(row, 'Unregistered termination target');
+        if (row.close || row.exit) return false;
+        assert(
+            row.spawn && row.identity,
+            'Creation identity required before owned root termination',
+        );
+        if (row.terminationRequested) return row.terminationResult;
+        row.terminationRequested = true;
+        this.note('termination-request', {
+            label: row.label,
+            pid: row.pid,
+            reason: String(reason).slice(0, 1024),
+            signal: 'SIGKILL',
+        });
+        row.terminationResult = child.kill('SIGKILL');
+        this.note('termination-result', {
+            label: row.label,
+            pid: row.pid,
+            returned: row.terminationResult,
+            closureProven: false,
+        });
+        assert(row.terminationResult, 'Owned termination request unavailable');
+        return row.terminationResult;
+    }
+    private note(stage: string, data: any) {
+        if (!this.options.diagnostics || this.halted || this.diagnosticFailure) return;
+        try {
+            const bytes = Buffer.byteLength(JSON.stringify({ stage, data }));
+            assert(
+                bytes <= 65536 &&
+                    ++this.diagnosticRows <= 512 &&
+                    this.diagnosticBytes + bytes <= 262144,
+                'Startup diagnostic bound',
+            );
+            this.diagnosticBytes += bytes;
+            const task = Promise.resolve().then(() => this.options.emit('startup-' + stage, data));
+            this.diagnosticTasks.add(task);
+            void task.then(
+                () => this.diagnosticTasks.delete(task),
+                (e) => {
+                    this.diagnosticTasks.delete(task);
+                    this.diagnosticFailure ??= e;
+                    this.halt(e);
+                    this.options.hold(e);
+                },
+            );
+        } catch (e) {
+            this.diagnosticFailure ??= e;
+            this.halt(e);
+            this.options.hold(e);
+        }
+    }
+    async drainDiagnostics() {
+        if (this.diagnosticFailure) throw this.diagnosticFailure;
+        await this.bounded(this.bound(), () => Promise.all([...this.diagnosticTasks]));
+        if (this.diagnosticFailure) throw this.diagnosticFailure;
     }
     private operation(opaque: boolean) {
         let settled!: () => void;
@@ -204,7 +348,10 @@ export class NativePilotStartup {
     private observe(row: any, read: () => Promise<unknown>) {
         assert(!row.joined, 'No observation after a completed child receipt');
         const task = Promise.resolve()
-            .then(read)
+            .then(() => {
+                assert(!this.halted, 'Held startup query admission closed');
+                return read();
+            })
             .catch((e) => {
                 row.error ??= String(e);
                 this.options.hold(e);
@@ -231,6 +378,7 @@ export class NativePilotStartup {
     }
     private checkJoin(deadline: number) {
         assert(!this.joinFailure, this.joinFailure ?? 'Startup closure previously failed');
+        assert(!this.halted, 'Held startup query admission closed');
         assert(
             Number(process.hrtime.bigint() / 1000000n) < deadline,
             'Startup cleanup deadline exhausted; closure unknown',
@@ -296,6 +444,10 @@ export class NativePilotStartup {
             this.checkJoin(deadline);
             assert.equal(row.observations.size, 0, 'Process observation still active');
             this.childProof(row);
+            this.note('child-joined', { label: row.label, pid: row.pid });
+            await Promise.all([...this.diagnosticTasks]);
+            if (this.diagnosticFailure) throw this.diagnosticFailure;
+            this.checkJoin(deadline);
             row.joined = true;
             row.observationsDrained = true;
             return { complete: true, child: this.snapshotChild(row) };

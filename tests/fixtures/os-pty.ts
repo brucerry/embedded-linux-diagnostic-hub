@@ -16,6 +16,7 @@ export async function osPtyFixture(
         holdUnknown?: (reason: unknown) => void;
         registerChild?: (child: ChildProcessWithoutNullStreams, stop: () => void) => void;
         check?: () => void;
+        diagnostic?: (value: string) => void;
     } = {},
 ) {
     if (process.platform !== 'win32') return null;
@@ -178,6 +179,7 @@ export async function osPtyFixture(
                 },
             );
             options.registerChild?.(child, () => child.stdin.end());
+            options.diagnostic?.(JSON.stringify({ phase: 'pty-bridge-spawn', pid: child.pid }));
             children.add(child);
             channel.on('error', () => {});
             child.stdin.on('error', () => {});
@@ -209,17 +211,40 @@ export async function osPtyFixture(
                         state.helperErrors.push('Helper diagnostics exceeded bound.');
                     child.stdin.end();
                     holdUnknown('PTY diagnostic output bound');
-                } else state.stderr += bytes.toString();
+                } else {
+                    state.stderr += bytes.toString();
+                    for (let offset = 0; offset < bytes.length; offset += 4096)
+                        options.diagnostic?.(
+                            JSON.stringify({
+                                phase: 'pty-bridge-stderr',
+                                pid: child.pid,
+                                base64: bytes.subarray(offset, offset + 4096).toString('base64'),
+                            }),
+                        );
+                }
             });
             const pending = new Promise<void>((resolve, reject) => {
                 let actualExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-                child.once('exit', (code, signal) => (actualExit = { code, signal }));
+                child.once('exit', (code, signal) => {
+                    actualExit = { code, signal };
+                    options.diagnostic?.(
+                        JSON.stringify({ phase: 'pty-bridge-exit', pid: child.pid, code, signal }),
+                    );
+                });
                 child.once('error', (error) => {
                     state.helperErrors.push(error.message);
                     channel.close();
                 });
                 child.once('close', (code, signal) => {
                     children.delete(child);
+                    options.diagnostic?.(
+                        JSON.stringify({
+                            phase: 'pty-bridge-pipe-close',
+                            pid: child.pid,
+                            code,
+                            signal,
+                        }),
+                    );
                     state.closes++;
                     if (code !== 0) state.helperErrors.push('Helper ended ' + code + '/' + signal);
                     if (!channel.destroyed) {
@@ -252,7 +277,17 @@ export async function osPtyFixture(
     options.signal?.addEventListener(
         'abort',
         () => {
-            for (const child of children) child.stdin.end();
+            for (const child of children) {
+                options.diagnostic?.(
+                    JSON.stringify({
+                        phase: 'pty-cancel-request',
+                        pid: child.pid,
+                        stdinEOFRequested: true,
+                        closureProven: false,
+                    }),
+                );
+                child.stdin.end();
+            }
         },
         { once: true },
     );

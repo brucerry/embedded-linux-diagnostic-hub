@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 /** A send callback is transport acceptance only. The owner ACKs after its fsync. */
-export function stageChannel(nonce: string, bindingSHA256: string, signal: AbortSignal) {
+export function stageChannel(
+    nonce: string,
+    bindingSHA256: string,
+    signal: AbortSignal,
+    { deadline = Infinity } = {},
+) {
     let sequence = 0,
         pending: { sequence: number; resolve(): void; reject(e: unknown): void } | undefined;
     process.on('message', (m: any) => {
@@ -20,6 +25,7 @@ export function stageChannel(nonce: string, bindingSHA256: string, signal: Abort
     });
     process.on('disconnect', () => pending?.reject(Error('Evidence owner disconnected')));
     return async (stage: string, data: unknown) => {
+        assert(Number(process.hrtime.bigint() / 1000000n) < deadline, 'Evidence cleanup deadline');
         assert(process.connected);
         assert(!pending, 'One evidence credit at a time');
         const m = {
@@ -32,7 +38,10 @@ export function stageChannel(nonce: string, bindingSHA256: string, signal: Abort
         };
         assert(Buffer.byteLength(JSON.stringify(m)) <= 65536);
         await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => reject(Error('Durable evidence ACK missing')), 10000);
+            const timer = setTimeout(
+                () => reject(Error('Durable evidence ACK missing')),
+                Math.max(0, Math.min(10000, deadline - Number(process.hrtime.bigint() / 1000000n))),
+            );
             pending = {
                 sequence: m.sequence,
                 resolve() {

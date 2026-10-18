@@ -19,10 +19,10 @@ import {
     bindingDigest,
 } from './lib/hosted-pilot-contract.mjs';
 import { pilotHostedContext, parsePilotSecurity } from './lib/hosted-pilot-security.mjs';
-import { runHostedPilot } from './lib/hosted-pilot-run.mjs';
+import { runHostedPilot, joinPilotStage } from './lib/hosted-pilot-run.mjs';
 import { ProductLease } from './lib/product-collector-files.mjs';
 import { createOwnershipHold } from './lib/product-entry-custody.mjs';
-import { closeEntries, writeAll } from './lib/product-collector-evidence.mjs';
+import { writeAll } from './lib/product-collector-evidence.mjs';
 import {
     fileIdentity,
     dependencyFacts,
@@ -38,6 +38,11 @@ import { runWinpsSecurityContract } from './lib/pilot-winps-contract.mjs';
 import { runSecurityCommand, requireSecurityProcess } from './lib/pilot-security-command.mjs';
 import { prepareAndFreezePilotDependencies } from './lib/pilot-dependencies.mjs';
 import { preparePilotElectron } from './lib/pilot-electron-preparation.mjs';
+import {
+    pilotStageDeadlines,
+    waitPilotStage,
+    stopHeldPilotActivity,
+} from './lib/pilot-runtime-startup.mjs';
 export { runHostedPilot };
 export async function nativePilotMain(args = process.argv.slice(2), environment = process.env) {
     requirePilotRuntimeReady(environment);
@@ -55,11 +60,16 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         entryEvidence,
         entryRecord,
         reserveShared,
-        entryClosure;
+        entryClosure,
+        startup;
+    const stages = new Map(),
+        cancellationRequests = new WeakSet();
     let entryCharge = 0;
     const hold = (state, record) => {
-        held ??= createOwnershipHold(state, record);
+        stopHeldPilotActivity(startup, () => clearInterval(timer));
+        held ??= createOwnershipHold({ ...state, startup: startup?.snapshot() }, record);
         signal?.abort(Error('Pilot owner holds unknown custody'));
+        startup?.cancel();
         return held;
     };
     try {
@@ -325,14 +335,14 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             evidence.append(stage, data);
         };
         signal = new AbortController();
-        const startup = new NativePilotStartup({
+        startup = new NativePilotStartup({
             signal: signal.signal,
             deadline: binding.deadline - pilotLimits.reserveMs,
             cleanupDeadline: binding.deadline,
             emit: async (s, d) => record(s, d),
             hold: (e) => owner?.hold(e),
+            diagnostics: true,
         });
-        const stages = new Map();
         let markerProof;
         const observer = new PilotDiskObserver(
             [
@@ -394,6 +404,37 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             );
             return true;
         };
+        const sendStageCancel = (child, message, callback = () => {}) => {
+            if (cancellationRequests.has(child)) return;
+            cancellationRequests.add(child);
+            try {
+                record('stage-cancel-request', {
+                    pid: child.pid,
+                    kind: message.kind,
+                    reason: message.reason,
+                    deadline: binding.deadline,
+                });
+            } catch (e) {
+                owner?.hold(e);
+            }
+            if (!child.connected) {
+                record('stage-cancel-transport', { pid: child.pid, connected: false, sent: false });
+                callback(Error('Stage cancellation IPC unavailable'));
+                return;
+            }
+            child.send(message, (e) => {
+                try {
+                    record('stage-cancel-transport', {
+                        pid: child.pid,
+                        sent: !e,
+                        error: e ? String(e).slice(0, 1024) : null,
+                    });
+                } catch (persistence) {
+                    owner?.hold(persistence);
+                }
+                callback(e);
+            });
+        };
         admitEarly();
         const result = await runHostedPilot(binding, {
             lease,
@@ -401,6 +442,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             clock: productClock,
             record,
             hold,
+            cancelChild: sendStageCancel,
             executionGate: () => requirePilotRuntimeReady(environment),
             onOwner: (o) => {
                 owner = o;
@@ -442,6 +484,8 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 observe('before-' + stage);
             },
             spawnStage: (stage, o) => {
+                const deadlines = pilotStageDeadlines(binding, stage, productClock.now());
+                record('stage-spawn-deadlines', { stage, ...deadlines });
                 const child = startup.spawn(
                     'stage-' + stage,
                     () =>
@@ -451,7 +495,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                                 '--import',
                                 pathToFileURL(runtime.tsx.path).href,
                                 path.join(root, 'scripts/windows-native-pilot-stage.mts'),
-                                JSON.stringify({ binding, stage, coverageJSON }),
+                                JSON.stringify({ binding, stage, coverageJSON, ...deadlines }),
                             ],
                             {
                                 cwd: root,
@@ -460,19 +504,18 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                                 env: { ...environment, HUB_NATIVE_PILOT_STAGE: '1' },
                             },
                         ),
-                    (c) => {
-                        if (c.connected)
-                            c.send({
-                                kind: 'cancel-hosted-pilot-stage',
-                                nonce,
-                                bindingSHA256: o.hash,
-                                reason: 'Outer startup cancellation',
-                            });
-                        else o.hold('Stage cancellation IPC unavailable');
-                    },
+                    (c) =>
+                        sendStageCancel(c, {
+                            kind: 'cancel-hosted-pilot-stage',
+                            nonce,
+                            bindingSHA256: o.hash,
+                            reason: 'Outer startup cancellation',
+                        }),
                 );
                 const state = {
                     stage,
+                    ...deadlines,
+                    runtimeReady: false,
                     sequence: 0,
                     final: null,
                     logs: [],
@@ -499,6 +542,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                                 assert(state.streams[name] + b.length <= pilotLimits.streamBytes);
                                 reserve(b.length);
                                 writeAll(entry.fd, b);
+                                fs.fsyncSync(entry.fd);
                                 state.streams[name] += b.length;
                             } catch (e) {
                                 o.hold(e);
@@ -519,6 +563,14 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                         );
                         assert(Buffer.byteLength(JSON.stringify(m)) <= 65536);
                         record(stage + ':' + m.stage, m.data);
+                        if (m.stage === 'runtime-ready') {
+                            assert(
+                                productClock.now() < state.runtimeDeadline,
+                                'Late runtime readiness cannot reopen admission',
+                            );
+                            state.runtimeReady = true;
+                        }
+                        if (m.stage === 'stage-held') o.hold(m.data.reason ?? 'Stage startup held');
                         if (m.stage === 'stage-final') {
                             assert(!state.final);
                             state.final = m.data;
@@ -540,52 +592,23 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 });
                 return child;
             },
-            waitStage: async (child, o) => {
-                const row = startup.children.get(child);
-                let t;
-                try {
-                    await Promise.race([
-                        row.closed,
-                        new Promise(
-                            (_, reject) =>
-                                (t = setTimeout(
-                                    () =>
-                                        reject(
-                                            Error(
-                                                'Stage closure unknown at immutable cleanup deadline',
-                                            ),
-                                        ),
-                                    Math.max(1, binding.deadline - productClock.now()),
-                                )),
-                        ),
-                    ]);
-                } catch (e) {
-                    o.hold(e);
-                    throw e;
-                } finally {
-                    clearTimeout(t);
-                }
-            },
-            joinStage: async (child) => {
-                const state = stages.get(child);
-                const logs = closeEntries(state.logs);
-                assert.equal(logs.complete, true);
-                assert(
-                    state.final?.startup.complete === true &&
-                        state.final.descendantsClosed === true &&
-                        state.final.leafReceiptsClosed === true,
-                );
-                assert.equal(state.final.stage, state.stage);
-                if (state.final.passed !== true) owner.cancel('Owned stage reported failure');
-                await startup.joinChild(child);
-                observe('post-close');
-                return {
-                    descendantsClosed: true,
-                    leafReceiptsClosed: true,
-                    logsClosed: true,
-                    final: state.final,
-                };
-            },
+            waitStage: async (child, o) =>
+                waitPilotStage({
+                    child,
+                    startup,
+                    state: stages.get(child),
+                    signal: early.signal,
+                    cancel: (e) => o.cancel(e),
+                    hold: (e) => o.hold(e),
+                    emit: async (stage, data) => record(stage, data),
+                }),
+            joinStage: async (child) =>
+                joinPilotStage(child, {
+                    state: stages.get(child),
+                    startup,
+                    cancel: (reason) => owner.cancel(reason),
+                    observe,
+                }),
             recheckInputs: recheck,
             cleanupRoots: async () => {
                 clearInterval(timer);

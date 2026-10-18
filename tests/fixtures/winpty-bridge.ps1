@@ -13,6 +13,11 @@ foreach ($item in $identities.PSObject.Properties) {
 }
 if ((Get-Process -Id $PID).Path -ine $identities.pwsh.path) { throw 'Actual PowerShell executable differs.' }
 if ($BashExecutable -ine $identities.bash.path -or $env:HUB_TEST_WINPTY_DLL -ine $identities.dll.path -or $env:HUB_TEST_WINPTY_AGENT -ine $identities.agent.path) { throw 'PTY tool path handoff differs.' }
+[Console]::Error.WriteLine('HUB_OS_PTY_PHASE Add-Type-before')
 Add-Type -Path (Join-Path $PSScriptRoot 'winpty-bridge.cs')
+[Console]::Error.WriteLine('HUB_OS_PTY_PHASE Add-Type-after')
 if (-not [HubWinptyFixture]::ClosureContract()) { throw 'PTY closure contracts failed.' }
-exit [HubWinptyFixture]::Run($BashExecutable,$CommandLine,$WorkingDirectory,$DeadlineMs)
+[Console]::Error.WriteLine('HUB_OS_PTY_PHASE managed-Run-before')
+$result = [HubWinptyFixture]::Run($BashExecutable,$CommandLine,$WorkingDirectory,$DeadlineMs)
+[Console]::Error.WriteLine('HUB_OS_PTY_PHASE managed-Run-after')
+exit $result

@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
 import {
     bindingDigest,
     validatePilotBinding,
@@ -13,12 +11,14 @@ import { createOwnershipHold } from './lib/product-entry-custody.mjs';
 import { NativePilotStartup } from '../tests/fixtures/native-pilot-startup';
 import { pilotPathMap } from '../tests/fixtures/native-pilot-paths';
 import { stageChannel } from '../tests/fixtures/pilot-stage-channel';
+import { runtimeDiagnostics, preparePilotStageRuntime } from './lib/pilot-runtime-startup.mjs';
 requirePilotRuntimeReady();
 assert(process.connected && process.env.HUB_NATIVE_PILOT_STAGE === '1');
 const envelope = JSON.parse(process.argv[2]),
     binding = envelope.binding,
     hash = bindingDigest(binding),
     controller = new AbortController();
+let diagnostics: ReturnType<typeof runtimeDiagnostics>, startup: NativePilotStartup;
 const cancel = (reason: string) => controller.abort(Error(reason));
 // Handlers and immutable deadline exist before runtime preparation or fixture imports.
 for (const e of ['SIGTERM', 'SIGINT', 'disconnect']) process.on(e, () => cancel(e));
@@ -26,85 +26,91 @@ process.on('message', (m: any) => {
     if (m?.kind === 'cancel-hosted-pilot-stage') {
         if (m.nonce !== binding.nonce || m.bindingSHA256 !== hash)
             cancel('Invalid stage cancellation');
-        else cancel(m.reason ?? 'Owner cancelled');
+        else {
+            cancel(m.reason ?? 'Owner cancelled');
+            diagnostics?.note('stage-cancel-ack', {
+                reason: m.reason ?? 'Owner cancelled',
+                stage: envelope.stage,
+            });
+        }
     }
 });
 const timer = setTimeout(
     () => cancel('Immutable stage work deadline'),
-    Math.max(
-        0,
-        binding.deadline - pilotLimits.reserveMs - Number(process.hrtime.bigint() / 1000000n),
-    ),
+    Math.max(0, envelope.stageDeadline - Number(process.hrtime.bigint() / 1000000n)),
 );
-const emit = stageChannel(binding.nonce, hash, controller.signal);
+const sendEvidence = stageChannel(binding.nonce, hash, controller.signal, {
+    deadline: binding.deadline,
+});
 let held: ReturnType<typeof createOwnershipHold> | undefined;
 const hold = (e: unknown) => {
-    cancel(String(e));
-    held ??= createOwnershipHold(
-        {
+    startup?.stopQueryAdmission();
+    if (!held) {
+        const state = {
             kind: 'native-pilot-stage-unknown',
             bindingSHA256: hash,
             reason: String(e).slice(0, 1024),
-        },
-        () => {},
-    );
+            startup: startup?.snapshot(),
+        };
+        held = createOwnershipHold(state, () => {});
+        diagnostics?.note('stage-held', state);
+    }
+    controller.abort(e);
+    startup?.cancel();
 };
-const startup = new NativePilotStartup({
+diagnostics = runtimeDiagnostics(sendEvidence, hold);
+const emit = diagnostics.emit;
+startup = new NativePilotStartup({
     signal: controller.signal,
-    deadline: binding.deadline - pilotLimits.reserveMs,
+    deadline: envelope.stageDeadline,
     cleanupDeadline: binding.deadline,
     emit,
     hold,
+    diagnostics: true,
 });
 let failure: unknown;
 try {
     validatePilotBinding(binding, Number(process.hrtime.bigint() / 1000000n));
     assert(['real-os-pty', 'native-electron-store'].includes(envelope.stage));
     const paths = pilotPathMap(binding.roots.privateRoot.path, binding.nonce);
-    const require = createRequire(import.meta.url),
-        loader = pathToFileURL(require.resolve('tsx')).href;
-    const prep = startup.spawn(
-        'ssh-runtime-build',
-        () =>
-            spawn(
-                process.execPath,
-                [
-                    '--import',
-                    loader,
-                    path.resolve('tests/fixtures/native-pilot-runtime-worker.ts'),
-                    JSON.stringify({ root: process.cwd(), outputParent: paths.runtimeParent }),
-                ],
-                {
-                    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-                    windowsHide: true,
-                    env: { ...process.env, HUB_NATIVE_PILOT_STAGE: '1' },
-                },
-            ),
-        (child) => {
-            if (child.connected) child.send({ kind: 'cancel-native-pilot-build' });
-            else hold('Runtime build cancellation unavailable');
-        },
+    assert(
+        Number.isSafeInteger(envelope.stageDeadline) &&
+            envelope.stageDeadline <= binding.deadline - pilotLimits.reserveMs,
     );
-    let runtime: any;
-    prep.on('message', (m: any) => {
-        if (m?.kind === 'native-runtime-result') runtime = m.result;
+    assert(
+        Number.isSafeInteger(envelope.runtimeDeadline) &&
+            envelope.runtimeDeadline <= envelope.stageDeadline,
+    );
+    await emit('stage-entry', {
+        stage: envelope.stage,
+        pid: process.pid,
+        stageDeadline: envelope.stageDeadline,
+        runtimeDeadline: envelope.runtimeDeadline,
     });
-    await startup.children.get(prep)!.closed;
-    controller.signal.throwIfAborted();
-    assert.equal(startup.children.get(prep)!.code, 0);
-    assert(runtime);
+    const require = createRequire(import.meta.url);
+    const runtime = await preparePilotStageRuntime({
+        binding,
+        bindingSHA256: hash,
+        paths,
+        startup,
+        signal: controller.signal,
+        deadline: envelope.runtimeDeadline,
+        emit,
+        cancel: (e: unknown) => controller.abort(e),
+        hold,
+    });
     process.env.HUB_MEMORY_SSH_PROFILE = runtime.manifestPath;
     require(runtime.preloadPath);
     process.execArgv.push('--require', runtime.preloadPath);
     paths.check();
     if (envelope.stage === 'real-os-pty') {
-        const ptyTimer = setTimeout(
-            () => cancel('Existing 25-second PTY limit'),
-            pilotLimits.ptyTestMs,
-        );
-        try {
+        await emit('pty-import-before', {});
+        {
             const { exerciseRealPtyAssertions } =
                 await import('../tests/fixtures/console-real-pty-assertions');
+            controller.signal.throwIfAborted();
+            assert(Number(process.hrtime.bigint() / 1000000n) < envelope.stageDeadline);
+            await emit('pty-assertions-before', {});
             await exerciseRealPtyAssertions({
                 expectedRuntime: binding.runtime,
                 homeParent: paths.ptyHomeParent,
@@ -114,10 +120,10 @@ try {
                 check: paths.check,
                 holdUnknown: hold,
                 registerChild: (child, stop) => startup.adopt('bash-winpty-bridge', child, stop),
-                diagnostic: (text) => console.log(text),
+                diagnostic: (text) =>
+                    diagnostics.note('pty-diagnostic', { text: text.slice(0, 8192) }),
             });
-        } finally {
-            clearTimeout(ptyTimer);
+            await emit('pty-assertions-after', {});
         }
     } else {
         const { parseNativeCoverage } =
@@ -147,12 +153,15 @@ try {
     startup.cancel();
 } finally {
     clearTimeout(timer);
+    diagnostics.note('stage-esbuild-stop-before', {});
     const { stop } = await import('esbuild');
     stop();
+    diagnostics.note('stage-esbuild-stop-after', {});
 }
 try {
     const proof = await startup.join();
     if (held) throw Error('Unknown startup retained');
+    await diagnostics.drain();
     await emit('stage-final', {
         stage: envelope.stage,
         passed: !failure,

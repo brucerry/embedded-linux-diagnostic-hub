@@ -1,5 +1,27 @@
 import assert from 'node:assert/strict';
 import { SameJobPilotCustody } from './hosted-pilot-custody.mjs';
+import { closeEntries } from './product-collector-evidence.mjs';
+/** Shared production final-receipt/log/process validation, including exceptional waits. */
+export async function joinPilotStage(child, { state, startup, cancel, observe }) {
+    const logs = closeEntries(state.logs);
+    assert.equal(logs.complete, true);
+    assert(
+        state.final?.startup?.complete === true &&
+            state.final.descendantsClosed === true &&
+            state.final.leafReceiptsClosed === true,
+        'Required stage-final/startup/descendant/leaf closure missing.',
+    );
+    assert.equal(state.final.stage, state.stage);
+    if (state.final.passed !== true) cancel('Owned stage reported failure');
+    await startup.joinChild(child);
+    observe('post-close');
+    return {
+        descendantsClosed: true,
+        leafReceiptsClosed: true,
+        logsClosed: true,
+        final: state.final,
+    };
+}
 /** Production owner orchestration. Ports expose concrete OS ownership, not trusted no-child booleans. */
 export async function runHostedPilot(binding, ports) {
     const owner = new SameJobPilotCustody(binding, ports);
@@ -22,9 +44,10 @@ export async function runHostedPilot(binding, ports) {
     }
     if (owner.state === 'held') throw failure ?? Error('Pilot ownership remains unknown');
     try {
-        owner.check(binding, true);
+        await owner.prepareCleanup((child, b) => ports.joinStage(child, b));
         const inputsUnchanged = await ports.recheckInputs();
-        owner.check(binding, true);
+        owner.checkCleanup();
+        assert.equal(inputsUnchanged, true, 'Inputs changed before root cleanup.');
         const rootsCleanupClosed = await ports.cleanupRoots();
         ports.record('pilot-result', {
             bindingSHA256: owner.hash,

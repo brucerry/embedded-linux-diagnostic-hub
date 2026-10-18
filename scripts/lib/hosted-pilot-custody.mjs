@@ -19,6 +19,7 @@ export class SameJobPilotCustody {
             clock,
             hold = createOwnershipHold,
             executionGate = requirePilotRuntimeReady,
+            cancelChild = (child, message, callback) => child.send(message, callback),
         },
     ) {
         validatePilotBinding(binding, clock.now());
@@ -34,7 +35,17 @@ export class SameJobPilotCustody {
             writable: false,
         });
         this.hash = bindingDigest(this.binding);
-        this.ports = { lease, verify, record, closeEvidence, events, clock, hold, executionGate };
+        this.ports = {
+            lease,
+            verify,
+            record,
+            closeEvidence,
+            events,
+            clock,
+            hold,
+            executionGate,
+            cancelChild,
+        };
         this.state = 'new';
         this.cancelled = null;
         this.pending = 0;
@@ -94,6 +105,8 @@ export class SameJobPilotCustody {
         this.state = 'held';
         this.token = null;
         // Referenced hold is established by the real helper before a hold-receipt write can fail.
+        this.ports.clock.clear(this.timer);
+        this.ports.clock.clear(this.cleanupTimer);
         this.holdOwner ??= this.ports.hold(this.snapshot(), this.ports.record);
         this.forwardCancel();
         return this.holdOwner;
@@ -103,7 +116,8 @@ export class SameJobPilotCustody {
             this.active.stopRequested = true;
             try {
                 assert.equal(this.active.child?.connected, true);
-                this.active.child.send(
+                this.ports.cancelChild(
+                    this.active.child,
                     {
                         kind: 'cancel-hosted-pilot-stage',
                         nonce: this.binding.nonce,
@@ -242,15 +256,29 @@ export class SameJobPilotCustody {
             throw e;
         }
     }
-    async release({ inputsUnchanged, rootsCleanupClosed, resultClosed }) {
+    checkCleanup() {
+        this.check(this.binding, true);
+        assert.equal(this.state, 'approved');
+        assert.equal(this.pending, 0);
+        assert.equal(this.active, null, 'Started stage has not supplied final closure proof.');
+        assert(this.verificationClosed, 'Same-job verification never settled.');
+    }
+    /** All exceptional exits converge here before rechecks or destructive cleanup. */
+    async prepareCleanup(joinDescendantsAndEvidence) {
         try {
             this.check(this.binding, true);
-            assert.equal(this.state, 'approved');
-            assert.equal(this.pending, 0);
-            assert.equal(this.active, null);
+            if (this.active) await this.joinStage(joinDescendantsAndEvidence);
+            this.checkCleanup();
+        } catch (e) {
+            this.hold(e);
+            throw e;
+        }
+    }
+    async release({ inputsUnchanged, rootsCleanupClosed, resultClosed }) {
+        try {
+            this.checkCleanup();
             if (!this.cancelled)
                 assert.deepEqual(this.stages, ['real-os-pty', 'native-electron-store']);
-            assert(this.verificationClosed, 'Same-job verification never settled.');
             assert(
                 inputsUnchanged === true && rootsCleanupClosed === true && resultClosed === true,
             );

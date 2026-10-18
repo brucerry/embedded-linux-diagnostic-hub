@@ -67,10 +67,43 @@ One fresh GitHub-hosted Windows manual attempt uses pinned Node 24.22.0 x64 and 
 dependencies. The live owner binds run, attempt 1, repository, commit, source, coverage, policy,
 dependencies, actual runtime paths/hashes, principal SID, physical roots, nonce and one immutable
 600-second monotonic budget. The last 60 seconds admit cleanup only. There is no retry or deadline
-reset. Exactly two stages run in order: the existing real Bash/winpty assertions with their
-25-second limit, then one existing desktop native cycle with normal GC, a 64 KiB payload and growing
-catalog. The cooperative growth canary is an optional local control and supplies no admission or
-release prerequisite.
+reset. Exactly two stages run in order: the existing real Bash/winpty assertions, then one existing
+desktop native cycle with normal GC, a 64 KiB payload and growing catalog. The parent now
+establishes the first stage's absolute 25-second deadline at spawn, including loader/import and
+common SSH-runtime setup. It does not start a fresh 25 seconds after setup. Each stage's common
+runtime prerequisite has a parent-derived 25-second deadline clipped to the unchanged core work
+cutoff; the native cycle still uses the remaining core work time. The cooperative growth canary
+remains optional.
+
+The runtime worker waits for bound parent admission after actual root identity and readiness are
+recorded. AbortSignal reaches the production runtime preparation; cancellation immediately calls the
+owned esbuild stop operation and rejects the pending build wait. Signal/deadline checks fence
+publication and later PTY admission. A parent watchdog stays responsive while the worker is blocked.
+It requests cancellation once, records transport separately from child acknowledgement and stop, and
+requires actual process/observed-descendant/inherited-pipe joins. An unresponsive Node runtime build
+worker with confirmed creation identity may receive owned-root termination after a one-second
+cooperative grace, within the existing ten-second startup cleanup bound and core cleanup deadline.
+This never supplies a false descendant or pipe-close receipt and never kills the PTY middle owner.
+Unconfirmed closure retains ownership; late success cannot reopen admission.
+
+Before later waits, bounded durable diagnostics identify stage spawn/deadlines, worker PID/creation,
+loader/package walk/build/publication, cancellation request/transport/acknowledgement, stop, exit
+and pipe closure. Inner streams retain a 64 KiB prefix each; one durable evidence credit remains in
+flight. Startup diagnostics use at most 512 rows/256 KiB per scope, within the unchanged 10 MiB
+shared evidence cap. Bridge stderr is forwarded live, including Add-Type and managed-Run phase
+markers. C# pump/native-call logic and its existing limits are unchanged; actual managed boundary
+controls still need separately reviewed Windows execution.
+
+A terminal hold stops disk scans and new process-query admission, clears work/cleanup timers and
+attempts each owned child's cancellation once. Already admitted operations remain owned; a held
+phase keeps its required referenced custody handle rather than continuing periodic observations. No
+failed/unknown phase becomes a successful release through artifact upload or VM teardown.
+
+Run 39124523368 proved the fresh WinPS and Electron prerequisites but retained its marker without
+first-stage completion. Persistent zero-file scans point before successful runtime publication; they
+do not establish the exact Windows stall or prove that winpty/C# was entered. The new local
+regressions reach the production worker and extracted startup/wait boundaries with only the build
+API controlled. They do not qualify a real Windows runtime build, PTY or native cycle.
 
 The owner exclusively acquires the canonical `diagnostic-hub-v060-check.lock` once. Marker bytes
 contain the live binding digest, avoiding a self-referential file hash. After acquisition, fresh
@@ -131,3 +164,11 @@ processes and injected Windows readback ports. They do not qualify real Windows 
 compilation, Bash/winpty, Electron, native capacity, the 30-minute pair or 100 cycles. Independent
 review and explicit execution authorization for this exact new source are required before any hosted
 pilot run.
+
+Every cleanup path first joins any started stage through the same production final-receipt
+validator, including a parent watchdog exception after direct process closure. The final startup,
+descendant, leaf and raw-log closure proofs must be complete before input rechecks or private-root
+deletion. Outer exit and pipe closure alone cannot admit cleanup. Missing proof retains the root,
+marker and referenced owner. A fully joined failed stage may clean up and release with a failed
+verdict; its original cancellation or timeout still prevents admission of the next stage. Input
+rechecks must return true before deletion.
