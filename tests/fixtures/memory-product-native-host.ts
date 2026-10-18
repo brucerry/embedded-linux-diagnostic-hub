@@ -271,6 +271,40 @@ __pilotApp.setPath('temp',__pilot.temp);__pilotApp.setPath('crashDumps',__pilot.
 
     return { root, metadata, downloads, profile };
 }
+export function nativePilotBuildLaunch(options: {
+    profile: string;
+    gcMode: string;
+    coldStart?: boolean;
+    workDeadlineMs?: number;
+    pilot?: Record<string, any>;
+}) {
+    const require = createRequire(import.meta.url);
+    const loader = pathToFileURL(require.resolve('tsx')).href;
+    return {
+        executable: process.execPath,
+        args: [
+            '--require',
+            path.join(path.dirname(process.env.HUB_MEMORY_SSH_PROFILE!), 'preload.cjs'),
+            '--import',
+            loader,
+            path.join(import.meta.dirname, 'native-pilot-build-worker.mts'),
+            JSON.stringify({
+                profile: options.profile,
+                gcMode: options.gcMode,
+                coldStart: options.coldStart,
+                workDeadlineMs: options.workDeadlineMs,
+                root: options.pilot!.root,
+                nonce: options.pilot!.nonce,
+            }),
+        ],
+        options: {
+            cwd: path.resolve(import.meta.dirname, '../..'),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe', 'ipc'] as const,
+            env: { ...process.env, HUB_NATIVE_PILOT_STAGE: '1' },
+        },
+    };
+}
 export async function createProductNative(options: {
     signal?: AbortSignal;
     workDeadlineMs?: number;
@@ -293,34 +327,14 @@ export async function createProductNative(options: {
         options.pilot.check();
         assert(options.startup, 'Pilot startup owner required before build');
         const startup = options.startup;
-        const loader = pathToFileURL(require.resolve('tsx')).href;
+        const launch = nativePilotBuildLaunch(options);
         const child = startup.spawn(
             'native-build-owner',
             () =>
-                spawn(
-                    process.execPath,
-                    [
-                        '--require',
-                        path.join(path.dirname(process.env.HUB_MEMORY_SSH_PROFILE!), 'preload.cjs'),
-                        '--import',
-                        loader,
-                        path.join(import.meta.dirname, 'native-pilot-build-worker.ts'),
-                        JSON.stringify({
-                            profile: options.profile,
-                            gcMode: options.gcMode,
-                            coldStart: options.coldStart,
-                            workDeadlineMs: options.workDeadlineMs,
-                            root: options.pilot!.root,
-                            nonce: options.pilot!.nonce,
-                        }),
-                    ],
-                    {
-                        cwd: path.resolve(import.meta.dirname, '../..'),
-                        windowsHide: true,
-                        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-                        env: { ...process.env, HUB_NATIVE_PILOT_STAGE: '1' },
-                    },
-                ),
+                spawn(launch.executable, launch.args, {
+                    ...launch.options,
+                    stdio: [...launch.options.stdio],
+                }),
             (c) => {
                 if (c.connected) c.send({ kind: 'cancel-native-pilot-build' });
                 else startup.options.hold('Build cancellation IPC unavailable');

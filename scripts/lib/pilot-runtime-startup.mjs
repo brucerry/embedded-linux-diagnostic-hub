@@ -107,7 +107,7 @@ export async function preparePilotStageRuntime(
     {
         spawnPort = spawn,
         loader = pathToFileURL(createRequire(path.join(root, 'package.json')).resolve('tsx')).href,
-        worker = path.join(root, 'tests/fixtures/native-pilot-runtime-worker.ts'),
+        worker = path.join(root, 'tests/fixtures/native-pilot-runtime-worker.mts'),
         clock = now,
         cooperativeMs = 1000,
     } = {},

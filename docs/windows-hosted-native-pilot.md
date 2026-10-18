@@ -172,3 +172,18 @@ deletion. Outer exit and pipe closure alone cannot admit cleanup. Missing proof 
 marker and referenced owner. A fully joined failed stage may clean up and release with a failed
 verdict; its original cancellation or timeout still prevents admission of the next stage. Input
 rechecks must return true before deletion.
+
+The two Node pilot worker entries use explicit `.mts` ESM filenames under the unchanged default
+CommonJS repository package scope. Runtime entry controls retain the resolved `--import tsx` file
+URL, production cwd and argv. The sibling build entry also retains the generated qualification SSH
+preload and is checked through a deliberate path-validation refusal before native build admission.
+Readiness or root exit alone does not establish loader/helper, descendant or pipe closure;
+incomplete proof still retains ownership. These local module-entry controls do not qualify a fresh
+Windows run.
+
+The fixture-dependent local module-entry control is explicit rather than part of the ordinary
+`tests/*.test.ts` sweep: set `HUB_PILOT_ENTRY_PROFILE` to an existing generated
+qualification-profile directory, then run
+`node --import tsx --test tests/windows-pilot-module-entry.test.mts`. The control verifies that
+profile's manifest, preload, bundle and source-lock identity; it does not create an SSH bundle or
+run native application payloads.

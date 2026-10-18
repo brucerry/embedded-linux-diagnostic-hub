@@ -6,6 +6,7 @@ import os from 'node:os';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { NativePilotStartup } from './fixtures/native-pilot-startup';
 import { PilotEvidence } from '../scripts/lib/pilot-evidence.mjs';
 import { SameJobPilotCustody } from '../scripts/lib/hosted-pilot-custody.mjs';
@@ -20,9 +21,10 @@ import {
     waitPilotStage,
     stopHeldPilotActivity,
 } from '../scripts/lib/pilot-runtime-startup.mjs';
+const loader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 const source = path.resolve(import.meta.dirname, '..'),
     deps = path.join(source, 'node_modules'),
-    worker = path.join(source, 'tests/fixtures/native-pilot-runtime-worker.ts');
+    worker = path.join(source, 'tests/fixtures/native-pilot-runtime-worker.mts');
 const now = () => Number(process.hrtime.bigint() / 1000000n),
     turn = () => new Promise((r) => setImmediate(r));
 const temp = () => fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-runtime-boundary-'));
@@ -36,7 +38,7 @@ function controlFiles(dir, mode = 'pending', trace = false) {
     );
     fs.writeFileSync(
         preload,
-        `require('node:module').registerHooks({resolve(s,c,n){if(s==='esbuild')return{url:${JSON.stringify(pathToFileURL(fake).href)},shortCircuit:true};if(['ssh2','asn1','safer-buffer','bcrypt-pbkdf','tweetnacl','tsx','esbuild'].some(x=>s===x+'/package.json'))return{url:require('node:url').pathToFileURL(require('node:path').join(${JSON.stringify(deps)},s)).href,shortCircuit:true};return n(s,c);}});`,
+        `require('node:module').registerHooks({resolve(s,c,n){if(s==='esbuild'&&['/memory-runtime.mjs','/native-pilot-runtime-worker.mts'].some(p=>(c.parentURL||'').endsWith(p)))return{url:${JSON.stringify(pathToFileURL(fake).href)},shortCircuit:true};if(['ssh2','asn1','safer-buffer','bcrypt-pbkdf','tweetnacl','tsx','esbuild'].some(x=>s===x+'/package.json'))return{url:require('node:url').pathToFileURL(require('node:path').join(${JSON.stringify(deps)},s)).href,shortCircuit:true};return n(s,c);}});`,
     );
     return { preload, fake };
 }
@@ -62,11 +64,15 @@ test('original review boundary: exact production worker stops pending fake build
             deadline: now() + 2500,
             cleanupDeadline: now() + 3000,
         };
-    const child = spawn(process.execPath, ['--require', preload, worker, JSON.stringify(raw)], {
-        cwd: source,
-        env: { ...process.env, HUB_NATIVE_PILOT_STAGE: '1' },
-        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    });
+    const child = spawn(
+        process.execPath,
+        ['--require', preload, '--import', loader, worker, JSON.stringify(raw)],
+        {
+            cwd: source,
+            env: { ...process.env, HUB_NATIVE_PILOT_STAGE: '1' },
+            stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        },
+    );
     let stdout = '',
         stderr = '',
         closed = false;
@@ -210,7 +216,7 @@ async function runtimeFixture({
     const binding = { nonce: 'control-runtime-nonce', deadline: now() + 600000 },
         deadline = now() + workMs;
     const spawnPort = (exe, args, opts) => {
-        let next = ['--require', files.preload, worker, args.at(-1)];
+        let next = ['--require', files.preload, ...args];
         if (fault === 'loader')
             next = ['-e', `console.error('controlled loader failure');process.exitCode=3;`];
         if (fault === 'close-no-result')
