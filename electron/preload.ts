@@ -2,9 +2,20 @@ import { validateCapture } from '../shared/automation';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ConnectOptions, DesktopBridge, HostKeyVerification, Snapshot } from '../shared/types';
 import type { TerminalEvent } from '../shared/terminal';
+import { captureRpcRequest } from '../shared/capture-rpc';
+import { streamRequest } from '../shared/ssh-stream-rpc';
+import { consoleRpcRequest } from '../shared/console-rpc';
+import { consoleArchiveRequest } from '../shared/console-archive-rpc';
 
 let automationConnection = '';
 const bridge: DesktopBridge = {
+    consoleStorage: (request) =>
+        ipcRenderer.invoke('hub:console-storage', consoleArchiveRequest(request)),
+    automationConsole: (request) =>
+        ipcRenderer.invoke('hub:automation-console', consoleRpcRequest(request)),
+    automationStream: (request) =>
+        ipcRenderer.invoke('hub:automation-stream', streamRequest(request)),
+    captureStorage: (request) => ipcRenderer.invoke('hub:capture', captureRpcRequest(request)),
     acquireAutomationActivity: () => ipcRenderer.invoke('hub:automation-activity-acquire'),
     releaseAutomationActivity: (id) => ipcRenderer.invoke('hub:automation-activity-release', id),
     onAutomationInterrupted: (callback) => {

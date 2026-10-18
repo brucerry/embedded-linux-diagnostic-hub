@@ -36,14 +36,20 @@ export const runClock: RunClock = {
         }),
 };
 export interface FlowBackend {
+    prepare?(plan: AutomationPlan, signal: AbortSignal, assertFresh: () => void): Promise<void>;
+    finishFlow?(reason: 'complete' | 'cancelled'): Promise<void | { failure: string }>;
+    receiveTimeSource?: AutomationRecord['receiveTimeSource'];
     connection(): string;
     available(): boolean;
     acquire(): () => void;
+    /** Join owned transport cleanup after raw seal and the outcome commit (including failure). */
+    finalize?(id: string): Promise<void>;
     execute(
         step: AutomationPlan['steps'][number],
         plan: AutomationPlan,
         signal: AbortSignal,
         id: string,
+        context?: { runId: string; ordinal: number; startedAt: string; assertFresh?: () => void },
     ): Promise<
         CommandCapture & { requestBytes?: string; deviceTime?: AutomationRecord['deviceTime'] }
     >;
@@ -54,19 +60,49 @@ export interface FlowState {
     state: 'idle' | 'waiting' | 'running' | 'delaying' | 'paused' | 'finished';
     message: string;
     step?: string;
+    cleanupPending?: boolean;
 }
 export class FlowRunner {
     private controller?: AbortController;
     private repeat = true;
     private stopped = false;
     private active?: Promise<void>;
+    private cleanup?: { retry: () => Promise<unknown>; release: () => void };
+    private cleanupRetry?: Promise<void>;
     constructor(
         private changed: (s: FlowState) => void,
-        private recorded: (r: AutomationRecord) => void,
+        private recorded: (r: AutomationRecord) => unknown,
         private clock: RunClock = runClock,
     ) {}
     get busy() {
-        return Boolean(this.active);
+        return Boolean(this.active || this.cleanup);
+    }
+    get cleanupPending() {
+        return Boolean(this.cleanup);
+    }
+    retryCleanup(): Promise<void> {
+        if (this.cleanupRetry) return this.cleanupRetry;
+        const pending = this.cleanup;
+        if (!pending) return Promise.resolve();
+        const task = (async () => {
+            await pending.retry();
+            if (this.cleanup === pending) {
+                pending.release();
+                this.cleanup = undefined;
+            }
+            this.controller = undefined;
+            this.changed({
+                state: 'paused',
+                message: 'Console cleanup acknowledged. Arm explicitly to resume.',
+            });
+        })();
+        this.cleanupRetry = task;
+        void task
+            .finally(() => {
+                if (this.cleanupRetry === task) this.cleanupRetry = undefined;
+            })
+            .catch(() => {});
+        return task;
     }
     stop() {
         this.repeat = false;
@@ -91,7 +127,7 @@ export class FlowRunner {
         this.controller?.abort();
     }
     start(input: AutomationPlan, backend: FlowBackend) {
-        if (this.active) throw Error('A flow is already armed or running.');
+        if (this.busy) throw Error('A flow is already armed, running or awaiting cleanup.');
         const plan = validatePlan(input),
             connection = backend.connection();
         if (!backend.available() || !connection)
@@ -109,9 +145,14 @@ export class FlowRunner {
             this.controller = undefined;
             throw e;
         }
+        let completed = false;
+        let terminal: FlowState | undefined;
         const task = this.run(plan, backend, connection, controller.signal)
+            .then(() => {
+                completed = true;
+            })
             .catch((error) => {
-                this.changed({
+                terminal = {
                     state: 'paused',
                     message:
                         this.failureNotice ||
@@ -119,13 +160,42 @@ export class FlowRunner {
                             ? 'Flow cancelled. Commands already sent may continue on the device.'
                             : String(error instanceof Error ? error.message : error) +
                               ' Flow paused; arm explicitly to resume.'),
-                });
+                };
             })
-            .finally(() => {
-                release();
+            .finally(async () => {
+                if (backend.finishFlow)
+                    this.changed({
+                        state: 'running',
+                        message: 'Finishing flow and saving retained evidence…',
+                    });
+                try {
+                    const result = await backend.finishFlow?.(completed ? 'complete' : 'cancelled');
+                    if (result?.failure)
+                        terminal = {
+                            state: 'paused',
+                            message: result.failure + ' Flow paused; arm explicitly to resume.',
+                        };
+                } catch (error) {
+                    this.cleanup = { retry: () => backend.finishFlow!('cancelled'), release };
+                    terminal = {
+                        state: 'paused',
+                        cleanupPending: true,
+                        message:
+                            'Console cleanup remains pending: ' +
+                            (error instanceof Error ? error.message : String(error)) +
+                            '. Later input is disarmed.',
+                    };
+                }
+                if (!this.cleanup) release();
                 this.executing = false;
                 if (this.active === task) this.active = undefined;
-                this.controller = undefined;
+                if (!this.cleanup) this.controller = undefined;
+                this.changed(
+                    terminal ?? {
+                        state: 'finished',
+                        message: 'Flow finished. Retained results are ready to review or export.',
+                    },
+                );
             });
         this.active = task;
         return task;
@@ -214,6 +284,23 @@ export class FlowRunner {
             }
         }
         let run = 0;
+        if (backend.prepare) {
+            guard();
+            const unwatch = this.clock.watch?.(() => {
+                try {
+                    guard();
+                } catch (error) {
+                    this.failureNotice = String(error instanceof Error ? error.message : error);
+                    this.controller?.abort();
+                }
+            });
+            try {
+                await backend.prepare(plan, signal, guard);
+                guard();
+            } finally {
+                unwatch?.();
+            }
+        }
         do {
             guard();
             const runId = crypto.randomUUID();
@@ -233,6 +320,7 @@ export class FlowRunner {
                 });
                 this.executing = true;
                 const unwatch = this.clock.watch?.(() => {
+                    if (signal.aborted) return;
                     try {
                         guard();
                     } catch (error) {
@@ -244,78 +332,106 @@ export class FlowRunner {
                 });
                 let capture: Awaited<ReturnType<FlowBackend['execute']>>;
                 try {
-                    capture = await backend.execute(step, plan, signal, id);
-                } catch (error) {
-                    capture = {
-                        stdout: '',
-                        stderr: error instanceof Error ? error.message : String(error),
-                        exitCode: null,
-                        completion: signal.aborted ? 'cancelled' : 'transport-error',
-                        truncated: false,
-                        chunks: [],
-                    };
-                } finally {
-                    unwatch?.();
-                    this.executing = false;
-                }
-                const completedAt = new Date(this.clock.local()).toISOString();
-                this.recorded({
-                    ...capture,
-                    id,
-                    runId,
-                    ordinal: ordinal + 1,
-                    name: step.name,
-                    command: step.command,
-                    transport: plan.transport,
-                    target: { ...backend.target },
-                    startedAt,
-                    completedAt,
-                    localZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    durationMs: Math.max(0, this.clock.mono() - began),
-                    deviceTime: capture.deviceTime ?? null,
-                    execution: {
-                        timeoutSeconds: plan.timeoutSeconds,
-                        repeatSeconds: plan.repeatSeconds,
-                        stepDelaySeconds: step.delaySeconds,
-                        ...(plan.start
-                            ? {
-                                  scheduledStart: {
-                                      epochMs: plan.start.epochMs,
-                                      clock: plan.start.clock,
-                                      zone: plan.start.zone,
-                                      ...(plan.start.wallTime !== undefined
-                                          ? { wallTime: plan.start.wallTime }
-                                          : {}),
-                                      ...(plan.start.utcOffset !== undefined
-                                          ? { utcOffset: plan.start.utcOffset }
-                                          : {}),
-                                      ...(plan.start.calibration
-                                          ? {
-                                                source: plan.start.calibration.source,
-                                                uncertaintyMs: plan.start.calibration.uncertaintyMs,
-                                            }
-                                          : {}),
-                                  },
-                              }
+                    try {
+                        capture = await backend.execute(step, plan, signal, id, {
+                            runId,
+                            ordinal: ordinal + 1,
+                            startedAt,
+                            assertFresh: guard,
+                        });
+                    } catch (error) {
+                        capture = {
+                            stdout: '',
+                            stderr: error instanceof Error ? error.message : String(error),
+                            exitCode: null,
+                            completion: signal.aborted ? 'cancelled' : 'transport-error',
+                            truncated: false,
+                            chunks: [],
+                        };
+                    }
+                    const completedAt = new Date(this.clock.local()).toISOString();
+                    // A durable result commit is part of command completion. Never send a later
+                    // command, repeat, or release the flow owner while this promise is pending.
+                    await this.recorded({
+                        ...capture,
+                        ...(backend.receiveTimeSource
+                            ? { receiveTimeSource: backend.receiveTimeSource }
                             : {}),
-                        ...(plan.transport === 'serial' ? { serial: { ...plan.serial } } : {}),
-                    },
-                });
-                // Long command execution is allowed; check wall/monotonic drift and connection immediately after it.
-                const local = this.clock.local(),
-                    mono = this.clock.mono();
-                if (Math.abs(local - lastLocal - (mono - lastMono)) > 1000)
-                    throw Error('Local clock changed or app slept during command execution.');
-                lastLocal = local;
-                lastMono = mono;
-                guard();
+                        id,
+                        runId,
+                        ordinal: ordinal + 1,
+                        name: step.name,
+                        command: step.command,
+                        transport: plan.transport,
+                        target: { ...backend.target },
+                        startedAt,
+                        completedAt,
+                        localZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        durationMs: Math.max(0, this.clock.mono() - began),
+                        deviceTime: capture.deviceTime ?? null,
+                        execution: {
+                            timeoutSeconds: plan.timeoutSeconds,
+                            repeatSeconds: plan.repeatSeconds,
+                            stepDelaySeconds: step.delaySeconds,
+                            ...(plan.start
+                                ? {
+                                      scheduledStart: {
+                                          epochMs: plan.start.epochMs,
+                                          clock: plan.start.clock,
+                                          zone: plan.start.zone,
+                                          ...(plan.start.wallTime !== undefined
+                                              ? { wallTime: plan.start.wallTime }
+                                              : {}),
+                                          ...(plan.start.utcOffset !== undefined
+                                              ? { utcOffset: plan.start.utcOffset }
+                                              : {}),
+                                          ...(plan.start.calibration
+                                              ? {
+                                                    source: plan.start.calibration.source,
+                                                    uncertaintyMs:
+                                                        plan.start.calibration.uncertaintyMs,
+                                                }
+                                              : {}),
+                                      },
+                                  }
+                                : {}),
+                            ...(plan.transport === 'serial' ? { serial: { ...plan.serial } } : {}),
+                        },
+                    });
+                    // A persistence acknowledgement may resume before the timer callback after
+                    // sleep. Check freshness against the last observed tick, never a reset baseline.
+                    guard();
+                } finally {
+                    try {
+                        await backend.finalize?.(id);
+                    } finally {
+                        unwatch?.();
+                        this.executing = false;
+                    }
+                }
+                if (capture.stored && capture.stored.state !== 'complete') {
+                    const failure = capture.stored.failure;
+                    throw Error(
+                        'Capture incomplete' +
+                            (failure ? ' (' + failure.code + '): ' + failure.message : '.') +
+                            ' Saved ' +
+                            capture.stored.committedBytes +
+                            ' of ' +
+                            (capture.stored.observedBytes ?? 'unknown') +
+                            ' observed bytes.',
+                    );
+                }
                 if (
                     !['exit', 'prompt-observed'].includes(capture.completion) ||
                     capture.truncated ||
                     (plan.transport === 'ssh' &&
-                        (capture.completion !== 'exit' ||
-                            capture.exitCode === null ||
-                            capture.termination))
+                        (plan.ssh?.mode === 'console'
+                            ? capture.completion !== 'prompt-observed' ||
+                              capture.exitCode !== null ||
+                              !capture.consoleCapture
+                            : capture.completion !== 'exit' ||
+                              capture.exitCode === null ||
+                              capture.termination))
                 )
                     throw Error('Command ended with ' + capture.completion + '.');
                 if (this.stopped) break;
@@ -327,10 +443,6 @@ export class FlowRunner {
                 'Repetition delay after completed flow; no overlap or catch-up.',
             );
         } while (!signal.aborted);
-        this.changed({
-            state: 'finished',
-            message: 'Flow finished. Retained results are ready to review or export.',
-        });
     }
 }
 export class ResultStore {

@@ -1,18 +1,160 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { test } from 'node:test';
 import { releaseAssets } from '../scripts/lib/release-assets.mjs';
 import {
+    PLATFORM_LANES,
+    consumerCases,
+    hashFile,
+    laneFiles,
+    producerCases,
+    producerFiles,
+} from '../scripts/lib/staged-artifact-gate.mjs';
+import {
     EXISTING_RELEASE,
     QUALIFIED_ARTIFACTS,
     SUCCESSFUL_JOBS,
     createExistingReceipt,
 } from '../scripts/lib/existing-release-recovery.mjs';
+
+const fixtureRun = { runId: '123456', runAttempt: '1' };
+
+/** Contract-test inputs only: no native execution, measured soak or reviewed policy is claimed. */
+async function syntheticStagedEvidence(root: string, version: string, sourceCommit: string) {
+    assert.ok(path.resolve(root).startsWith(path.resolve(tmpdir()) + path.sep));
+    assert.ok(path.basename(root).startsWith('hub-publication-notes-'));
+    assert.ok(['0.5.0', '0.5.1'].includes(version), 'Model only the historical note fixtures.');
+    const output = path.join(root, 'synthetic-staged-contract-inputs');
+    const label = { syntheticPublicationUnitOnly: true, nativeExecutionPerformed: false };
+    const context = {
+        version,
+        sourceCommit,
+        sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+            cwd: root,
+            encoding: 'utf8',
+        }).trim(),
+        ...fixtureRun,
+    };
+    const record = async (name: string, value: unknown) => {
+        const file = path.join(output, name);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, JSON.stringify(value) + '\n', { flag: 'wx' });
+        const { bytes, sha256 } = await hashFile(file, name);
+        return { path: name, bytes, sha256 };
+    };
+    const runtime = (lane: (typeof PLATFORM_LANES)[number]) => ({
+        platform: lane.platform,
+        arch: lane.arch,
+        osRelease: 'synthetic-contract-model',
+        node: '24.21.0',
+        executable: lane.platform === 'win32' ? 'C:\\synthetic\\node.exe' : '/synthetic/node',
+        executableSHA256: createHash('sha256').update('synthetic observer').digest('hex'),
+    });
+    const artifacts = (names: string[]) =>
+        Promise.all(names.map((name) => hashFile(path.join(root, 'release', name), name)));
+    const modelCase = (
+        id: string,
+        evidence: Array<{ path: string; bytes: number; sha256: string }>,
+    ) => ({
+        id,
+        status: 'passed',
+        exitCode: 0,
+        signal: null,
+        command: ['synthetic-publication-contract-model-only', id],
+        evidence,
+    });
+    for (const lane of PLATFORM_LANES) {
+        const applications = [];
+        const cases = [];
+        for (const id of consumerCases(lane.id)) {
+            if (id.endsWith('runtime-identity')) {
+                const asset =
+                    lane.platform === 'win32'
+                        ? 'Diagnostic-Hub.exe'
+                        : lane.platform === 'darwin'
+                          ? `Diagnostic-Hub-macos-${lane.arch}.zip`
+                          : id.startsWith('appimage')
+                            ? 'Diagnostic-Hub-linux-x64.AppImage'
+                            : 'Diagnostic-Hub-linux-x64.tar.gz';
+                const app = {
+                    ...label,
+                    asset,
+                    packaged: true,
+                    version,
+                    platform: lane.platform,
+                    arch: lane.arch,
+                    executableSHA256: createHash('sha256')
+                        .update('synthetic ' + asset)
+                        .digest('hex'),
+                    asarSHA256: createHash('sha256').update('synthetic asar').digest('hex'),
+                    versions: { electron: '44.5.1', node: '24.21.0', chrome: 'synthetic' },
+                    sandbox: true,
+                };
+                applications.push(app);
+                cases.push(modelCase(id, [await record(`${lane.id}/${id}.json`, app)]));
+            } else {
+                cases.push(
+                    modelCase(id, [await record(`${lane.id}/${id}.json`, { ...label, id })]),
+                );
+            }
+        }
+        await record(lane.id + '.json', {
+            ...label,
+            schemaVersion: 1,
+            kind: 'staged-native-consumer',
+            status: 'passed',
+            ...context,
+            lane: lane.id,
+            runtime: runtime(lane),
+            artifacts: await artifacts(laneFiles(version, lane.id)),
+            applications,
+            cases,
+        });
+    }
+    for (const scope of ['web', 'gateway']) {
+        const retained = await Promise.all(
+            ['policy', 'runtime', 'normal', 'forced', 'loader'].map((kind) =>
+                record(`${scope}/${kind}.json`, { ...label, scope, kind }),
+            ),
+        );
+        await record(scope + '.json', {
+            ...label,
+            schemaVersion: 1,
+            kind: 'staged-artifact-producer',
+            status: 'passed',
+            ...context,
+            scope,
+            runtime: runtime(PLATFORM_LANES[0]),
+            artifacts: await artifacts(producerFiles(version, scope)),
+            cases: producerCases(scope).map((id: string) => modelCase(id, retained)),
+            qualificationScope: 'full-product',
+            reviewedPolicySHA256: retained[0].sha256,
+            runtimeProfileSHA256: retained[1].sha256,
+            // These are schema boundary values, not durations/cycles measured by this test.
+            normalGC: {
+                status: 'passed',
+                elapsedMs: 1800000,
+                completedCycles: 100,
+                receiptSHA256: retained[2].sha256,
+            },
+            forcedGC: {
+                status: 'passed',
+                elapsedMs: 1800000,
+                completedCycles: 100,
+                receiptSHA256: retained[3].sha256,
+            },
+            browserVersions: { chromium: 'synthetic', firefox: 'synthetic', webkit: 'synthetic' },
+            optionalNativeAddon: 'absent',
+            loaderProvenanceSHA256: retained[4].sha256,
+        });
+    }
+    return output;
+}
 
 async function fixture(version: string, existing = false) {
     const root = await mkdtemp(path.join(tmpdir(), 'hub-publication-notes-'));
@@ -25,6 +167,10 @@ async function fixture(version: string, existing = false) {
     await mkdir(path.join(root, 'docs/releases'), { recursive: true });
     await mkdir(path.join(root, 'release'));
     git('init', '--initial-branch=main');
+    // Copied ESM scripts must resolve the existing dependencies without copying or committing them.
+    await writeFile(path.join(root, '.gitignore'), '/node_modules\n', { flag: 'wx' });
+    await symlink(path.resolve('node_modules'), path.join(root, 'node_modules'), 'junction');
+    assert.equal(git('check-ignore', 'node_modules'), 'node_modules');
     git('config', 'core.autocrlf', 'false');
     git('config', 'user.name', 'Fixture Author');
     git('config', 'user.email', 'fixture@example.invalid');
@@ -91,13 +237,16 @@ async function fixture(version: string, existing = false) {
     };
     const payloads = new Map<string, Buffer>();
     for (const name of releaseAssets(version)) {
-        const bytes =
-            existing &&
-            ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'].includes(name)
+        const helper = ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'].includes(
+            name,
+        );
+        const bytes = helper
+            ? existing
                 ? execFileSync('git', ['show', EXISTING_RELEASE.tag + ':public/' + name], {
                       cwd: root,
                   })
-                : Buffer.from('Fixture bytes: ' + name);
+                : await readFile(path.join(root, 'public', name))
+            : Buffer.from('Fixture bytes: ' + name);
         payloads.set(name, bytes);
         await add(name, bytes);
         await add(name + '.sha256', Buffer.from(digest(bytes) + '  ' + name + '\n'));
@@ -148,6 +297,9 @@ async function fixture(version: string, existing = false) {
             ),
         );
     }
+    const stagedOutput = existing
+        ? undefined
+        : await syntheticStagedEvidence(root, version, commit);
     const draft = {
         id: existing ? EXISTING_RELEASE.draft : 77,
         tag_name: 'v' + version,
@@ -159,7 +311,7 @@ async function fixture(version: string, existing = false) {
         assets,
     };
     await writeFile(path.join(root, 'draft.json'), JSON.stringify(draft));
-    const toolingSHA = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const toolingSHA = git('rev-parse', 'HEAD');
     const receiptPath = path.join(root, 'receipt.json');
     if (existing) {
         await writeFile(
@@ -279,7 +431,8 @@ async function fixture(version: string, existing = false) {
         root,
         commit,
         headings,
-        run: (invalid = '', badInventory = '') =>
+        stagedOutput,
+        run: (invalid = '', badInventory = '', stagedEnv: Record<string, string> = {}) =>
             spawnSync(
                 process.execPath,
                 existing
@@ -294,11 +447,15 @@ async function fixture(version: string, existing = false) {
                         GITHUB_REPOSITORY: 'brucerry/embedded-linux-diagnostic-hub',
                         GITHUB_REF_NAME: 'v' + version,
                         GITHUB_SHA: commit,
+                        GITHUB_RUN_ID: fixtureRun.runId,
+                        GITHUB_RUN_ATTEMPT: fixtureRun.runAttempt,
+                        HUB_PLATFORM_EVIDENCE: stagedOutput,
                         GH_TOKEN: 'fixture-token',
                         HUB_BAD_NOTES: invalid,
                         HUB_EXISTING_BAD: badInventory,
                         HUB_TOOLING_SHA: toolingSHA,
                         NODE_OPTIONS: '--import=' + JSON.stringify(pathToFileURL(bootstrap).href),
+                        ...stagedEnv,
                     },
                 },
             ),
@@ -320,6 +477,7 @@ for (const version of ['0.5.0', '0.5.1']) {
             try {
                 const result = f.run();
                 assert.equal(result.status, 0, result.stderr);
+                assert.match(result.stdout, /All four native staged-consumer receipts bind/);
                 const request = JSON.parse(
                     await readFile(path.join(f.root, 'publication-request.json'), 'utf8'),
                 );
@@ -334,12 +492,55 @@ for (const version of ['0.5.0', '0.5.1']) {
                 );
                 assert.ok(notes.includes('/commit/' + f.commit));
                 assert.match(result.stdout, /Release version verified/);
+                assert.match(result.stdout, /All four native staged-consumer receipts bind/);
             } finally {
                 await f.close();
             }
         },
     );
 }
+test('actual publication CLI keeps staged evidence mandatory before any server write', async () => {
+    const f = await fixture('0.5.1');
+    try {
+        assert.ok(f.stagedOutput);
+        const refuses = async (name: string, env: Record<string, string> = {}) => {
+            const result = f.run('', '', env);
+            assert.equal(result.error, undefined, name);
+            assert.equal(result.signal, null, name);
+            assert.notEqual(result.status, 0, name);
+            assert.match(result.stderr, /AssertionError|ENOENT/, name);
+            for (const file of ['server-write-attempt.json', 'publication-request.json'])
+                await assert.rejects(() => readFile(path.join(f.root, file)), { code: 'ENOENT' });
+        };
+        await refuses('run identity missing', { GITHUB_RUN_ID: '' });
+        await refuses('receipt belongs to a different run', { GITHUB_RUN_ID: '999999' });
+        for (const name of ['win32-x64.json', 'gateway.json']) {
+            const file = path.join(f.stagedOutput, name);
+            const original = await readFile(file);
+            try {
+                await rm(file);
+                await refuses('required receipt missing: ' + name);
+            } finally {
+                await writeFile(file, original, { flag: 'wx' });
+            }
+        }
+        for (const file of [
+            path.join(f.stagedOutput, 'win32-x64/portable-desktop.json'),
+            path.join(f.root, 'release/Diagnostic-Hub.exe'),
+        ]) {
+            const original = await readFile(file);
+            try {
+                await writeFile(file, Buffer.concat([original, Buffer.from('tampered')]));
+                await refuses('retained bytes changed: ' + path.basename(file));
+            } finally {
+                await writeFile(file, original);
+            }
+        }
+    } finally {
+        await f.close();
+    }
+});
+
 test('actual publication CLI rejects malformed final notes before PATCH for old and new formats', async () => {
     for (const version of ['0.5.0', '0.5.1']) {
         const invalids =

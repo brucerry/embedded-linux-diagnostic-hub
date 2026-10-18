@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { distributable, releaseAssets } from './lib/release-assets.mjs';
+import { distributable, releaseAssets, includesWindowsSetup } from './lib/release-assets.mjs';
+import {
+    WINDOWS_SETUP_ASSET,
+    validateWindowsSetupInfo,
+    windowsSetupInfoName,
+} from './lib/windows-setup-release.mjs';
 import { MAC_ARCHES, macAsset, macManifest, validateMacManifest } from './lib/macos-release.mjs';
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 assert.match(version, /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/, 'Use a semantic release version.');
@@ -25,6 +30,24 @@ if (process.argv.includes('--assets')) {
     assert.equal(info.version, version);
     assert.equal(info.commit, process.env.GITHUB_SHA);
     assert.ok(['Valid', 'NotSigned'].includes(info.signature));
+    if (includesWindowsSetup(version)) {
+        const bytes = await readFile(path.join('release', WINDOWS_SETUP_ASSET));
+        validateWindowsSetupInfo(
+            JSON.parse(
+                await readFile(
+                    path.join('release', windowsSetupInfoName(WINDOWS_SETUP_ASSET)),
+                    'utf8',
+                ),
+            ),
+            {
+                version,
+                commit: process.env.GITHUB_SHA,
+                asset: WINDOWS_SETUP_ASSET,
+                bytes: bytes.length,
+                sha256: createHash('sha256').update(bytes).digest('hex'),
+            },
+        );
+    }
     const linux = JSON.parse(await readFile('release/linux-build-info.json', 'utf8'));
     assert.equal(linux.version, version);
     assert.equal(linux.commit, process.env.GITHUB_SHA);

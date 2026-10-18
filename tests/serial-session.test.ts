@@ -89,6 +89,27 @@ function fake(openGate?: Promise<void>, writeGate?: Promise<void>) {
     };
 }
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+test('Deselect publishes idle after ownership release and requires explicit reselection without opening', async () => {
+    const f = fake();
+    const session = new SerialSession(async () => {});
+    const observed: { state: string; owned: boolean; selected: boolean }[] = [];
+    session.subscribe((status) =>
+        observed.push({
+            state: status.state,
+            owned: session.isOwned,
+            selected: Boolean(session.selectedPort),
+        }),
+    );
+    session.select(f.port, 'COM11');
+    await session.close(true);
+    assert.deepEqual(observed.at(-1), { state: 'idle', owned: false, selected: false });
+    assert.equal(f.opens, 0);
+    assert.equal(f.closes, 0);
+    await assert.rejects(session.connect(DEFAULT_SERIAL_SETTINGS), /Choose/);
+    session.select(f.port, 'COM11');
+    assert.deepEqual(observed.at(-1), { state: 'selected', owned: false, selected: true });
+    assert.equal(f.opens, 0);
+});
 test('selection is not open; receive/write are bytes; deselect releases idle reader and writer', async () => {
     const f = fake();
     const received: Uint8Array[] = [];
@@ -170,14 +191,20 @@ test('timeout does not claim closed ownership and close recovery cannot open ano
     const gate = deferred();
     const f = fake(gate.promise);
     const session = new SerialSession(async () => {}, 15);
+    const ownership: boolean[] = [];
+    session.subscribe(() => ownership.push(session.isOwned));
     session.select(f.port, 'port');
     const opening = session.connect(DEFAULT_SERIAL_SETTINGS);
     await assert.rejects(session.close(), /cleanup is still pending/);
+    assert.equal(session.isOwned, true);
+    assert.equal(ownership.at(-1), true);
+    assert.throws(() => session.select(fake().port, 'replacement'), /Disconnect/);
     await assert.rejects(session.connect(DEFAULT_SERIAL_SETTINGS), /still open/);
     gate.resolve();
     await opening;
     await session.close();
     assert.equal(f.closes, 1);
+    assert.equal(ownership.at(-1), false);
 });
 test('invalid framing cannot open and cancelling selection is ordinary', async () => {
     const f = fake();

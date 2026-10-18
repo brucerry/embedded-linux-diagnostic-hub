@@ -49,7 +49,7 @@ test('portable production website works at a nested URL on desktop and mobile', 
         await page.goto(`http://127.0.0.1:${port}${prefix}`);
         await expect(page.getByText('NOT CONNECTED', { exact: true })).toBeVisible();
         await expect(page.getByRole('region', { name: 'Device time', exact: true })).toContainText(
-            'No device connected',
+            'SSH disconnected',
         );
         await expect(page.locator('.metric-card')).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Connect target device' })).toBeVisible();
@@ -166,7 +166,7 @@ test('portable production website works at a nested URL on desktop and mobile', 
             await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
             await expect(
                 page.getByRole('region', { name: 'Device time', exact: true }),
-            ).toContainText('No device connected');
+            ).toContainText('SSH disconnected');
         } finally {
             await page.goto('about:blank').catch(() => {});
             await gateway.close();

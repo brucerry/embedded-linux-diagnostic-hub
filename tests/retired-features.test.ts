@@ -76,7 +76,11 @@ test('ordinary delivery keeps checksum verification and never manages a desktop 
     const legacyMatches = (wmClass: string, desktopId: string) =>
         wmClass.toLowerCase() === 'diagnostic-hub' && desktopId === 'diagnostic-hub.desktop';
     assert.equal(legacyMatches('diagnostic-hub-native', pkg.desktopName), false);
-    assert.doesNotMatch(main, /setPath\('userData'|hub:window-motion|hub:tests-/);
+    assert.doesNotMatch(main, /hub:window-motion|hub:tests-/);
+    // Native window identity may not create an alternate profile. Installed startup
+    // separately selects and locks its canonical profile before Electron initializes.
+    const windowIdentity = await readFile('electron/linux-window-identity.ts', 'utf8');
+    assert.doesNotMatch(windowIdentity, /setPath\(|userData|sessionData/);
 });
 
 test('workspace view and navigation cannot restore redundant Reports/Evidence or Tests pages', async () => {

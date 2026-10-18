@@ -1,10 +1,21 @@
 import { validateScheduleMetadata } from './automation-time';
+import {
+    sshExecutionMode,
+    sshInput,
+    consoleReady,
+    consoleCompletion,
+    type ConsoleCompletion,
+    type SshExecutionMode,
+    type SshInputIntent,
+} from './ssh-console';
+import type { StoredCapture } from './capture-store';
 export const AUTOMATION_LIMITS = {
     commands: 20,
     commandBytes: 8192,
     planBytes: 65536,
     outputBytes: 65536,
     chunks: 256,
+    serialBlockBytes: 1024,
     rows: 200,
     retainedBytes: 8 * 1024 * 1024,
     timeoutSeconds: 300,
@@ -21,6 +32,7 @@ export interface CommandStep {
     command: string;
     delaySeconds: number;
     enterOnly?: boolean;
+    ssh?: { intent: SshInputIntent; completion?: ConsoleCompletion };
 }
 export interface ClockCalibration {
     source: string;
@@ -32,6 +44,7 @@ export interface ClockCalibration {
     zone: string;
 }
 export interface AutomationPlan {
+    ssh?: { mode: SshExecutionMode; ready?: ConsoleCompletion; completion?: ConsoleCompletion };
     captureDeviceTime?: boolean;
     transport: AutomationTransportName;
     steps: CommandStep[];
@@ -55,11 +68,19 @@ export type Completion =
     | 'timeout'
     | 'cancelled'
     | 'transport-error'
+    | 'storage-error'
     | 'output-limit';
 export interface RawChunk {
     stream: 'stdout' | 'stderr' | 'serial';
     base64: string;
     receivedAt: string;
+    /** Logical Serial byte block; receivedAt is its first contributing read observation. */
+    aggregation?: {
+        kind: 'serial-byte-block-v1';
+        firstReceivedAt: string;
+        lastReceivedAt: string;
+        contributingReads: number;
+    };
 }
 export interface TerminationEvidence {
     signal: string;
@@ -68,6 +89,20 @@ export interface TerminationEvidence {
     truncated: boolean;
 }
 export interface CommandCapture {
+    consoleCapture?: {
+        schema: 2;
+        id: string;
+        flowId: string;
+        runId: string;
+        stepId: string;
+        ordinal: number;
+        intent: SshInputIntent;
+        criterion: ConsoleCompletion;
+        match: import('./console-journal').ConsoleMatch;
+    };
+    /** Present only for an explicitly storage-backed producer, never inferred from display text. */
+    stored?: StoredCapture;
+    previewClipped?: boolean;
     termination?: TerminationEvidence;
     stdout: string;
     stderr: string;
@@ -76,7 +111,10 @@ export interface CommandCapture {
     truncated: boolean;
     chunks: RawChunk[];
 }
+export type ReceiveTimeSource = 'local-client' | 'gateway';
 export interface AutomationRecord extends CommandCapture {
+    /** Host observing incoming bytes; older records may not record this source. */
+    receiveTimeSource?: ReceiveTimeSource;
     id: string;
     runId: string;
     ordinal: number;
@@ -113,6 +151,8 @@ export interface AutomationRequest {
     timeoutMs: number;
 }
 export interface AutomationTransport {
+    automationStream?: import('./ssh-stream-rpc').SshStreamRpc;
+    automationConsole?: import('./console-rpc').ConsoleRpc;
     automationConnection(): string;
     runAutomation(request: AutomationRequest): Promise<CommandCapture>;
     cancelAutomation(id: string, connection: string): Promise<void>;
@@ -157,6 +197,7 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
         p,
         [
             'captureDeviceTime',
+            'ssh',
             'transport',
             'steps',
             'timeoutSeconds',
@@ -177,10 +218,24 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
     )
         throw Error('Commands: add between 1 and 20 steps.');
     let total = 0;
+    if (p.ssh !== undefined) {
+        knownFields(p.ssh, ['mode', 'ready', 'completion'], 'SSH settings');
+        if (p.transport !== 'ssh') throw Error('SSH console settings require SSH transport.');
+    }
+    const sshMode = sshExecutionMode(p.ssh?.mode);
+    if (sshMode === 'console') {
+        consoleReady(p.ssh?.ready);
+        consoleCompletion(p.ssh?.completion);
+    } else if (p.ssh?.ready !== undefined || p.ssh?.completion !== undefined)
+        throw Error('Console criteria require console mode.');
     const ids = new Set<string>();
     for (const [i, s] of p.steps.entries()) {
         const field = 'Step ' + (i + 1);
-        knownFields(s, ['id', 'name', 'enabled', 'command', 'delaySeconds', 'enterOnly'], field);
+        knownFields(
+            s,
+            ['id', 'name', 'enabled', 'command', 'delaySeconds', 'enterOnly', 'ssh'],
+            field,
+        );
         if (
             !s ||
             typeof s.id !== 'string' ||
@@ -206,11 +261,33 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
             throw Error(
                 field + ': Enter-only requires Serial, an empty script and CR, LF or CRLF.',
             );
+        if (s.ssh !== undefined) {
+            knownFields(s.ssh, ['intent', 'completion'], field + ' SSH input');
+            if (p.transport !== 'ssh')
+                throw Error(field + ': SSH input metadata requires SSH transport.');
+        }
+        if (p.transport === 'ssh') {
+            if (sshMode === 'console' && !s.ssh)
+                throw Error(field + ': choose an explicit Script or Send Enter intent.');
+            if (
+                (sshMode === 'console' || s.ssh !== undefined) &&
+                (s.enabled || s.command.trim() || s.ssh?.intent === 'send-enter')
+            )
+                sshInput(sshMode, { intent: s.ssh?.intent ?? 'script', command: s.command });
+            if (sshMode === 'console') consoleCompletion(s.ssh?.completion ?? p.ssh!.completion);
+            else if (s.ssh?.completion !== undefined)
+                throw Error(field + ': completion criteria require console mode.');
+        }
         const size = new TextEncoder().encode(s.command).length;
         total += size;
         if (size > AUTOMATION_LIMITS.commandBytes)
             throw Error(field + ': command exceeds 8192 UTF-8 bytes.');
-        if (s.enabled && !s.command.trim() && !s.enterOnly)
+        if (
+            s.enabled &&
+            !s.command.trim() &&
+            !s.enterOnly &&
+            !(sshMode === 'console' && s.ssh?.intent === 'send-enter')
+        )
             throw Error(
                 field +
                     (s.name ? ' (' + s.name + ')' : '') +
@@ -379,6 +456,7 @@ export function validateCapture(input: unknown): CommandCapture {
             'timeout',
             'cancelled',
             'transport-error',
+            'storage-error',
             'output-limit',
         ].includes(r.completion) ||
         !(
@@ -427,12 +505,50 @@ export function validateCapture(input: unknown): CommandCapture {
             new Date(c.receivedAt).toISOString() !== c.receivedAt
         )
             throw Error('Invalid Automation raw chunk.');
-        total +=
+        const byteLength =
             (c.base64.length * 3) / 4 -
             (c.base64.endsWith('==') ? 2 : c.base64.endsWith('=') ? 1 : 0);
+        const a = c.aggregation;
+        if (
+            a !== undefined &&
+            (!a ||
+                typeof a !== 'object' ||
+                Array.isArray(a) ||
+                Object.keys(a).sort().join(',') !==
+                    'contributingReads,firstReceivedAt,kind,lastReceivedAt' ||
+                c.stream !== 'serial' ||
+                a.kind !== 'serial-byte-block-v1' ||
+                byteLength < 1 ||
+                byteLength > AUTOMATION_LIMITS.serialBlockBytes ||
+                a.firstReceivedAt !== c.receivedAt ||
+                typeof a.lastReceivedAt !== 'string' ||
+                !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(a.lastReceivedAt) ||
+                !Number.isFinite(Date.parse(a.lastReceivedAt)) ||
+                new Date(a.lastReceivedAt).toISOString() !== a.lastReceivedAt ||
+                !Number.isInteger(a.contributingReads) ||
+                a.contributingReads < 1 ||
+                a.contributingReads > byteLength ||
+                (a.contributingReads === 1 && a.firstReceivedAt !== a.lastReceivedAt))
+        )
+            throw Error('Invalid Serial capture-block provenance.');
+        total += byteLength;
         if (total > AUTOMATION_LIMITS.outputBytes)
             throw Error('Automation raw output exceeds its bound.');
-        return { stream: c.stream, base64: c.base64, receivedAt: c.receivedAt };
+        return {
+            stream: c.stream,
+            base64: c.base64,
+            receivedAt: c.receivedAt,
+            ...(a
+                ? {
+                      aggregation: {
+                          kind: a.kind,
+                          firstReceivedAt: a.firstReceivedAt,
+                          lastReceivedAt: a.lastReceivedAt,
+                          contributingReads: a.contributingReads,
+                      },
+                  }
+                : {}),
+        };
     });
     return {
         stdout: r.stdout,

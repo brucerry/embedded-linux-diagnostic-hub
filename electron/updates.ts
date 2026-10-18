@@ -37,15 +37,25 @@ export class ReleaseUpdater {
         private arch: string,
         private packaged: boolean,
         private request: typeof fetch = (input, init) => fetch(input, init),
+        private delivery: 'portable' | 'installed' | 'unavailable' = 'portable',
     ) {}
 
     private get assetName() {
-        if (this.arch !== 'x64') return null;
+        if (this.delivery !== 'portable' || this.arch !== 'x64') return null;
         return this.platform === 'win32'
             ? 'Diagnostic-Hub.exe'
             : this.platform === 'linux'
               ? 'Diagnostic-Hub-linux-x64.AppImage'
               : null;
+    }
+
+    private assertAutomaticDelivery(): void {
+        if (this.delivery !== 'portable')
+            throw Error(
+                this.delivery === 'installed'
+                    ? 'Automatic updates are not qualified for this installed delivery. Use the verified setup for Update or Repair.'
+                    : 'Automatic updates require a verified supported delivery location. Use the verified setup or portable download.',
+            );
     }
 
     private async get(url: string, timeout = 30_000) {
@@ -88,9 +98,13 @@ export class ReleaseUpdater {
                 installable: false,
                 release: null,
                 installationUnavailableReason:
-                    this.platform === 'darwin'
-                        ? 'Automatic updates are unavailable on macOS. Quit Diagnostic Hub and use the verified Mac installer; normal signing and Gatekeeper policy still apply.'
-                        : 'Automatic updates are unavailable on this platform. Check GitHub releases for manually supported downloads.',
+                    this.delivery === 'installed'
+                        ? 'Automatic updates are not qualified for this installed delivery. Use the verified setup for Update or Repair.'
+                        : this.delivery === 'unavailable'
+                          ? 'Automatic updates require a verified supported delivery location. Use the verified setup or portable download.'
+                          : this.platform === 'darwin'
+                            ? 'Automatic updates are unavailable on macOS. Quit Diagnostic Hub and use the verified Mac installer; normal signing and Gatekeeper policy still apply.'
+                            : 'Automatic updates are unavailable on this platform. Check GitHub releases for manually supported downloads.',
                 ...(this.platform === 'darwin' && (this.arch === 'x64' || this.arch === 'arm64')
                     ? {
                           manualUpdate: {
@@ -175,6 +189,7 @@ export class ReleaseUpdater {
     }
 
     assertCanDownload(): void {
+        this.assertAutomaticDelivery();
         if (!this.assetName) throw new Error('Automatic updates are unavailable on this platform.');
         if (!this.packaged) throw new Error('Run a packaged application to install updates.');
         if (this.busy) throw new Error('An update operation is already running.');
@@ -297,6 +312,7 @@ export class ReleaseUpdater {
     }
 
     handoffInfo() {
+        this.assertAutomaticDelivery();
         if (!this.ready || !this.candidate) throw Error('Download and verify an update first.');
         return {
             previousVersion: this.currentVersion,
@@ -306,6 +322,7 @@ export class ReleaseUpdater {
         };
     }
     async executable(): Promise<string> {
+        this.assertAutomaticDelivery();
         if (this.busy || !this.ready) throw new Error('Download and verify an update first.');
         return this.verify(this.ready);
     }

@@ -1,0 +1,15 @@
+/* Keep the existing Earth position, lowered landscape and star cadence. */
+@media (prefers-reduced-motion: reduce) {
+    .terminal-playground *,
+    .terminal-playground ~ .terminal-screen .xterm-cursor-blink,
+    .serial-beach ~ .terminal-screen .xterm-cursor-blink {
+        animation: none !important;
+    }
+    .terminal-playground ~ .terminal-screen .xterm-cursor-blink,
+    .serial-beach ~ .terminal-screen .xterm-cursor-blink {
+        opacity: 1;
+    }
+    .terminal-playground .terminal-star {
+        opacity: 0.2;
+    }
+}

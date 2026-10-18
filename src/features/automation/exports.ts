@@ -1,4 +1,5 @@
 import type { AutomationRecord } from '../../../shared/automation';
+import { formatReceivedOutput, receivedOutput, receiveTimeLabel } from './received-output';
 export type ExportFormat = 'json' | 'csv' | 'markdown' | 'text';
 export function exportResults(
     records: AutomationRecord[],
@@ -15,6 +16,7 @@ export function exportResults(
             name: r.name,
             command: r.command,
             transport: r.transport,
+            ...(r.receiveTimeSource ? { receiveTimeSource: r.receiveTimeSource } : {}),
             target: {
                 endpoint: r.target.endpoint,
                 ...(r.target.username ? { username: r.target.username } : {}),
@@ -51,6 +53,7 @@ export function exportResults(
                 stream: c.stream,
                 base64: c.base64,
                 receivedAt: c.receivedAt,
+                ...(c.aggregation ? { aggregation: { ...c.aggregation } } : {}),
             })),
             ...(r.requestBytes ? { requestBytes: r.requestBytes } : {}),
             ...(r.execution
@@ -97,8 +100,9 @@ export function exportResults(
                 : {}),
         }),
     );
+    const hasSerialBlocks = rows.some((row) => row.chunks.some((chunk) => chunk.aggregation));
     const metadata = {
-        schemaVersion: 1,
+        schemaVersion: hasSerialBlocks ? 2 : 1,
         kind: 'diagnostic-hub-command-automation',
         createdAt,
         scope,
@@ -147,13 +151,41 @@ export function exportResults(
             'coreDumped',
             'terminationMessage',
             'terminationTruncated',
+            'rowType',
+            'receiveTimeSource',
+            'chunkIndex',
+            'chunkStream',
+            'receivedAt',
+            ...(hasSerialBlocks
+                ? ['chunkRepresentation', 'firstReceivedAt', 'lastReceivedAt', 'contributingReads']
+                : []),
+            'chunkByteLength',
+            'chunkText',
+            'chunkBase64',
+            'utf8PendingBytes',
+            'utf8ContinuesFromPreviousChunk',
+            'utf8IncompleteAtEnd',
             'transformedFields',
         ];
         const quote = (s: string) => '"' + s.replaceAll('"', '""') + '"';
         const out = [keys.map(quote).join(',')];
+        const append = (v: Record<string, unknown>) => {
+            const transformed: string[] = [];
+            const cells = keys.slice(0, -1).map((k) => {
+                let text = String(v[k] ?? '');
+                if (/^[\s\x00-\x1f\x7f-\x9f]*[=+\-@]/.test(text)) {
+                    text = "'" + text;
+                    transformed.push(k);
+                }
+                return quote(text);
+            });
+            out.push([...cells, quote(transformed.join(';'))].join(','));
+        };
         for (const r of rows) {
             const v: Record<string, unknown> = {
                 ...r,
+                rowType: 'command',
+                receiveTimeSource: receiveTimeLabel(r.receiveTimeSource),
                 endpoint: r.target.endpoint,
                 username: r.target.username ?? '',
                 deviceTime: r.deviceTime?.value ?? '',
@@ -179,16 +211,30 @@ export function exportResults(
                 terminationMessage: r.termination?.message,
                 terminationTruncated: r.termination?.truncated,
             };
-            const transformed: string[] = [];
-            const cells = keys.slice(0, -1).map((k) => {
-                let text = String(v[k] ?? '');
-                if (/^[\s\x00-\x1f\x7f-\x9f]*[=+\-@]/.test(text)) {
-                    text = "'" + text;
-                    transformed.push(k);
-                }
-                return quote(text);
-            });
-            out.push([...cells, quote(transformed.join(';'))].join(','));
+            append(v);
+            for (const c of receivedOutput(r))
+                append({
+                    id: r.id,
+                    runId: r.runId,
+                    ordinal: r.ordinal,
+                    transport: r.transport,
+                    rowType: c.aggregation ? 'receive-block' : 'receive-chunk',
+                    receiveTimeSource: receiveTimeLabel(r.receiveTimeSource),
+                    truncated: r.truncated,
+                    chunkIndex: c.index,
+                    chunkStream: c.stream,
+                    receivedAt: c.receivedAt,
+                    chunkRepresentation: c.aggregation?.kind ?? 'receive-observation',
+                    firstReceivedAt: c.aggregation?.firstReceivedAt,
+                    lastReceivedAt: c.aggregation?.lastReceivedAt,
+                    contributingReads: c.aggregation?.contributingReads,
+                    chunkByteLength: c.byteLength,
+                    chunkText: c.text,
+                    chunkBase64: c.base64,
+                    utf8PendingBytes: c.pendingUtf8Bytes,
+                    utf8ContinuesFromPreviousChunk: c.continuesFromPreviousChunk,
+                    utf8IncompleteAtEnd: c.incompleteAtEnd,
+                });
         }
         return out.join('\r\n');
     }
@@ -269,14 +315,18 @@ export function exportResults(
                           safe(header) +
                           '\n\n### Command\n\n' +
                           fence(r.command) +
-                          '\n\n### Output\n\n' +
+                          '\n\n### Received output\n\n' +
+                          fence(formatReceivedOutput(r)) +
+                          '\n\n### Raw aggregate output\n\n' +
                           fence(r.stdout) +
                           '\n\n### Error output\n\n' +
                           fence(r.stderr)
                     : visible(header) +
                           'Command:\n' +
                           visible(r.command) +
-                          '\nOutput:\n' +
+                          '\nReceived output:\n' +
+                          formatReceivedOutput(r) +
+                          '\nRaw aggregate output:\n' +
                           visible(r.stdout) +
                           '\nError output:\n' +
                           visible(r.stderr);

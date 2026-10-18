@@ -25,6 +25,22 @@ export class SshTerminal {
     private openingTimer?: ReturnType<typeof setTimeout>;
     private rejectOpening?: (error: Error) => void;
     private writes = new Set<(error?: Error) => void>();
+    private underlyingWrites = new Set<(error?: Error | null) => void>();
+    private openingPending = false;
+    private channelClosed = false;
+    private cleanupClosed = false;
+    private cleanupResolve!: () => void;
+    private cleanupDone = new Promise<void>((resolve) => {
+        this.cleanupResolve = resolve;
+    });
+    private outputData = (data: Buffer) => this.output(data);
+    private streamError = () =>
+        this.close('The remote terminal channel failed. Reconnect the device to retry.');
+    private streamClose = () => {
+        this.channelClosed = true;
+        this.close();
+        this.settleCleanup();
+    };
     readonly id: string;
 
     constructor(
@@ -38,8 +54,10 @@ export class SshTerminal {
     }
 
     open(client: Client, size: TerminalSize): Promise<void> {
+        if (this.ended) return Promise.reject(Error('This terminal is already closed.'));
         this.emit({ id: this.id, type: 'state', state: 'opening' });
         return new Promise((resolve, reject) => {
+            this.openingPending = true;
             this.rejectOpening = reject;
             this.openingTimer = setTimeout(
                 () => this.close('The device did not open a terminal within 30 seconds.'),
@@ -47,8 +65,18 @@ export class SshTerminal {
             );
             try {
                 client.shell({ term: 'xterm-256color', ...terminalSize(size) }, (error, stream) => {
+                    this.openingPending = false;
+                    if (stream) {
+                        this.stream = stream;
+                        stream.on('error', this.streamError);
+                        stream.stderr.on('error', this.streamError);
+                        stream.once('close', this.streamClose);
+                    }
                     if (this.ended) {
-                        stream?.close();
+                        stream?.destroy();
+                        stream?.resume();
+                        stream?.stderr.resume();
+                        this.settleCleanup();
                         return;
                     }
                     if (error) {
@@ -58,20 +86,16 @@ export class SshTerminal {
                         return;
                     }
                     clearTimeout(this.openingTimer);
+                    this.openingTimer = undefined;
                     this.rejectOpening = undefined;
                     this.stream = stream;
-                    stream.on('data', (data: Buffer) => this.output(data));
-                    stream.stderr.on('data', (data: Buffer) => this.output(data));
-                    stream.on('error', () =>
-                        this.close(
-                            'The remote terminal channel failed. Reconnect the device to retry.',
-                        ),
-                    );
-                    stream.on('close', () => this.close());
+                    stream.on('data', this.outputData);
+                    stream.stderr.on('data', this.outputData);
                     this.emit({ id: this.id, type: 'state', state: 'open' });
                     resolve();
                 });
             } catch {
+                this.openingPending = false;
                 this.close('The remote terminal channel could not be opened. Reconnect to retry.');
             }
         });
@@ -133,7 +157,7 @@ export class SshTerminal {
     }
 
     get hasPendingInput() {
-        return this.inputBytes > 0;
+        return this.inputBytes > 0 || this.underlyingWrites.size > 0;
     }
     async write(data: unknown): Promise<void> {
         if (this.inputBlocked()) throw Error('Terminal input is paused during Automation.');
@@ -150,7 +174,17 @@ export class SshTerminal {
                 error ? reject(Error('Terminal input could not be delivered.')) : resolve();
             };
             this.writes.add(finish);
-            stream.write(bytes, finish);
+            const written = (error?: Error | null) => {
+                if (!this.underlyingWrites.delete(written)) return;
+                finish(error);
+                this.settleCleanup();
+            };
+            this.underlyingWrites.add(written);
+            try {
+                stream.write(bytes, written);
+            } catch (error) {
+                written(error instanceof Error ? error : Error(String(error)));
+            }
         });
     }
 
@@ -161,17 +195,69 @@ export class SshTerminal {
     }
 
     close(message?: string): void {
-        if (this.ended) return;
+        if (this.ended) {
+            this.settleCleanup();
+            return;
+        }
         this.ended = true;
         clearTimeout(this.stalled);
         clearTimeout(this.openingTimer);
+        this.stalled = undefined;
+        this.openingTimer = undefined;
         this.rejectOpening?.(Error(message ?? 'Terminal closed before opening.'));
         this.rejectOpening = undefined;
         for (const finish of this.writes) finish(Error('Terminal closed.'));
         this.pending.clear();
         this.pendingBytes = 0;
         this.stream?.destroy();
+        this.stream?.resume();
+        this.stream?.stderr.resume();
         this.finished();
         this.emit({ id: this.id, type: 'state', state: message ? 'error' : 'closed', message });
+        this.settleCleanup();
+    }
+    private settleCleanup() {
+        if (
+            this.cleanupClosed ||
+            !this.ended ||
+            this.openingPending ||
+            (this.stream && !this.channelClosed) ||
+            this.underlyingWrites.size
+        )
+            return;
+        this.stream?.off('data', this.outputData);
+        this.stream?.stderr.off('data', this.outputData);
+        this.stream?.off('error', this.streamError);
+        this.stream?.stderr.off('error', this.streamError);
+        this.stream?.off('close', this.streamClose);
+        this.stream = undefined;
+        this.cleanupClosed = true;
+        this.cleanupResolve();
+    }
+    join() {
+        return this.cleanupDone;
+    }
+    get ownershipSnapshot() {
+        const stream = this.stream;
+        const listeners = stream
+            ? stream.listeners('data').filter((value) => value === this.outputData).length +
+              stream.stderr.listeners('data').filter((value) => value === this.outputData).length +
+              stream.listeners('error').filter((value) => value === this.streamError).length +
+              stream.stderr.listeners('error').filter((value) => value === this.streamError)
+                  .length +
+              stream.listeners('close').filter((value) => value === this.streamClose).length
+            : 0;
+        return {
+            opening: this.openingPending ? 1 : 0,
+            channel: stream && !this.channelClosed ? 1 : 0,
+            writeCallbacks: this.underlyingWrites.size,
+            inputBytes: this.inputBytes,
+            pendingAcks: this.pending.size,
+            pendingAckBytes: this.pendingBytes,
+            timers: (this.stalled ? 1 : 0) + (this.openingTimer ? 1 : 0),
+            listeners,
+            closing: this.ended && !this.cleanupClosed ? 1 : 0,
+            cleanupClosed: this.cleanupClosed,
+        };
     }
 }

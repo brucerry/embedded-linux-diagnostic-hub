@@ -8,6 +8,12 @@ on:
             WINDOWS_CSC_KEY_PASSWORD:
                 required: false
     workflow_dispatch:
+        inputs:
+            windows_preflight_only:
+                description: 'One nonqualifying metadata preflight; skips the standing build'
+                type: boolean
+                required: false
+                default: false
     push:
         branches: [main]
     pull_request:
@@ -16,11 +22,15 @@ permissions:
     contents: read
 
 concurrency:
-    group: windows-${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+    group:
+        windows-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch'
+        && inputs.windows_preflight_only && '-preflight' || '' }}
+    cancel-in-progress:
+        ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only) }}
 
 jobs:
     build:
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only) }}
         runs-on: windows-latest
         timeout-minutes: 30
         steps:
@@ -74,6 +84,8 @@ jobs:
               run: npx tsx tests/windows-update-handoff-smoke.ts
               env:
                   HUB_FEATURE_EVIDENCE: validation/update-handoff
+            - name: Build the approved version-gated assisted setup and descriptor
+              run: node scripts/staged-artifact-gate.mjs build-setup
             - run: npm run checksums
             - name: Record signing status
               shell: pwsh
@@ -92,6 +104,9 @@ jobs:
                       release/Diagnostic-Hub.exe
                       release/Diagnostic-Hub.exe.sha256
                       release/build-info.json
+                      release/Diagnostic-Hub-Windows-x64-Setup.exe
+                      release/Diagnostic-Hub-Windows-x64-Setup.exe.sha256
+                      release/Diagnostic-Hub-Windows-x64-Setup.exe.info.json
                   if-no-files-found: error
             - name: Retain isolated update handoff evidence separately
               uses: actions/upload-artifact@v4
@@ -106,3 +121,51 @@ jobs:
                   name: windows-browser-failure-${{ github.run_attempt }}
                   path: test-results/
                   if-no-files-found: warn
+
+    windows-preflight-only:
+        name: Windows metadata preflight (nonqualifying)
+        if: github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only
+        runs-on: windows-latest
+        timeout-minutes: 15
+        env:
+            HUB_WINDOWS_PREFLIGHT_ONLY: '1'
+        steps:
+            - name: Refuse replacement attempts
+              shell: pwsh
+              run: |
+                  if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'One attempt; no automatic reruns.' }
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  architecture: x64
+                  cache: npm
+            - name: Restore only lockfile-declared dependencies
+              run: npm ci
+            - name: Create fresh metadata root and resolve the actual loader
+              shell: pwsh
+              run: |
+                  $root = Join-Path $env:RUNNER_TEMP 'diagnostic-hub-windows-preflight'
+                  if (Test-Path -LiteralPath $root) { throw 'Fresh metadata root required.' }
+                  New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+                  $canonical = node -p "require('node:fs').realpathSync(process.argv[1])" "$root"
+                  if ($LASTEXITCODE -ne 0) { throw 'Canonical root resolution failed.' }
+                  $loader = node -p "require('node:url').pathToFileURL(require.resolve('tsx')).href"
+                  if ($LASTEXITCODE -ne 0) { throw 'Loader resolution failed.' }
+                  "PREFLIGHT_ROOT=$canonical" >> $env:GITHUB_ENV
+                  "PREFLIGHT_LOADER=$loader" >> $env:GITHUB_ENV
+            - name: Observe only hosted metadata and disposable file I/O
+              shell: pwsh
+              run: |
+                  node --import $env:PREFLIGHT_LOADER scripts/memory-product-preflight.mts "--out=$env:PREFLIGHT_ROOT"
+                  if ($LASTEXITCODE -ne 0) { throw 'Partial or blocked metadata facts; retain and review.' }
+            - name: Retain nonqualifying facts including partial failures, then stop
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-metadata-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: ${{ runner.temp }}/diagnostic-hub-windows-preflight/
+                  if-no-files-found: warn
+                  retention-days: 14

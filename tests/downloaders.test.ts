@@ -92,6 +92,10 @@ const name = 'Diagnostic-Hub-linux-x64.AppImage';
 let content;
 if (url.includes('/releases?')) {
     content = JSON.stringify([{prerelease:true, assets:[{browser_download_url:'https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/download/v0.1.0/' + name}]}]);
+} else if (url.includes('/releases/tags/')) {
+    content = JSON.stringify({tag_name:'v0.1.0', draft:false, target_commitish:'a'.repeat(40)});
+} else if (url.endsWith('/linux-build-info.json')) {
+    content = JSON.stringify({version:'0.1.0', platform:'linux', arch:'x64', commit:'a'.repeat(40), assets:{[name]:'${hash}'}});
 } else if (url.endsWith('.sha256')) {
     content = (process.env.HUB_TEST_CORRUPT ? '0'.repeat(64) : '${hash}') + '  ' + name + '\\n';
 } else content = fs.readFileSync(root + '/payload');
@@ -100,6 +104,12 @@ else process.stdout.write(content);
 `,
         { mode: 0o755 },
     );
+    for (const [tool, body] of Object.entries({
+        zenity: 'printf "%s\\n" "Save portable package and Open"',
+        kdialog: 'exit 255',
+        setsid: '[ "$1" != --wait ] || shift\nexec "$@"',
+    }))
+        await writeFile(path.join(bin, tool), '#!/bin/sh\n' + body + '\n', { mode: 0o755 });
     for (const tool of ['sudo', 'pkexec', 'su'])
         await writeFile(path.join(bin, tool), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     return {
@@ -108,6 +118,8 @@ else process.stdout.write(content);
         run: (extra: string[] = [], env: Record<string, string> = {}) =>
             spawnSync('bash', [launcher, '--directory', path.join(root, 'download'), ...extra], {
                 encoding: 'utf8',
+                timeout: 60_000,
+                input: '',
                 env: {
                     ...process.env,
                     PATH: bin + path.delimiter + process.env.PATH,
@@ -122,7 +134,7 @@ else process.stdout.write(content);
 }
 
 test(
-    'Linux download-and-run selects engineering previews, verifies bytes, launches without elevation or FUSE',
+    'Linux download-and-run selects engineering previews, verifies source and bytes, and opens only with mocked explicit consent',
     { skip: process.platform !== 'linux' },
     async () => {
         const item = await fixture();
@@ -140,7 +152,8 @@ test(
                 await readFile(path.join(item.root, 'launched'), 'utf8'),
                 '--appimage-extract-and-run',
             );
-            assert.match(result.stdout, /Verified v0.1.0/);
+            assert.match(result.stdout, /Saved verified v0.1.0/);
+            assert.match(result.stdout, /Source: a{40}/);
         } finally {
             await item.close();
         }

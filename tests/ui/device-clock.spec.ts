@@ -152,7 +152,7 @@ test('seven-segment digits and pixel hands follow device time with an orange dis
     await disconnect.hover();
     await expect(disconnect).toHaveCSS('background-color', 'rgb(255, 193, 122)');
     await disconnect.click();
-    await expect(region).toContainText('No device connected');
+    await expect(region).toContainText('SSH disconnected');
     await expect(region.locator('.device-clock-hour-hand')).toHaveCount(0);
     const connectButton = page.getByRole('button', { name: 'Connect device', exact: true }).first();
     await connectButton.hover();
@@ -345,7 +345,7 @@ test('late old-device results are discarded and page reload samples only after f
     await page.clock.fastForward(60_000);
     await expect.poll(() => calls(page)).toBe(2);
     await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
-    await expect(clock(page)).toContainText('No device connected');
+    await expect(clock(page)).toContainText('SSH disconnected');
     const response = {
         status: 'available' as const,
         sample: parseDeviceClock(
@@ -368,7 +368,7 @@ test('late old-device results are discarded and page reload samples only after f
     await expect(clock(page)).toContainText('EST · UTC-05:00');
     expect(await calls(page)).toBe(3);
     await page.reload();
-    await expect(clock(page)).toContainText('No device connected');
+    await expect(clock(page)).toContainText('SSH disconnected');
     expect(await calls(page)).toBe(0);
     expect(await page.evaluate(() => window.desktopTest.connects)).toBe(0);
     await connect(page);
@@ -394,7 +394,7 @@ test('missing bridge support, unavailable reads, report import and update keep h
         mimeType: 'application/json',
         buffer: Buffer.from(JSON.stringify(createReport(demoSnapshot()))),
     });
-    await expect(clock(page)).toContainText('No device connected');
+    await expect(clock(page)).toContainText('SSH disconnected');
     await page.reload();
     await page.evaluate(() => {
         window.desktopTest.clock.fail = true;
@@ -402,7 +402,7 @@ test('missing bridge support, unavailable reads, report import and update keep h
     await connect(page);
     await expect(clock(page)).toContainText('Device time unavailable');
     await page.evaluate(() => window.desktopTest.closeConnection?.());
-    await expect(clock(page)).toContainText('No device connected');
+    await expect(clock(page)).toContainText('SSH disconnected');
 });
 
 test('website clock supports native gateway data and older/malformed routes without losing SSH', async ({

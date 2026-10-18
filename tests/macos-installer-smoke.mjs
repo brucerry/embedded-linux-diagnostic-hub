@@ -61,11 +61,17 @@ await shim(
     'mv',
     'if [ "$HUB_FIXTURE_CASE" = interrupted ] && [[ "$1" == */extracted/Diagnostic\\ Hub.app ]]; then kill -TERM "$PPID"; exit 1; fi\nexec /bin/mv "$@"',
 );
+// Dialog responses below are explicit fixture consent, not native GUI acceptance.
+await shim(
+    'osascript',
+    'cat >/dev/null\nif [ "$HUB_FIXTURE_REVIEW" = cancel ]; then printf "cancel\\n"; elif [ "$4" = 1 ]; then printf "open\\n"; else printf "install\\n"; fi',
+);
 const env = {
     ...process.env,
     PATH: bin + ':' + process.env.PATH,
     HUB_MAC_FIXTURE: fixture,
     HUB_FIXTURE_CASE: '',
+    HUB_FIXTURE_REVIEW: '',
     HUB_FIXTURE_MACHINE: '',
     HUB_FIXTURE_ARM: '',
 };
@@ -112,7 +118,12 @@ const actualLinks = execFileSync('/usr/bin/zipinfo', ['-l', path.join(fixture, p
     .split('\n')
     .filter((line) => line.startsWith('l'));
 console.log('Actual native ZIP link entries:', JSON.stringify(actualLinks.slice(0, 8)));
-let result = run();
+let result = run({ HUB_FIXTURE_REVIEW: 'cancel' });
+assert.equal(result.status, 0, result.stderr + result.stdout);
+assert.match(result.stdout, /Setup cancelled/);
+assert.ok(!result.stdout.includes('Installed Diagnostic Hub'));
+await assert.rejects(readFile(path.join(target, 'Contents/Resources/app.asar')));
+result = run();
 assert.equal(result.status, 0, result.stderr + result.stdout);
 const previous = await readFile(path.join(target, 'Contents/Resources/app.asar'));
 const userData = path.join(root, 'user-data');

@@ -855,9 +855,11 @@ test('SSH and Serial terminal layouts match, Earth stays anchored and background
         expect(ssh.duckBottom).toBeLessThanOrEqual(ssh.frameBottom);
         expect(ssh.earthTop).toBe('56px');
         expect(ssh.earthRight).toBe('32px');
-        expect(ssh.landscapeTransform).toBe(
-            viewport.width === 1440 ? 'matrix(1, 0, 0, 1, 0, 20)' : 'matrix(1, 0, 0, 1, 0, 8.24)',
-        );
+        const matrix = ssh.landscapeTransform.slice(7, -1).split(',').map(Number);
+        expect(matrix.slice(0, 5)).toEqual([1, 0, 0, 1, 0]);
+        // Firefox serializes layout-app-unit rounding (8.23333 for 2vw at 412px).
+        const expectedY = Math.min(20, Math.max(8, viewport.width * 0.02));
+        expect(Math.abs(matrix[5] - expectedY)).toBeLessThanOrEqual(1 / 60);
         expect(
             await terminal
                 .locator('.terminal-stars')

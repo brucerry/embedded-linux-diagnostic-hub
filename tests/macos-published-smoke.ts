@@ -12,6 +12,8 @@ async function verifyPublishedMac() {
     assert.equal(process.platform, 'darwin');
     const { version } = JSON.parse(await readFile('package.json', 'utf8'));
     const tag = 'v' + version;
+    const [major, minor] = version.split('.').map(Number);
+    const guidedHelper = major > 0 || minor >= 6;
     const root = await realpath(await mkdtemp(path.join(tmpdir(), 'hub-published-mac-')));
     const directory = path.join(root, 'Applications with spaces');
     async function port() {
@@ -31,6 +33,7 @@ async function verifyPublishedMac() {
     const url = targets.helperURL;
     const args = [
         ...targets.versionArguments,
+        ...(guidedHelper ? ['--terminal'] : []),
         '--directory',
         directory,
         '--',
@@ -42,12 +45,26 @@ async function verifyPublishedMac() {
     const command = 'curl -fsSL ' + quote(url) + ' | /bin/bash -s -- ' + args.map(quote).join(' ');
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
-    const installed = spawnSync('/bin/bash', ['-o', 'pipefail', '-c', command], {
-        env,
-        encoding: 'utf8',
-        timeout: 180000,
-    });
+    // New guided helpers receive automated QA consent through a real PTY.
+    // Historical helpers retain their original argument/input contract.
+    const installed = guidedHelper
+        ? spawnSync(
+              '/usr/bin/script',
+              ['-q', '/dev/null', '/bin/bash', '-o', 'pipefail', '-c', command],
+              {
+                  env,
+                  encoding: 'utf8',
+                  input: 'o\n',
+                  timeout: 180000,
+              },
+          )
+        : spawnSync('/bin/bash', ['-o', 'pipefail', '-c', command], {
+              env,
+              encoding: 'utf8',
+              timeout: 180000,
+          });
     assert.equal(installed.status, 0, installed.stderr + installed.stdout);
+    assert.match(installed.stdout, /Installed Diagnostic Hub/);
     const app = path.join(directory, 'Diagnostic Hub.app');
     const manifestResponse = await fetch(
         'https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/download/' +

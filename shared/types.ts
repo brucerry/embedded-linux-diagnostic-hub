@@ -55,6 +55,8 @@ export interface DesktopBridge
         Partial<import('./terminal').TerminalTransport>,
         Partial<import('./serial').SerialDesktopBridge>,
         Partial<import('./automation').AutomationTransport> {
+    captureStorage?: import('./capture-rpc').CaptureRpcTransport;
+    consoleStorage?: import('./console-archive-rpc').ConsoleArchiveRpc;
     acquireAutomationActivity?(): Promise<string>;
     releaseAutomationActivity?(id: string): Promise<void>;
     onAutomationInterrupted?(callback: (reason: string) => void): () => void;
@@ -117,6 +119,13 @@ export interface UpdateReceipt {
     updatedAt: string;
 }
 export interface UpdateInfo {
+    installation?: {
+        id: string;
+        layout: import('./installation').InstalledLayout;
+        profilePath: string;
+        payloadIntegrity: 'not-checked';
+        automaticUpdateQualified: false;
+    };
     currentVersion: string;
     currentPath: string | null;
     receipt: UpdateReceipt | null;

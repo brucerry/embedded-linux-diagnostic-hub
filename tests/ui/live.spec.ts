@@ -202,6 +202,10 @@ test('disconnect retains graph history without polling and reset removes the ret
     await inspectMemory();
     const graphTab = page.getByRole('tab', { name: 'Graph view' });
     await graphTab.click();
+    // Collection starts before its independent history Worker has prepared the frame.
+    await expect
+        .poll(() => page.getByRole('dialog').locator('.live-graph circle').count())
+        .toBeGreaterThan(2);
     const points = await page.getByRole('dialog').locator('.live-graph circle').count();
     expect(points).toBeGreaterThan(2);
     await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();

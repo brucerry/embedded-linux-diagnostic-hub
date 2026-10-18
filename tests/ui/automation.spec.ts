@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { installSerial } from './fixtures/serial';
 import { installDesktop } from './fixtures/desktop';
+import { installSshStream } from './fixtures/ssh-stream';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -17,6 +18,146 @@ const output = async (page: Page, name: string, testInfo: import('@playwright/te
     await mkdir(path.dirname(file), { recursive: true });
     await page.screenshot({ path: file, fullPage: true });
 };
+
+test('Automation action icons and warning palette retain readable states and one complete Cancel action', async ({
+    page,
+}, testInfo) => {
+    const ratio = (a: string, b: string) => {
+        const luminance = (value: string) =>
+            value
+                .match(/[\d.]+/g)!
+                .slice(0, 3)
+                .map(Number)
+                .map((v) => v / 255)
+                .map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+                .reduce((sum, v, index) => sum + v * [0.2126, 0.7152, 0.0722][index], 0);
+        const x = luminance(a),
+            y = luminance(b);
+        return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+    };
+    const palette = (button: import('@playwright/test').Locator) =>
+        button.evaluate((element) => {
+            const style = getComputedStyle(element);
+            let parent = element.parentElement;
+            while (parent && getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)')
+                parent = parent.parentElement;
+            return {
+                text: style.color,
+                background: style.backgroundColor,
+                outline: style.outlineColor,
+                opacity: style.opacity,
+                adjacent: parent ? getComputedStyle(parent).backgroundColor : 'rgb(0, 0, 0)',
+            };
+        });
+    const alignedIcon = async (button: import('@playwright/test').Locator) => {
+        await expect(button.locator('svg')).toHaveCount(1);
+        await expect(button.locator('svg')).toHaveAttribute('aria-hidden', 'true');
+        const geometry = await button.evaluate((element) => {
+            const b = element.getBoundingClientRect(),
+                icon = element.querySelector('svg')!.getBoundingClientRect();
+            return {
+                delta: Math.abs(b.top + b.height / 2 - (icon.top + icon.height / 2)),
+                width: parseFloat(getComputedStyle(element.querySelector('svg')!).width),
+                height: parseFloat(getComputedStyle(element.querySelector('svg')!).height),
+            };
+        });
+        expect(geometry.delta).toBeLessThanOrEqual(1);
+        expect(geometry.width).toBe(16);
+        expect(geometry.height).toBe(16);
+    };
+    await installSerial(page);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Serial', exact: true }).click();
+    const serial = page.getByRole('region', { name: 'Local serial terminal' });
+    await serial.getByLabel('Local serial port', { exact: true }).selectOption('0');
+    await serial.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(serial.getByText('Ready', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Automation', exact: true }).click();
+    const flow = page.getByRole('region', { name: 'Automation', exact: true });
+    const clear = flow.getByRole('button', { name: 'Clear retained results', exact: true });
+    await expect(clear).toBeDisabled();
+    await alignedIcon(clear);
+    await expect(clear).toHaveCSS('background-color', 'rgb(150, 61, 72)');
+    await clear.hover({ force: true });
+    await expect(clear).toHaveCSS('background-color', 'rgb(150, 61, 72)');
+    const disabled = await palette(clear);
+    expect(disabled.opacity).toBe('0.5');
+    await output(page, 'automation-clear-disabled.png', testInfo);
+    await flow.getByLabel('Automation transport').selectOption('serial');
+    await setup(flow, 'Commands');
+    await flow.getByLabel('Command 1 script').fill('ls');
+    await setup(flow, 'Connection');
+    await flow.getByLabel('Serial completion prompt').fill('console# ');
+    await setup(flow, 'Review');
+    const start = flow.getByRole('button', { name: 'Start flow', exact: true });
+    await expect(start).toBeEnabled();
+    await alignedIcon(start);
+    await expect(flow.getByText(/Cancel disarms queued steps and repetitions/)).toBeVisible();
+    await start.click();
+    await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toBeVisible();
+    await expect(flow.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
+    await expect(start).toBeDisabled();
+    await alignedIcon(start);
+    await expect(start).toHaveCSS('opacity', '0.5');
+    await output(page, 'automation-running-cancel.png', testInfo);
+    await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
+    await expect(flow.getByRole('status')).toContainText('Commands already sent may continue');
+    await expect(clear).toBeEnabled();
+    await expect(start).toBeEnabled();
+    const measurements: unknown[] = [
+        { state: 'disabled', ...disabled, disabledContrastExempt: true },
+    ];
+    for (const colorScheme of ['dark', 'light'] as const) {
+        await page.emulateMedia({ colorScheme });
+        await page.mouse.move(0, 0);
+        await expect(clear).toHaveCSS('color', 'rgb(255, 233, 233)');
+        await expect(clear).toHaveCSS('background-color', 'rgb(150, 61, 72)');
+        const normal = await palette(clear);
+        expect(ratio(normal.text, normal.background)).toBeGreaterThanOrEqual(4.5);
+        measurements.push({
+            colorScheme,
+            state: 'normal',
+            ...normal,
+            contrast: ratio(normal.text, normal.background),
+        });
+        await clear.hover();
+        await expect(clear).toHaveCSS('background-color', 'rgb(176, 68, 83)');
+        const hover = await palette(clear);
+        expect(ratio(hover.text, hover.background)).toBeGreaterThanOrEqual(4.5);
+        measurements.push({
+            colorScheme,
+            state: 'hover',
+            ...hover,
+            contrast: ratio(hover.text, hover.background),
+        });
+        await start.hover();
+        const play = await palette(start);
+        expect(ratio(play.text, play.background)).toBeGreaterThanOrEqual(4.5);
+        await alignedIcon(start);
+    }
+    await output(page, 'automation-actions-hover.png', testInfo);
+    await page.mouse.move(0, 0);
+    await clear.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    await expect(clear).toBeFocused();
+    await expect(clear).toHaveCSS('outline-style', 'solid');
+    await expect(clear).toHaveCSS('outline-width', '3px');
+    const focus = await palette(clear);
+    expect(ratio(focus.outline, focus.adjacent)).toBeGreaterThanOrEqual(3);
+    measurements.push({ state: 'focus', ...focus, contrast: ratio(focus.outline, focus.adjacent) });
+    await output(page, 'automation-actions-focus.png', testInfo);
+    await page.emulateMedia({ forcedColors: 'active' });
+    const forced = await palette(clear);
+    expect(ratio(forced.text, forced.background)).toBeGreaterThanOrEqual(4.5);
+    await alignedIcon(clear);
+    await testInfo.attach('automation-action-palettes', {
+        body: JSON.stringify(measurements, null, 2),
+        contentType: 'application/json',
+    });
+    await output(page, 'automation-actions-forced-colors.png', testInfo);
+    expect(await flow.locator('tbody tr').count()).toBe(1); // Synthetic cancelled row was never cleared.
+});
 test('Serial flow edits remain deliberate, multiline bytes and QA exports use captured rows', async ({
     page,
 }, testInfo) => {
@@ -55,7 +196,7 @@ test('Serial flow edits remain deliberate, multiline bytes and QA exports use ca
     });
     await expect(flow.getByRole('status')).toContainText('Flow finished');
     await expect(flow.locator('tbody')).toContainText('prompt-observed');
-    await expect(flow.locator('tbody')).toContainText('Unavailable');
+    await expect(flow.locator('tbody')).toContainText('unavailable');
     const writes = await page.evaluate(() => window.serialTest.writes.length);
     const [download] = await Promise.all([
         page.waitForEvent('download'),
@@ -64,9 +205,29 @@ test('Serial flow edits remain deliberate, multiline bytes and QA exports use ca
     const file = await download.path();
     const fs = await import('node:fs/promises');
     const data = JSON.parse(await fs.readFile(file!, 'utf8'));
-    expect(data.records[0].command).toBe('first line\nsecond line');
-    expect(data.records[0].exitCode).toBeNull();
-    expect(data.records[0].requestBytes).toBe(
+    expect(data.captures).toHaveLength(1);
+    const captured = data.captures[0];
+    expect(captured.capture.header.command).toBe('first line\nsecond line');
+    expect(captured.outcome.exitCode).toBeNull();
+    expect(captured.capture.header.receiveTimeSource).toBe('local-client');
+    expect(captured.outcome.execution.serial.timestampPrefix).toBe('');
+    await expect(
+        flow.getByRole('columnheader', { name: 'Host receive timestamps (UTC)' }),
+    ).toBeVisible();
+    await expect(flow.locator('tbody')).toContainText(captured.rawObservations[0].receivedAt);
+    await expect(flow.locator('tbody')).toContainText('Receive source: local-client');
+    await expect(
+        flow.getByText('Host receive time is not device emission time.', { exact: false }),
+    ).toBeVisible();
+    await expect(flow.locator('tbody')).toContainText('reply');
+    expect(
+        Buffer.concat(
+            captured.rawObservations.map((frame: { base64: string }) =>
+                Buffer.from(frame.base64, 'base64'),
+            ),
+        ).toString(),
+    ).toBe('reply\r\n\x1b[32mconsole# ');
+    expect(captured.capture.header.requestBase64).toBe(
         Buffer.from('first line\nsecond line\n').toString('base64'),
     );
     expect(await page.evaluate(() => window.serialTest.writes.length)).toBe(writes);
@@ -116,23 +277,11 @@ test('SSH flow uses separate API, retains drafts and genuine exits without termi
     page,
 }, testInfo) => {
     await installDesktop(page);
-    await page.addInitScript(() => {
-        const api = window.diagnosticHub!;
-        const state = { commands: [] as string[] };
-        (window as unknown as { automationTest: typeof state }).automationTest = state;
-        api.automationConnection = () => 'synthetic-connected-001';
-        api.cancelAutomation = async () => {};
-        api.runAutomation = async (request) => {
-            state.commands.push(request.command);
-            return {
-                stdout: 'synthetic SSH result',
-                stderr: 'synthetic diagnostic error',
-                exitCode: 7,
-                completion: 'exit',
-                truncated: false,
-                chunks: [],
-            };
-        };
+    await installSshStream(page, {
+        connection: 'synthetic-connected-001',
+        stdout: 'synthetic SSH result',
+        stderr: 'synthetic diagnostic error',
+        exitCode: 7,
     });
     await page.goto('/');
     await page.getByRole('button', { name: 'Connect device', exact: true }).first().click();
@@ -146,13 +295,11 @@ test('SSH flow uses separate API, retains drafts and genuine exits without termi
     await flow.getByRole('button', { name: 'Run once', exact: true }).click();
     await expect(flow.locator('tbody')).toContainText('7');
     await expect(flow.locator('tbody')).toContainText('synthetic SSH result');
-    expect(
-        await page.evaluate(
-            () =>
-                (window as unknown as { automationTest: { commands: string[] } }).automationTest
-                    .commands,
-        ),
-    ).toEqual(['fixture first\nfixture second']);
+    expect(await page.evaluate(() => window.sshStreamTest.commands)).toEqual([
+        'fixture first\nfixture second',
+    ]);
+    await expect.poll(() => page.evaluate(() => window.sshStreamTest.finalized)).toBe(1);
+    expect(await page.evaluate(() => window.sshStreamTest.legacyCalls)).toBe(0);
     expect(await page.evaluate(() => window.desktopTest.terminal!.inputs)).toEqual([]);
     await output(page, 'automation-ssh.png', testInfo);
 });
@@ -164,24 +311,11 @@ for (const transport of ['ssh', 'serial'] as const)
             if (transport === 'serial') await installSerial(page);
             else {
                 await installDesktop(page);
-                await page.addInitScript(() => {
-                    let calls = 0;
-                    (window as unknown as { scheduledCalls: () => number }).scheduledCalls = () =>
-                        calls;
-                    const bridge = window.diagnosticHub!;
-                    bridge.automationConnection = () => 'schedule-fixture-001';
-                    bridge.cancelAutomation = async () => {};
-                    bridge.runAutomation = async () => {
-                        calls++;
-                        return {
-                            stdout: 'scheduled fixture',
-                            stderr: '',
-                            exitCode: 0,
-                            completion: 'exit',
-                            truncated: false,
-                            chunks: [],
-                        };
-                    };
+                await installSshStream(page, {
+                    connection: 'schedule-fixture-001',
+                    stdout: 'scheduled fixture',
+                    stderr: '',
+                    exitCode: 0,
                 });
             }
             await page.clock.install({ time: new Date('2028-02-29T11:59:00Z') });
@@ -236,9 +370,7 @@ for (const transport of ['ssh', 'serial'] as const)
                     (t) =>
                         t === 'serial'
                             ? window.serialTest.writes.length
-                            : (
-                                  window as unknown as { scheduledCalls: () => number }
-                              ).scheduledCalls(),
+                            : window.sshStreamTest.commands.length,
                     transport,
                 );
             expect(await calls()).toBe(0);
@@ -343,9 +475,16 @@ test('Enter-only Serial Automation shares one port and reader; local input annot
     const fs = await import('node:fs/promises'),
         file = await download.path();
     const result = JSON.parse(await fs.readFile(file!, 'utf8'));
-    expect(result.records[0].stdout).toBe('actual reply\r\nconsole# ');
-    expect(result.records[0].requestBytes).toBe('DQ==');
-    expect(result.records[0].completion).toBe('prompt-observed');
+    expect(result.captures).toHaveLength(1);
+    expect(
+        Buffer.concat(
+            result.captures[0].rawObservations.map((frame: { base64: string }) =>
+                Buffer.from(frame.base64, 'base64'),
+            ),
+        ).toString(),
+    ).toBe('actual reply\r\nconsole# ');
+    expect(result.captures[0].capture.header.requestBase64).toBe('DQ==');
+    expect(result.captures[0].outcome.completion).toBe('prompt-observed');
     expect(
         await page.evaluate(() => ({
             opens: window.serialTest.opens,

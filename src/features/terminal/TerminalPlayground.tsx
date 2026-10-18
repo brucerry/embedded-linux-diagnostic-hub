@@ -1,4 +1,5 @@
 import { useId, type CSSProperties } from 'react';
+import './TerminalPlayground.css';
 const skyStars = (() => {
     let seed = 73419;
     const random = () => {

@@ -160,6 +160,10 @@ export async function gatewayFixture(
             ...(body ? { body: JSON.stringify(body) } : {}),
         });
     return {
+        get ownershipSnapshot() {
+            return gateway.ownershipSnapshot;
+        },
+        closeGateway: gateway.close,
         clock,
         terminal,
         token,

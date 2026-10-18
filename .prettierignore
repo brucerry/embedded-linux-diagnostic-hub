@@ -16,3 +16,7 @@ dist-site/
 /.codex/
 
 /openspec/changes/archive/
+
+# Accepted diagnostic core is byte-pinned; preserve its reviewed source bytes.
+/tests/fixtures/inspection/passive-cdp.cjs
+/tests/fixtures/inspection/release-window.cjs

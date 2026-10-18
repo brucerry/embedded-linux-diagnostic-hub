@@ -1,5 +1,7 @@
 import { coalesceTerminalEvents } from './gateway-terminal-events';
 import { validateCapture } from '../../shared/automation';
+import { streamRequest, type SshStreamRequest } from '../../shared/ssh-stream-rpc';
+import { consoleRpcRequest, type ConsoleRpcRequest } from '../../shared/console-rpc';
 import { validateSnapshot } from '../../shared/report';
 import {
     ConnectionFailure,
@@ -105,7 +107,7 @@ export class GatewayClient implements TerminalTransport {
         route: string,
         method = 'GET',
         data?: unknown,
-        options?: { signal?: AbortSignal; clock?: boolean },
+        options?: { signal?: AbortSignal; clock?: boolean; stream?: boolean },
     ): Promise<Record<string, unknown>> {
         const sessionAtStart = this.sessionId;
         let response: Response;
@@ -141,6 +143,7 @@ export class GatewayClient implements TerminalTransport {
                 this.sessionId === sessionAtStart &&
                 [401, 404].includes(response.status) &&
                 !route.includes('/terminal') &&
+                !(options?.stream && response.status === 404) &&
                 !(options?.clock && response.status === 404)
             ) {
                 this.sessionId = '';
@@ -248,6 +251,51 @@ export class GatewayClient implements TerminalTransport {
 
     automationConnection() {
         return this.sessionId;
+    }
+    async automationConsole(input: ConsoleRpcRequest, options?: { signal?: AbortSignal }) {
+        const request = consoleRpcRequest(input),
+            connection = this.sessionId;
+        if (!connection) throw Error('Connect through a gateway first.');
+        if (request.action !== 'capabilities' && request.connection !== connection)
+            throw Error('Console connection changed.');
+        const result = await this.request(
+            '/api/sessions/' + connection + '/automation/console/' + request.action,
+            'POST',
+            request,
+            {
+                stream: true,
+                signal: AbortSignal.any([
+                    AbortSignal.timeout(
+                        ['read', 'step', 'finish'].includes(request.action) ? 310000 : 15000,
+                    ),
+                    ...(options?.signal ? [options.signal] : []),
+                ]),
+            },
+        );
+        if (connection !== this.sessionId) throw Error('Console connection changed.');
+        return result;
+    }
+    async automationStream(input: SshStreamRequest) {
+        const request = streamRequest(input),
+            connection = this.sessionId;
+        if (!connection) throw Error('Connect through a gateway first.');
+        if (
+            request.action !== 'capabilities' &&
+            (request.action === 'start' ? request.request.connection : request.connection) !==
+                connection
+        )
+            throw Error('SSH capture connection changed.');
+        const result = await this.request(
+            '/api/sessions/' + connection + '/automation/stream/' + request.action,
+            'POST',
+            request,
+            {
+                stream: true,
+                signal: AbortSignal.timeout(request.action === 'read' ? 310000 : 15000),
+            },
+        );
+        if (connection !== this.sessionId) throw Error('SSH capture connection changed.');
+        return result;
     }
     async runAutomation(request: import('../../shared/automation').AutomationRequest) {
         if (!request.connection || request.connection !== this.sessionId)

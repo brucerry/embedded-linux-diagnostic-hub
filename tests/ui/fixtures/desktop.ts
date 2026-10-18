@@ -2,6 +2,8 @@ import type { Page } from '@playwright/test';
 import type { Snapshot, UpdateRecovery, UpdateRequest } from '../../../shared/types';
 import { demoSnapshot } from '../../fixtures/snapshots';
 import type { TerminalEvent } from '../../../shared/terminal';
+import type { CaptureRpcServer } from '../../../shared/capture-rpc';
+import type { CaptureReportFormat, CaptureReportScope } from '../../../shared/capture-report';
 import {
     parseDeviceClock,
     type DeviceClockResponse,
@@ -9,6 +11,7 @@ import {
 import { clockOutput } from '../../fixtures/device-clock';
 
 export interface DesktopTestState {
+    captureExports: { format: CaptureReportFormat; scope: CaptureReportScope; bytes: number }[];
     requests: UpdateRequest[];
     connects: number;
     disconnects: number;
@@ -49,6 +52,7 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
     await page.addInitScript(
         ({ snapshot, recovery, clockSample }) => {
             window.desktopTest = {
+                captureExports: [],
                 requests: [],
                 connects: 0,
                 disconnects: 0,
@@ -95,7 +99,39 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 },
             };
             window.desktopTest.closeConnection = () => closed?.();
+            let captureHost: Promise<CaptureRpcServer> | undefined;
             window.diagnosticHub = {
+                captureStorage: async (request) => {
+                    captureHost ??= (async () => {
+                        const rpcPath = new URL('/shared/capture-rpc.ts', location.href).href,
+                            storePath = new URL(
+                                '/src/features/automation/capture/indexeddb-store.ts',
+                                location.href,
+                            ).href,
+                            reportPath = new URL('/shared/capture-report.ts', location.href).href;
+                        const [
+                                { CaptureRpcServer },
+                                { IndexedDbCaptureStore },
+                                { streamCaptureReport },
+                            ] = await Promise.all([
+                                import(rpcPath),
+                                import(storePath),
+                                import(reportPath),
+                            ]),
+                            store = await IndexedDbCaptureStore.open();
+                        return new CaptureRpcServer(
+                            store,
+                            async (format: CaptureReportFormat, scope: CaptureReportScope) => {
+                                let bytes = 0;
+                                for await (const chunk of streamCaptureReport(store, format, scope))
+                                    bytes += chunk.length;
+                                window.desktopTest.captureExports.push({ format, scope, bytes });
+                                return true;
+                            },
+                        );
+                    })();
+                    return (await captureHost).dispatch(request);
+                },
                 openTerminal: async (request) => {
                     const terminal = window.desktopTest.terminal!;
                     terminal.id = request.id;

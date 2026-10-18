@@ -1,10 +1,15 @@
 import {
     AUTOMATION_LIMITS,
-    bytesBase64,
     type CommandCapture,
     type Completion,
 } from '../../../shared/automation';
-import { VisibleTail } from '../automation/serial-completion';
+import { VisibleTail, Utf8Boundary } from '../automation/serial-completion';
+import { SerialCaptureBlocks } from '../automation/serial-capture';
+import {
+    CommandPreview,
+    type CommandOutputSink,
+    type StreamedCommandCapture,
+} from '../../../shared/automation-stream';
 import {
     SERIAL_CHUNK_BYTES,
     SERIAL_QUEUE_BYTES,
@@ -24,8 +29,14 @@ export interface SerialStatus {
 }
 export class SerialSession {
     private automationOwner?: symbol;
-    private capture?: { append(bytes: Uint8Array): void; cancel(): void; interrupt(): boolean };
+    private capture?: {
+        append(bytes: Uint8Array, receivedAt: string): void | Promise<void>;
+        cancel(): void;
+        interrupt(): boolean;
+        delivered?(): void;
+    };
     private lastReceived = 0;
+    private receiveBusy = false;
     private automationInput?: (bytes: Uint8Array, generation: number) => void;
     setAutomationInputConsumer(consume?: (bytes: Uint8Array, generation: number) => void) {
         this.automationInput = consume;
@@ -178,7 +189,8 @@ export class SerialSession {
             this.status.state !== 'connected' ||
             this.automationOwner ||
             this.writing ||
-            this.queue.length
+            this.queue.length ||
+            this.receiveBusy
         )
             throw Error('Serial: connect and wait for pending interactive writes first.');
         const owner = Symbol();
@@ -199,6 +211,20 @@ export class SerialSession {
         prompt: string,
         timeoutMs: number,
         signal: AbortSignal,
+        output: CommandOutputSink,
+    ): Promise<StreamedCommandCapture>;
+    async runAutomation(
+        bytes: Uint8Array,
+        prompt: string,
+        timeoutMs: number,
+        signal: AbortSignal,
+    ): Promise<CommandCapture>;
+    async runAutomation(
+        bytes: Uint8Array,
+        prompt: string,
+        timeoutMs: number,
+        signal: AbortSignal,
+        output?: CommandOutputSink,
     ): Promise<CommandCapture> {
         if (
             !this.automationOwner ||
@@ -219,7 +245,7 @@ export class SerialSession {
             throw Error('Serial completion prompt is invalid.');
         const generation = this.status.generation,
             started = performance.now();
-        while (performance.now() - this.lastReceived < 100) {
+        while (this.receiveBusy || performance.now() - this.lastReceived < 100) {
             if (signal.aborted) throw Error('Cancelled.');
             if (performance.now() - started > 1000)
                 throw Error('Serial input is not quiet. Drain unsolicited output before running.');
@@ -233,6 +259,16 @@ export class SerialSession {
         )
             throw Error('Serial connection changed.');
         const writer = this.writer;
+        if (output)
+            return this.captureStreamingAutomation(
+                writer,
+                bytes,
+                prompt,
+                timeoutMs,
+                signal,
+                generation,
+                output,
+            );
         return new Promise((resolve) => {
             let settled = false,
                 stdout = '',
@@ -241,7 +277,8 @@ export class SerialSession {
                 writingDone = false;
             const decoder = new TextDecoder(),
                 tail = new VisibleTail(),
-                chunks: CommandCapture['chunks'] = [];
+                boundary = new Utf8Boundary(),
+                blocks = new SerialCaptureBlocks();
             const finish = (completion: Completion) => {
                 if (settled) return;
                 settled = true;
@@ -260,7 +297,7 @@ export class SerialSession {
                     exitCode: null,
                     completion,
                     truncated: completion === 'output-limit',
-                    chunks,
+                    chunks: blocks.finish(),
                 });
             };
             const cancel = () => finish('cancelled'),
@@ -276,20 +313,21 @@ export class SerialSession {
                     if (settled) return;
                     clearTimeout(quiet);
                     const kept = value.slice(0, Math.max(0, AUTOMATION_LIMITS.outputBytes - size));
-                    if (chunks.length >= AUTOMATION_LIMITS.chunks) return finish('output-limit');
                     size += kept.length;
                     if (kept.length) {
-                        chunks.push({
-                            stream: 'serial',
-                            base64: bytesBase64(kept),
-                            receivedAt: new Date().toISOString(),
-                        });
+                        blocks.append(kept, new Date().toISOString());
                         const decoded = decoder.decode(kept, { stream: true });
+                        boundary.append(kept);
                         stdout += decoded;
                         tail.append(decoded);
                     }
                     if (kept.length < value.length) return finish('output-limit');
-                    if (writingDone && tail.value.endsWith(prompt))
+                    if (
+                        writingDone &&
+                        boundary.complete &&
+                        tail.complete &&
+                        tail.value.endsWith(prompt)
+                    )
                         quiet = setTimeout(() => finish('prompt-observed'), 200);
                 },
             };
@@ -304,8 +342,121 @@ export class SerialSession {
                         await writer.write(bytes.slice(offset, offset + SERIAL_CHUNK_BYTES));
                     }
                     writingDone = true;
-                    if (!settled && tail.value.endsWith(prompt))
+                    if (
+                        !settled &&
+                        boundary.complete &&
+                        tail.complete &&
+                        tail.value.endsWith(prompt)
+                    )
                         quiet = setTimeout(() => finish('prompt-observed'), 200);
+                } catch {
+                    finish('transport-error');
+                }
+            })();
+        });
+    }
+    private captureStreamingAutomation(
+        writer: WritableStreamDefaultWriter<Uint8Array>,
+        bytes: Uint8Array,
+        prompt: string,
+        timeoutMs: number,
+        signal: AbortSignal,
+        generation: number,
+        output: CommandOutputSink,
+    ): Promise<StreamedCommandCapture> {
+        return new Promise((resolve) => {
+            let stopping = false,
+                writingDone = false,
+                receiving = false,
+                appending: Promise<void> | undefined,
+                quiet: ReturnType<typeof setTimeout> | undefined;
+            const decoder = new TextDecoder(),
+                tail = new VisibleTail(),
+                boundary = new Utf8Boundary(),
+                preview = new CommandPreview();
+            const finish = (completion: Completion) => {
+                if (stopping) return;
+                stopping = true;
+                clearTimeout(timer);
+                clearTimeout(quiet);
+                signal.removeEventListener('abort', cancel);
+                if (!writingDone)
+                    void Promise.resolve()
+                        .then(() => this.close())
+                        .catch(() => {});
+                // Keep this capture and its flow owner until the accepted observation has
+                // settled. Cancellation cannot turn a pending write into a success.
+                void Promise.resolve().then(async () => {
+                    await appending;
+                    if (this.capture === capture) this.capture = undefined;
+                    resolve({
+                        ...preview.finish(),
+                        exitCode: null,
+                        completion,
+                        truncated: false,
+                        chunks: [],
+                        previewClipped: preview.clipped,
+                    });
+                });
+            };
+            const ready = () => {
+                clearTimeout(quiet);
+                if (
+                    !stopping &&
+                    !receiving &&
+                    writingDone &&
+                    boundary.complete &&
+                    tail.complete &&
+                    tail.value.endsWith(prompt)
+                )
+                    quiet = setTimeout(() => {
+                        if (!receiving && generation === this.status.generation)
+                            finish('prompt-observed');
+                    }, 200);
+            };
+            const cancel = () => finish('cancelled'),
+                timer = setTimeout(() => finish('timeout'), timeoutMs);
+            const capture = {
+                cancel,
+                delivered: () => {
+                    receiving = false;
+                    ready();
+                },
+                interrupt: () => {
+                    const pendingWrite = !writingDone;
+                    finish('transport-error');
+                    return pendingWrite;
+                },
+                append: (value: Uint8Array, receivedAt: string) => {
+                    if (stopping) return;
+                    receiving = true;
+                    clearTimeout(quiet);
+                    const pending = (async () => {
+                        try {
+                            await output.append(value, receivedAt, 'serial');
+                            preview.append(value, 'serial');
+                            boundary.append(value);
+                            tail.append(decoder.decode(value, { stream: true }));
+                        } catch {
+                            finish('transport-error');
+                        }
+                    })();
+                    appending = pending;
+                    return pending;
+                },
+            };
+            this.capture = capture;
+            signal.addEventListener('abort', cancel, { once: true });
+            if (signal.aborted) return cancel();
+            void (async () => {
+                try {
+                    this.automationInput?.(bytes.slice(), generation);
+                    for (let offset = 0; offset < bytes.length; offset += SERIAL_CHUNK_BYTES) {
+                        if (stopping || generation !== this.status.generation) return;
+                        await writer.write(bytes.slice(offset, offset + SERIAL_CHUNK_BYTES));
+                    }
+                    writingDone = true;
+                    ready();
                 } catch {
                     finish('transport-error');
                 }
@@ -407,7 +558,11 @@ export class SerialSession {
                 }
                 if (!value || generation !== this.status.generation) continue;
                 this.lastReceived = performance.now();
-                this.capture?.append(value);
+                this.receiveBusy = true;
+                // A delivery acknowledgement belongs to the capture present at this read.
+                // Never notify a replacement capture after cancellation or generation changes.
+                const receivingCapture = this.capture;
+                await receivingCapture?.append(value, new Date().toISOString());
                 if (value.byteLength > SERIAL_QUEUE_BYTES)
                     throw Error('Serial output exceeded its buffer limit.');
                 for (
@@ -437,6 +592,8 @@ export class SerialSession {
                         if (signal.aborted) cancel();
                     });
                 }
+                this.receiveBusy = false;
+                receivingCapture?.delivered?.();
             }
         } catch (error) {
             if (generation === this.status.generation) {
@@ -444,6 +601,7 @@ export class SerialSession {
                 void this.close().catch(() => {});
             }
         } finally {
+            this.receiveBusy = false;
             reader.releaseLock();
         }
     }
@@ -488,12 +646,14 @@ export class SerialSession {
                     this.selected = undefined;
                     this.status = { ...this.status, label: '' };
                 }
-                this.publish(this.selected ? 'selected' : 'idle');
             })();
             this.closing = task;
             void task.then(
                 () => {
-                    if (this.closing === task) this.closing = undefined;
+                    if (this.closing === task) {
+                        this.closing = undefined;
+                        this.publish(this.selected ? 'selected' : 'idle');
+                    }
                 },
                 () => {
                     if (this.closing === task) this.closing = undefined;
