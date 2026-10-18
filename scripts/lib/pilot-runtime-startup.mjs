@@ -4,7 +4,11 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { pilotLimits } from './hosted-pilot-contract.mjs';
-import { requireIdentityPlan, reportingRefusal } from './startup-identity-report.mjs';
+import {
+    planStartupIdentity,
+    requireIdentityPlan,
+    reportingRefusal,
+} from './startup-identity-report.mjs';
 const now = () => Number(process.hrtime.bigint() / 1000000n);
 /** A single durable credit with a finite pending/total diagnostic envelope. */
 export function runtimeDiagnostics(send, hold) {
@@ -50,7 +54,8 @@ export function runtimeDiagnostics(send, hold) {
         bytes += size;
         return enqueue(() => send(stage, data), size);
     };
-    emit.publishIdentity = (plan) => {
+    emit.publishIdentity = (stage, data) => {
+        const plan = planStartupIdentity(stage, data);
         requireIdentityPlan(plan);
         if (failed) return Promise.reject(failed);
         const b = plan.budget;

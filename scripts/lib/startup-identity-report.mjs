@@ -154,8 +154,8 @@ export function requireIdentityPlan(plan) {
 const ordinaryLedgers = new WeakMap();
 /** Native pilot emitters reserve atomically; ordinary aggregate reporters await every frame. */
 export async function reportStartupIdentity(emit, stage, data) {
+    if (typeof emit.publishIdentity === 'function') return emit.publishIdentity(stage, data);
     const plan = planStartupIdentity(stage, data);
-    if (typeof emit.publishIdentity === 'function') return emit.publishIdentity(plan);
     let ledger = ordinaryLedgers.get(emit);
     if (!ledger)
         ordinaryLedgers.set(
