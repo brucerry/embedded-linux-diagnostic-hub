@@ -40,3 +40,29 @@ middle read, so each descriptor passed to fsync has writable access. Local regre
 Windows writable-flush requirements on actual disposable files for nominal, injected sync and
 injected close cases; a genuine writable flush failure still fails. These controls are not native
 Windows observations and do not approve collection.
+
+Hosted run `39094809530` on commit `9c5afbadab9fa4afefd69918b3b2901ebdfd9ae5` matched source
+`3577982001db416ee08cf371ea9e53eedda108ebd7868603801d5c047ef575a4` but both Windows PowerShell 5.1
+ACL observations failed to autoload `Microsoft.PowerShell.Security`. The workflow used `pwsh` to
+launch Node, which passed its inherited environment to the absolute, hashed Windows PowerShell
+executable.
+
+Microsoft documents that a PowerShell 7 module path survives an intermediate process and can resolve
+shared module names to incompatible versions. The preflight now omits all case variants of
+`PSModulePath` from only the Windows PowerShell child environment, allowing its normal startup
+defaults. It leaves the parent environment, PowerShell 7 child environment, profile flags, execution
+policy, JSON path transport, owner checks, command limits and metadata admission unchanged. It does
+not edit machine/user module paths, install/import a replacement module, or change ACLs or security
+settings.
+
+The original artifact did not capture `PSModulePath`, the selected Security module or its underlying
+import exception. Environment inheritance is the evidence-backed mechanism addressed by this patch,
+not a claim to have observed the exact shadowed module on that now-finished host. Added bounded
+observations record inherited module paths and actual Windows PowerShell version/home/module
+path/Get-Acl module identity for future review. Local deterministic command-port tests are not a
+Windows rerun.
+
+References:
+[Microsoft about_PSModulePath](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.5#starting-windows-powershell-from-powershell-7)
+and
+[Windows PowerShell CLI flags](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1).

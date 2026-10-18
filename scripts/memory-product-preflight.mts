@@ -23,7 +23,7 @@ import {
     writeReport,
 } from './lib/windows-preflight.mjs';
 
-const aclScript =
+export const aclScript =
     '$ErrorActionPreference="Stop";$id=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$paths=ConvertFrom-Json $env:HUB_PREFLIGHT_PATHS;$rows=@(foreach($p in $paths){$a=Get-Acl -LiteralPath $p;[pscustomobject]@{path=$p;owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;sddl=$a.Sddl}});[pscustomobject]@{principal=$id;rows=$rows}|ConvertTo-Json -Depth 4 -Compress';
 export function parseAclObservation(text, paths) {
     const value = JSON.parse(text.replace(/^\uFEFF/, ''));
@@ -34,6 +34,35 @@ export function parseAclObservation(text, paths) {
         assert(typeof r.owner === 'string' && typeof r.sddl === 'string' && r.sddl.length > 0);
     });
     return value;
+}
+/** Node is an intermediate process: WinPS must construct its own default module path. */
+export function runPreflightCommand(
+    exe,
+    script,
+    extra = {},
+    {
+        windowsPowerShell = false,
+        environment = process.env,
+        spawn = spawnSync,
+        timeout = preflightLimits.commandMs,
+    } = {},
+) {
+    const env = { ...environment, ...extra };
+    if (windowsPowerShell)
+        for (const key of Object.keys(env))
+            if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
+    const result = spawn(exe, ['-NoProfile', '-NonInteractive', '-Command', script], {
+        windowsHide: true,
+        shell: false,
+        encoding: 'utf8',
+        timeout,
+        maxBuffer: preflightLimits.commandBytes,
+        env,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
 }
 export async function productPreflight(
     outputRoot,
@@ -143,21 +172,15 @@ export async function productPreflight(
         admit();
         const command = (exe, script, extra = {}) => {
             admit();
-            const result = spawnSync(exe, ['-NoProfile', '-NonInteractive', '-Command', script], {
-                windowsHide: true,
-                encoding: 'utf8',
+            const stdout = runPreflightCommand(exe, script, extra, {
+                windowsPowerShell: exe === powershell,
                 timeout: Math.min(
                     preflightLimits.commandMs,
                     deadline - preflightLimits.reserveMs - clock.now(),
                 ),
-                maxBuffer: preflightLimits.commandBytes,
-                env: { ...process.env, ...extra },
             });
-            assert.equal(result.error, undefined);
-            assert.equal(result.signal, null);
-            assert.equal(result.status, 0, result.stderr);
             assert.equal(cancelled, null);
-            return result.stdout;
+            return stdout;
         };
         const powershell = fs.realpathSync(
             path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
@@ -189,6 +212,24 @@ export async function productPreflight(
             );
             return version;
         });
+        observe('powershell51-launch', {
+            executable: powershell,
+            flags: ['-NoProfile', '-NonInteractive', '-Command'],
+            inheritedPSModulePath: Object.fromEntries(
+                Object.entries(process.env).filter(([key]) => key.toUpperCase() === 'PSMODULEPATH'),
+            ),
+            childPSModulePath: 'omitted; Windows PowerShell constructs its startup defaults',
+            shell: false,
+            executionPolicyChanged: false,
+        });
+        await step('powershell51-command-discovery', () =>
+            JSON.parse(
+                command(
+                    powershell,
+                    '$ErrorActionPreference="Stop";$c=Get-Command -Name Get-Acl -ErrorAction Stop;[pscustomobject]@{PSVersion=$PSVersionTable.PSVersion.ToString();PSEdition=$PSVersionTable.PSEdition;PSHome=$PSHOME;PSModulePath=$env:PSModulePath;command=$c.Name;modulePath=$c.Module.Path;moduleVersion=$c.Module.Version.ToString()}|ConvertTo-Json -Compress',
+                ),
+            ),
+        );
         const single = await step('powershell51-acl-single', () =>
             parseAclObservation(
                 command(powershell, aclScript, {

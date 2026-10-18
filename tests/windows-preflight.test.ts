@@ -16,7 +16,12 @@ import {
     writeReport,
     dependencyFacts,
 } from '../scripts/lib/windows-preflight.mjs';
-import { parseAclObservation, productPreflight } from '../scripts/memory-product-preflight.mts';
+import {
+    aclScript,
+    runPreflightCommand,
+    parseAclObservation,
+    productPreflight,
+} from '../scripts/memory-product-preflight.mts';
 const scratch = () =>
     fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-preflight-control-'));
 for (const fault of [null, 'sync', 'close'])
@@ -243,3 +248,138 @@ test('non-Windows entry is blocked before allocation and all early handlers/time
     assert.equal(timers.size, 0);
     for (const e of ['SIGINT', 'SIGTERM', 'disconnect']) assert.equal(events.listenerCount(e), 0);
 });
+
+// This models the documented pwsh -> Node -> WinPS inherited-module-path failure.
+// It invokes the actual preflight command helper and actual unchanged ACL script; no PowerShell runs.
+for (const moduleKeys of [
+    ['PSModulePath'],
+    ['PSMODULEPATH'],
+    ['psmodulepath'],
+    ['PSModulePath', 'PSMODULEPATH'],
+])
+    for (const paths of [['D:\\owned root'], ['D:\\owned root', 'C:\\Users\\runner\\Temp']])
+        test(`WinPS command removes inherited ${moduleKeys.join('/')} for ${paths.length} ACL paths without changing parent or policy`, () => {
+            const inherited = Object.freeze(
+                    Object.fromEntries([
+                        ...moduleKeys.map((key) => [
+                            key,
+                            'C:\\Program Files\\PowerShell\\7\\Modules;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules',
+                        ]),
+                        ['Path', 'C:\\Program Files\\PowerShell\\7;C:\\Windows\\System32'],
+                        ['PSExecutionPolicyPreference', 'RemoteSigned'],
+                        ['SystemRoot', 'C:\\Windows'],
+                        ['USERPROFILE', 'C:\\Users\\runner'],
+                    ]),
+                ),
+                extra = Object.freeze({ HUB_PREFLIGHT_PATHS: JSON.stringify(paths) }),
+                exe = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+            const value = {
+                principal: 'S-1-5-21-1',
+                rows: paths.map((path) => ({ path, owner: 'S-1-5-21-1', sddl: 'D:observed' })),
+            };
+            let calls = 0;
+            const output = runPreflightCommand(exe, aclScript, extra, {
+                windowsPowerShell: true,
+                environment: inherited,
+                timeout: 1500,
+                spawn(actualExe, args, options) {
+                    calls++;
+                    assert.equal(actualExe, exe);
+                    assert.deepEqual(args, [
+                        '-NoProfile',
+                        '-NonInteractive',
+                        '-Command',
+                        aclScript,
+                    ]);
+                    assert.equal(options.shell, false);
+                    assert.equal(options.windowsHide, true);
+                    assert.equal(options.encoding, 'utf8');
+                    assert.equal(options.timeout, 1500);
+                    assert.equal(options.maxBuffer, preflightLimits.commandBytes);
+                    assert.equal(options.env.PSExecutionPolicyPreference, 'RemoteSigned');
+                    assert.equal(options.env.Path, inherited.Path);
+                    assert.equal(options.env.SystemRoot, inherited.SystemRoot);
+                    assert.deepEqual(JSON.parse(options.env.HUB_PREFLIGHT_PATHS), paths);
+                    if (
+                        Object.keys(options.env).some((key) => key.toUpperCase() === 'PSMODULEPATH')
+                    )
+                        return {
+                            status: 1,
+                            signal: null,
+                            stderr: 'Get-Acl: Microsoft.PowerShell.Security could not be loaded (modeled inherited PS7 module)',
+                            stdout: '',
+                        };
+                    return { status: 0, signal: null, stderr: '', stdout: JSON.stringify(value) };
+                },
+            });
+            assert.equal(calls, 1);
+            assert.deepEqual(parseAclObservation(output, paths), value);
+            assert.deepEqual(
+                Object.keys(inherited).filter((key) => key.toUpperCase() === 'PSMODULEPATH'),
+                moduleKeys,
+            );
+            assert.equal(extra.HUB_PREFLIGHT_PATHS, JSON.stringify(paths));
+        });
+test('WinPS environment omission also removes an extra override while preserving literal JSON path transport', () => {
+    const paths = ["D:\\a b\\'quoted'\\$([never-run])`;[literal]"],
+        extra = Object.freeze({
+            HUB_PREFLIGHT_PATHS: JSON.stringify(paths),
+            pSmOdUlEpAtH: 'C:\\PS7',
+        });
+    runPreflightCommand('absolute-WinPS', aclScript, extra, {
+        windowsPowerShell: true,
+        environment: {},
+        spawn(exe, args, options) {
+            assert.equal(exe, 'absolute-WinPS');
+            assert.equal(args[3], aclScript);
+            assert(!args[3].includes(paths[0]));
+            assert.deepEqual(JSON.parse(options.env.HUB_PREFLIGHT_PATHS), paths);
+            assert(!Object.keys(options.env).some((key) => key.toUpperCase() === 'PSMODULEPATH'));
+            return { status: 0, signal: null, stdout: '{}', stderr: '' };
+        },
+    });
+    assert.equal(extra.pSmOdUlEpAtH, 'C:\\PS7');
+});
+test('the separate PowerShell7 compile-only command retains its inherited module path and policy', () => {
+    const environment = Object.freeze({
+        PSModulePath: 'PS7-default-modules',
+        PSExecutionPolicyPreference: 'AllSigned',
+    });
+    runPreflightCommand(
+        'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+        'Add-Type -Path $env:HUB_PREFLIGHT_CS',
+        { HUB_PREFLIGHT_CS: 'file.cs' },
+        {
+            environment,
+            spawn(_exe, args, options) {
+                assert.deepEqual(options.env, { ...environment, HUB_PREFLIGHT_CS: 'file.cs' });
+                assert.equal(options.shell, false);
+                assert(!args.includes('-ExecutionPolicy'));
+                return { status: 0, signal: null, stdout: '{}', stderr: '' };
+            },
+        },
+    );
+});
+for (const result of [
+    {
+        error: Object.assign(Error('real timeout'), { code: 'ETIMEDOUT' }),
+        signal: null,
+        status: null,
+    },
+    { signal: 'SIGTERM', status: null },
+    { signal: null, status: 1, stderr: 'real module import failure' },
+])
+    test(`WinPS process failure ${result.error?.code ?? result.signal ?? result.status} remains a failed observation`, () => {
+        assert.throws(() =>
+            runPreflightCommand(
+                'absolute-WinPS',
+                aclScript,
+                {},
+                {
+                    windowsPowerShell: true,
+                    environment: {},
+                    spawn: () => ({ stdout: 'untrusted partial result', ...result }),
+                },
+            ),
+        );
+    });
