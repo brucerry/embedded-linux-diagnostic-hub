@@ -13,6 +13,28 @@ disposable SQLite, and the existing native generation/reopen, Save cancel and Sa
 cases. Hashing a draft does not confer review. The workflow obtains no collection capability from
 these inputs.
 
+The repaired provider assigns `ConvertFrom-Json` directly and validates a flat one-to-three-record
+plan before any provider call. Paths and kinds must already be scalar strings. Actual filesystem
+items and their attributes must be scalar before the retained reparse and
+DirectorySecurity/FileSecurity checks. The old wrapper exists only in a failing, read-only red
+control.
+
+Before any future native enrollment, the entry runs the real System32 x64 Windows PowerShell 5.1
+provider contract in the same job. Its 30 cases include the exact old two-directory failure, three
+green provider shapes and 26 rejection cases. Raw JSON, launch tuple, interpreter/provider
+identities, type/count traces, stdout/stderr and command completion are durably recorded before
+assertions. The next proposed execution is only the separately selected standalone contract job,
+with no Electron resolution, PTY, native payload or canonical-marker acquisition. Its actual result
+must be independently reviewed before another native pilot is proposed.
+
+Electron dependency preparation now verifies an existing pinned Windows install or fails missing. It
+does not import the lazy Electron index or start an installer. The complete dependency digest is
+frozen only after this preparation, and later identity rechecks remain strict. The WinPS
+prerequisite and preparation stay inside the original core work deadline. The 1 MiB contract
+evidence and 512 KiB early-entry journal are charged within the existing 10 MiB evidence cap; they
+do not increase disk thresholds. Early failures retain their input, raw transport and descriptor
+closure evidence.
+
 One fresh GitHub-hosted Windows manual attempt uses pinned Node 24.22.0 x64 and lockfile
 dependencies. The live owner binds run, attempt 1, repository, commit, source, coverage, policy,
 dependencies, actual runtime paths/hashes, principal SID, physical roots, nonce and one immutable

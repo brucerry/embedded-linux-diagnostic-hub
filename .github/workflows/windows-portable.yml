@@ -35,6 +35,15 @@ on:
                 description: 'Exact independently reviewed finite-pilot native coverage JSON'
                 type: string
                 required: false
+            windows_pilot_winps_contract:
+                description: 'One real WinPS provider contract only; no native payload'
+                type: boolean
+                required: false
+                default: false
+            contract_source_sha256:
+                description: 'Independently reviewed exact source digest for WinPS-only contract'
+                type: string
+                required: false
     push:
         branches: [main]
     pull_request:
@@ -45,17 +54,18 @@ permissions:
 concurrency:
     group:
         windows-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch'
-        && inputs.windows_preflight_only && '-preflight' || github.event_name == 'workflow_dispatch'
-        && inputs.windows_native_pilot && '-native-pilot' || '' }}
+        && inputs.windows_pilot_winps_contract && '-winps-contract' || github.event_name ==
+        'workflow_dispatch' && inputs.windows_preflight_only && '-preflight' || github.event_name ==
+        'workflow_dispatch' && inputs.windows_native_pilot && '-native-pilot' || '' }}
     cancel-in-progress:
         ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
-        inputs.windows_native_pilot)) }}
+        inputs.windows_native_pilot || inputs.windows_pilot_winps_contract)) }}
 
 jobs:
     build:
         if:
             ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
-            inputs.windows_native_pilot)) }}
+            inputs.windows_native_pilot || inputs.windows_pilot_winps_contract)) }}
         runs-on: windows-latest
         timeout-minutes: 30
         steps:
@@ -151,7 +161,7 @@ jobs:
         name: Windows metadata preflight (nonqualifying)
         if:
             github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only &&
-            !inputs.windows_native_pilot
+            !inputs.windows_native_pilot && !inputs.windows_pilot_winps_contract
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -199,7 +209,9 @@ jobs:
 
     windows-native-pilot:
         name: Finite Windows native readiness pilot (nonqualifying)
-        if: github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot
+        if:
+            github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot &&
+            !inputs.windows_pilot_winps_contract
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -252,5 +264,57 @@ jobs:
               with:
                   name: windows-finite-native-pilot-${{ github.run_id }}-${{ github.run_attempt }}
                   path: ${{ runner.temp }}/diagnostic-hub-finite-native-pilot/
+                  if-no-files-found: warn
+                  retention-days: 14
+
+    winps-provider-contract:
+        if: github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract
+        runs-on: windows-latest
+        timeout-minutes: 8
+        env:
+            HUB_WINDOWS_PILOT_WINPS_CONTRACT: '1'
+            CONTRACT_EXPECTED_SOURCE: ${{ inputs.contract_source_sha256 }}
+            CONTRACT_NATIVE_SELECTED: ${{ inputs.windows_native_pilot }}
+            CONTRACT_METADATA_SELECTED: ${{ inputs.windows_preflight_only }}
+        steps:
+            - name: Require the reviewed identity and first attempt
+              shell: pwsh
+              run: |
+                  if ($env:CONTRACT_NATIVE_SELECTED -eq 'true' -or $env:CONTRACT_METADATA_SELECTED -eq 'true') { throw 'WinPS-only contract is mutually exclusive with native and metadata selectors.' }
+                  if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'One contract attempt; no reruns.' }
+                  if ($env:CONTRACT_EXPECTED_SOURCE -cnotmatch '^[a-f0-9]{64}$') { throw 'Reviewed source digest required.' }
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  architecture: x64
+                  cache: npm
+            - name: Restore the lockfile dependencies for the existing TypeScript loader
+              run: npm ci
+            - name: Create a fresh bounded contract evidence directory and resolve the loader
+              shell: pwsh
+              run: |
+                  $root = Join-Path $env:RUNNER_TEMP 'diagnostic-hub-winps-contract'
+                  if (Test-Path -LiteralPath $root) { throw 'Fresh contract root required.' }
+                  New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+                  $canonical = node -p "require('node:fs').realpathSync(process.argv[1])" "$root"
+                  if ($LASTEXITCODE -ne 0) { throw 'Physical contract root required.' }
+                  $loader = node -p "require('node:url').pathToFileURL(require.resolve('tsx')).href"
+                  if ($LASTEXITCODE -ne 0) { throw 'Actual loader required.' }
+                  "CONTRACT_ROOT=$canonical" >> $env:GITHUB_ENV
+                  "CONTRACT_LOADER=$loader" >> $env:GITHUB_ENV
+            - name: Run only the real x64 WinPS 5.1 provider contract
+              shell: pwsh
+              run: |
+                  node --import $env:CONTRACT_LOADER scripts/windows-pilot-winps-contract.mts "--out=$env:CONTRACT_ROOT" "--expected-source=$env:CONTRACT_EXPECTED_SOURCE"
+                  if ($LASTEXITCODE -ne 0) { throw 'Contract failed or custody is unknown; retain evidence, no retry.' }
+            - name: Retain bounded contract evidence including failures
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-pilot-winps-contract-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: ${{ runner.temp }}/diagnostic-hub-winps-contract/
                   if-no-files-found: warn
                   retention-days: 14

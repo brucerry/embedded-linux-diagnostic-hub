@@ -148,6 +148,11 @@ export class PilotSpaceLedger {
 export function requirePilotRuntimeReady(env = process.env) {
     assert.equal(env.HUB_WINDOWS_NATIVE_PILOT, '1', 'Separate native pilot selector required.');
     assert.notEqual(
+        env.HUB_WINDOWS_PILOT_WINPS_CONTRACT,
+        '1',
+        'WinPS-only contract cannot launch native work.',
+    );
+    assert.notEqual(
         env.HUB_WINDOWS_PREFLIGHT_ONLY,
         '1',
         'Metadata-only cannot launch native work.',

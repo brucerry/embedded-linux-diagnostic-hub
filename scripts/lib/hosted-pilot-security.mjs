@@ -12,9 +12,12 @@ export function pilotHostedContext(
         realpath = fs.realpathSync,
         ancestry = ancestryIdentity,
         tmp = os.tmpdir(),
+        mode = 'pilot',
     } = {},
 ) {
     assert.equal(platform, 'win32');
+    assert(['pilot', 'winps-contract'].includes(mode));
+    if (mode === 'winps-contract') assert.notEqual(env.HUB_WINDOWS_NATIVE_PILOT, '1');
     for (const [k, v] of Object.entries({
         GITHUB_ACTIONS: 'true',
         RUNNER_ENVIRONMENT: 'github-hosted',
@@ -23,7 +26,9 @@ export function pilotHostedContext(
         GITHUB_REPOSITORY: 'brucerry/embedded-linux-diagnostic-hub',
         GITHUB_EVENT_NAME: 'workflow_dispatch',
         GITHUB_RUN_ATTEMPT: '1',
-        HUB_WINDOWS_NATIVE_PILOT: '1',
+        ...(mode === 'pilot'
+            ? { HUB_WINDOWS_NATIVE_PILOT: '1' }
+            : { HUB_WINDOWS_PILOT_WINPS_CONTRACT: '1' }),
     }))
         assert.equal(env[k], v, 'Pilot context ' + k);
     assert.notEqual(env.HUB_WINDOWS_PREFLIGHT_ONLY, '1');
@@ -85,6 +90,8 @@ function sid(ace, flags) {
 export function parsePilotSecurity(text, plans, principal) {
     assert(Buffer.byteLength(text) <= 65536);
     const v = JSON.parse(text.replace(/^\uFEFF/, ''));
+    assert.equal(v.schema, 1);
+    assert.equal(v.complete, true);
     assert(/^S-1-5-21-\d+-\d+-\d+-\d+$/.test(v.principal));
     if (principal) assert.equal(v.principal, principal);
     assert(Array.isArray(v.rows) && v.rows.length === plans.length);

@@ -34,6 +34,9 @@ import {
 } from './lib/windows-preflight.mjs';
 import { PilotEvidence } from './lib/pilot-evidence.mjs';
 import { PilotDiskObserver } from './lib/pilot-disk-observer.mjs';
+import { runWinpsSecurityContract } from './lib/pilot-winps-contract.mjs';
+import { runSecurityCommand, requireSecurityProcess } from './lib/pilot-security-command.mjs';
+import { prepareAndFreezePilotDependencies } from './lib/pilot-dependencies.mjs';
 export { runHostedPilot };
 export async function nativePilotMain(args = process.argv.slice(2), environment = process.env) {
     requirePilotRuntimeReady(environment);
@@ -41,7 +44,18 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         early = new AbortController();
     const earlyCancel = () => early.abort(Error('Pilot entry cancelled before enrollment'));
     for (const e of ['SIGTERM', 'SIGINT', 'disconnect']) process.on(e, earlyCancel);
-    let owner, held, evidence, timer, privateRoot, paths, signal;
+    let owner,
+        held,
+        evidence,
+        timer,
+        privateRoot,
+        paths,
+        signal,
+        entryEvidence,
+        entryRecord,
+        reserveShared,
+        entryClosure;
+    let entryCharge = 0;
     const hold = (state, record) => {
         held ??= createOwnershipHold(state, record);
         signal?.abort(Error('Pilot owner holds unknown custody'));
@@ -86,7 +100,58 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         const evidenceAncestors = ancestryIdentity(out),
             evidenceId = metadataIdentity(out);
         assert(evidenceId.directory);
-        const deps = dependencyFacts(path.join(root, 'node_modules'), admitEarly);
+        const entryRoot = path.join(out, 'entry-evidence');
+        fs.mkdirSync(entryRoot);
+        entryEvidence = new PilotEvidence(entryRoot, {
+            check: () => {
+                context.check();
+                checkAncestry(evidenceAncestors);
+            },
+        });
+        entryRecord = (stage, data) => {
+            const bytes = Buffer.byteLength(JSON.stringify({ stage, data })) + 256;
+            assert(entryCharge + bytes <= 524288, 'Early evidence pre-write budget');
+            reserveShared?.(bytes);
+            entryEvidence.append(stage, data);
+            entryCharge += bytes;
+        };
+        entryRecord('entry-start', {
+            sourceSHA256: options['expected-source'],
+            startedAt,
+            deadline: startedAt + pilotLimits.totalMs,
+        });
+        const contractRoot = path.join(out, 'winps-contract');
+        fs.mkdirSync(contractRoot);
+        const contract = await runWinpsSecurityContract({
+            sourceRoot: root,
+            outputRoot: contractRoot,
+            expectedSourceSHA256: options['expected-source'],
+            environment,
+            mode: 'pilot',
+            signal: early.signal,
+            outerDeadline: startedAt + pilotLimits.totalMs - pilotLimits.reserveMs,
+        });
+        entryRecord('winps-contract-prerequisite', {
+            passed: contract.passed,
+            casesPassed: contract.casesPassed,
+            casesRequired: contract.casesRequired,
+            interpreter: contract.interpreter,
+            interpreterReport: contract.interpreterReport,
+            evidenceClosure: contract.evidenceClosure,
+            evidenceBytes: contract.evidenceBytes,
+        });
+        assert.equal(
+            contract.passed,
+            true,
+            'Real WinPS production provider contract must pass before Electron/dependency enrollment.',
+        );
+        admitEarly();
+        const prepared = prepareAndFreezePilotDependencies(root, {
+            environment,
+            check: admitEarly,
+            record: entryRecord,
+        });
+        const deps = prepared.dependencies;
         const where = (name) => {
             admitEarly();
             const r = spawnSync('where.exe', [name], {
@@ -101,7 +166,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             return fs.realpathSync(p);
         };
         const git = where('git.exe'),
-            powershell = where('powershell.exe'),
+            powershell = contract.interpreter.path,
             pwsh = where('pwsh.exe');
         let gitRoot = [
             path.resolve(path.dirname(git), '..'),
@@ -115,7 +180,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         const runtimePaths = {
             node: process.execPath,
             tsx: require.resolve('tsx'),
-            electron: require('electron'),
+            electron: prepared.electron,
             powershell: pwsh,
             git,
             bash: path.join(bin, 'bash.exe'),
@@ -143,17 +208,36 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             securityScript = path.join(root, 'scripts/lib/hosted-pilot-security.ps1'),
             scriptIdentity = fileIdentity(securityScript);
         const security = (plans, principal) => {
-            const env = { ...environment, HUB_NATIVE_PILOT_SECURITY_PATHS: JSON.stringify(plans) };
-            for (const k of Object.keys(env)) if (k.toUpperCase() === 'PSMODULEPATH') delete env[k];
-            const r = spawnSync(
-                powershell,
-                ['-NoProfile', '-NonInteractive', '-File', securityScript],
-                { encoding: 'utf8', windowsHide: true, timeout: 10000, maxBuffer: 65536, env },
-            );
-            assert(!r.error && r.status === 0 && r.signal === null, r.stderr);
+            const reply = runSecurityCommand(root, powershell, JSON.stringify(plans), {
+                environment,
+                record: entryRecord,
+                onProcessState: (state) => {
+                    if (!state.closed) {
+                        if (owner)
+                            owner.hold(
+                                'PowerShell query close unconfirmed: ' + JSON.stringify(state),
+                            );
+                        else
+                            hold(
+                                {
+                                    kind: 'pilot-security-query-unknown',
+                                    processState: state,
+                                    privateRoot,
+                                },
+                                entryRecord,
+                            );
+                    }
+                },
+                check: () => {
+                    context.check();
+                    checkAncestry(evidenceAncestors);
+                    assert(productClock.now() < startedAt + pilotLimits.totalMs);
+                },
+            });
+            requireSecurityProcess(reply.result);
             assert.deepEqual(fileIdentity(securityScript), scriptIdentity);
             assert.deepEqual(fileIdentity(powershell, { pe: true }), psIdentity);
-            return parsePilotSecurity(r.stdout, plans, principal);
+            return parsePilotSecurity(reply.stdout, plans, principal);
         };
         refuseMarker(context.parent);
         const nonce = randomUUID();
@@ -204,11 +288,12 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 attempt: '1',
             },
         );
-        let charged = 0;
+        let charged = entryCharge + contract.evidenceBytes;
         const reserve = (n) => {
             assert(charged + n <= pilotLimits.evidenceBytes);
             charged += n;
         };
+        reserveShared = reserve;
         evidence = new PilotEvidence(out, {
             check: () => {
                 context.check();
@@ -324,7 +409,15 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 early.signal.throwIfAborted();
                 return b;
             },
-            closeEvidence: async () => evidence.close(),
+            closeEvidence: async () => {
+                const main = evidence.close();
+                entryClosure = entryEvidence.close();
+                return {
+                    complete: main.complete && entryClosure.complete,
+                    main,
+                    entry: entryClosure,
+                };
+            },
             beforeStage: async (stage) => {
                 observe('before-' + stage);
             },
@@ -483,7 +576,12 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 return !fs.existsSync(privateRoot);
             },
         });
-        return { ...result, observations: observer.snapshot() };
+        return {
+            ...result,
+            observations: observer.snapshot(),
+            winpsContractPassed: contract.passed,
+            entryEvidenceClosure: entryClosure,
+        };
     } catch (e) {
         if (
             owner &&
@@ -492,9 +590,30 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             owner.state !== 'held'
         )
             owner.hold(e);
-        if (evidence && (!owner || !owner.ports.lease.state().created)) {
-            const closure = evidence.close();
-            if (!closure.complete)
+        if (!held && (!owner || !owner.ports.lease.state().created)) {
+            if (entryEvidence && !entryEvidence.entry.attempted)
+                try {
+                    entryRecord('entry-failed', {
+                        error: String(e).slice(0, 2048),
+                        nativeLaunches: 0,
+                    });
+                } catch (persistence) {
+                    hold(
+                        { kind: 'pilot-early-evidence-unknown', reason: String(persistence) },
+                        () => {},
+                    );
+                }
+            const main = evidence?.close(),
+                entry = entryEvidence?.close();
+            console.error(
+                JSON.stringify({
+                    kind: 'pilot-entry-failure',
+                    error: String(e).slice(0, 2048),
+                    mainEvidenceClosure: main ?? null,
+                    entryEvidenceClosure: entry ?? null,
+                }),
+            );
+            if ((main && !main.complete) || (entry && !entry.complete))
                 hold(
                     { kind: 'pilot-pre-enrollment-evidence-unknown', reason: String(e) },
                     () => {},

@@ -374,6 +374,8 @@ function security(kind = 'file', flags = 16) {
     const principal = 'S-1-5-21-1-2-3-500',
         p = 'C:\\Temp\\owned.lock';
     return {
+        schema: 1,
+        complete: true,
         principal,
         rows: [
             {
