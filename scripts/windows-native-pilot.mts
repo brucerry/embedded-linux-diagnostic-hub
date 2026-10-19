@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +44,7 @@ import {
     waitPilotStage,
     stopHeldPilotActivity,
 } from './lib/pilot-runtime-startup.mjs';
+import { lookupPilotTool, prerequisiteFailure } from './lib/pilot-tool-lookup.mjs';
 export { runHostedPilot };
 export async function nativePilotMain(args = process.argv.slice(2), environment = process.env) {
     requirePilotRuntimeReady(environment);
@@ -73,6 +74,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         startup?.cancel();
         return held;
     };
+    let prerequisite = 'entry-inputs-and-host-context';
     try {
         const expectedKeys = ['out', 'expected-source', 'expected-policy', 'coverage-sha256'];
         const options = Object.fromEntries(
@@ -94,6 +96,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             assert(productClock.now() < startedAt + pilotLimits.totalMs - pilotLimits.reserveMs);
         };
         admitEarly();
+        prerequisite = 'source-policy-coverage-and-evidence-root';
         assert.equal(await sourceFingerprint(root), options['expected-source']);
         admitEarly();
         const policyFile = path.join(root, 'scripts/lib/hosted-pilot-policy.json'),
@@ -132,6 +135,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             startedAt,
             deadline: startedAt + pilotLimits.totalMs,
         });
+        prerequisite = 'fresh-winps-contract';
         const contractRoot = path.join(out, 'winps-contract');
         fs.mkdirSync(contractRoot);
         const contract = await runWinpsSecurityContract({
@@ -158,28 +162,35 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             'Real WinPS production provider contract must pass before Electron/dependency enrollment.',
         );
         admitEarly();
+        let lookupOrdinal = 0;
         const where = (name) => {
-            admitEarly();
-            const r = spawnSync('where.exe', [name], {
-                windowsHide: true,
-                encoding: 'utf8',
-                timeout: 2000,
-                maxBuffer: 8192,
+            prerequisite = 'tool-lookup:' + name;
+            return lookupPilotTool(name, {
+                ordinal: ++lookupOrdinal,
+                clock: productClock.now,
+                workDeadline: startedAt + pilotLimits.totalMs - pilotLimits.reserveMs,
+                check: admitEarly,
+                record: entryRecord,
+                onProcessState: (state) => {
+                    if (!state.closed)
+                        hold(
+                            { kind: 'pilot-prerequisite-query-unknown', processState: state },
+                            entryRecord,
+                        );
+                },
             });
-            assert(!r.error && r.status === 0);
-            const p = r.stdout.split(/\r?\n/).find((p) => path.isAbsolute(p) && !/["\r\n]/.test(p));
-            assert(p);
-            return fs.realpathSync(p);
         };
-        const git = where('git.exe'),
+        const git = await where('git.exe'),
             powershell = contract.interpreter.path,
-            pwsh = where('pwsh.exe');
+            pwsh = await where('pwsh.exe');
+        prerequisite = 'git-root-and-winpty-paths';
         let gitRoot = [
             path.resolve(path.dirname(git), '..'),
             path.resolve(path.dirname(git), '../..'),
         ].find((p) => fs.existsSync(path.join(p, 'usr/bin/winpty.dll')));
-        assert(gitRoot);
+        assert(gitRoot, 'Git root containing usr/bin/winpty.dll unavailable');
         const bin = path.join(gitRoot, 'usr/bin');
+        prerequisite = 'owned-electron-preparation';
         await preparePilotElectron(root, {
             parent: context.parent,
             evidenceRoot: out,
@@ -199,6 +210,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             record: entryRecord,
             hold,
         });
+        prerequisite = 'dependency-runtime-freeze';
         const prepared = prepareAndFreezePilotDependencies(root, {
             environment,
             check: admitEarly,
@@ -206,6 +218,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         });
         const deps = prepared.dependencies,
             runtime = { platform: process.platform, arch: process.arch };
+        prerequisite = 'runtime-version-and-architecture';
         assert.equal(process.version, 'v24.22.0');
         assert.equal(process.arch, 'x64');
         const runtimePaths = {
@@ -220,6 +233,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             winptyAgent: path.join(bin, 'winpty-agent.exe'),
         };
         for (const [name, p] of Object.entries(runtimePaths)) {
+            prerequisite = 'runtime-identity:' + name;
             const id = fileIdentity(fs.realpathSync(p), {
                 pe: !['tsx'].includes(name),
                 check: admitEarly,
@@ -235,6 +249,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                       : {}),
             };
         }
+        prerequisite = 'security-provider-identities';
         const psIdentity = fileIdentity(powershell, { pe: true, check: admitEarly }),
             securityScript = path.join(root, 'scripts/lib/hosted-pilot-security.ps1'),
             scriptIdentity = fileIdentity(securityScript);
@@ -270,6 +285,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             assert.deepEqual(fileIdentity(powershell, { pe: true }), psIdentity);
             return parsePilotSecurity(reply.stdout, plans, principal);
         };
+        prerequisite = 'canonical-marker-absence-and-private-paths';
         refuseMarker(context.parent);
         const nonce = randomUUID();
         privateRoot = path.join(context.parent, 'diagnostic-hub-native-pilot-' + nonce);
@@ -280,6 +296,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 { path: privateRoot, kind: 'directory' },
             ],
             initial = security(plans);
+        prerequisite = 'host-binding-and-root-identities';
         const binding = {
             schema: 1,
             kind: 'windows-hosted-native-readiness-pilot-v1',
@@ -309,6 +326,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         // evidenceRoot's digest is a nonsecret physical-identity binding, explicitly not ACL admission.
         binding.roots.evidenceRoot.identitySHA256 = binding.roots.evidenceRoot.descriptorSHA256;
         delete binding.roots.evidenceRoot.descriptorSHA256;
+        prerequisite = 'lease-construction';
         const lease = new ProductLease(
             path.join(context.parent, 'diagnostic-hub-v060-check.lock'),
             {
@@ -437,6 +455,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             });
         };
         admitEarly();
+        prerequisite = 'hosted-pilot-owner-admission';
         const result = await runHostedPilot(binding, {
             lease,
             events: process,
@@ -617,7 +636,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             if (entryEvidence && !entryEvidence.entry.attempted)
                 try {
                     entryRecord('entry-failed', {
-                        error: String(e).slice(0, 2048),
+                        ...prerequisiteFailure(e, prerequisite),
                         nativeLaunches: 0,
                     });
                 } catch (persistence) {
@@ -631,7 +650,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             console.error(
                 JSON.stringify({
                     kind: 'pilot-entry-failure',
-                    error: String(e).slice(0, 2048),
+                    ...prerequisiteFailure(e, prerequisite),
                     mainEvidenceClosure: main ?? null,
                     entryEvidenceClosure: entry ?? null,
                 }),
@@ -656,6 +675,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
             if (!r.passed) process.exitCode = 1;
         })
         .catch((e) => {
-            console.error(String(e));
+            console.error(
+                JSON.stringify({
+                    kind: 'pilot-top-level-failure',
+                    ...prerequisiteFailure(e, 'pre-entry-runtime-gate-or-unhandled'),
+                }),
+            );
             process.exitCode = 1;
         });
