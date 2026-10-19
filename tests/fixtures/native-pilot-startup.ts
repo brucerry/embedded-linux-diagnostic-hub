@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
-import { ProcessSampler, type ProcessRow } from './memory-resource-processes';
+import { ProcessSampler, readProcessTable, type ProcessRow } from './memory-resource-processes';
+import {
+    processQueryBatchLimit,
+    validateProcessQueryBatch,
+} from '../../scripts/lib/pilot-process-query.mjs';
 export class NativePilotStartup {
     readonly operations = new Map<string, any>();
     readonly children = new Map<ChildProcess, any>();
@@ -15,6 +19,7 @@ export class NativePilotStartup {
     private diagnosticRows = 0;
     private joinFailure: string | undefined;
     private joinTask: Promise<any> | undefined;
+    private queryClosures: any[] = [];
     constructor(
         readonly options: {
             signal: AbortSignal;
@@ -126,7 +131,21 @@ export class NativePilotStartup {
                     this.cancel();
                 }
             });
-        const sampler = new ProcessSampler(child.pid ? [child.pid] : [], this.options.readTable);
+        const sampler = new ProcessSampler(
+            child.pid ? [child.pid] : [],
+            this.options.readTable ??
+                (() =>
+                    readProcessTable(
+                        this.options.diagnostics
+                            ? (proof) => {
+                                  this.queryClosures.push(proof);
+                                  if (this.queryClosures.length === processQueryBatchLimit)
+                                      this.flushQueryClosures();
+                              }
+                            : undefined,
+                    )),
+        );
+        row.sampler = sampler;
         row.identityTask = this.observe(row, async () => {
             const id = await (this.options.identity
                 ? this.options.identity(child)
@@ -247,6 +266,22 @@ export class NativePilotStartup {
         this.admissionClosed = true;
         for (const row of this.children.values()) this.stopObservations(row);
     }
+    private flushQueryClosures() {
+        if (!this.queryClosures.length) return;
+        const queries = this.queryClosures.splice(0);
+        this.note('process-query-closed', { schema: 1, queries });
+    }
+    /** The production parent receiver calls this only after bound durable append. */
+    acceptQueryClosures(child: ChildProcess, batch: unknown, platform = process.platform) {
+        if (this.halted) return;
+        const row = this.children.get(child);
+        assert(row && row.spawn && row.pid, 'Query closure from unowned stage');
+        const proofs = validateProcessQueryBatch(batch);
+        for (const proof of proofs) {
+            assert.equal(proof.platform, platform, 'Query closure platform mismatch');
+            row.sampler.acceptClosedQuery(proof, row.pid);
+        }
+    }
     halt(reason: unknown) {
         if (!this.halted)
             this.note('held', {
@@ -270,7 +305,15 @@ export class NativePilotStartup {
                 stopRequested: row.stopRequested,
                 error: row.error,
                 observations: row.observations.size,
+                ...(row.sampler.historyProof().retiredCount ||
+                row.sampler.historyProof().failure ||
+                row.sampler.historyProof().pendingClosedQueries
+                    ? { processHistory: row.sampler.historyProof() }
+                    : {}),
             })),
+            ...(this.queryClosures.length
+                ? { closedQueriesAwaitingDiagnosticFlush: [...this.queryClosures] }
+                : {}),
         };
     }
     terminateChild(child: ChildProcess, reason: unknown) {
@@ -328,6 +371,7 @@ export class NativePilotStartup {
         }
     }
     async drainDiagnostics() {
+        this.flushQueryClosures();
         if (this.diagnosticFailure) throw this.diagnosticFailure;
         await this.bounded(this.bound(), () => Promise.all([...this.diagnosticTasks]));
         if (this.diagnosticFailure) throw this.diagnosticFailure;
@@ -426,9 +470,16 @@ export class NativePilotStartup {
             sampleTimer,
             observations,
             joinTask,
+            sampler,
             ...receipt
         } = row;
-        return receipt;
+        const history = sampler.historyProof();
+        return {
+            ...receipt,
+            ...(history.retiredCount || history.failure || history.pendingClosedQueries
+                ? { processHistory: history }
+                : {}),
+        };
     }
     private finishChild(row: any, deadline: number): Promise<any> {
         this.stopObservations(row);
@@ -441,6 +492,7 @@ export class NativePilotStartup {
             this.checkJoin(deadline);
             this.childProof(row);
             await row.descendants();
+            this.flushQueryClosures();
             this.checkJoin(deadline);
             assert.equal(row.observations.size, 0, 'Process observation still active');
             this.childProof(row);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { processQueryStage, validateProcessQueryBatch } from './pilot-process-query.mjs';
 import {
     startupIdentityDecoder,
     startupIdentityStages,
@@ -20,6 +21,7 @@ export function pilotEvidenceReceiver({
     send,
     hold,
     clock,
+    acceptQueryClosures,
 }) {
     let failed,
         reservedRows = 0,
@@ -82,10 +84,24 @@ export function pilotEvidenceReceiver({
                         rows + reservedRows < identityReportLimits.rows,
                         'Parent stage diagnostic rows',
                     );
+                    if (message.stage === processQueryStage) {
+                        validateProcessQueryBatch(message.data);
+                        assert(
+                            typeof acceptQueryClosures === 'function',
+                            'Query closure receiver unavailable',
+                        );
+                    }
                     record(stage + ':' + message.stage, message.data);
                 }
                 state.sequence++;
                 rows++;
+                if (message.stage === processQueryStage) {
+                    assert.equal(
+                        acceptQueryClosures(message.data),
+                        undefined,
+                        'Query closure admission must be synchronous',
+                    );
+                }
                 if (message.stage === 'runtime-ready') {
                     assert(
                         clock() < state.runtimeDeadline,

@@ -565,6 +565,8 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                     send: (m, callback) => child.send(m, callback),
                     hold: (e) => o.hold(e),
                     clock: () => productClock.now(),
+                    acceptQueryClosures: (batch) =>
+                        startup.acceptQueryClosures(child, batch, binding.runtime.platform),
                 });
                 child.on('message', receiver.receive);
 

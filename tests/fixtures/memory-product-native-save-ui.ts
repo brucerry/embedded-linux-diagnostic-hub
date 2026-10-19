@@ -32,7 +32,7 @@ export async function exerciseNativeSaveCases(
             if (decision === 'save') await host.readFault.arm('quota');
             await host.releaseReport(decision);
             await expect(button).toBeEnabled();
-            await expect(view.getByRole('alert')).toContainText(
+            await expect(view.getByRole(decision === 'cancel' ? 'status' : 'alert')).toContainText(
                 decision === 'cancel' ? 'Export cancelled.' : host.readFault.quotaMessage,
             );
             await expect.poll(async () => (await host.snapshot()).capture.owners.export).toBe(0);
