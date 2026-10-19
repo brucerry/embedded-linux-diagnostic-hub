@@ -35,6 +35,7 @@ import {
 import { soakPhysicalLimits } from './lib/soak-physical-budget.mjs';
 import { soakEvidenceContractSHA256 } from './lib/soak-evidence.mjs';
 import { runOuter, verifyProductManifest, dependencyIdentity } from './memory-product-collect.mts';
+import { bindObservationDirectory } from './lib/observation-paths.mjs';
 import { ObservationHandoff } from './lib/observation-handoff.mjs';
 import { ObservationAccounting, admitObservationShared } from './lib/observation-accounting.mjs';
 import { preserveObservationPty } from './lib/observation-pty-receipt.mjs';
@@ -45,10 +46,22 @@ import {
     observationAuthority,
 } from './lib/windows-observation-approval.mjs';
 
-export function observationContext(env = process.env) {
-    assert.equal(process.platform, 'win32');
-    assert.equal(process.arch, 'x64');
-    assert.equal(process.version, 'v24.22.0');
+export function observationContext(
+    env = process.env,
+    {
+        platform = process.platform,
+        arch = process.arch,
+        version = process.version,
+        tmp = os.tmpdir(),
+        realpath = fs.realpathSync,
+        identity = metadataIdentity,
+        ancestry = ancestryIdentity,
+        recheck = checkAncestry,
+    } = {},
+) {
+    assert.equal(platform, 'win32');
+    assert.equal(arch, 'x64');
+    assert.equal(version, 'v24.22.0');
     for (const [key, value] of Object.entries({
         GITHUB_ACTIONS: 'true',
         RUNNER_ENVIRONMENT: 'github-hosted',
@@ -66,32 +79,43 @@ export function observationContext(env = process.env) {
         if (key.startsWith('HUB_'))
             assert(['HUB_WINDOWS_OBSERVATION_PAIR', 'HUB_OBSERVATION_REQUEST_JSON'].includes(key));
     }
-    const tmp = fs.realpathSync(os.tmpdir()),
-        profile = fs.realpathSync(env.USERPROFILE);
+    const profile = realpath(env.USERPROFILE);
     assert(/^C:\\Users\\[^\\]+$/i.test(profile));
-    assert.equal(
-        tmp.toLowerCase(),
-        path.win32.join(profile, 'AppData', 'Local', 'Temp').toLowerCase(),
+    const profileBinding = bindObservationDirectory(env.USERPROFILE, profile, { identity });
+    const tempBinding = bindObservationDirectory(
+        tmp,
+        path.win32.join(profile, 'AppData', 'Local', 'Temp'),
+        { identity },
     );
-    const rows = ancestryIdentity(tmp),
-        preserved = Object.fromEntries(
-            ['TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA'].map((k) => [k, env[k]]),
-        );
+    tmp = realpath(tmp);
+    const admittedAncestries = [
+        ancestry(tmp),
+        ancestry(realpath(path.win32.join(profile, 'AppData', 'Local', 'Temp'))),
+    ];
+    const preserved = Object.fromEntries(
+        ['TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA'].map((k) => [k, env[k]]),
+    );
     return {
         tmp,
         check() {
-            checkAncestry(rows);
+            for (const rows of admittedAncestries) recheck(rows);
+            profileBinding.check();
+            tempBinding.check();
             for (const [k, v] of Object.entries(preserved)) assert.equal(env[k], v);
         },
     };
 }
-export async function observationMain(args = process.argv.slice(2), env = process.env) {
+export async function observationMain(
+    args = process.argv.slice(2),
+    env = process.env,
+    contextOptions,
+) {
     assert.equal(
         observationPolicy.executionEnabled,
         true,
         'Observation route disabled pending independent source/host review and separate activation authorization.',
     );
-    const context = observationContext(env),
+    const context = observationContext(env, contextOptions),
         root = fs.realpathSync(path.resolve(import.meta.dirname, '..')),
         require = createRequire(import.meta.url),
         started = productClock.now(),

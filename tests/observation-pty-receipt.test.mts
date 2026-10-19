@@ -113,8 +113,15 @@ function fixture() {
         ownerCheck,
         hold: (s) => holds.push(s),
         identity: (file) =>
-            file === parent
-                ? { dev: '1', ino: '1' }
+            /^C:\\/i.test(file)
+                ? {
+                      path: file,
+                      realpath: file,
+                      directory: true,
+                      file: false,
+                      dev: '1',
+                      ino: /\\Temp$/i.test(file) ? '1' : String(10 + file.length),
+                  }
                 : { ...metadataIdentity(root), path: 'D:\\report', dev: '1', ino: '3' },
     };
     return {
@@ -177,6 +184,78 @@ test('post-wait digest detects added evidence and sync/close uncertainty stays h
             }),
         );
         assert(f.holds.length > 0);
+    } finally {
+        f.close();
+    }
+});
+for (const alias of [
+    'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp',
+    'c:\\users\\runneradmin\\appdata\\local\\temp',
+])
+    test('durable long TEMP receipt admits current alias with unchanged bytes ' + alias, () => {
+        const f = fixture();
+        try {
+            const before = fs.readFileSync(path.join(f.root, 'pilot.jsonl'));
+            f.options.canonicalTemp = alias;
+            const first = preserveObservationPty(f.root, f.expected, f.options);
+            assert(first.closed && first.durable);
+            assert.deepEqual(preserveObservationPty(f.root, f.expected, f.options), first);
+            assert.deepEqual(fs.readFileSync(path.join(f.root, 'pilot.jsonl')), before);
+            assert.equal(f.holds.length, 0);
+        } finally {
+            f.close();
+        }
+    });
+for (const fault of [
+    'current-object',
+    'recorded-object',
+    'both-objects',
+    'recorded-ancestor-reparse',
+    'current-ancestor-reparse',
+    'ownership',
+])
+    test('PTY aliases preserve hold on ' + fault + ' after approval wait', () => {
+        const f = fixture();
+        try {
+            const short = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp';
+            f.options.canonicalTemp = short;
+            const first = preserveObservationPty(f.root, f.expected, f.options);
+            assert(first.closed);
+            const identity = f.options.identity;
+            f.options.identity = (file) => {
+                if (fault === 'recorded-ancestor-reparse' && file === 'C:\\Users\\runneradmin')
+                    throw Error('Reparse refused');
+                if (fault === 'current-ancestor-reparse' && file === 'C:\\Users\\RUNNER~1')
+                    throw Error('Reparse refused');
+                const row = identity(file);
+                if (
+                    (fault === 'current-object' && file === short) ||
+                    (fault === 'recorded-object' && file === parent) ||
+                    (fault === 'both-objects' && (file === parent || file === short))
+                )
+                    return { ...row, ino: '2' };
+                return row;
+            };
+            if (fault === 'ownership')
+                f.options.ownerCheck.many = () => {
+                    throw Error('Untrusted owner/ACL refused');
+                };
+            assert.throws(() => preserveObservationPty(f.root, f.expected, f.options));
+            assert(f.holds.length > 0);
+        } finally {
+            f.close();
+        }
+    });
+test('receipt snapshots retain both TEMP ancestries for post-approval comparison', () => {
+    const f = fixture();
+    try {
+        f.options.canonicalTemp = 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp';
+        const first = preserveObservationPty(f.root, f.expected, f.options),
+            identity = f.options.identity;
+        f.options.identity = (file) =>
+            file === 'C:\\Users\\runneradmin' ? { ...identity(file), ino: '900' } : identity(file);
+        const second = preserveObservationPty(f.root, f.expected, f.options);
+        assert.notDeepEqual(second, first);
     } finally {
         f.close();
     }

@@ -2,6 +2,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+    bindObservationDirectory,
+    requireObservationDirectoryIdentity,
+} from './observation-paths.mjs';
 import { observationInventory } from './observation-accounting.mjs';
 import {
     readStreamedDurableArtifacts,
@@ -82,8 +86,15 @@ export function preserveObservationPty(
         );
         for (const key of ['repository', 'run', 'attempt', 'commit'])
             assert.equal(b.host[key], host[key]);
-        assert.equal(b.roots.canonicalTemp.path, canonicalTemp);
-        const temp = identity(canonicalTemp);
+        ownerCheck.many([canonicalTemp, b.roots.canonicalTemp.path]);
+        const tempBinding = bindObservationDirectory(canonicalTemp, b.roots.canonicalTemp.path, {
+            identity,
+        });
+        const temp = requireObservationDirectoryIdentity(
+            canonicalTemp,
+            b.roots.canonicalTemp.path,
+            identity,
+        );
         assert.equal(temp.dev, b.roots.canonicalTemp.dev);
         assert.equal(temp.ino, b.roots.canonicalTemp.ino);
         const evidence = identity(root);
@@ -99,6 +110,7 @@ export function preserveObservationPty(
         assert.equal(result.bindingSHA256, owned.bindingSHA256);
         assert.equal(result.passed, true);
         assert.equal(result.collectionApproval, false);
+        tempBinding.check();
         checkAncestry(ancestry);
         return {
             bindingSHA256: owned.bindingSHA256,
@@ -106,6 +118,7 @@ export function preserveObservationPty(
             scopeSHA256: b.scopeSHA256,
             policySHA256: b.pilotPolicySHA256,
             ancestry,
+            tempAncestries: tempBinding.ancestries,
             root: identity(root),
             files: durable.inventory.map((r) => ({
                 path: r.name,
