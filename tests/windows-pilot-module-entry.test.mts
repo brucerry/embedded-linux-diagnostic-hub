@@ -233,7 +233,38 @@ async function entryControl(kind, incompleteHelperProof = false) {
                 assert(!messages.some((m) => m.kind === 'native-runtime-ready'));
                 assert(!admissionAttempted);
             } else {
-                assert(admissionAttempted);
+                const observed = startup.children.get(child);
+                assert(
+                    admissionAttempted,
+                    'Runtime entry failed before expected admission: ' +
+                        JSON.stringify({
+                            failure: failure
+                                ? {
+                                      message: String(failure).slice(0, 1024),
+                                      code: failure.code ?? null,
+                                      syscall: failure.syscall ?? null,
+                                      path: failure.path ?? null,
+                                  }
+                                : null,
+                            held: Boolean(held?.referenced),
+                            ready: messages.some((m) => m.kind === 'native-runtime-ready'),
+                            cancelAck: messages.some((m) => m.kind === 'native-runtime-cancel-ack'),
+                            child: {
+                                pid: observed.pid,
+                                spawn: observed.spawn,
+                                exit: observed.exit,
+                                close: observed.close,
+                                error:
+                                    observed.error == null
+                                        ? null
+                                        : String(observed.error).slice(0, 1024),
+                            },
+                            lastStages: rows
+                                .slice(-12)
+                                .map((r) => ({ stage: r.stage, error: r.data?.error ?? null })),
+                            stderr: raw.slice(0, 2048),
+                        }),
+                );
                 assert(messages.some((m) => m.kind === 'native-runtime-ready'));
                 assert(messages.some((m) => m.kind === 'native-runtime-cancel-ack'));
                 assert(!/TransformError|Top-level await/.test(raw));

@@ -912,7 +912,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
                     assert(productClock.now() < b.preparationDeadline);
                 },
             });
-            const ownerCheck = collectorObservationSecurity(m, sourceRoot);
+            const ownerCheck = collectorObservationSecurity(m, sourceRoot, {
+                check: () => {
+                    assert(process.connected, 'Collector security IPC disconnected');
+                    assert(
+                        productClock.now() < cohort.deadlineMs,
+                        'Immutable security cohort deadline',
+                    );
+                },
+            });
             const remote = await connectObservationCollector(m, nonce, cohort, { ownerCheck });
             await runCollector(m, manifestSHA256, nonce, cohort, {
                 events: remote.events,

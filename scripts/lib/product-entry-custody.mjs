@@ -114,7 +114,11 @@ export class CollectionEntry {
     }
 }
 /** The refed hold exists before any persistence; an error cannot reject out of unknown custody. */
-export function createOwnershipHold(state, record, { interval = setInterval } = {}) {
+export function createOwnershipHold(
+    state,
+    record,
+    { interval = setInterval, onRetained = () => {} } = {},
+) {
     const row = { state, persistenceErrors: [], handle: null };
     row.handle = interval(() => {
         void row.state;
@@ -122,12 +126,7 @@ export function createOwnershipHold(state, record, { interval = setInterval } = 
     row.handle?.ref?.();
     retained.add(row);
     const outcome = new Promise(() => {});
-    try {
-        record('ownership-held.json', state);
-    } catch (error) {
-        row.persistenceErrors.push(String(error).slice(0, 4096));
-    }
-    return {
+    const hold = {
         outcome,
         snapshot: () => ({
             attached: true,
@@ -135,6 +134,18 @@ export function createOwnershipHold(state, record, { interval = setInterval } = 
             referencedHandleCreated: true,
         }),
     };
+    // The caller latches the actual hold before persistence can reenter or fail.
+    try {
+        onRetained(hold);
+    } catch (error) {
+        row.persistenceErrors.push(String(error).slice(0, 4096));
+    }
+    try {
+        record('ownership-held.json', state);
+    } catch (error) {
+        row.persistenceErrors.push(String(error).slice(0, 4096));
+    }
+    return hold;
 }
 /** Register each acquired log before the next open can fail. Partial failures carry custody. */
 export function prepareProductLogs(guard, names, io = fs) {

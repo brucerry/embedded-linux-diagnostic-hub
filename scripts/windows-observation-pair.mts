@@ -15,8 +15,6 @@ import { preparePilotStageRuntime } from './lib/pilot-runtime-startup.mjs';
 import { preparePilotElectron } from './lib/pilot-electron-preparation.mjs';
 import { settledElectronExecutable } from './lib/pilot-dependencies.mjs';
 import { lookupPilotTool } from './lib/pilot-tool-lookup.mjs';
-import { runSecurityCommand, requireSecurityProcess } from './lib/pilot-security-command.mjs';
-import { parsePilotSecurity } from './lib/hosted-pilot-security.mjs';
 import {
     metadataIdentity,
     ancestryIdentity,
@@ -35,6 +33,10 @@ import {
 import { soakPhysicalLimits } from './lib/soak-physical-budget.mjs';
 import { soakEvidenceContractSHA256 } from './lib/soak-evidence.mjs';
 import { runOuter, verifyProductManifest, dependencyIdentity } from './memory-product-collect.mts';
+import {
+    preparationObservationSecurity,
+    closedObservationSecurityRefusal,
+} from './lib/observation-security.mjs';
 import { bindObservationDirectory } from './lib/observation-paths.mjs';
 import { ObservationHandoff } from './lib/observation-handoff.mjs';
 import { ObservationAccounting, admitObservationShared } from './lib/observation-accounting.mjs';
@@ -105,6 +107,40 @@ export function observationContext(
         },
     };
 }
+/** Ordinary refusal cleanup needs positive local resource/evidence/source and marker proofs. */
+export async function refuseObservationPreparation(
+    error,
+    { lease, verifySource, check, record, resourceStates, evidenceComplete },
+) {
+    const resources = resourceStates();
+    assert.deepEqual(Object.keys(resources).sort(), ['electron', 'runtime']);
+    assert(
+        Object.values(resources).every((v) => ['not-started', 'closed'].includes(v)),
+        'Preparation resource closure unproved',
+    );
+    assert(evidenceComplete(), 'Preparation evidence incomplete');
+    assert.equal(await verifySource(), true, 'Preparation source changed');
+    check();
+    const proof = {
+        admissionCertain: true,
+        directParentsClosed: true,
+        evidenceClosed: true,
+        inputsUnchanged: true,
+        leafReceiptsClosed: true,
+        resultClosed: true,
+    };
+    record('preparation-refused', {
+        error: String(error).slice(0, 4096),
+        sourceUnchanged: true,
+        resources,
+        securityRefusal: closedObservationSecurityRefusal(error),
+        releasePending: true,
+        proof,
+    });
+    // ProductLease rechecks the actual marker, owner/ACL, ancestry and exact bytes here.
+    lease.release(proof);
+    return { released: lease.state().released };
+}
 export async function observationMain(
     args = process.argv.slice(2),
     env = process.env,
@@ -139,13 +175,29 @@ export async function observationMain(
         startup,
         initialSource,
         monitor,
-        accounting;
+        accounting,
+        preparationEvidenceComplete = true;
+    const preparationResources = { electron: 'not-started', runtime: 'not-started' };
     const held = (state) => {
-        unknown ??= createOwnershipHold(state, () => {});
-        clearInterval(monitor);
-        startup?.stopQueryAdmission();
-        signal.abort(Error('Unknown observation custody'));
-        return unknown;
+        if (unknown) return unknown;
+        return createOwnershipHold(
+            {
+                ...state,
+                stage,
+                sourceSHA256: initialSource ?? null,
+                lease: lease?.state() ?? null,
+                resources: { ...preparationResources },
+            },
+            record,
+            {
+                onRetained: (hold) => {
+                    unknown = hold;
+                    clearInterval(monitor);
+                    startup?.stopQueryAdmission();
+                    signal.abort(Error('Unknown observation custody'));
+                },
+            },
+        );
     };
     const cancel = () => signal.abort(Error('Observation supervisor cancelled'));
     for (const e of ['SIGINT', 'SIGTERM', 'disconnect']) process.on(e, cancel);
@@ -166,34 +218,39 @@ export async function observationMain(
     const prep = path.join(out, 'preparation');
     fs.mkdirSync(prep);
     const record = (name, value) => {
-        context.check();
-        checkAncestry(ancestry);
-        const bytes = Buffer.from(
-            JSON.stringify({ sequence: recordRows, stage: name, data: value }) + '\n',
-        );
-        assert(
-            recordRows < 2048 && bytes.length <= 65536 && recordBytes + bytes.length <= 1048576,
-            'Observation preparation evidence bound',
-        );
-        if (accounting)
-            admitObservationShared(out, accounting.prerequisiteRoots, 'parent', bytes.length);
-        const fd = fs.openSync(
-                path.join(prep, String(recordRows).padStart(6, '0') + '.json'),
-                'wx',
-                0o600,
-            ),
-            e = { fd, errors: [], attempted: false };
         try {
-            writeAll(fd, bytes);
-        } finally {
-            const closed = closeEntries([e]);
-            if (!closed.complete) {
-                held({ phase: 'preparation-evidence-close-unknown', closed });
-                throw Error('Preparation evidence not durable/closed');
+            context.check();
+            checkAncestry(ancestry);
+            const bytes = Buffer.from(
+                JSON.stringify({ sequence: recordRows, stage: name, data: value }) + '\n',
+            );
+            assert(
+                recordRows < 2048 && bytes.length <= 65536 && recordBytes + bytes.length <= 1048576,
+                'Observation preparation evidence bound',
+            );
+            if (accounting)
+                admitObservationShared(out, accounting.prerequisiteRoots, 'parent', bytes.length);
+            const ordinal = recordRows++;
+            recordBytes += bytes.length;
+            const fd = fs.openSync(
+                    path.join(prep, String(ordinal).padStart(6, '0') + '.json'),
+                    'wx',
+                    0o600,
+                ),
+                e = { fd, errors: [], attempted: false };
+            try {
+                writeAll(fd, bytes);
+            } finally {
+                const closed = closeEntries([e]);
+                if (!closed.complete) {
+                    held({ phase: 'preparation-evidence-close-unknown', closed });
+                    throw Error('Preparation evidence not durable/closed');
+                }
             }
+        } catch (error) {
+            preparationEvidenceComplete = false;
+            throw error;
         }
-        recordRows++;
-        recordBytes += bytes.length;
     };
     const freeSpace = () => {
         const s = fs.statfsSync(context.tmp, { bigint: true });
@@ -282,40 +339,26 @@ export async function observationMain(
                 winptyDll: path.join(bin, 'winpty.dll'),
                 winptyAgent: path.join(bin, 'winpty-agent.exe'),
             };
-        const security = (plans, principal) => {
-            const reply = runSecurityCommand(root, winps, JSON.stringify(plans), {
+        const {
+            initial: securityInitial,
+            descriptors,
+            ownerCheck,
+        } = preparationObservationSecurity(
+            root,
+            winps,
+            [
+                { path: context.tmp, kind: 'directory' },
+                { path: out, kind: 'directory' },
+            ],
+            {
                 environment: env,
                 record,
                 check,
                 onProcessState: (s) => {
                     if (!s.closed) held({ phase: 'security-query-close-unknown', state: s });
                 },
-            });
-            requireSecurityProcess(reply.result);
-            return parsePilotSecurity(reply.stdout, plans, principal);
-        };
-        const securityInitial = security([
-                { path: context.tmp, kind: 'directory' },
-                { path: out, kind: 'directory' },
-            ]),
-            descriptors = new Map(securityInitial.rows.map((r) => [r.path, r.descriptorSHA256]));
-        const ownerCheck = (file) => ownerCheck.many([file])[0];
-        ownerCheck.many = (files) => {
-            const plans = files.map((file) => ({
-                    path: file,
-                    kind: fs.lstatSync(file).isDirectory() ? 'directory' : 'file',
-                })),
-                rows = security(plans, securityInitial.principal).rows;
-            for (const row of rows) {
-                if (descriptors.has(row.path))
-                    assert.equal(row.descriptorSHA256, descriptors.get(row.path));
-                else {
-                    assert(descriptors.size < 8192, 'Observation descriptor history bound');
-                    descriptors.set(row.path, row.descriptorSHA256);
-                }
-            }
-            return rows;
-        };
+            },
+        );
         refuseMarker(context.tmp);
         lease = new ProductLease(
             path.join(context.tmp, 'diagnostic-hub-v060-check.lock'),
@@ -344,6 +387,7 @@ export async function observationMain(
             ownerCheck,
             hold: held,
         });
+        preparationResources.electron = 'running';
         await preparePilotElectron(root, {
             parent: context.tmp,
             evidenceRoot: prep,
@@ -355,7 +399,9 @@ export async function observationMain(
             record,
             hold: (state) => held({ phase: 'electron-preparation', state }),
         });
+        preparationResources.electron = 'closed';
         check();
+        preparationResources.runtime = 'running';
         startup = new NativePilotStartup({
             signal: signal.signal,
             deadline: deadline - 60000,
@@ -378,8 +424,9 @@ export async function observationMain(
             hold: (e) => held({ phase: 'runtime-build', error: String(e) }),
             root,
         });
-        await startup.join();
+        assert.equal((await startup.join()).complete, true);
         assert.equal(startup.unknown.length, 0);
+        preparationResources.runtime = 'closed';
         check();
         const coveragePath = path.join(out, 'native-coverage.json');
         fs.writeFileSync(coveragePath, request.coverageJSON, { flag: 'wx' });
@@ -643,7 +690,8 @@ export async function observationMain(
     } catch (error) {
         if (startup)
             try {
-                await startup.join();
+                assert.equal((await startup.join()).complete, true);
+                preparationResources.runtime = 'closed';
             } catch (e) {
                 held({ phase: 'preparation-descendants-unknown', error: String(e) });
             }
@@ -656,20 +704,13 @@ export async function observationMain(
                 }).outcome;
             try {
                 stage = 'preparation-cleanup';
-                assert.equal(await sourceFingerprint(root), initialSource);
-                check();
-                record('preparation-refused', {
-                    error: String(error),
-                    sourceUnchanged: true,
-                    startup: startup?.snapshot() ?? null,
-                });
-                lease.release({
-                    admissionCertain: true,
-                    directParentsClosed: true,
-                    evidenceClosed: true,
-                    inputsUnchanged: true,
-                    leafReceiptsClosed: true,
-                    resultClosed: true,
+                await refuseObservationPreparation(error, {
+                    lease,
+                    verifySource: async () => (await sourceFingerprint(root)) === initialSource,
+                    check,
+                    record,
+                    resourceStates: () => ({ ...preparationResources }),
+                    evidenceComplete: () => preparationEvidenceComplete,
                 });
             } catch (e) {
                 return held({ phase: 'preparation-release-unknown', error: String(e) }).outcome;

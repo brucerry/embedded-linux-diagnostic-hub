@@ -123,6 +123,19 @@ the existing strict trusted-three-ACE hosted policy; it does not claim an atomic
 Windows metadata is fsynced through writable descriptors and actual closure is checked
 independently.
 
+Security readback retains the production provider's one-to-three-plan limit. Both logical many-path
+adapters submit ordered batches of at most three, validate each response against the same principal
+and descriptor history, and publish history only after the entire call succeeds. Failure admits no
+later batch or native work. The raw provider and its over-limit negative controls are unchanged.
+
+A security input refusal may use ordinary preparation-refusal cleanup only with positive process
+closure, durable raw query records and zero filesystem/ACL queries. Cleanup additionally requires
+unchanged source and roots, complete preparation evidence, and each attempted preparation resource
+positively closed. Marker release still performs its strict ownership/ACL/byte recheck. Missing
+proof retains custody. Unknown ownership latches its referenced hold before bounded reason
+persistence; a failed reason write cannot release or detach that hold. A genuine hold can remain
+until the existing outer workflow timeout and is not evidence of lease release.
+
 Outcomes are distinct:
 
 - `COMPLETE_RAW_OBSERVATION`: required workload, coverage and durable closure completed; no memory

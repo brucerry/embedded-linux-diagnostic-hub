@@ -6,6 +6,7 @@ import {
     bindObservationDirectory,
     requireObservationDirectoryIdentity,
 } from './observation-paths.mjs';
+import { closedObservationSecurityRefusal } from './observation-security.mjs';
 import { observationInventory } from './observation-accounting.mjs';
 import {
     readStreamedDurableArtifacts,
@@ -129,7 +130,10 @@ export function preserveObservationPty(
             closed: true,
         };
     } catch (error) {
-        hold({ phase: 'pty-source-scope-or-closure-invalid', error: String(error) });
+        // A proved input-only refusal owns no query process or raw evidence descriptor.
+        // All trust/receipt failures and uncertain query/read closure still retain custody.
+        if (!closedObservationSecurityRefusal(error))
+            hold({ phase: 'pty-source-scope-or-closure-invalid', error: String(error) });
         throw error;
     }
 }
