@@ -1,3 +1,7 @@
+import {
+    namedCleanupFailure,
+    cleanupHostReply,
+} from '../../scripts/lib/pilot-cleanup-diagnostics.mjs';
 import { productStartup } from './memory-product-startup';
 import assert from 'node:assert/strict';
 import { fork, type ChildProcess } from 'node:child_process';
@@ -55,6 +59,7 @@ export class OwnedHost {
     private termination?: HostTermination;
     private actualExit?: Extract<HostTermination, { kind: 'exited' }>;
     private firstFailure?: Error;
+    private pipeClose?: { code: number | null; signal: NodeJS.Signals | null };
     private started = false;
     private nextId = 0;
     private pending?: { reject(error: unknown): void; resolve(value: unknown): void; id: number };
@@ -126,7 +131,8 @@ export class OwnedHost {
             this.firstFailure ??= error;
             this.pending?.reject(this.firstFailure);
         });
-        this.child.once('close', () => {
+        this.child.once('close', (code, signal) => {
+            this.pipeClose = { code, signal };
             if (this.actualExit) return;
             if (!this.started && !this.child.pid && this.firstFailure)
                 finish({ kind: 'failed-start', error: String(this.firstFailure) });
@@ -283,21 +289,65 @@ export class OwnedHost {
             clearTimeout(timer);
         }
     }
-    async close(beforeRelease?: () => Promise<void>) {
-        const final = (await this.request('shutdown')) as Metrics;
-        await beforeRelease?.();
-        const release = (await this.request('release')) as Metrics;
-        assert.equal(release.resources.ipcMessageListeners, 0);
-        assert.equal(release.resources.ipcDisconnectListeners, 0);
-        assert.equal(release.resources.timers, 0);
-        const outcome = await this.waitForTermination('IPC release');
-        assert.deepEqual(
-            outcome,
-            { kind: 'exited', code: 0, signal: null },
-            'Owned host exit must be normal zero.',
-        );
-        assert.equal(this.firstFailure, undefined);
-        return { shutdown: final, release, termination: outcome };
+    async close(
+        beforeRelease?: () => Promise<unknown>,
+        identity?: { pid?: number; created?: string },
+    ) {
+        let phase = 'shutdown-request',
+            shutdown: unknown,
+            release: unknown,
+            beforeReleaseObservation: unknown,
+            outcome: unknown;
+        try {
+            shutdown = await this.request('shutdown');
+            phase = 'before-release-history';
+            beforeReleaseObservation = await beforeRelease?.();
+            phase = 'release-request';
+            release = await this.request('release');
+            const reply = release as Metrics;
+            phase = 'release-message-listeners';
+            assert.equal(reply.resources.ipcMessageListeners, 0);
+            phase = 'release-disconnect-listeners';
+            assert.equal(reply.resources.ipcDisconnectListeners, 0);
+            phase = 'release-timers';
+            assert.equal(reply.resources.timers, 0);
+            phase = 'wait-normal-termination';
+            outcome = await this.waitForTermination('IPC release');
+            phase = 'normal-exit-verdict';
+            assert.deepEqual(
+                outcome,
+                { kind: 'exited', code: 0, signal: null },
+                'Owned host exit must be normal zero.',
+            );
+            phase = 'first-failure-verdict';
+            assert.equal(this.firstFailure, undefined);
+            return {
+                shutdown: shutdown as Metrics,
+                release: reply,
+                termination: outcome as HostTermination,
+            };
+        } catch (error) {
+            // Capture at the failing boundary, before abortAll can change process/IPC state.
+            throw namedCleanupFailure('OwnedHost.close', error, {
+                role: this.role,
+                pid: this.child.pid ?? null,
+                created:
+                    identity && identity.pid === this.child.pid ? (identity.created ?? null) : null,
+                phase,
+                shutdown: cleanupHostReply(shutdown),
+                beforeReleaseObservation,
+                release: cleanupHostReply(release),
+                firstFailure: this.firstFailure,
+                termination: this.termination,
+                actualExit: this.actualExit,
+                pipeClose: this.pipeClose,
+                outcome,
+                connected: this.child.connected,
+                started: this.started,
+                pendingRequest: this.pending?.id ?? null,
+                releaseAuthorized: false,
+            });
+        }
     }
     async abort() {
         if (this.actualExit) return this.actualExit;
@@ -491,9 +541,10 @@ export async function isolatedGateway(
             );
     };
     const beforeStop = async (stage: string) => {
-        await observeAll(stage, true);
+        const observations = await observeAll(stage, true);
         const problems = historyProblems();
         if (problems.length) throw Error('Gateway cleanup is unverified: ' + problems.join('; '));
+        return observations;
     };
     const abortAll = async (original: unknown): Promise<never> => {
         const problems: unknown[] = [];
@@ -703,10 +754,15 @@ export async function isolatedGateway(
                         await beforeStop('before-close');
                         for (const host of [...hosts].reverse()) {
                             const entry = histories.find((value) => value.host === host)!;
-                            const result = await host.close(async () => {
-                                await beforeStop('before-release/' + host.role);
-                                entry.mayExit = true;
-                            });
+                            const result = await host.close(
+                                async () => {
+                                    const stage = 'before-release/' + host.role;
+                                    const processes = await beforeStop(stage);
+                                    entry.mayExit = true;
+                                    return { stage, processes };
+                                },
+                                { pid: entry.pid, created: entry.created },
+                            );
                             await emit('gateway-host-teardown', {
                                 role: host.role,
                                 ...result,

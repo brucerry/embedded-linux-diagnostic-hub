@@ -15,6 +15,7 @@ import { PilotEvidence } from '../scripts/lib/pilot-evidence.mjs';
 import { ProductLease } from '../scripts/lib/product-collector-files.mjs';
 import { createOwnershipHold } from '../scripts/lib/product-entry-custody.mjs';
 import * as identity from '../scripts/lib/startup-identity-report.mjs';
+import * as cleanup from '../scripts/lib/pilot-cleanup-diagnostics.mjs';
 const root = path.resolve(import.meta.dirname, '..'),
     req = createRequire(import.meta.url),
     ts = req('typescript');
@@ -373,6 +374,7 @@ async function fixture({
     if (!browser)
         mod = await load('tests/fixtures/memory-product-aggregate-native.ts', {
             ...common,
+            '../../scripts/lib/pilot-cleanup-diagnostics.mjs': cleanup,
             'node:fs/promises': { default: {} },
             './memory-product-native-contract': {
                 nativeGenerationCase: 'native-renderer-generation-reset-reopen',
@@ -399,6 +401,7 @@ async function fixture({
         }
         mod = await load('tests/fixtures/memory-product-aggregate.ts', {
             ...common,
+            '../../scripts/lib/pilot-cleanup-diagnostics.mjs': cleanup,
             'node:fs/promises': {
                 default: {
                     realpath: async (p) => p,

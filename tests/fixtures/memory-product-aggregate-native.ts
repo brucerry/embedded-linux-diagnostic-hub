@@ -1,3 +1,8 @@
+import {
+    cleanupDiagnostics,
+    namedCleanupFailure,
+    boundedCleanupDiagnostic,
+} from '../../scripts/lib/pilot-cleanup-diagnostics.mjs';
 import { reportStartupIdentity } from '../../scripts/lib/startup-identity-report.mjs';
 import { nativeGenerationCase } from './memory-product-native-contract';
 import { exerciseNativeSaveCases } from './memory-product-native-save-ui';
@@ -122,50 +127,58 @@ export async function createNativeAggregateDriver(context: {
     }
     async function teardownOnce() {
         if (closed) return;
-        const errors: unknown[] = [];
-        if (host && !host.page.isClosed())
+        const errors: unknown[] = [],
+            report = cleanupDiagnostics((stage: string, data: unknown) =>
+                context.emit(stage, data),
+            );
+        const attempt = async (disposer: string, dispose: () => unknown) => {
             try {
-                await host.releaseQualificationHolds();
-            } catch (error) {
+                await dispose();
+                report.note('aggregate-native-disposer', { disposer, verified: true });
+            } catch (cause) {
+                const error = namedCleanupFailure(disposer, cause);
                 errors.push(error);
+                report.note('aggregate-native-disposer', {
+                    disposer,
+                    verified: false,
+                    error: boundedCleanupDiagnostic(error),
+                });
             }
+        };
         if (host && !host.page.isClosed())
-            try {
-                await context.emit(
-                    'aggregate-native-page-cleanup',
-                    await host.page.evaluate(() =>
-                        window.memoryProduct.joinAggregatePageOperations(),
-                    ),
+            await attempt('release-qualification-holds', () => host!.releaseQualificationHolds());
+        if (host && !host.page.isClosed())
+            await attempt('join-aggregate-page-operations', async () => {
+                const joined = await host!.page.evaluate(() =>
+                    window.memoryProduct.joinAggregatePageOperations(),
                 );
-            } catch (error) {
-                errors.push(error);
-            }
-        if (protocol)
-            try {
-                await protocol.detach();
-            } catch (error) {
-                errors.push(error);
-            }
+                report.note('aggregate-native-page-cleanup', joined);
+            });
+        if (protocol) await attempt('detach-renderer-protocol', () => protocol!.detach());
         if (gateway)
-            try {
-                await gateway.close();
-                await gateway.assertExited();
-            } catch (error) {
-                errors.push(error);
-            }
+            await attempt('gateway-close-and-join', async () => {
+                await gateway!.close();
+                await gateway!.assertExited();
+            });
         if (host)
-            try {
-                await host.close();
-                await host.assertExited();
-            } catch (error) {
-                errors.push(error);
-            }
-        if (workers)
-            try {
-                workers.dispose();
-            } catch (error) {
-                errors.push(error);
-            }
+            await attempt('native-close-and-join', async () => {
+                await host!.close();
+                await host!.assertExited();
+            });
+        if (workers) await attempt('dispose-viewer-workers', () => workers!.dispose());
+        // No diagnostic await can prevent independent cleanup above. Pending or failed
+        // publication still cannot grant a closed verdict or bypass the outer deadline.
+        if (errors.length) {
+            // A blocked diagnostic cannot postpone propagation of an actual disposer
+            // failure to the sticky owner. Publication remains observed, never authority.
+            void report.drain().catch(() => {});
+            throw new AggregateError(errors, 'Native aggregate cleanup is unverified.');
+        }
+        try {
+            await report.drain();
+        } catch (cause) {
+            errors.push(namedCleanupFailure('cleanup-diagnostic-publication', cause));
+        }
         if (errors.length)
             throw new AggregateError(errors, 'Native aggregate cleanup is unverified.');
         closed = true;

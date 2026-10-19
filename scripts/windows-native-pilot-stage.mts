@@ -1,3 +1,4 @@
+import { boundedCleanupDiagnostic, cleanupErrorReason } from './lib/pilot-cleanup-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -68,25 +69,38 @@ const hold = (e: unknown) => {
         const state = {
             kind: 'native-pilot-stage-unknown',
             bindingSHA256: hash,
-            reason: String(e).slice(0, 1024),
-            startup: startup?.snapshot(),
+            reason: 'Failure retained; bounded diagnostic follows.',
+            error: undefined as unknown,
+            startup: undefined as unknown,
         };
         held = createOwnershipHold(state, () => {});
-        if (terminal) {
-            terminal.enterHold();
-            terminal.note('stage-held', state);
-            if (!terminalReportStarted) {
-                terminalReportStarted = true;
-                void startup
-                    ?.terminalObservation('held-final-admitted-observations')
-                    .catch((error) =>
-                        terminal!.note('startup-terminal-observation-unavailable', {
-                            error: String(error).slice(0, 1024),
-                            releaseAuthorized: false,
-                        }),
-                    );
-            }
-        } else diagnostics?.note('stage-held', state);
+        state.error = boundedCleanupDiagnostic(e);
+        state.reason = cleanupErrorReason(e);
+        try {
+            state.startup = startup?.snapshot();
+        } catch (error) {
+            state.startup = { unavailable: boundedCleanupDiagnostic(error) };
+        }
+        try {
+            if (terminal) {
+                terminal.enterHold();
+                terminal.note('stage-held', state);
+                if (!terminalReportStarted) {
+                    terminalReportStarted = true;
+                    void startup
+                        ?.terminalObservation('held-final-admitted-observations')
+                        .catch((error) =>
+                            terminal!.note('startup-terminal-observation-unavailable', {
+                                error: cleanupErrorReason(error),
+                                errorDetails: boundedCleanupDiagnostic(error),
+                                releaseAuthorized: false,
+                            }),
+                        );
+                }
+            } else diagnostics?.note('stage-held', state);
+        } catch {
+            /* The referenced hold already exists; diagnostic transport has no authority. */
+        }
     }
     controller.abort(e);
     startup?.cancel();
@@ -221,7 +235,8 @@ try {
     await emit('stage-final', {
         stage: envelope.stage,
         passed: !failure,
-        reason: failure ? String(failure).slice(0, 1024) : null,
+        reason: failure ? cleanupErrorReason(failure) : null,
+        error: failure ? boundedCleanupDiagnostic(failure) : null,
         startup: proof,
         descendantsClosed: true,
         leafReceiptsClosed: true,
