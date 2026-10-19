@@ -17,6 +17,10 @@ import {
     requirePilotRuntimeReady,
     pilotLimits,
     bindingDigest,
+    requirePilotMode,
+    requirePilotStage,
+    nativeReadinessMode,
+    ptyObservationMode,
 } from './lib/hosted-pilot-contract.mjs';
 import { pilotHostedContext, parsePilotSecurity } from './lib/hosted-pilot-security.mjs';
 import { runHostedPilot, joinPilotStage } from './lib/hosted-pilot-run.mjs';
@@ -37,7 +41,14 @@ import { pilotEvidenceReceiver } from './lib/pilot-evidence-channel.mjs';
 import { PilotDiskObserver } from './lib/pilot-disk-observer.mjs';
 import { runWinpsSecurityContract } from './lib/pilot-winps-contract.mjs';
 import { runSecurityCommand, requireSecurityProcess } from './lib/pilot-security-command.mjs';
-import { prepareAndFreezePilotDependencies } from './lib/pilot-dependencies.mjs';
+import {
+    prepareAndFreezePilotDependencies,
+    freezePtyObservationDependencies,
+} from './lib/pilot-dependencies.mjs';
+import {
+    parsePtyObservationScope,
+    parsePtyObservationPolicy,
+} from './lib/pty-observation-scope.mjs';
 import { preparePilotElectron } from './lib/pilot-electron-preparation.mjs';
 import {
     pilotStageDeadlines,
@@ -46,8 +57,13 @@ import {
 } from './lib/pilot-runtime-startup.mjs';
 import { lookupPilotTool, prerequisiteFailure } from './lib/pilot-tool-lookup.mjs';
 export { runHostedPilot };
-export async function nativePilotMain(args = process.argv.slice(2), environment = process.env) {
-    requirePilotRuntimeReady(environment);
+export async function nativePilotMain(
+    args = process.argv.slice(2),
+    environment = process.env,
+    mode = nativeReadinessMode,
+) {
+    requirePilotMode(mode, environment);
+    const ptyOnly = mode === ptyObservationMode;
     const startedAt = productClock.now(),
         early = new AbortController();
     const earlyCancel = () => early.abort(Error('Pilot entry cancelled before enrollment'));
@@ -76,7 +92,8 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
     };
     let prerequisite = 'entry-inputs-and-host-context';
     try {
-        const expectedKeys = ['out', 'expected-source', 'expected-policy', 'coverage-sha256'];
+        const scopeKey = ptyOnly ? 'scope-sha256' : 'coverage-sha256';
+        const expectedKeys = ['out', 'expected-source', 'expected-policy', scopeKey];
         const options = Object.fromEntries(
             args.map((a) => {
                 assert(/^--[^=]+=.+$/.test(a));
@@ -85,11 +102,13 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         );
         assert.equal(args.length, expectedKeys.length);
         assert.deepEqual(Object.keys(options).sort(), expectedKeys.sort());
-        for (const k of ['expected-source', 'expected-policy', 'coverage-sha256'])
+        for (const k of ['expected-source', 'expected-policy', scopeKey])
             assert(/^[a-f0-9]{64}$/.test(options[k]));
         const root = path.resolve(import.meta.dirname, '..'),
             require = createRequire(import.meta.url),
-            context = pilotHostedContext(environment);
+            context = pilotHostedContext(environment, {
+                mode: ptyOnly ? ptyObservationMode : 'pilot',
+            });
         const admitEarly = () => {
             early.signal.throwIfAborted();
             context.check();
@@ -99,16 +118,41 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         prerequisite = 'source-policy-coverage-and-evidence-root';
         assert.equal(await sourceFingerprint(root), options['expected-source']);
         admitEarly();
-        const policyFile = path.join(root, 'scripts/lib/hosted-pilot-policy.json'),
+        const policyFile = path.join(
+                root,
+                ptyOnly
+                    ? 'scripts/lib/hosted-pty-observation-policy.json'
+                    : 'scripts/lib/hosted-pilot-policy.json',
+            ),
             policyBytes = fs.readFileSync(policyFile);
         assert.equal(digest(policyBytes), options['expected-policy']);
-        const coverageJSON = environment.HUB_NATIVE_PILOT_COVERAGE_JSON;
-        assert(typeof coverageJSON === 'string' && Buffer.byteLength(coverageJSON) <= 8192);
-        parseNativeCoverage(
-            Buffer.from(coverageJSON),
-            options['coverage-sha256'],
-            options['expected-source'],
-        );
+        const scopeJSON = ptyOnly ? environment.HUB_PTY_OBSERVATION_SCOPE_JSON : undefined;
+        const coverageJSON = ptyOnly ? undefined : environment.HUB_NATIVE_PILOT_COVERAGE_JSON;
+        if (ptyOnly) {
+            assert(
+                !environment.HUB_NATIVE_PILOT_COVERAGE_JSON,
+                'Native coverage excluded from PTY-only entry.',
+            );
+            assert(typeof scopeJSON === 'string');
+            parsePtyObservationPolicy(policyBytes, options['expected-policy']);
+            parsePtyObservationScope(
+                Buffer.from(scopeJSON),
+                options[scopeKey],
+                options['expected-source'],
+                options['expected-policy'],
+            );
+        } else {
+            assert(
+                !environment.HUB_PTY_OBSERVATION_SCOPE_JSON,
+                'PTY scope excluded from native entry.',
+            );
+            assert(typeof coverageJSON === 'string' && Buffer.byteLength(coverageJSON) <= 8192);
+            parseNativeCoverage(
+                Buffer.from(coverageJSON),
+                options['coverage-sha256'],
+                options['expected-source'],
+            );
+        }
         const out = options.out;
         assert(path.isAbsolute(out) && fs.realpathSync(out) === out);
         assert.deepEqual(fs.readdirSync(out), [], 'Fresh nonsecret evidence directory required');
@@ -131,6 +175,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             entryCharge += bytes;
         };
         entryRecord('entry-start', {
+            mode,
             sourceSHA256: options['expected-source'],
             startedAt,
             deadline: startedAt + pilotLimits.totalMs,
@@ -143,7 +188,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             outputRoot: contractRoot,
             expectedSourceSHA256: options['expected-source'],
             environment,
-            mode: 'pilot',
+            mode: ptyOnly ? ptyObservationMode : 'pilot',
             signal: early.signal,
             outerDeadline: startedAt + pilotLimits.totalMs - pilotLimits.reserveMs,
         });
@@ -191,31 +236,31 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         assert(gitRoot, 'Git root containing usr/bin/winpty.dll unavailable');
         const bin = path.join(gitRoot, 'usr/bin');
         prerequisite = 'owned-electron-preparation';
-        await preparePilotElectron(root, {
-            parent: context.parent,
-            evidenceRoot: out,
-            tools: {
-                winps: powershell,
-                pwsh,
-                git,
-                bash: path.join(bin, 'bash.exe'),
-                cygpath: path.join(bin, 'cygpath.exe'),
-                winptyDll: path.join(bin, 'winpty.dll'),
-                winptyAgent: path.join(bin, 'winpty-agent.exe'),
-            },
-            environment,
-            signal: early.signal,
-            workDeadline: startedAt + pilotLimits.totalMs - pilotLimits.reserveMs,
-            check: admitEarly,
-            record: entryRecord,
-            hold,
-        });
+        if (!ptyOnly)
+            await preparePilotElectron(root, {
+                parent: context.parent,
+                evidenceRoot: out,
+                tools: {
+                    winps: powershell,
+                    pwsh,
+                    git,
+                    bash: path.join(bin, 'bash.exe'),
+                    cygpath: path.join(bin, 'cygpath.exe'),
+                    winptyDll: path.join(bin, 'winpty.dll'),
+                    winptyAgent: path.join(bin, 'winpty-agent.exe'),
+                },
+                environment,
+                signal: early.signal,
+                workDeadline: startedAt + pilotLimits.totalMs - pilotLimits.reserveMs,
+                check: admitEarly,
+                record: entryRecord,
+                hold,
+            });
         prerequisite = 'dependency-runtime-freeze';
-        const prepared = prepareAndFreezePilotDependencies(root, {
-            environment,
-            check: admitEarly,
-            record: entryRecord,
-        });
+        const freezeOptions = { environment, check: admitEarly, record: entryRecord };
+        const prepared = ptyOnly
+            ? freezePtyObservationDependencies(root, freezeOptions)
+            : prepareAndFreezePilotDependencies(root, freezeOptions);
         const deps = prepared.dependencies,
             runtime = { platform: process.platform, arch: process.arch };
         prerequisite = 'runtime-version-and-architecture';
@@ -224,7 +269,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         const runtimePaths = {
             node: process.execPath,
             tsx: require.resolve('tsx'),
-            electron: prepared.electron,
+            ...(!ptyOnly ? { electron: prepared.electron } : {}),
             powershell: pwsh,
             git,
             bash: path.join(bin, 'bash.exe'),
@@ -290,7 +335,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         const nonce = randomUUID();
         privateRoot = path.join(context.parent, 'diagnostic-hub-native-pilot-' + nonce);
         fs.mkdirSync(privateRoot);
-        paths = pilotPathMap(privateRoot, nonce, true);
+        paths = pilotPathMap(privateRoot, nonce, true, mode);
         const plans = [
                 { path: context.parent, kind: 'directory' },
                 { path: privateRoot, kind: 'directory' },
@@ -299,13 +344,18 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         prerequisite = 'host-binding-and-root-identities';
         const binding = {
             schema: 1,
-            kind: 'windows-hosted-native-readiness-pilot-v1',
+            kind: ptyOnly
+                ? 'windows-hosted-pty-observation-v1'
+                : 'windows-hosted-native-readiness-pilot-v1',
+            mode,
             collectionApproval: false,
             host: context.host,
             nonce,
             principalSID: initial.principal,
             sourceSHA256: options['expected-source'],
-            coveragePolicySHA256: options['coverage-sha256'],
+            ...(ptyOnly
+                ? { scopeSHA256: options[scopeKey] }
+                : { coveragePolicySHA256: options[scopeKey] }),
             pilotPolicySHA256: options['expected-policy'],
             dependenciesSHA256: deps.sha256,
             runtime,
@@ -330,7 +380,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
         const lease = new ProductLease(
             path.join(context.parent, 'diagnostic-hub-v060-check.lock'),
             {
-                kind: 'finite-native-pilot-owner',
+                kind: ptyOnly ? 'finite-pty-observation-owner' : 'finite-native-pilot-owner',
                 nonce,
                 bindingSHA256: bindingDigest(binding),
                 run: context.host.run,
@@ -398,6 +448,16 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             }
         };
         const recheck = async () => {
+            requirePilotMode(mode, environment);
+            if (ptyOnly) {
+                assert.equal(environment.HUB_PTY_OBSERVATION_SCOPE_JSON, scopeJSON);
+                parsePtyObservationScope(
+                    Buffer.from(scopeJSON),
+                    binding.scopeSHA256,
+                    binding.sourceSHA256,
+                    binding.pilotPolicySHA256,
+                );
+            }
             if (markerProof) {
                 lease.check();
                 assert.deepEqual(
@@ -463,7 +523,10 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
             record,
             hold,
             cancelChild: sendStageCancel,
-            executionGate: () => requirePilotRuntimeReady(environment),
+            executionGate: (boundMode) => {
+                assert.equal(boundMode, mode);
+                requirePilotMode(boundMode, environment);
+            },
             onOwner: (o) => {
                 owner = o;
                 timer = setInterval(() => {
@@ -504,6 +567,7 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                 observe('before-' + stage);
             },
             spawnStage: (stage, o) => {
+                requirePilotStage(o.binding, stage, environment, productClock.now());
                 const deadlines = pilotStageDeadlines(binding, stage, productClock.now());
                 record('stage-spawn-deadlines', { stage, ...deadlines });
                 const child = startup.spawn(
@@ -515,7 +579,13 @@ export async function nativePilotMain(args = process.argv.slice(2), environment 
                                 '--import',
                                 pathToFileURL(runtime.tsx.path).href,
                                 path.join(root, 'scripts/windows-native-pilot-stage.mts'),
-                                JSON.stringify({ binding, stage, coverageJSON, ...deadlines }),
+                                JSON.stringify({
+                                    binding: o.binding,
+                                    stage,
+                                    coverageJSON,
+                                    scopeJSON,
+                                    ...deadlines,
+                                }),
                             ],
                             {
                                 cwd: root,

@@ -67,3 +67,16 @@ export function prepareAndFreezePilotDependencies(
     record('dependency-identity-frozen', dependencies);
     return { electron, dependencies };
 }
+/** PTY dependencies are inventoried without resolving, preparing or probing Electron. */
+export function freezePtyObservationDependencies(
+    root,
+    { check = () => {}, record = () => {}, freeze = dependencyFacts } = {},
+) {
+    check();
+    const dependencies = freeze(path.join(root, 'node_modules'), check, {
+        contentPartitions: true,
+    });
+    check();
+    record('pty-dependency-identity-frozen', dependencies);
+    return { dependencies };
+}

@@ -20,6 +20,7 @@ export class NativePilotStartup {
     private joinFailure: string | undefined;
     private joinTask: Promise<any> | undefined;
     private queryClosures: any[] = [];
+    private terminalTask: Promise<void> | undefined;
     constructor(
         readonly options: {
             signal: AbortSignal;
@@ -32,6 +33,7 @@ export class NativePilotStartup {
             proveDescendants?: (child: ChildProcess) => Promise<void>;
             timeoutMs?: number;
             diagnostics?: boolean;
+            terminalEmit?: (stage: string, data: unknown) => Promise<void>;
         },
     ) {
         this.cleanupDeadline = options.cleanupDeadline ?? options.deadline;
@@ -138,6 +140,10 @@ export class NativePilotStartup {
                     readProcessTable(
                         this.options.diagnostics
                             ? (proof) => {
+                                  assert(
+                                      this.queryClosures.length < 256,
+                                      'Pending query receipt bound',
+                                  );
                                   this.queryClosures.push(proof);
                                   if (this.queryClosures.length === processQueryBatchLimit)
                                       this.flushQueryClosures();
@@ -267,9 +273,90 @@ export class NativePilotStartup {
         for (const row of this.children.values()) this.stopObservations(row);
     }
     private flushQueryClosures() {
-        if (!this.queryClosures.length) return;
+        if (this.halted || !this.queryClosures.length) return;
         const queries = this.queryClosures.splice(0);
         this.note('process-query-closed', { schema: 1, queries });
+    }
+    /** Drain observation promises only. Never opens a read or restores held admission. */
+    terminalObservation(label: string) {
+        if (!this.options.terminalEmit) return Promise.resolve();
+        if (this.terminalTask) return this.terminalTask;
+        const admitted = [...this.children.values()].flatMap((row) => [...row.observations]);
+        const deadline = Math.min(
+            this.cleanupDeadline,
+            Number(process.hrtime.bigint() / 1000000n) + (this.options.timeoutMs ?? 10000),
+        );
+        this.terminalTask = (async () => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+                const outcomes = await Promise.race([
+                    Promise.allSettled(admitted),
+                    new Promise<undefined>(
+                        (resolve) =>
+                            (timer = setTimeout(
+                                () => resolve(undefined),
+                                Math.max(0, deadline - Number(process.hrtime.bigint() / 1000000n)),
+                            )),
+                    ),
+                ]);
+                const data = {
+                    schema: 1,
+                    label: label.slice(0, 128),
+                    observedAt: Number(process.hrtime.bigint() / 1000000n),
+                    clockDomain: 'node-hrtime-milliseconds',
+                    deadline,
+                    queryAdmissionClosed: this.halted || this.joining,
+                    newQueryAdmitted: false,
+                    releaseAuthorized: false,
+                    pendingAtCapture: admitted.length,
+                    admittedObservationsSettled: Boolean(outcomes),
+                    outcomes:
+                        outcomes?.map((r) =>
+                            r.status === 'fulfilled'
+                                ? { status: r.status }
+                                : { status: r.status, error: String(r.reason).slice(0, 512) },
+                        ) ?? null,
+                    children: [...this.children.values()].map((row) => ({
+                        label: row.label,
+                        pid: row.pid,
+                        ownedRootIdentity: Array.isArray(row.identity)
+                            ? row.identity
+                                  .filter((r: any) => r.pid === row.pid)
+                                  .map((r: any) => ({ pid: r.pid, created: r.created }))
+                            : null,
+                        exit: row.exit,
+                        close: row.close,
+                        pendingObservations: row.observations.size,
+                        census: row.sampler.observationFacts(),
+                        history: row.sampler.historyProof(),
+                    })),
+                    unflushedClosedQueryReceipts: this.queryClosures.length,
+                    inheritedWriterOwnership: {
+                        available: false,
+                        reason: 'No inherited-handle owner query is authorized or inferred.',
+                    },
+                    meaning:
+                        'Last completed admitted census per child; timestamp may precede terminal closure. Not a fresh post-hold query or release proof.',
+                };
+                if (Buffer.byteLength(JSON.stringify(data)) > 60000) {
+                    await this.options.terminalEmit!('startup-terminal-observation', {
+                        schema: 1,
+                        label: label.slice(0, 128),
+                        available: false,
+                        reason: 'Complete terminal census exceeds reserved frame.',
+                        children: this.children.size,
+                        pendingAtCapture: admitted.length,
+                        releaseAuthorized: false,
+                        newQueryAdmitted: false,
+                    });
+                    return;
+                }
+                await this.options.terminalEmit!('startup-terminal-observation', data);
+            } finally {
+                clearTimeout(timer);
+            }
+        })();
+        return this.terminalTask;
     }
     /** The production parent receiver calls this only after bound durable append. */
     acceptQueryClosures(child: ChildProcess, batch: unknown, platform = process.platform) {
@@ -348,8 +435,9 @@ export class NativePilotStartup {
             const bytes = Buffer.byteLength(JSON.stringify({ stage, data }));
             assert(
                 bytes <= 65536 &&
-                    ++this.diagnosticRows <= 512 &&
-                    this.diagnosticBytes + bytes <= 262144,
+                    ++this.diagnosticRows <= (this.options.terminalEmit ? 510 : 512) &&
+                    this.diagnosticBytes + bytes <=
+                        262144 - (this.options.terminalEmit ? 65536 : 0),
                 'Startup diagnostic bound',
             );
             this.diagnosticBytes += bytes;
@@ -540,6 +628,10 @@ export class NativePilotStartup {
                     !this.unknown.length,
                 'Opaque startup remains unknown',
             );
+            if (this.options.terminalEmit) {
+                await this.terminalObservation('normal-final-join');
+                this.checkJoin(deadline);
+            }
             return {
                 complete: true,
                 children: [...this.children.values()].map((row) => this.snapshotChild(row)),

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { SameJobPilotCustody } from './hosted-pilot-custody.mjs';
 import { closeEntries } from './product-collector-evidence.mjs';
+import { pilotStages } from './hosted-pilot-contract.mjs';
 /** Shared production final-receipt/log/process validation, including exceptional waits. */
 export async function joinPilotStage(child, { state, startup, cancel, observe }) {
     const logs = closeEntries(state.logs);
@@ -29,7 +30,7 @@ export async function runHostedPilot(binding, ports) {
     let failure;
     try {
         const token = await owner.acquireAndVerify();
-        for (const stage of ['real-os-pty', 'native-electron-store']) {
+        for (const stage of pilotStages(owner.binding)) {
             owner.check();
             await ports.beforeStage(stage);
             owner.check();

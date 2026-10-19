@@ -14,9 +14,31 @@ export const pilotLimits = Object.freeze({
 });
 export const bindingDigest = (value) =>
     createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export const ptyObservationMode = 'pty-observation-only';
+export const nativeReadinessMode = 'native-readiness';
+/** A distinct binding kind prevents a native coverage capability standing in for PTY scope. */
+export function pilotBindingMode(value) {
+    if (value.kind === 'windows-hosted-pty-observation-v1') {
+        assert.equal(value.mode, ptyObservationMode, 'Explicit PTY observation mode required.');
+        assert(!('coveragePolicySHA256' in value), 'Native coverage cannot authorize PTY scope.');
+        assert(/^[a-f0-9]{64}$/.test(value.scopeSHA256));
+        return ptyObservationMode;
+    }
+    assert.equal(value.kind, 'windows-hosted-native-readiness-pilot-v1');
+    assert(value.mode === undefined || value.mode === nativeReadinessMode);
+    assert(!('scopeSHA256' in value), 'PTY scope cannot authorize native work.');
+    return nativeReadinessMode;
+}
+export function pilotStages(binding) {
+    return Object.freeze(
+        pilotBindingMode(binding) === ptyObservationMode
+            ? ['real-os-pty']
+            : ['real-os-pty', 'native-electron-store'],
+    );
+}
 export function validatePilotBinding(value, now, cleanup = false) {
     assert.equal(value.schema, 1);
-    assert.equal(value.kind, 'windows-hosted-native-readiness-pilot-v1');
+    const mode = pilotBindingMode(value);
     assert.equal(value.collectionApproval, false);
     assert.equal(value.host.repository, 'brucerry/embedded-linux-diagnostic-hub');
     assert.equal(value.host.attempt, '1');
@@ -29,7 +51,7 @@ export function validatePilotBinding(value, now, cleanup = false) {
     assert(/^S-1-5-21-\d+-\d+-\d+-\d+$/.test(value.principalSID));
     for (const field of [
         'sourceSHA256',
-        'coveragePolicySHA256',
+        ...(mode === ptyObservationMode ? ['scopeSHA256'] : ['coveragePolicySHA256']),
         'pilotPolicySHA256',
         'dependenciesSHA256',
     ])
@@ -37,7 +59,7 @@ export function validatePilotBinding(value, now, cleanup = false) {
     for (const key of [
         'node',
         'tsx',
-        'electron',
+        ...(mode === ptyObservationMode ? [] : ['electron']),
         'powershell',
         'git',
         'bash',
@@ -49,7 +71,9 @@ export function validatePilotBinding(value, now, cleanup = false) {
         assert(row && /^[a-f0-9]{64}$/.test(row.sha256) && /^[A-Za-z]:\\/.test(row.path));
     }
     assert.equal(value.runtime.node.version, 'v24.22.0');
-    assert.equal(value.runtime.electron.version, '44.5.1');
+    if (mode === ptyObservationMode)
+        assert(!('electron' in value.runtime), 'PTY-only has no Electron runtime.');
+    else assert.equal(value.runtime.electron.version, '44.5.1');
     assert.equal(value.runtime.arch, 'x64');
     assert.equal(value.runtime.platform, 'win32');
     for (const key of ['canonicalTemp', 'privateRoot', 'evidenceRoot']) {
@@ -148,6 +172,11 @@ export class PilotSpaceLedger {
 export function requirePilotRuntimeReady(env = process.env) {
     assert.equal(env.HUB_WINDOWS_NATIVE_PILOT, '1', 'Separate native pilot selector required.');
     assert.notEqual(
+        env.HUB_WINDOWS_PTY_OBSERVATION_ONLY,
+        '1',
+        'PTY-only cannot launch native work.',
+    );
+    assert.notEqual(
         env.HUB_WINDOWS_PILOT_WINPS_CONTRACT,
         '1',
         'WinPS-only contract cannot launch native work.',
@@ -157,4 +186,26 @@ export function requirePilotRuntimeReady(env = process.env) {
         '1',
         'Metadata-only cannot launch native work.',
     );
+}
+export function requirePilotMode(mode, env = process.env) {
+    if (mode === nativeReadinessMode) return requirePilotRuntimeReady(env);
+    assert.equal(mode, ptyObservationMode, 'Recognized pilot mode required.');
+    assert.equal(env.HUB_WINDOWS_PTY_OBSERVATION_ONLY, '1', 'Separate PTY-only selector required.');
+    for (const key of [
+        'HUB_WINDOWS_NATIVE_PILOT',
+        'HUB_WINDOWS_PREFLIGHT_ONLY',
+        'HUB_WINDOWS_PILOT_WINPS_CONTRACT',
+    ])
+        assert.notEqual(env[key], '1', 'PTY-only selectors must be exclusive: ' + key);
+}
+/** Called before a stage starts its runtime worker or imports either workload. */
+export function requirePilotStage(
+    binding,
+    stage,
+    env = process.env,
+    now = Number(process.hrtime.bigint() / 1000000n),
+) {
+    validatePilotBinding(binding, now);
+    requirePilotMode(pilotBindingMode(binding), env);
+    assert(pilotStages(binding).includes(stage), 'Stage excluded by immutable pilot mode.');
 }

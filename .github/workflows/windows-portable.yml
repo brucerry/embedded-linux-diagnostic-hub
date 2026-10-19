@@ -19,6 +19,27 @@ on:
                 type: boolean
                 required: false
                 default: false
+            windows_pty_observation_only:
+                description: 'One reviewed PTY observation stage; no native application stage'
+                type: boolean
+                required: false
+                default: false
+            pty_source_sha256:
+                description: 'Independently reviewed exact PTY source digest'
+                type: string
+                required: false
+            pty_policy_sha256:
+                description: 'Independently reviewed hosted-pty-observation-policy.json digest'
+                type: string
+                required: false
+            pty_scope_sha256:
+                description: 'Independently reviewed PTY-only scope JSON digest'
+                type: string
+                required: false
+            pty_scope_json:
+                description: 'Exact independently reviewed PTY observation scope JSON'
+                type: string
+                required: false
             pilot_source_sha256:
                 description: 'Independently reviewed frozen pilot source digest'
                 type: string
@@ -54,18 +75,22 @@ permissions:
 concurrency:
     group:
         windows-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch'
-        && inputs.windows_pilot_winps_contract && '-winps-contract' || github.event_name ==
-        'workflow_dispatch' && inputs.windows_preflight_only && '-preflight' || github.event_name ==
-        'workflow_dispatch' && inputs.windows_native_pilot && '-native-pilot' || '' }}
+        && inputs.windows_pty_observation_only && '-pty-observation' || github.event_name ==
+        'workflow_dispatch' && inputs.windows_pilot_winps_contract && '-winps-contract' ||
+        github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only && '-preflight' ||
+        github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot && '-native-pilot'
+        || '' }}
     cancel-in-progress:
         ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
-        inputs.windows_native_pilot || inputs.windows_pilot_winps_contract)) }}
+        inputs.windows_native_pilot || inputs.windows_pilot_winps_contract ||
+        inputs.windows_pty_observation_only)) }}
 
 jobs:
     build:
         if:
             ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
-            inputs.windows_native_pilot || inputs.windows_pilot_winps_contract)) }}
+            inputs.windows_native_pilot || inputs.windows_pilot_winps_contract ||
+            inputs.windows_pty_observation_only)) }}
         runs-on: windows-latest
         timeout-minutes: 30
         steps:
@@ -161,7 +186,8 @@ jobs:
         name: Windows metadata preflight (nonqualifying)
         if:
             github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only &&
-            !inputs.windows_native_pilot && !inputs.windows_pilot_winps_contract
+            !inputs.windows_native_pilot && !inputs.windows_pilot_winps_contract &&
+            !inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -211,7 +237,7 @@ jobs:
         name: Finite Windows native readiness pilot (nonqualifying)
         if:
             github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot &&
-            !inputs.windows_pilot_winps_contract
+            !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -268,7 +294,9 @@ jobs:
                   retention-days: 14
 
     winps-provider-contract:
-        if: github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract
+        if:
+            github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract &&
+            !inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 8
         env:
@@ -316,5 +344,73 @@ jobs:
               with:
                   name: windows-pilot-winps-contract-${{ github.run_id }}-${{ github.run_attempt }}
                   path: ${{ runner.temp }}/diagnostic-hub-winps-contract/
+                  if-no-files-found: warn
+                  retention-days: 14
+
+    windows-pty-observation:
+        name: One Windows PTY observation stage (nonqualifying)
+        if: github.event_name == 'workflow_dispatch' && inputs.windows_pty_observation_only
+        runs-on: windows-latest
+        timeout-minutes: 15
+        permissions:
+            contents: read
+        env:
+            HUB_WINDOWS_PTY_OBSERVATION_ONLY: '1'
+            HUB_PTY_OBSERVATION_SCOPE_JSON: ${{ inputs.pty_scope_json }}
+            PTY_EXPECTED_SOURCE: ${{ inputs.pty_source_sha256 }}
+            PTY_EXPECTED_POLICY: ${{ inputs.pty_policy_sha256 }}
+            PTY_SCOPE_SHA256: ${{ inputs.pty_scope_sha256 }}
+            PTY_NATIVE_SELECTED: ${{ inputs.windows_native_pilot }}
+            PTY_METADATA_SELECTED: ${{ inputs.windows_preflight_only }}
+            PTY_CONTRACT_SELECTED: ${{ inputs.windows_pilot_winps_contract }}
+        steps:
+            - name: Refuse mixed selectors, unreviewed identities and replacement attempts
+              shell: pwsh
+              run: |
+                  if ($env:PTY_NATIVE_SELECTED -eq 'true' -or $env:PTY_METADATA_SELECTED -eq 'true' -or $env:PTY_CONTRACT_SELECTED -eq 'true') { throw 'PTY-only selector must be exclusive.' }
+                  if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'One PTY observation attempt; no reruns.' }
+                  foreach ($digest in @($env:PTY_EXPECTED_SOURCE, $env:PTY_EXPECTED_POLICY, $env:PTY_SCOPE_SHA256)) {
+                      if ($digest -cnotmatch '^[a-f0-9]{64}$') { throw 'Exact independently reviewed PTY digest required.' }
+                  }
+                  if (-not $env:HUB_PTY_OBSERVATION_SCOPE_JSON) { throw 'Reviewed PTY scope JSON required.' }
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  architecture: x64
+                  cache: npm
+            - name: Verify exact PTY source, policy and scope before dependency restore
+              timeout-minutes: 1
+              shell: pwsh
+              run: |
+                  node --input-type=module -e "import fs from 'node:fs'; import assert from 'node:assert/strict'; import {sourceFingerprint} from './tests/fixtures/memory-resource-identity.ts'; import {requirePilotMode,ptyObservationMode} from './scripts/lib/hosted-pilot-contract.mjs'; import {parsePtyObservationPolicy,parsePtyObservationScope} from './scripts/lib/pty-observation-scope.mjs'; requirePilotMode(ptyObservationMode); parsePtyObservationPolicy(fs.readFileSync('scripts/lib/hosted-pty-observation-policy.json'),process.env.PTY_EXPECTED_POLICY); parsePtyObservationScope(Buffer.from(process.env.HUB_PTY_OBSERVATION_SCOPE_JSON),process.env.PTY_SCOPE_SHA256,process.env.PTY_EXPECTED_SOURCE,process.env.PTY_EXPECTED_POLICY); assert.equal(await sourceFingerprint('.'),process.env.PTY_EXPECTED_SOURCE);"
+                  if ($LASTEXITCODE -ne 0) { throw 'PTY request source/policy/scope refused before dependencies.' }
+            - name: Restore only lockfile-declared dependencies
+              run: npm ci
+            - name: Create a fresh PTY evidence root and resolve actual loader
+              shell: pwsh
+              run: |
+                  $root = Join-Path $env:RUNNER_TEMP 'diagnostic-hub-pty-observation'
+                  if (Test-Path -LiteralPath $root) { throw 'Fresh PTY observation root required.' }
+                  New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+                  $canonical = node -p "require('node:fs').realpathSync(process.argv[1])" "$root"
+                  if ($LASTEXITCODE -ne 0) { throw 'Physical PTY report root required.' }
+                  $loader = node -p "require('node:url').pathToFileURL(require.resolve('tsx')).href"
+                  if ($LASTEXITCODE -ne 0) { throw 'Actual loader required.' }
+                  "PTY_ROOT=$canonical" >> $env:GITHUB_ENV
+                  "PTY_LOADER=$loader" >> $env:GITHUB_ENV
+            - name: Run the single mode-bound PTY observation stage
+              shell: pwsh
+              run: |
+                  node --import $env:PTY_LOADER scripts/windows-pty-observation.mts "--out=$env:PTY_ROOT" "--expected-source=$env:PTY_EXPECTED_SOURCE" "--expected-policy=$env:PTY_EXPECTED_POLICY" "--scope-sha256=$env:PTY_SCOPE_SHA256"
+                  if ($LASTEXITCODE -ne 0) { throw 'PTY evidence failed or custody is unknown; no retry.' }
+            - name: Retain bounded PTY evidence including failed attempts
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-pty-observation-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: ${{ runner.temp }}/diagnostic-hub-pty-observation/
                   if-no-files-found: warn
                   retention-days: 14

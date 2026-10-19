@@ -6,18 +6,24 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { installedPtyIdentity, ptyBridgeArguments } from './winpty-identity';
 import { finalPtyClosure } from './pty-closure';
+import { ptyTerminalObservation, ptyCompileObservation } from './pty-terminal-observation.mjs';
 import type { Session } from 'ssh2';
 
 /** Real installed Windows/MSYS PTY, with a test-owned normal interactive HOME/.bashrc. */
 export async function osPtyFixture(
     options: {
         homeParent?: string;
+        maxOpenings?: 1;
         expectedRuntime?: Record<string, { path: string; sha256: string }>;
         signal?: AbortSignal;
         holdUnknown?: (reason: unknown) => void;
         registerChild?: (child: ChildProcessWithoutNullStreams, stop: () => void) => void;
         check?: () => void;
         diagnostic?: (value: string) => void;
+        terminalDiagnostic?: (value: unknown) => Promise<void> | void;
+        ownedChildIdentity?: (
+            child: ChildProcessWithoutNullStreams,
+        ) => { created: string } | undefined;
     } = {},
 ) {
     if (process.platform !== 'win32') return null;
@@ -189,11 +195,20 @@ export async function osPtyFixture(
         homeUnix,
         helperErrors: [] as string[],
     };
-    const children = new Set<ChildProcessWithoutNullStreams>();
+    const children = new Map<ChildProcessWithoutNullStreams, () => void>();
+    let compileObservations = 0;
+    const terminalObservers = new Set<ReturnType<typeof ptyTerminalObservation>>();
     const closed = new Set<Promise<void>>();
     const attachShell = (session: Session) => {
         session.on('pty', (accept) => accept?.());
         session.on('shell', (accept) => {
+            if (options.maxOpenings === 1 && state.opens !== 0) {
+                const error = Error(
+                    'PTY-only permits one helper invocation; repeated opening refused.',
+                );
+                holdUnknown(error);
+                throw error;
+            }
             const channel = accept();
             state.opens++;
             options.signal?.throwIfAborted();
@@ -219,9 +234,45 @@ export async function osPtyFixture(
                     },
                 },
             );
-            options.registerChild?.(child, () => child.stdin.end());
+            let stopping = false,
+                compileSeen = false;
+            const terminal = options.terminalDiagnostic
+                ? ptyTerminalObservation({
+                      child,
+                      channel,
+                      identity: () => options.ownedChildIdentity?.(child),
+                      stopping: () => stopping,
+                      emit: options.terminalDiagnostic,
+                      hold: holdUnknown,
+                  })
+                : undefined;
+            if (terminal) terminalObservers.add(terminal);
+            const stopShell = () => {
+                const first = !stopping;
+                const wasPaused = child.stdout.isPaused();
+                stopping = true;
+                // EOF requests and every later output callback share this terminal drain state.
+                try {
+                    child.stdin.end();
+                } finally {
+                    child.stdout.resume();
+                }
+                if (first) {
+                    terminal?.event('stop-requested');
+                    terminal?.snapshot('stop');
+                }
+                if (first)
+                    timing('bridge-stop-drain', {
+                        childPid: child.pid,
+                        wasPaused,
+                        stdoutPaused: child.stdout.isPaused(),
+                        stdoutEnded: child.stdout.readableEnded,
+                        stderrEnded: child.stderr.readableEnded,
+                    });
+            };
+            options.registerChild?.(child, stopShell);
             options.diagnostic?.(JSON.stringify({ phase: 'pty-bridge-spawn', pid: child.pid }));
-            children.add(child);
+            children.set(child, stopShell);
             channel.on('error', () => {});
             child.stdin.on('error', () => {});
             child.stdout.on('data', (bytes: Buffer) => {
@@ -231,12 +282,33 @@ export async function osPtyFixture(
                 }
                 state.outputBytes += bytes.length;
                 state.outputTail = (state.outputTail + bytes.toString()).slice(-4096);
-                if (!channel.destroyed && !channel.write(bytes)) child.stdout.pause();
+                if (stopping || channel.destroyed || channel.writableEnded) {
+                    terminal?.event('stdout-data', {
+                        bytes: bytes.length,
+                        disposition: 'discarded',
+                    });
+                    return;
+                }
+                terminal?.event('stdout-data', {
+                    bytes: bytes.length,
+                    disposition: 'channel-write',
+                });
+                if (!channel.write(bytes)) {
+                    child.stdout.pause();
+                    terminal?.event('write-false');
+                }
             });
-            channel.on('drain', () => child.stdout.resume());
+            channel.on('drain', () => {
+                terminal?.event('channel-drain');
+                child.stdout.resume();
+            });
             channel.on('data', (bytes: Buffer) => {
+                if (stopping) {
+                    terminal?.event('input-discard', { bytes: bytes.length });
+                    return;
+                }
                 if (state.inputs.length >= 64) {
-                    child.stdin.end();
+                    stopShell();
                     channel.close();
                     return;
                 }
@@ -244,20 +316,43 @@ export async function osPtyFixture(
                 if (!child.stdin.write(bytes)) channel.pause();
             });
             child.stdin.on('drain', () => channel.resume());
-            const stopShell = () => {
-                child.stdin.end();
-                child.stdout.resume();
-            };
-            channel.on('end', stopShell);
-            channel.on('close', stopShell);
+            channel.on('end', () => {
+                terminal?.event('channel-end');
+                stopShell();
+            });
+            channel.on('close', () => {
+                terminal?.event('channel-close');
+                stopShell();
+            });
             child.stderr.on('data', (bytes: Buffer) => {
+                terminal?.event('stderr-data', { bytes: bytes.length });
                 if (Buffer.byteLength(state.stderr) + bytes.length > 65536) {
                     if (!state.helperErrors.includes('Helper diagnostics exceeded bound.'))
                         state.helperErrors.push('Helper diagnostics exceeded bound.');
-                    child.stdin.end();
+                    stopShell();
                     holdUnknown('PTY diagnostic output bound');
                 } else {
                     state.stderr += bytes.toString();
+                    if (options.terminalDiagnostic) {
+                        try {
+                            const fact = ptyCompileObservation(state.stderr, child.pid);
+                            if (fact && !compileSeen) {
+                                compileSeen = true;
+                                compileObservations++;
+                                void Promise.resolve(
+                                    options.terminalDiagnostic({
+                                        ...fact,
+                                        ownedRootIdentity:
+                                            options.ownedChildIdentity?.(child) ?? null,
+                                        authority:
+                                            'Call observation only; no custody-release authority.',
+                                    }),
+                                ).catch(holdUnknown);
+                            }
+                        } catch (error) {
+                            holdUnknown(error);
+                        }
+                    }
                     for (let offset = 0; offset < bytes.length; offset += 4096)
                         options.diagnostic?.(
                             JSON.stringify({
@@ -272,8 +367,19 @@ export async function osPtyFixture(
                 let actualExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
                 child.once('exit', (code, signal) => {
                     actualExit = { code, signal };
+                    terminal?.event('process-exit');
+                    terminal?.snapshot('exit', { code, signal });
                     options.diagnostic?.(
-                        JSON.stringify({ phase: 'pty-bridge-exit', pid: child.pid, code, signal }),
+                        JSON.stringify({
+                            phase: 'pty-bridge-exit',
+                            pid: child.pid,
+                            code,
+                            signal,
+                            stopRequested: stopping,
+                            stdoutPaused: child.stdout.isPaused(),
+                            stdoutEnded: child.stdout.readableEnded,
+                            stderrEnded: child.stderr.readableEnded,
+                        }),
                     );
                 });
                 child.once('error', (error) => {
@@ -282,6 +388,8 @@ export async function osPtyFixture(
                 });
                 child.once('close', (code, signal) => {
                     children.delete(child);
+                    terminal?.event('outer-close');
+                    terminal?.snapshot('close', { code, signal });
                     options.diagnostic?.(
                         JSON.stringify({
                             phase: 'pty-bridge-pipe-close',
@@ -322,7 +430,7 @@ export async function osPtyFixture(
     options.signal?.addEventListener(
         'abort',
         () => {
-            for (const child of children) {
+            for (const [child, stop] of children) {
                 options.diagnostic?.(
                     JSON.stringify({
                         phase: 'pty-cancel-request',
@@ -331,7 +439,7 @@ export async function osPtyFixture(
                         closureProven: false,
                     }),
                 );
-                child.stdin.end();
+                stop();
             }
         },
         { once: true },
@@ -346,7 +454,7 @@ export async function osPtyFixture(
         },
         close() {
             return (closeTask ??= (async () => {
-                for (const child of children) child.stdin.end();
+                for (const stop of children.values()) stop();
                 let timer: ReturnType<typeof setTimeout> | undefined;
                 try {
                     await Promise.race([
@@ -361,9 +469,31 @@ export async function osPtyFixture(
                     ]);
                 } catch (e) {
                     holdUnknown(e);
+                    for (const terminal of terminalObservers) {
+                        terminal.event(
+                            String(e).includes('PTY cooperative closure unknown')
+                                ? 'fixture-timeout'
+                                : 'fixture-failure',
+                        );
+                        terminal.snapshot('final', {
+                            outcome: 'unknown',
+                            error: String(e).slice(0, 512),
+                        });
+                    }
                     throw e;
                 } finally {
                     clearTimeout(timer);
+                }
+                for (const terminal of terminalObservers) {
+                    terminal.event('fixture-join');
+                    terminal.snapshot('final', { outcome: 'outer-close-observed' });
+                }
+                if (options.terminalDiagnostic && compileObservations !== state.opens) {
+                    const error = Error(
+                        'Complete compile observation missing; diagnostic evidence remains unknown.',
+                    );
+                    holdUnknown(error);
+                    throw error;
                 }
                 if (state.opens > 0) finalPtyClosure(state.stderr);
                 options.check?.();

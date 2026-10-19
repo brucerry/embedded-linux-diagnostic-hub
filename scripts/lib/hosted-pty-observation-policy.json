@@ -1,0 +1,14 @@
+{
+    "schema": 1,
+    "kind": "windows-hosted-pty-observation-policy-v1",
+    "mode": "pty-observation-only",
+    "stages": ["real-os-pty"],
+    "helpers": 1,
+    "nativeApplicationStages": 0,
+    "nativeElectronStoreCycles": 0,
+    "canaries": 0,
+    "warmup": false,
+    "attempts": 1,
+    "reruns": 0,
+    "collectionApproval": false
+}

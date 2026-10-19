@@ -381,7 +381,7 @@ test('separately selected contract job runs no native entry or Electron resolver
     assert.equal(job['timeout-minutes'], 8);
     assert.equal(
         job.if,
-        "github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract",
+        "github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only",
     );
     assert.match(job.steps[0].run, /mutually exclusive/);
     assert.match(flow.jobs['windows-native-pilot'].if, /!inputs.windows_pilot_winps_contract/);

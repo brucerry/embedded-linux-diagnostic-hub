@@ -352,7 +352,10 @@ test('actual CLI runtime-selector refusal retains a bounded top-level stack befo
         .find((r) => r?.kind === 'pilot-top-level-failure');
     assert(receipt);
     assert.match(receipt.error, /Separate native pilot selector required/);
-    assert.match(receipt.stack, /requirePilotRuntimeReady/);
+    // tsx may label shared MJS gate frames as "assert". Require both real
+    // source locations rather than a transform-dependent function label.
+    assert.match(receipt.stack, /hosted-pilot-contract\.mjs:\d+:\d+/);
+    assert.match(receipt.stack, /windows-native-pilot\.mts:\d+:\d+/);
     assert.equal(receipt.prerequisite, 'pre-entry-runtime-gate-or-unhandled');
     assert(receipt.stack.length <= 4096);
 });

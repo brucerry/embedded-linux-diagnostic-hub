@@ -6,19 +6,38 @@ import {
     validatePilotBinding,
     requirePilotRuntimeReady,
     pilotLimits,
+    requirePilotStage,
+    pilotBindingMode,
+    ptyObservationMode,
 } from './lib/hosted-pilot-contract.mjs';
+import { parsePtyObservationScope } from './lib/pty-observation-scope.mjs';
 import { createOwnershipHold } from './lib/product-entry-custody.mjs';
 import { NativePilotStartup } from '../tests/fixtures/native-pilot-startup';
 import { pilotPathMap } from '../tests/fixtures/native-pilot-paths';
 import { stageChannel } from '../tests/fixtures/pilot-stage-channel';
+import { terminalRuntimeDiagnostics } from './lib/pilot-terminal-diagnostics.mjs';
 import { runtimeDiagnostics, preparePilotStageRuntime } from './lib/pilot-runtime-startup.mjs';
-requirePilotRuntimeReady();
 assert(process.connected && process.env.HUB_NATIVE_PILOT_STAGE === '1');
 const envelope = JSON.parse(process.argv[2]),
     binding = envelope.binding,
     hash = bindingDigest(binding),
     controller = new AbortController();
-let diagnostics: ReturnType<typeof runtimeDiagnostics>, startup: NativePilotStartup;
+requirePilotStage(binding, envelope.stage);
+if (pilotBindingMode(binding) === ptyObservationMode) {
+    assert.equal(envelope.coverageJSON, undefined, 'Native coverage excluded from PTY stage.');
+    parsePtyObservationScope(
+        Buffer.from(envelope.scopeJSON),
+        binding.scopeSHA256,
+        binding.sourceSHA256,
+        binding.pilotPolicySHA256,
+    );
+}
+let diagnostics:
+        ReturnType<typeof runtimeDiagnostics> | ReturnType<typeof terminalRuntimeDiagnostics>,
+    startup: NativePilotStartup;
+let terminal:
+    ReturnType<ReturnType<typeof terminalRuntimeDiagnostics>['reserveTerminal']> | undefined;
+let terminalReportStarted = false;
 const cancel = (reason: string) => controller.abort(Error(reason));
 // Handlers and immutable deadline exist before runtime preparation or fixture imports.
 for (const e of ['SIGTERM', 'SIGINT', 'disconnect']) process.on(e, () => cancel(e));
@@ -28,7 +47,7 @@ process.on('message', (m: any) => {
             cancel('Invalid stage cancellation');
         else {
             cancel(m.reason ?? 'Owner cancelled');
-            diagnostics?.note('stage-cancel-ack', {
+            (terminal ?? diagnostics)?.note('stage-cancel-ack', {
                 reason: m.reason ?? 'Owner cancelled',
                 stage: envelope.stage,
             });
@@ -53,12 +72,30 @@ const hold = (e: unknown) => {
             startup: startup?.snapshot(),
         };
         held = createOwnershipHold(state, () => {});
-        diagnostics?.note('stage-held', state);
+        if (terminal) {
+            terminal.enterHold();
+            terminal.note('stage-held', state);
+            if (!terminalReportStarted) {
+                terminalReportStarted = true;
+                void startup
+                    ?.terminalObservation('held-final-admitted-observations')
+                    .catch((error) =>
+                        terminal!.note('startup-terminal-observation-unavailable', {
+                            error: String(error).slice(0, 1024),
+                            releaseAuthorized: false,
+                        }),
+                    );
+            }
+        } else diagnostics?.note('stage-held', state);
     }
     controller.abort(e);
     startup?.cancel();
 };
-diagnostics = runtimeDiagnostics(sendEvidence, hold);
+const ptyDiagnostics =
+    envelope.stage === 'real-os-pty' ? terminalRuntimeDiagnostics(sendEvidence, hold) : undefined;
+diagnostics = ptyDiagnostics ?? runtimeDiagnostics(sendEvidence, hold);
+if (ptyDiagnostics)
+    terminal = ptyDiagnostics.reserveTerminal({ rows: 16, bytes: 131072, pendingBytes: 65536 });
 const emit = diagnostics.emit;
 startup = new NativePilotStartup({
     signal: controller.signal,
@@ -67,12 +104,18 @@ startup = new NativePilotStartup({
     emit,
     hold,
     diagnostics: true,
+    ...(terminal ? { terminalEmit: terminal.emit } : {}),
 });
 let failure: unknown;
 try {
     validatePilotBinding(binding, Number(process.hrtime.bigint() / 1000000n));
-    assert(['real-os-pty', 'native-electron-store'].includes(envelope.stage));
-    const paths = pilotPathMap(binding.roots.privateRoot.path, binding.nonce);
+    requirePilotStage(binding, envelope.stage);
+    const paths = pilotPathMap(
+        binding.roots.privateRoot.path,
+        binding.nonce,
+        false,
+        pilotBindingMode(binding),
+    );
     assert(
         Number.isSafeInteger(envelope.stageDeadline) &&
             envelope.stageDeadline <= binding.deadline - pilotLimits.reserveMs,
@@ -117,15 +160,28 @@ try {
                 journalParent: paths.ptyJournalParent,
                 signal: controller.signal,
                 requireNative: true,
+                ...(pilotBindingMode(binding) === ptyObservationMode
+                    ? { maxOpenings: 1 as const }
+                    : {}),
                 check: paths.check,
                 holdUnknown: hold,
                 registerChild: (child, stop) => startup.adopt('bash-winpty-bridge', child, stop),
+                terminalDiagnostic: (data) => terminal!.emit('pty-terminal', data),
+                ownedChildIdentity: (child) =>
+                    startup.children
+                        .get(child)
+                        ?.identity?.find((row: any) => row.pid === child.pid),
                 diagnostic: (text) =>
                     diagnostics.note('pty-diagnostic', { text: text.slice(0, 8192) }),
             });
             await emit('pty-assertions-after', {});
         }
     } else {
+        assert.notEqual(
+            pilotBindingMode(binding),
+            ptyObservationMode,
+            'PTY mode cannot import native application stage.',
+        );
         const { parseNativeCoverage } =
             await import('../tests/fixtures/memory-product-native-contract');
         const nativeCoverage = parseNativeCoverage(
@@ -153,10 +209,10 @@ try {
     startup.cancel();
 } finally {
     clearTimeout(timer);
-    diagnostics.note('stage-esbuild-stop-before', {});
+    (terminal ?? diagnostics).note('stage-esbuild-stop-before', {});
     const { stop } = await import('esbuild');
     stop();
-    diagnostics.note('stage-esbuild-stop-after', {});
+    (terminal ?? diagnostics).note('stage-esbuild-stop-after', {});
 }
 try {
     const proof = await startup.join();

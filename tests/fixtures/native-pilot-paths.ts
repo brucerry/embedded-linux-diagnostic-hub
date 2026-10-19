@@ -2,7 +2,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ancestryIdentity, checkAncestry } from '../../scripts/lib/windows-preflight.mjs';
-export function pilotPathMap(root: string, nonce: string, create = false) {
+import {
+    nativeReadinessMode,
+    ptyObservationMode,
+} from '../../scripts/lib/hosted-pilot-contract.mjs';
+export function pilotPathMap(
+    root: string,
+    nonce: string,
+    create = false,
+    mode = nativeReadinessMode,
+) {
+    assert([nativeReadinessMode, ptyObservationMode].includes(mode));
     assert(path.isAbsolute(root) && fs.realpathSync(root) === root);
     assert.equal(path.basename(root), 'diagnostic-hub-native-pilot-' + nonce);
     const ancestry = ancestryIdentity(root);
@@ -17,7 +27,13 @@ export function pilotPathMap(root: string, nonce: string, create = false) {
             temp: 'native-temp',
             crash: 'native-crash',
             logs: 'native-logs',
-        }).map(([key, leaf]) => [key, path.join(root, leaf)]),
+        })
+            .filter(
+                ([key]) =>
+                    mode !== ptyObservationMode ||
+                    ['ptyHomeParent', 'runtimeParent', 'ptyJournalParent'].includes(key),
+            )
+            .map(([key, leaf]) => [key, path.join(root, leaf)]),
     ) as Record<string, string>;
     if (create) for (const dir of Object.values(paths)) fs.mkdirSync(dir);
     const identities = new Map(
@@ -30,11 +46,15 @@ export function pilotPathMap(root: string, nonce: string, create = false) {
         checkAncestry(ancestry);
         const allowed = new Set([
             ...Object.values(paths).map((p) => path.basename(p)),
-            'native-app',
-            'native-downloads',
-            'native-results',
-            'target-profile',
-            'native-will-quit.json',
+            ...(mode === ptyObservationMode
+                ? []
+                : [
+                      'native-app',
+                      'native-downloads',
+                      'native-results',
+                      'target-profile',
+                      'native-will-quit.json',
+                  ]),
         ]);
         for (const name of fs.readdirSync(root))
             assert(allowed.has(name), 'Unexpected application-owned route: ' + name);
@@ -45,13 +65,15 @@ export function pilotPathMap(root: string, nonce: string, create = false) {
         }
     };
     check();
-    return { root, nonce, ...paths, check } as Record<string, any>;
+    return { root, nonce, mode, ...paths, check } as Record<string, any>;
 }
 export function nativePilotLaunchRoutes(paths: Record<string, any>) {
+    assert.notEqual(paths.mode, ptyObservationMode, 'PTY-only cannot admit native launch paths.');
     paths.check();
     return { artifactsDir: paths.artifactsDir, tracesDir: paths.tracesDir };
 }
 export function pilotEarlyAppPaths(paths: Record<string, any>) {
+    assert.notEqual(paths.mode, ptyObservationMode, 'PTY-only cannot admit native app paths.');
     paths.check();
     return { temp: paths.temp, crashDumps: paths.crash, logs: paths.logs };
 }

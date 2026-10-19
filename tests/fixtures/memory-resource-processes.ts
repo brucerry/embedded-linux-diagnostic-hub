@@ -144,6 +144,7 @@ export class ProcessSampler {
     private tableSource: ReturnType<typeof processTables.get>;
     private failure: unknown;
     private overflow: unknown;
+    private lastCensus: any;
     constructor(
         private roots: number[],
         private readTable: () => Promise<Row[]> = readProcessTable,
@@ -260,7 +261,7 @@ export class ProcessSampler {
                 }
             }
         }
-        return [...this.identities.values()].map(({ pid, created, root }) => {
+        const census = [...this.identities.values()].map(({ pid, created, root }) => {
             if (rows.some((value) => value.pid === pid && !value.created))
                 throw Error(`Owned process liveness unknown: ${pid}.`);
             const row = rows.find((value) => value.pid === pid && value.created === created);
@@ -281,6 +282,30 @@ export class ProcessSampler {
                 ],
             };
         });
+        this.lastCensus = {
+            observedAt: Number(process.hrtime.bigint() / 1000000n),
+            clockDomain: 'node-hrtime-milliseconds',
+            sequence,
+            tableSHA256: this.tableDigest,
+            rawTable: this.tableSource ?? null,
+            tuples: census.map((row) => [row.pid, row.created, row.role, row.state]),
+        };
+        return census;
+    }
+    /** Complete owned tuples from the last completed admitted read; never opens a query. */
+    observationFacts() {
+        return this.lastCensus
+            ? {
+                  ...this.lastCensus,
+                  tuples: this.lastCensus.tuples.map((row: any[]) => [...row]),
+                  lastReadComplete: true,
+                  laterFailure: this.failure ? String(this.failure).slice(0, 512) : null,
+              }
+            : {
+                  lastReadComplete: false,
+                  reason: 'No complete owned observation retained.',
+                  laterFailure: this.failure ? String(this.failure).slice(0, 512) : null,
+              };
     }
     private checkBound(rows: Row[]) {
         if (this.identities.size > 256) {

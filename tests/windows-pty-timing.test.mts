@@ -385,7 +385,7 @@ test('dependency content partitions reuse exact canonical identity, cover every 
 test('helper instrumentation remains finite and brackets existing operations without changed waits', () => {
     const ps = fs.readFileSync(path.join(root, 'tests/fixtures/winpty-bridge.ps1'), 'utf8'),
         cs = fs.readFileSync(path.join(root, 'tests/fixtures/winpty-bridge.cs'), 'utf8');
-    assert.equal((ps.match(/^Write-PtyTiming '/gm) || []).length, 9);
+    assert.equal((ps.match(/^\s*Write-PtyTiming '/gm) || []).length, 9);
     assert.equal((cs.match(/Timing\("[^"\n]+"\)/g) || []).length, 10);
     for (const phase of [
         'helper-entry',

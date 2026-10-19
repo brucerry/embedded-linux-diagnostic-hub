@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { digest, metadataIdentity, ancestryIdentity, checkAncestry } from './windows-preflight.mjs';
+import {
+    requirePilotMode,
+    ptyObservationMode,
+    nativeReadinessMode,
+} from './hosted-pilot-contract.mjs';
 /** Readback policy is pilot-specific. Ordinary collection owner admission is untouched. */
 export function pilotHostedContext(
     env = process.env,
@@ -16,8 +21,10 @@ export function pilotHostedContext(
     } = {},
 ) {
     assert.equal(platform, 'win32');
-    assert(['pilot', 'winps-contract'].includes(mode));
+    assert(['pilot', 'winps-contract', ptyObservationMode].includes(mode));
     if (mode === 'winps-contract') assert.notEqual(env.HUB_WINDOWS_NATIVE_PILOT, '1');
+    if (mode === 'winps-contract') assert.notEqual(env.HUB_WINDOWS_PTY_OBSERVATION_ONLY, '1');
+    else requirePilotMode(mode === 'pilot' ? nativeReadinessMode : mode, env);
     for (const [k, v] of Object.entries({
         GITHUB_ACTIONS: 'true',
         RUNNER_ENVIRONMENT: 'github-hosted',
@@ -26,9 +33,11 @@ export function pilotHostedContext(
         GITHUB_REPOSITORY: 'brucerry/embedded-linux-diagnostic-hub',
         GITHUB_EVENT_NAME: 'workflow_dispatch',
         GITHUB_RUN_ATTEMPT: '1',
-        ...(mode === 'pilot'
-            ? { HUB_WINDOWS_NATIVE_PILOT: '1' }
-            : { HUB_WINDOWS_PILOT_WINPS_CONTRACT: '1' }),
+        ...(mode === ptyObservationMode
+            ? { HUB_WINDOWS_PTY_OBSERVATION_ONLY: '1' }
+            : mode === 'pilot'
+              ? { HUB_WINDOWS_NATIVE_PILOT: '1' }
+              : { HUB_WINDOWS_PILOT_WINPS_CONTRACT: '1' }),
     }))
         assert.equal(env[k], v, 'Pilot context ' + k);
     assert.notEqual(env.HUB_WINDOWS_PREFLIGHT_ONLY, '1');

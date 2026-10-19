@@ -3,7 +3,9 @@ import {
     bindingDigest,
     validatePilotBinding,
     pilotLimits,
-    requirePilotRuntimeReady,
+    requirePilotMode,
+    pilotBindingMode,
+    pilotStages,
 } from './hosted-pilot-contract.mjs';
 import { createOwnershipHold } from './product-entry-custody.mjs';
 /** In-memory same-owner continuation protocol. This module neither launches workloads nor weakens ordinary collector admission. */
@@ -18,7 +20,7 @@ export class SameJobPilotCustody {
             events,
             clock,
             hold = createOwnershipHold,
-            executionGate = requirePilotRuntimeReady,
+            executionGate = requirePilotMode,
             cancelChild = (child, message, callback) => child.send(message, callback),
         },
     ) {
@@ -173,18 +175,15 @@ export class SameJobPilotCustody {
     start(stage, token, current, spawn) {
         let active;
         try {
-            this.ports.executionGate();
+            this.ports.executionGate(pilotBindingMode(this.binding));
             this.check(current);
             assert.equal(token, this.token, 'No serialized/replayed approval capability.');
             assert.equal(this.state, 'approved');
             assert.equal(this.active, null);
-            assert(['real-os-pty', 'native-electron-store'].includes(stage));
+            const allowed = pilotStages(this.binding);
+            assert(allowed.includes(stage), 'Stage excluded by immutable pilot mode.');
             assert(!this.stages.includes(stage), 'No retry/repeated stage.');
-            assert.equal(
-                stage,
-                ['real-os-pty', 'native-electron-store'][this.stages.length],
-                'Pilot stage order changed.',
-            );
+            assert.equal(stage, allowed[this.stages.length], 'Pilot stage order changed.');
             active = {
                 stage,
                 child: null,
@@ -277,8 +276,7 @@ export class SameJobPilotCustody {
     async release({ inputsUnchanged, rootsCleanupClosed, resultClosed }) {
         try {
             this.checkCleanup();
-            if (!this.cancelled)
-                assert.deepEqual(this.stages, ['real-os-pty', 'native-electron-store']);
+            if (!this.cancelled) assert.deepEqual(this.stages, pilotStages(this.binding));
             assert(
                 inputsUnchanged === true && rootsCleanupClosed === true && resultClosed === true,
             );
