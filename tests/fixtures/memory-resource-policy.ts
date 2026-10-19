@@ -1,3 +1,9 @@
+import { soakPhysicalLimits } from '../../scripts/lib/soak-physical-budget.mjs';
+import { soakMeasurementContract } from '../../scripts/lib/soak-measurement.mjs';
+import {
+    soakEvidenceContractSHA256,
+    soakEvidenceContract,
+} from '../../scripts/lib/soak-evidence.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -46,7 +52,13 @@ export function soakAssessmentConfig(input: {
         measuredMs: 1500000,
         minCycles: 100,
         payloadBytes: 33 * 1024 ** 2,
-        checkpointGrouping: 'catalog-mode/disk-records/process-instance/v1',
+        checkpointGrouping: 'catalog-mode/disk-records/process-instance/v2',
+        measurement: soakMeasurementContract,
+        localEvidenceContractSHA256: soakEvidenceContractSHA256,
+        serialGeometry: soakEvidenceContract.serialGeometry,
+        physicalAdmission: soakPhysicalLimits,
+        physicalAdmissionMeaning:
+            'Named apparent-byte policy partitions; inventory does not prove Chromium growth or between-poll physical peaks.',
         ownership: {
             protocol: 'cancel-product-job/v1',
             budgetMs: 2400000,

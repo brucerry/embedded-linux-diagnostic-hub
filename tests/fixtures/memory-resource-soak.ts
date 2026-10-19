@@ -1,3 +1,12 @@
+import { registerSoakPhysicalScope } from '../../scripts/lib/soak-physical-budget.mjs';
+import { assertArtifactReadersClosed } from '../../scripts/lib/owned-artifact-stream.mjs';
+import {
+    MatchedCheckpoints,
+    soakMeasurementContract,
+    assertSoakGcCapability,
+} from '../../scripts/lib/soak-measurement.mjs';
+import { SoakTimeline, soakEvidenceContractSHA256 } from '../../scripts/lib/soak-evidence.mjs';
+import { finishObservationTimeline } from '../../scripts/lib/soak-observation-closure.mjs';
 import { parseNativeCoverage } from './memory-product-native-contract';
 import { readEvidence } from './memory-resource-evidence';
 import { ProductShutdownObserver } from './memory-product-shutdown';
@@ -8,7 +17,6 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { productJob, ProductRunOwner, observeProductOwner } from './memory-product-owner';
-import { syncCloseEvidence } from './memory-resource-evidence';
 import { fileURLToPath } from 'node:url';
 import {
     soakCoverage,
@@ -60,6 +68,7 @@ async function main(owner: ProductRunOwner) {
         adapter && destination,
         'Provide --driver=<test integration module> and --out=<private evidence directory>.',
     );
+    const gcPreflight = assertSoakGcCapability(gcMode, await nodeRuntimeIdentity(), globalThis.gc);
     const adapterPath = path.resolve(adapter);
     const adapterHash = createHash('sha256')
         .update(await fs.readFile(adapterPath))
@@ -85,26 +94,15 @@ async function main(owner: ProductRunOwner) {
     }
     await fs.mkdir(destination, { recursive: true });
     const output = await fs.mkdtemp(path.join(path.resolve(destination), `${lane}-${gcMode}-`));
+    const physicalScope = registerSoakPhysicalScope(output);
     const timeline = await fs.open(path.join(output, 'timeline.jsonl'), 'wx');
-    let writes = Promise.resolve(),
-        timelineBytes = 0,
-        timelineRows = 0;
-    const emit = async (stage: string, data: unknown) => {
-        const line = JSON.stringify({ time: Date.now(), stage, data }) + '\n';
-        writes = writes.then(async () => {
-            const bytes = Buffer.byteLength(line);
-            assert.ok(
-                bytes <= 1024 ** 2 &&
-                    timelineRows < 50000 &&
-                    timelineBytes + bytes <= 64 * 1024 ** 2,
-                'Product timeline bound exceeded before write.',
-            );
-            timelineBytes += bytes;
-            timelineRows++;
-            await timeline.writeFile(line);
-        });
-        await writes;
-    };
+    const localEvidence = new SoakTimeline(timeline, {
+        sourceSHA256,
+        nonce: owner.job.nonce,
+        hold: (error: unknown) => (localEvidence.failure ? owner.hold(error) : owner.cancel(error)),
+    });
+    await localEvidence.start();
+    const emit = localEvidence.emit;
     const { createQualificationDriver } = await import(pathToFileURL(adapterPath).href);
     let driver: QualificationDriver;
     let stop = false;
@@ -151,24 +149,40 @@ async function main(owner: ProductRunOwner) {
             // Admit OS observation before shutdown; join the old CDP sample before inspection retirement.
             shutdown.start();
             stop = true;
+            physicalScope.enterCleanup();
+            await localEvidence.enterCleanup();
             await sampling;
             await inFlight;
         });
     } catch (error) {
-        await emit('receipt', {
-            status: 'failed',
-            stage: 'driver-startup',
-            sourceSHA256,
-            adapterHash,
-            failure: String(error).slice(0, 4096),
-        });
-        const errors = await syncCloseEvidence([timeline]);
-        if (errors.length)
-            throw new AggregateError(
-                [error, ...errors],
-                'Product startup evidence closure failed.',
-            );
-        throw error;
+        localEvidence.fail(error);
+        const errors: unknown[] = [error];
+        try {
+            physicalScope.enterCleanup();
+            await localEvidence.enterCleanup();
+        } catch (failure) {
+            errors.push(failure);
+        }
+        try {
+            await emit('receipt', {
+                status: 'failed',
+                stage: 'driver-startup',
+                sourceSHA256,
+                adapterHash,
+                failure: String(error).slice(0, 4096),
+            });
+        } catch (failure) {
+            errors.push(failure);
+        }
+        try {
+            await localEvidence.finish();
+        } catch (failure) {
+            errors.push(failure);
+        }
+        throw new AggregateError(
+            errors,
+            'Product startup failed; timeline closure attempted independently.',
+        );
     }
     const required = requirements(
         args.has('component'),
@@ -176,6 +190,8 @@ async function main(owner: ProductRunOwner) {
         args.has('viewer'),
         nativeCoverage,
     );
+    let checkpointCompleteness: unknown = null;
+    let matched: InstanceType<typeof MatchedCheckpoints> | undefined;
     let assessment: MemoryAssessment | undefined,
         assessmentIdentity: string | null = null,
         policySHA256: string | null = null;
@@ -202,33 +218,72 @@ async function main(owner: ProductRunOwner) {
             assert.equal(count, 0, `${stage}: abandoned owner ${owner}`);
         await emit('owners', { stage, counts });
     };
-    const collect = async (quiescent = false) => {
-        const processes = await owner.run(() =>
-            driver.sampleProcesses({
+    const samplingCounts = { requests: 0, attempted: 0, usable: 0, unavailable: 0, coalesced: 0 };
+    const collect = async (quiescent = false) =>
+        localEvidence.transaction(async () => {
+            physicalScope.inspect();
+            const attempt = ++samplingCounts.attempted,
+                readStartedMono = performance.now();
+            let processes: ProcessSample[];
+            try {
+                processes = await owner.run(() =>
+                    driver.sampleProcesses({
+                        quiescent,
+                        forceGc: quiescent && gcMode === 'forced',
+                    }),
+                );
+                assert.ok(
+                    processes.length,
+                    'A process exiting is terminated, never an empty/zero memory sample.',
+                );
+                recordPeaks(processes);
+            } catch (error) {
+                samplingCounts.unavailable++;
+                await emit('sampling-window', {
+                    schema: 1,
+                    clockDomain: 'node-performance',
+                    attempt,
+                    quiescent,
+                    forceGc: quiescent && gcMode === 'forced',
+                    readStartedMono,
+                    readEndedMono: performance.now(),
+                    status: 'unavailable',
+                    counts: { ...samplingCounts },
+                    error: String(error).slice(0, 4096),
+                });
+                throw error;
+            }
+            samplingCounts.usable++;
+            await emit('sampling-window', {
+                schema: 1,
+                clockDomain: 'node-performance',
+                attempt,
                 quiescent,
                 forceGc: quiescent && gcMode === 'forced',
-            }),
-        );
-        assert.ok(
-            processes.length,
-            'A process exiting is terminated, never an empty/zero memory sample.',
-        );
-        recordPeaks(processes);
-        await emit('processes', processes);
-        return processes;
-    };
-    const sample = () => {
-        inFlight ??= collect().finally(() => {
-            inFlight = undefined;
+                readStartedMono,
+                readEndedMono: performance.now(),
+                status: 'usable',
+                counts: { ...samplingCounts },
+            });
+            await emit('processes', processes);
+            return processes;
         });
-        return inFlight;
+    const sample = () => {
+        samplingCounts.requests++;
+        if (inFlight) {
+            samplingCounts.coalesced++;
+            return inFlight;
+        }
+        return (inFlight = collect().finally(() => {
+            inFlight = undefined;
+        }));
     };
     const checkpoint = async () => {
+        samplingCounts.requests++;
         await inFlight;
-        inFlight = collect(true).finally(() => {
+        return (inFlight = collect(true).finally(() => {
             inFlight = undefined;
-        });
-        return inFlight;
+        }));
     };
     const sampleContinuously = async () => {
         if (args.has('no-sampler')) return;
@@ -255,6 +310,8 @@ async function main(owner: ProductRunOwner) {
                 ? 'disabled-matched-control'
                 : 'serialized-250ms-target',
             viewer: args.has('viewer'),
+            localEvidenceContractSHA256: soakEvidenceContractSHA256,
+            gcPreflight,
         });
         for (const item of required.coverage)
             assert.ok(
@@ -273,6 +330,14 @@ async function main(owner: ProductRunOwner) {
             );
         if (policyPath || calibrating) {
             const scope = validateDeclaredMemoryScope(driver.memoryScope);
+            matched = new MatchedCheckpoints(scope.roles);
+            if (gcMode === 'forced') {
+                assert.ok(
+                    driver.preflightGc,
+                    'Actual forced role capability preflight unavailable',
+                );
+                await driver.preflightGc();
+            }
             const assessmentContext = {
                 sourceSHA256,
                 adapterHash,
@@ -316,6 +381,39 @@ async function main(owner: ProductRunOwner) {
         sampling = sampleContinuously().catch((error) => {
             samplerFailure = error;
         });
+        let lastCheckpointEnded = -Infinity,
+            globalCheckpointOrdinal = 0;
+        const spacedCheckpoint = async () => {
+            const remaining =
+                lastCheckpointEnded + soakMeasurementContract.spacingMs - performance.now();
+            if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+            const startMono = performance.now(),
+                processes = await checkpoint(),
+                endMono = performance.now();
+            lastCheckpointEnded = endMono;
+            return { processes, startMono, endMono, globalOrdinal: globalCheckpointOrdinal++ };
+        };
+        const retainCheckpoint = async (
+            phase: string,
+            ordinal: number,
+            stateKey: string,
+            result: any,
+            processes: ProcessSample[],
+            startMono: number,
+            endMono: number,
+            globalOrdinal: number,
+        ) => {
+            await emit('quiescent-checkpoint', {
+                phase,
+                ordinal,
+                stateKey,
+                diskBytes: result.diskBytes,
+                cache: result.cache,
+                processes,
+                window: { clockDomain: 'node-performance', startMono, endMono, globalOrdinal },
+                seriesPolicy: soakMeasurementContract,
+            });
+        };
         const warmStart = performance.now();
         while (performance.now() - warmStart < 300000) {
             const catalogMode = warmupCycles % 2 ? 'growing' : 'constant';
@@ -328,17 +426,31 @@ async function main(owner: ProductRunOwner) {
                 }),
             );
             await checkOwners('warmup-cycle');
-            const samples = await checkpoint();
-            assessment?.warm(samples, `${catalogMode}/${result.diskRecords}`);
-            await emit('quiescent-checkpoint', {
-                phase: 'warmup',
-                ordinal: warmupCycles - 1,
-                stateKey: `${catalogMode}/${result.diskRecords}`,
-                diskBytes: result.diskBytes,
-                cache: result.cache,
-                processes: samples,
+            const stateKey = `${catalogMode}/${result.diskRecords}`;
+            for (let n = 0; n < 3; n++) {
+                const { processes, startMono, endMono, globalOrdinal } = await spacedCheckpoint();
+                matched?.visit(processes, stateKey, 'warmup', {
+                    clockDomain: 'node-performance',
+                    startMono,
+                    endMono,
+                    globalOrdinal,
+                });
+                assessment?.warm(processes, stateKey);
+                await retainCheckpoint(
+                    'warmup',
+                    warmupCycles - 1,
+                    stateKey,
+                    result,
+                    processes,
+                    startMono,
+                    endMono,
+                    globalOrdinal,
+                );
+            }
+            await emit('warmup-cycle', {
+                ...result,
+                physicalChargesBeforeCycleRecord: localEvidence.physicalCharges.snapshot(),
             });
-            await emit('warmup-cycle', result);
             if (samplerFailure) throw samplerFailure;
         }
         achievedWarmupMs = performance.now() - warmStart;
@@ -369,17 +481,75 @@ async function main(owner: ProductRunOwner) {
                 coverage.add(id);
             }
             await checkOwners('closed-cycle');
-            const samples = await checkpoint();
-            assessment?.observe(samples, `${catalogMode}/${result.diskRecords}`);
-            await emit('quiescent-checkpoint', {
-                phase: 'measured',
-                ordinal: cycles,
-                stateKey: `${catalogMode}/${result.diskRecords}`,
-                diskBytes: result.diskBytes,
-                cache: result.cache,
-                processes: samples,
+            const stateKey = `${catalogMode}/${result.diskRecords}`;
+            let first = await spacedCheckpoint();
+            if (matched) {
+                const needed = matched.needsWarm(first.processes, stateKey);
+                if (needed.length) {
+                    assert(
+                        needed.every((v: any) =>
+                            soakMeasurementContract.ephemeralRoles.includes(v.s.role),
+                        ),
+                        'Stable process/state has no three matched warm checkpoints',
+                    );
+                    const identities = new Set(
+                        needed.map((v: any) => `${v.s.pid}/${v.s.created}/${v.s.role}`),
+                    );
+                    for (let n = 0; n < 3; n++) {
+                        if (n) first = await spacedCheckpoint();
+                        const processes = first.processes.filter((p: ProcessSample) =>
+                            identities.has(`${p.pid}/${p.created}/${p.role}`),
+                        );
+                        assert(
+                            processes.length,
+                            'Ephemeral process vanished before matching warmup',
+                        );
+                        matched.visit(processes, stateKey, 'ephemeral-warm', {
+                            clockDomain: 'node-performance',
+                            startMono: first.startMono,
+                            endMono: first.endMono,
+                            globalOrdinal: first.globalOrdinal,
+                        });
+                        assessment?.warm(processes, stateKey);
+                        await retainCheckpoint(
+                            'ephemeral-warm',
+                            cycles,
+                            stateKey,
+                            result,
+                            processes,
+                            first.startMono,
+                            first.endMono,
+                            first.globalOrdinal,
+                        );
+                    }
+                    first = await spacedCheckpoint();
+                }
+            }
+            for (let n = 0; n < 3; n++) {
+                if (n) first = await spacedCheckpoint();
+                matched?.visit(first.processes, stateKey, 'measured', {
+                    clockDomain: 'node-performance',
+                    startMono: first.startMono,
+                    endMono: first.endMono,
+                    globalOrdinal: first.globalOrdinal,
+                });
+                assessment?.observe(first.processes, stateKey);
+                await retainCheckpoint(
+                    'measured',
+                    cycles,
+                    stateKey,
+                    result,
+                    first.processes,
+                    first.startMono,
+                    first.endMono,
+                    first.globalOrdinal,
+                );
+            }
+            await emit('measured-cycle', {
+                ordinal: cycles++,
+                ...result,
+                physicalChargesBeforeCycleRecord: localEvidence.physicalCharges.snapshot(),
             });
-            await emit('measured-cycle', { ordinal: cycles++, ...result });
             if (samplerFailure) throw samplerFailure;
         }
         achievedMeasuredMs = performance.now() - measuredStart;
@@ -388,6 +558,7 @@ async function main(owner: ProductRunOwner) {
                 coverage.has(item),
                 `Unqualified lifecycle case: ${item}; ${driver.capabilities.unsupported[item] ?? 'not exercised'}`,
             );
+        checkpointCompleteness = matched?.finish() ?? null;
         if (assessment)
             memoryResult = {
                 status: 'passed-reviewed-metrics',
@@ -426,6 +597,7 @@ async function main(owner: ProductRunOwner) {
             }
             if (errors.length)
                 throw new AggregateError(errors, 'Product shutdown or final observation failed.');
+            assertArtifactReadersClosed();
             await checkOwners('full-teardown');
             ownershipJoined = true;
         } catch (error) {
@@ -434,6 +606,7 @@ async function main(owner: ProductRunOwner) {
         }
         failure ??= samplerFailure;
         if (owner.signal.aborted) failure ??= owner.signal.reason;
+        if (failure) localEvidence.fail(failure);
         try {
             await emit('receipt', {
                 status: failure
@@ -462,13 +635,20 @@ async function main(owner: ProductRunOwner) {
                 memory: memoryResult,
                 assessmentIdentity,
                 policySHA256,
+                samplingCounts: { ...samplingCounts },
+                checkpointCompleteness,
                 observedPeakRSSBytes: Object.fromEntries(peaks),
                 peakIsSamplingLowerBound: true,
                 limitation:
                     'A pass covers only these synthetic cases and platform/runtime identity; normal and forced runs are separate. Disk/cache accounting is intentional retained state.',
             });
         } finally {
-            const errors = await syncCloseEvidence([timeline]);
+            let errors: unknown[] = [];
+            try {
+                await finishObservationTimeline(localEvidence, owner);
+            } catch (error) {
+                errors.push(error);
+            }
             if (errors.length) {
                 owner.hold('Product timeline sync/close failed.');
                 throw new AggregateError(errors, 'Product timeline sync/close failed.');

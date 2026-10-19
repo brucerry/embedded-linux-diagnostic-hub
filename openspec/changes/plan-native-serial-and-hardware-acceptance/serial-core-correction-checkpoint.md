@@ -1,0 +1,20 @@
+# Serial core correctness correction checkpoint
+
+This isolated five-file correction addresses all three independent-review findings against the frozen Serial core packet 2e417910d0b5a91d6076f912cb1f1ceaee16c0718081711a102a5e6d190b8749. It is ready for independent re-review and remains unadopted.
+
+- P1, persistence sleep/stall: the command watchdog remains active through the awaited result callback, and freshness is checked against the last observed tick before any later command. The old unconditional clock-baseline reset is removed. A resume acknowledgement arriving before the next timer tick cannot conceal a 10-second gap. A healthy 10-second commit with regular 250-ms ticks remains valid; a stalled commit retains ownership until its acknowledgement/cleanup settles. Watchdog ticks after cancellation do not overwrite the original stall reason.
+- P2, stale prompt/queued continuation: a storage-backed capture's prompt timer starts only after that original receive observation has been delivered through the terminal consumer. The read loop acknowledges the exact capture present at the original read, never a replacement capture. Known receive/display work also prevents acquisition/re-arming. Queued old continuation is drained into the first capture before quiet completion; it cannot satisfy the next command. The existing 200-ms quiet interval and display timeout are unchanged.
+- P2, clock provenance: only explicitly LF-terminated logical receive lines (including CRLF) can create a prefixed device-time observation. Timeout, cancellation and EOF do not terminate an unfinished line. Earlier complete observations survive later unfinished/invalid text. UTF-8 remains streaming and incomplete suffixes never become a valid timestamp on finalization.
+
+Evidence: the unchanged baseline produces eight expected failures from 11 negative-control cases (three controls pass); the tested source snapshot is retained alongside the log. Final qualification passes 78 native tests: 13 new correction cases, all 12 actual Serial/storage integration cases including >32 MiB and same-session Enter/Enter/script/re-arm, plus 53 existing runner/Serial/lifecycle cases. Browser qualification passes 21 integration/correction cases across Chromium, Firefox and Windows Playwright WebKit, plus all 14 actual AutomationPage arming/cancellation cases. Typecheck and focused formatting pass. No timeouts, assertions, integrity checks or acceptance gates were weakened.
+
+Patch: C:/Users/bruce/Desktop/Codex/2026-10-13/task/serial-fix-evidence/serial-core-correction-review.patch
+SHA-256: f4c34e9930d662d202f4785f0c6aebe2cf7f483792e4d96a567898153bb96b8d
+Manifest: C:/Users/bruce/Desktop/Codex/2026-10-13/task/serial-fix-evidence/serial-core-correction-review.json
+Candidate: C:/Users/bruce/Desktop/Codex/2026-10-13/task/capture-serial-correction/workspace
+
+Frozen foundation, accepted foundation correction and reviewed Serial source/patches/logs remain unchanged. Original application source is unchanged; main remains 2f84f429214633374e56159296b87c188d64c5f2; tests/ui/live.spec.ts retains its separate +4/-0 edit and expected SHA-256 and was never copied. No dependencies, DUT/physical port/SSH target interaction, installation, new CI dispatch, push, tag or publication.
+
+The UI/catalog/native IPC prototype workspace remains separate and unqualified. The current visible application is not upgraded by this correction. Durable UI/catalog/export and trusted native IPC, native indexing, SSH streaming/persistent console, whole-product memory/lifecycle and physical platform evidence remain pending. Unexpected midstream native-download failure UX in Firefox/WebKit remains an explicit release gate; preflight success does not qualify it. Serial scene work, including the latest subtle soft-light 16-bit/pixel clouds, remains queued with visual changes; no scene/animation files changed.
+
+This is a safe boundary for subsequent correctness/storage/SSH work to use the user's selected xhigh effort; visual/UI wording/icons/animations/docs remain allocated high. The active turn's effort was not changed, and no CI dispatch was requested or performed.

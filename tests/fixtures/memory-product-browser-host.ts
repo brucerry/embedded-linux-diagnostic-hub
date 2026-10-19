@@ -372,6 +372,7 @@ export async function createProductBrowser(options: {
                 directory: downloads,
                 emit: options.emit,
                 journal: downloadJournal,
+                signal: options.signal,
             });
         }
         await options.emit('actual-product-browser', {
@@ -421,6 +422,7 @@ export async function createProductBrowser(options: {
                     origin,
                     directory: downloads,
                     journal: downloadJournal,
+                    signal: options.signal,
                     monitor: actualDownloads,
                     rootChild: launched!.process(),
                     emit: options.emit,
@@ -476,6 +478,12 @@ export async function createProductBrowser(options: {
             get download() {
                 requireInspectionReady?.();
                 return actualDownloads?.download;
+            },
+            get streamDownload() {
+                return actualDownloads?.streamDownload;
+            },
+            get viewerDownload() {
+                return actualDownloads?.viewerDownload;
             },
             get downloadCount() {
                 return actualDownloads?.count;

@@ -1,0 +1,4 @@
+{
+    "enabled": true,
+    "reason": "Independent exact-source and host-scope review, then separate activation and execution authorization are required."
+}

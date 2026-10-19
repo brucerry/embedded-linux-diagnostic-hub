@@ -7,6 +7,7 @@ import {
 } from '../../tests/fixtures/memory-product-owner.ts';
 import { requireObservedClosure } from './owned-child.mjs';
 import { randomUUID } from 'node:crypto';
+import { observationOutcome } from './observation-outcome.mjs';
 
 export const limits = Object.freeze({
     parents: 2,
@@ -52,8 +53,12 @@ export async function collectProductPreparation(
         leaseOwned = false,
         journalClosed = false,
         released = false,
+        releaseDelegated = false,
         admissionUncertain = false,
-        pinsUnchanged = false;
+        pinsUnchanged = false,
+        recordsClosed = true,
+        releaseProtocolFailed = false,
+        completionReceipt = null;
     const fail = (error) => {
         failure ??= String(error).slice(0, 4096);
         if (active) {
@@ -67,9 +72,11 @@ export async function collectProductPreparation(
     };
     const record = (name, value) => {
         try {
-            ports.record(name, value);
+            const receipt = ports.record(name, value);
+            if (name === 'completion.json') completionReceipt = receipt;
             return true;
         } catch (e) {
+            recordsClosed = false;
             fail(e);
             return false;
         }
@@ -195,6 +202,17 @@ export async function collectProductPreparation(
                 );
             } catch (error) {
                 rememberPrepared(error.preparedLogs);
+                if (
+                    error.noChildStarted &&
+                    error.fdClosure?.complete === true &&
+                    ports.admissionRefused
+                )
+                    try {
+                        await ports.admissionRefused(spec);
+                    } catch (closeError) {
+                        preparedClosureUnknown = true;
+                        fail(closeError);
+                    }
                 // noChildStarted proves only admission, never descriptor durability/closure.
                 if (error.fdClosure?.complete !== true) preparedClosureUnknown = true;
                 admissionUncertain ||= !error.noChildStarted;
@@ -396,6 +414,16 @@ export async function collectProductPreparation(
         totalMemoryQualified: false,
         elapsedMs: clock.now() - started,
         leaseReleasePending: false,
+        observation:
+            records.length &&
+            records.every((r) => r.inspection?.ownershipComplete && r.streams.complete)
+                ? (records.find(
+                      (r) => r.inspection?.observation?.status !== 'COMPLETE_RAW_OBSERVATION',
+                  )?.inspection?.observation ??
+                  (failure
+                      ? observationOutcome({ ownershipComplete: true, complete: false, failure })
+                      : { status: 'COMPLETE_RAW_OBSERVATION', memoryQualified: false }))
+                : observationOutcome({ ownershipComplete: false, complete: false, failure }),
     };
     const proof = {
         directParentsClosed: records.every(
@@ -412,6 +440,7 @@ export async function collectProductPreparation(
         admissionCertain: !admissionUncertain,
         evidenceClosed:
             journalClosed &&
+            recordsClosed &&
             preparedEvidenceClosed &&
             preparedClosure.complete &&
             ports.evidenceComplete() &&
@@ -420,49 +449,112 @@ export async function collectProductPreparation(
     };
     result.leaseReleasePending = Object.values(proof).every(Boolean);
     const resultClosed = record('result-before-release.json', result);
-    if (result.leaseReleasePending && resultClosed && leaseOwned) {
+    const releaseReady = result.leaseReleasePending && resultClosed && leaseOwned;
+    if (releaseReady) {
         try {
-            ports.lease.release({ ...proof, resultClosed: true });
-            released = true;
+            // The real outer-bound lease is explicitly provisional. A direct lease is
+            // not released until the final required child record has closed below.
+            if (ports.lease.deferredRelease === true) {
+                const release = await ports.lease.release({ ...proof, resultClosed: true });
+                assert.equal(release?.deferred, true);
+                releaseDelegated = true;
+            }
             record('marker-release.json', {
-                released: true,
+                released: false,
+                delegatedToIndependentOuter: releaseDelegated,
+                releaseAfterFinalEvidence: true,
                 resultClosedBeforeRelease: true,
                 proof,
             });
         } catch (e) {
+            releaseProtocolFailed = true;
             fail(e);
         }
     }
+    const evidenceHealthy = () => proof.evidenceClosed && recordsClosed && ports.evidenceComplete();
+    const invalidObservation = () =>
+        observationOutcome({ ownershipComplete: false, durable: false, complete: false });
     const completion = {
         ...result,
+        observation:
+            evidenceHealthy() && !releaseProtocolFailed ? result.observation : invalidObservation(),
         status: failure ? 'INVALID_PRODUCT_COLLECTION' : 'COLLECTED_UNREVIEWED_WINDOWS_PAIR',
         failure,
-        markerReleased: released,
-        leaseRetained: ports.lease.state?.().retained ?? (leaseOwned && !released),
+        markerReleased: false,
+        leaseReleaseDelegated: releaseDelegated,
+        leaseRetained: ports.lease.state?.().retained ?? leaseOwned,
         leaseOwnershipUnverified:
             ports.lease.state?.().created && !ports.lease.state?.().identityConfirmed,
         collectorOwnExitOrCloseSelfAttested: false,
     };
     const completionDurable = record('completion.json', completion);
+    let finalEvidenceAcknowledged = false;
+    const childEvidenceClosed = completionDurable && evidenceHealthy();
     if (
-        completion.leaseRetained ||
+        releaseReady &&
+        !releaseProtocolFailed &&
+        childEvidenceClosed &&
+        !completion.leaseOwnershipUnverified &&
+        !admissionUncertain &&
+        preparedClosure.complete &&
+        proof.directParentsClosed &&
+        proof.leafReceiptsClosed
+    ) {
+        try {
+            if (releaseDelegated) {
+                assert.equal(
+                    typeof ports.finalEvidenceClosed,
+                    'function',
+                    'Final evidence-closed acknowledgment required',
+                );
+                assert(
+                    completionReceipt?.name === 'completion.json' &&
+                        /^[a-f0-9]{64}$/.test(completionReceipt.sha256) &&
+                        Number.isSafeInteger(completionReceipt.bytes) &&
+                        completionReceipt.bytes > 0 &&
+                        completionReceipt.bytes <= 262144,
+                    'Actual final completion byte receipt required',
+                );
+                await ports.finalEvidenceClosed(completionReceipt, completion.observation);
+                finalEvidenceAcknowledged = true;
+            } else {
+                await ports.lease.release({ ...proof, resultClosed: true });
+                released = true;
+            }
+        } catch (e) {
+            fail(e);
+        }
+    }
+    if (
+        !childEvidenceClosed ||
+        (releaseDelegated && !finalEvidenceAcknowledged) ||
+        (completion.leaseRetained && !released && !finalEvidenceAcknowledged) ||
         completion.leaseOwnershipUnverified ||
         admissionUncertain ||
         !preparedClosure.complete ||
         !proof.directParentsClosed ||
         !proof.leafReceiptsClosed
     ) {
-        // Production port stays attached with ownership handlers and a referenced handle.
-        // Tests can observe this boundary without starting or detaching an OS process.
-        return await ports.holdUnknown({ ...completion, completionDurable });
+        return await ports.holdUnknown({
+            ...completion,
+            status: 'INVALID_PRODUCT_COLLECTION',
+            failure,
+            observation: invalidObservation(),
+            completionDurable,
+            finalEvidenceAcknowledged,
+        });
     }
+    // No required child evidence write follows the final acknowledgment or direct release.
     for (const event of ['SIGTERM', 'SIGINT', 'disconnect']) events.off(event, interrupt);
     events.off('message', message);
     stopEntry?.();
     return {
         ...completion,
+        markerReleased: released,
+        leaseRetained: !released && completion.leaseRetained,
         status: failure ? 'INVALID_PRODUCT_COLLECTION' : completion.status,
         failure,
         completionDurable,
+        finalEvidenceAcknowledged,
     };
 }

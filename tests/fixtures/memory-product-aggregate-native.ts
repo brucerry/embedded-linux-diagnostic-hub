@@ -283,6 +283,8 @@ export async function createNativeAggregateDriver(context: {
                     viewer: Boolean(context.viewer),
                     faults: true,
                     nativeDownload: host!.download,
+                    expectedTail: tail,
+                    emit: context.emit,
                 });
                 await host!.joinDedicatedWorkers();
                 const seen = workers!.since(token);
@@ -334,7 +336,7 @@ export async function createNativeAggregateDriver(context: {
                     requireCrossPage: cross,
                     clear: 'none',
                     reopen: 'none',
-                    nativeDownload: host!.reportDownload,
+                    streamDownload: host!.reportDownload,
                     nativeSaveCases: (view) =>
                         exerciseNativeSaveCases(page, view, host!, context.emit),
                     nativeEmptyExport: {
@@ -489,6 +491,7 @@ export async function createNativeAggregateDriver(context: {
                     input,
                     coverage: [...coverage],
                     accounting,
+                    serialGeometryEvidence: serial.geometryEvidence,
                     keep,
                     ssh,
                     results,
@@ -531,6 +534,23 @@ export async function createNativeAggregateDriver(context: {
             } finally {
                 busy = false;
             }
+        },
+        async preflightGc() {
+            assert.equal(context.gcMode, 'forced');
+            assert.ok(host && gateway);
+            for (const [role, identity] of Object.entries(gateway.runtimeIdentity) as [
+                string,
+                any,
+            ][])
+                assert.ok(
+                    identity.execArgv?.includes('--expose-gc'),
+                    role + ' GC launch capability unavailable',
+                );
+            return {
+                native: await host.preflightGc(),
+                gateway: Object.keys(gateway.runtimeIdentity),
+                actualGcCalls: 0,
+            };
         },
         sampleProcesses: sample,
         async sampleShutdownProcesses() {

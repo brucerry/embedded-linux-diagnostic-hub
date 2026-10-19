@@ -65,6 +65,21 @@ on:
                 description: 'Independently reviewed exact source digest for WinPS-only contract'
                 type: string
                 required: false
+            windows_observation_pair:
+                description:
+                    'Prepare one full normal-GC raw pair, then wait for same-host human approval'
+                type: boolean
+                required: false
+                default: false
+            observation_request_json:
+                description: 'Exact reviewed source/policy/coverage request JSON for the raw pair'
+                type: string
+                required: false
+            observation_approve_json:
+                description:
+                    'Human approval JSON copied from the live host challenge; approval-only job'
+                type: string
+                required: false
     push:
         branches: [main]
     pull_request:
@@ -74,23 +89,29 @@ permissions:
 
 concurrency:
     group:
-        windows-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch'
-        && inputs.windows_pty_observation_only && '-pty-observation' || github.event_name ==
+        windows-${{ github.workflow }}-${{ github.ref }}${{ inputs.observation_approve_json &&
+        format('-observation-approval-{0}', github.run_id) || inputs.windows_observation_pair &&
+        '-observation-pair' || github.event_name == 'workflow_dispatch' &&
+        inputs.windows_pty_observation_only && '-pty-observation' || github.event_name ==
         'workflow_dispatch' && inputs.windows_pilot_winps_contract && '-winps-contract' ||
-        github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only && '-preflight' ||
-        github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot && '-native-pilot'
-        || '' }}
+        github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+        !inputs.observation_request_json && !inputs.observation_approve_json &&
+        inputs.windows_preflight_only && '-preflight' || github.event_name == 'workflow_dispatch' &&
+        !inputs.windows_observation_pair && !inputs.observation_request_json &&
+        !inputs.observation_approve_json && inputs.windows_native_pilot && '-native-pilot' || '' }}
     cancel-in-progress:
         ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
         inputs.windows_native_pilot || inputs.windows_pilot_winps_contract ||
-        inputs.windows_pty_observation_only)) }}
+        inputs.windows_pty_observation_only || inputs.windows_observation_pair ||
+        inputs.observation_request_json || inputs.observation_approve_json)) }}
 
 jobs:
     build:
         if:
             ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
             inputs.windows_native_pilot || inputs.windows_pilot_winps_contract ||
-            inputs.windows_pty_observation_only)) }}
+            inputs.windows_pty_observation_only || inputs.windows_observation_pair ||
+            inputs.observation_request_json || inputs.observation_approve_json)) }}
         runs-on: windows-latest
         timeout-minutes: 30
         steps:
@@ -185,9 +206,10 @@ jobs:
     windows-preflight-only:
         name: Windows metadata preflight (nonqualifying)
         if:
-            github.event_name == 'workflow_dispatch' && inputs.windows_preflight_only &&
-            !inputs.windows_native_pilot && !inputs.windows_pilot_winps_contract &&
-            !inputs.windows_pty_observation_only
+            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            !inputs.observation_request_json && !inputs.observation_approve_json &&
+            inputs.windows_preflight_only && !inputs.windows_native_pilot &&
+            !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -236,8 +258,10 @@ jobs:
     windows-native-pilot:
         name: Finite Windows native readiness pilot (nonqualifying)
         if:
-            github.event_name == 'workflow_dispatch' && inputs.windows_native_pilot &&
-            !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
+            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            !inputs.observation_request_json && !inputs.observation_approve_json &&
+            inputs.windows_native_pilot && !inputs.windows_pilot_winps_contract &&
+            !inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 15
         env:
@@ -295,8 +319,9 @@ jobs:
 
     winps-provider-contract:
         if:
-            github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract &&
-            !inputs.windows_pty_observation_only
+            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            !inputs.observation_request_json && !inputs.observation_approve_json &&
+            inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 8
         env:
@@ -349,7 +374,10 @@ jobs:
 
     windows-pty-observation:
         name: One Windows PTY observation stage (nonqualifying)
-        if: github.event_name == 'workflow_dispatch' && inputs.windows_pty_observation_only
+        if:
+            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            !inputs.observation_request_json && !inputs.observation_approve_json &&
+            inputs.windows_pty_observation_only
         runs-on: windows-latest
         timeout-minutes: 15
         permissions:
@@ -414,3 +442,115 @@ jobs:
                   path: ${{ runner.temp }}/diagnostic-hub-pty-observation/
                   if-no-files-found: warn
                   retention-days: 14
+
+    windows-observation-pair:
+        name: One manually approved full Windows raw observation pair
+        if: >-
+            github.event_name == 'workflow_dispatch' && inputs.windows_observation_pair &&
+            inputs.observation_request_json && !inputs.observation_approve_json &&
+            !inputs.windows_preflight_only && !inputs.windows_native_pilot &&
+            !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
+        runs-on: windows-latest
+        timeout-minutes: 130
+        permissions:
+            contents: read
+            actions: read
+        env:
+            OBSERVATION_REQUEST_JSON: ${{ inputs.observation_request_json }}
+        steps:
+            - name: Refuse replacement attempts and non-owner dispatch
+              shell: pwsh
+              run: |
+                  if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'One attempt; no rerun.' }
+                  if ($env:GITHUB_ACTOR -ne 'brucerry') { throw 'Reviewed human owner required.' }
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  architecture: x64
+                  cache: npm
+            - name: Refuse disabled source before dependency or PTY execution
+              shell: pwsh
+              run: |
+                  node -e "if (!JSON.parse(require('node:fs').readFileSync('scripts/lib/observation-execution.json','utf8')).enabled) throw Error('Observation source remains disabled pending independent review and activation approval')"
+                  if ($LASTEXITCODE -ne 0) { throw 'Disabled review candidate; no PTY or pair is launched.' }
+            - name: Restore reviewed lockfile dependencies
+              run: npm ci
+            - name: Create the fresh canonical private evidence root
+              shell: pwsh
+              run: |
+                  $tmp = node -p "require('node:fs').realpathSync(require('node:os').tmpdir())"
+                  if ($LASTEXITCODE -ne 0) { throw 'Canonical TEMP required.' }
+                  $root = Join-Path $tmp "diagnostic-hub-observation-$env:GITHUB_RUN_ID-1"
+                  if (Test-Path -LiteralPath $root) { throw 'Fresh private root required; no retry.' }
+                  New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+                  "OBSERVATION_ROOT=$root" >> $env:GITHUB_ENV
+                  $pty = Join-Path $tmp "diagnostic-hub-observation-pty-$env:GITHUB_RUN_ID-1"
+                  if (Test-Path -LiteralPath $pty) { throw 'Fresh PTY evidence root required.' }
+                  New-Item -ItemType Directory -Path $pty -ErrorAction Stop | Out-Null
+                  "OBSERVATION_PTY_ROOT=$pty" >> $env:GITHUB_ENV
+                  $loader = node -p "require('node:url').pathToFileURL(require.resolve('tsx')).href"
+                  if ($LASTEXITCODE -ne 0) { throw 'Actual loader required.' }
+                  "OBSERVATION_LOADER=$loader" >> $env:GITHUB_ENV
+            - name: Fresh reviewed PTY gate on this allocation; no native app stage
+              shell: pwsh
+              env:
+                  HUB_WINDOWS_PTY_OBSERVATION_ONLY: '1'
+              run: |
+                  $request = $env:OBSERVATION_REQUEST_JSON | ConvertFrom-Json
+                  $env:HUB_PTY_OBSERVATION_SCOPE_JSON = $request.pty.scopeJSON
+                  $result = node --import $env:OBSERVATION_LOADER scripts/windows-pty-observation.mts "--out=$env:OBSERVATION_PTY_ROOT" "--expected-source=$($request.sourceSHA256)" "--expected-policy=$($request.pty.policySHA256)" "--scope-sha256=$($request.pty.scopeSHA256)"
+                  if ($LASTEXITCODE -ne 0) { throw 'Fresh PTY failed or closure unknown; stop, no pair and no retry.' }
+                  $result | Set-Content -LiteralPath (Join-Path $env:OBSERVATION_PTY_ROOT 'returned-owner-result.json') -Encoding utf8
+                  "OBSERVATION_PTY_GATE_COMPLETED=1" >> $env:GITHUB_ENV
+            - name: Own preparation, live same-host approval, then at most one serialized raw pair
+              shell: pwsh
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  HUB_WINDOWS_OBSERVATION_PAIR: '1'
+                  HUB_OBSERVATION_REQUEST_JSON: ${{ inputs.observation_request_json }}
+              run: |
+                  node --import $env:OBSERVATION_LOADER scripts/windows-observation-pair.mts "--out=$env:OBSERVATION_ROOT"
+                  if ($LASTEXITCODE -ne 0) { throw 'Observation did not complete clean raw evidence; retain exact outcome, no retry.' }
+            - name: Retain exact bounded evidence including refused and incomplete observations
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-raw-observation-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: |
+                      ${{ env.OBSERVATION_ROOT }}/
+                      ${{ env.OBSERVATION_PTY_ROOT }}/
+                  if-no-files-found: warn
+                  retention-days: 14
+
+    windows-observation-approval:
+        name: Human same-host approval record only
+        if: >-
+            github.event_name == 'workflow_dispatch' && inputs.observation_approve_json &&
+            !inputs.windows_observation_pair && !inputs.observation_request_json &&
+            !inputs.windows_preflight_only && !inputs.windows_native_pilot &&
+            !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: read
+        env:
+            OBSERVATION_APPROVAL_JSON: ${{ inputs.observation_approve_json }}
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+            - name: Validate the human-owned decision; never launch a product payload
+              id: decision
+              run: node scripts/windows-observation-approve.mjs
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ steps.decision.outputs.artifact_name }}
+                  path: approval.json
+                  if-no-files-found: error
+                  retention-days: 1

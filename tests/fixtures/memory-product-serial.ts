@@ -11,7 +11,11 @@ type Mode = {
     holdPrompt?: boolean;
     tail?: string;
 };
-export function installProductSerial() {
+export function installProductSerial(expected?: { chunkBytes: number; prompt: string }) {
+    let geometryFailure: Error | undefined;
+    const requireGeometry = () => {
+        if (geometryFailure) throw geometryFailure;
+    };
     let mode: Mode = { bytes: 32, chunkBytes: 16384, delayMs: 0, prompt: 'qualification# ' };
     let generation = 0,
         opens = 0,
@@ -80,6 +84,7 @@ export function installProductSerial() {
         writable: null,
         getInfo: () => ({ usbVendorId: 0xabcd, usbProductId: 0x0600 }),
         async open() {
+            requireGeometry();
             event('open-start');
             opens++;
             if (mode.holdOpen)
@@ -128,6 +133,7 @@ export function installProductSerial() {
             });
             const output = new WritableStream<Uint8Array>({
                 async write(bytes) {
+                    requireGeometry();
                     writes++;
                     event('write-start', bytes.length);
                     sent += bytes.length;
@@ -194,6 +200,17 @@ export function installProductSerial() {
     return {
         port,
         configure(next: Partial<Mode>) {
+            requireGeometry();
+            if (
+                expected &&
+                ((next.chunkBytes !== undefined && next.chunkBytes !== expected.chunkBytes) ||
+                    (next.prompt !== undefined && next.prompt !== expected.prompt))
+            ) {
+                geometryFailure = Error(
+                    'Selected Serial fixture geometry mismatch; no retry or rechunking.',
+                );
+                throw geometryFailure;
+            }
             if (remaining || promptPending || pumping)
                 throw Error('Finish current fixture response before reconfiguration.');
             mode = { ...mode, ...next };
@@ -245,6 +262,16 @@ export function installProductSerial() {
         },
         snapshot() {
             return {
+                geometry: {
+                    expected: expected ? { ...expected } : null,
+                    actual: {
+                        chunkBytes: mode.chunkBytes,
+                        prompt: mode.prompt,
+                        bodyBytes: mode.bytes,
+                        tail: mode.tail ?? '',
+                    },
+                    failure: geometryFailure ? String(geometryFailure) : null,
+                },
                 opens,
                 closes,
                 sent,

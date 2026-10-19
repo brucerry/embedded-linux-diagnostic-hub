@@ -239,4 +239,5 @@ export interface QualificationDriver {
     sampleShutdownProcesses?(): ReturnType<QualificationDriver['sampleProcesses']>;
     teardown(): Promise<void>;
     assertDescendantsExited(): Promise<void>;
+    preflightGc?(): Promise<unknown>;
 }

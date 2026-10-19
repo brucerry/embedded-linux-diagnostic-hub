@@ -189,7 +189,7 @@ export function closeEntries(entries, io = fs) {
 }
 export function streamCollector(
     fd,
-    { max = limits.streamBytes, io = fs, onFailure = () => {} } = {},
+    { max = limits.streamBytes, io = fs, onFailure = () => {}, admit = () => {} } = {},
 ) {
     let attempted = 0,
         written = 0,
@@ -203,6 +203,7 @@ export function streamCollector(
             if (failed) return;
             try {
                 assert(attempted <= max, 'Parent stream evidence cap exceeded.');
+                admit(bytes.length);
                 writeAll(fd, bytes, {
                     writeSync(...args) {
                         const n = io.writeSync(...args);
@@ -228,4 +229,195 @@ export function streamCollector(
             partialWriteUncertainty: failed,
         }),
     };
+}
+
+const durableReferences = new WeakMap();
+/** Whole-tree durable verification with one64KiB buffer, no retained file bodies. */
+export function readStreamedDurableArtifacts(specs, { io = fs, check = () => {} } = {}) {
+    const raw = {},
+        inventory = [],
+        entries = [],
+        readErrors = [];
+    const scratch = Buffer.alloc(65536);
+    for (const spec of specs) {
+        if (spec.optional && !io.existsSync(spec.path)) continue;
+        let entry,
+            identity,
+            bytes = 0,
+            sha256;
+        try {
+            check(spec.path);
+            identity = io.lstatSync(spec.path);
+            assert(
+                identity.isFile() &&
+                    !identity.isSymbolicLink() &&
+                    identity.nlink === 1 &&
+                    identity.size <= spec.max,
+            );
+            const fd = io.openSync(spec.path, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW ?? 0));
+            entry = {
+                fd,
+                name: spec.name,
+                path: spec.path,
+                errors: [],
+                synced: false,
+                closed: false,
+                attempted: false,
+            };
+            entries.push(entry);
+            const verify = () => {
+                check(spec.path);
+                const a = io.fstatSync(fd),
+                    b = io.lstatSync(spec.path);
+                assert(a.isFile() && b.isFile() && !b.isSymbolicLink());
+                for (const k of ['dev', 'ino', 'uid', 'size'])
+                    assert(
+                        a[k] === identity[k] && b[k] === identity[k],
+                        'Streamed raw identity changed',
+                    );
+            };
+            entry.beforeSync = verify;
+            entry.afterSync = verify;
+            verify();
+            const hash = createHash('sha256');
+            for (;;) {
+                const n = io.readSync(fd, scratch, 0, scratch.length, null);
+                if (!n) break;
+                bytes += n;
+                assert(bytes <= identity.size && bytes <= spec.max);
+                hash.update(scratch.subarray(0, n));
+            }
+            assert(bytes === identity.size);
+            verify();
+            sha256 = hash.digest('hex');
+        } catch (e) {
+            readErrors.push({ name: spec.name, error: String(e).slice(0, 4096) });
+        } finally {
+            if (entry) closeEntries([entry], io);
+        }
+        inventory.push({
+            name: spec.name,
+            path: spec.path,
+            bytes,
+            maximumBytes: spec.max,
+            sha256: sha256 ?? null,
+        });
+        if (sha256 && entry?.synced && entry.closed && !entry.errors.length) {
+            const ref = Object.freeze({
+                kind: 'durable-file-reference-v1',
+                path: spec.path,
+                bytes,
+                sha256,
+            });
+            durableReferences.set(ref, { io, check, identity });
+            raw[spec.name] = ref;
+        }
+        if (entry && !entry.closed) {
+            readErrors.push({
+                name: spec.name,
+                error: 'Descriptor closure unknown; further file admission stopped.',
+            });
+            break;
+        }
+    }
+    const complete =
+        readErrors.length === 0 &&
+        entries.every((e) => e.synced && e.closed && !e.errors.length) &&
+        inventory.length === specs.filter((s) => !s.optional || io.existsSync(s.path)).length;
+    return {
+        raw,
+        inventory,
+        durability: {
+            complete,
+            readErrors,
+            errors: entries.flatMap((e) => e.errors),
+            handles: entries.map((e) => ({
+                name: e.name,
+                path: e.path,
+                openObserved: true,
+                syncObserved: e.synced,
+                closeObserved: e.closed,
+                closeAttempted: e.attempted,
+                errors: [...e.errors],
+            })),
+            maximumReadBufferBytes: scratch.length,
+            retainedRawBodyBytes: 0,
+        },
+    };
+}
+/** Reopens only a module-owned identity-checked reference; verifies exact EOF digest and close. */
+export function* durableChunks(ref) {
+    const owner = durableReferences.get(ref);
+    assert(owner, 'Foreign durable file reference');
+    const { io, check, identity } = owner;
+    let fd;
+    const buffer = Buffer.alloc(65536),
+        hash = createHash('sha256');
+    let bytes = 0;
+    const verify = () => {
+        check(ref.path);
+        const p = io.lstatSync(ref.path),
+            f = io.fstatSync(fd);
+        assert(p.isFile() && !p.isSymbolicLink() && f.isFile());
+        for (const k of ['dev', 'ino', 'uid', 'size'])
+            assert(p[k] === identity[k] && f[k] === identity[k], 'Streamed reader rebound');
+    };
+    try {
+        fd = io.openSync(ref.path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+        verify();
+        for (;;) {
+            const n = io.readSync(fd, buffer, 0, buffer.length, null);
+            if (!n) break;
+            bytes += n;
+            assert(bytes <= ref.bytes);
+            const value = buffer.subarray(0, n);
+            hash.update(value);
+            yield value;
+        }
+        assert(
+            bytes === ref.bytes && hash.digest('hex') === ref.sha256,
+            'Streamed reader EOF digest',
+        );
+        verify();
+    } finally {
+        if (fd !== undefined) io.closeSync(fd);
+    }
+}
+/** Synchronous consumers borrow each row until the next iteration; no growing concat buffers. */
+export function* artifactLines(input, maxLine = 1048576) {
+    const chunks = Buffer.isBuffer(input) ? [input] : durableChunks(input),
+        row = Buffer.alloc(maxLine);
+    let used = 0;
+    for (const chunk of chunks) {
+        let start = 0;
+        for (let i = 0; i < chunk.length; i++)
+            if (chunk[i] === 10) {
+                const n = i + 1 - start;
+                assert(used + n <= maxLine, 'Artifact line bound');
+                chunk.copy(row, used, start, i + 1);
+                used += n;
+                yield row.subarray(0, used);
+                used = 0;
+                start = i + 1;
+            }
+        assert(used + chunk.length - start <= maxLine, 'Artifact line bound');
+        chunk.copy(row, used, start);
+        used += chunk.length - start;
+    }
+    assert(!used, 'Artifact unterminated EOF');
+}
+export function smallArtifact(input, max = 4194304) {
+    if (Buffer.isBuffer(input)) {
+        assert(input.length <= max);
+        return input;
+    }
+    assert(input.bytes <= max);
+    const result = Buffer.alloc(input.bytes);
+    let offset = 0;
+    for (const chunk of durableChunks(input)) {
+        chunk.copy(result, offset);
+        offset += chunk.length;
+    }
+    assert(offset === result.length);
+    return result;
 }

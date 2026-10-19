@@ -1,0 +1,13 @@
+# Corrective acceptance — 2026-10-12
+
+Accepted source: 6c4ef3cd826c50392926698ae0459ce1cd25f2e4.
+
+- Windows 38229292609, Linux 38229292605 and website 38229292914 completed successfully. Linux includes the base packaging/runtime job and all seven unchanged GNOME42/46/48/50 X11/Wayland cases. Windows retains packaged 100-cycle native stress, cold launch, host trust, icon/signature/asset gates.
+- Exact class diagnostic-hub-native verified on the real compositor; original desktop name restored after window creation. No app name, user-data, executable, updater or launcher-file identity migration; no extension operation.
+- Initial 5538d89 rejected on all seven class assertions. bd80da1 fixed the actual class, then five cases timed out on programmatic minimize/restore. e1360b5 sequential traces proved transitions through minimize and showed actual compositor remaining minimized after client restore, including local Electron false on Wayland while compositor stayed1. These failures remain recorded; none were waived.
+- Qualified Linux test operation is owned compositor native desktop/window-switcher unminimize/activate, as used by the former native GNOME harness. Both actual compositor and Electron states, 5-second deadlines, restore notifications, one window, selected terminal, no crash and SSH/PTY identity continuity remain asserted. This qualifies native compositor restoration, NOT BrowserWindow.restore API; no production workaround or new renderer privilege was added.
+- Local full unit 110 total:100 pass/10 platform skips/0fail; focused tests/type/build pass. Sequenced Windows native100cycles pass with trace. Hosted Linux/website production tests cover platform-only cases. No local installation or board operation occurred.
+- All original user-file hashes remain identical, and only the original two tracked edits and one untracked worker remain dirty. Private evidence, archived plans, saved reports and previously published assets/notes remain untouched.
+- Read-only npm audit reports8moderate/2critical entries tracing to two dev/build advisories; production-only audit0. Current concurrently calls have literal commands/no untrusted comment-token expansion; affected build logging is not an identified application/device input path. No force upgrade; native Electron/Chromium risks are not covered by npm audit. Detailed advisory receipts saved in task/stable-dependency-applicability.json.
+
+The removal contract was already synced and archived at15/15. This implementation-only correction is4/4 with skip_specs; no requirement change or new sync is needed. Stable publication remains separately gated on fresh tag workflows and public asset/source verification. macOS and3-second SSH retry remain deferred until after stable completion.

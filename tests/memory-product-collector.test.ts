@@ -21,6 +21,12 @@ import {
 } from '../scripts/lib/product-collector-files.mjs';
 import { inspectProductRaw } from '../scripts/lib/product-collector-inspection.mjs';
 import { observeCollector } from '../scripts/lib/product-collector-observer.mjs';
+import {
+    SoakTimeline,
+    soakEvidenceContract,
+    soakEvidenceContractSHA256,
+} from '../scripts/lib/soak-evidence.mjs';
+import { losslessReportStages } from '../scripts/lib/startup-identity-report.mjs';
 class Clock {
     time = 0;
     serial = 0;
@@ -210,7 +216,8 @@ test('2 ordered parents persist closure before next admission and release only a
     for (let i = 0; i < 1; i++)
         assert(h.order.indexOf(`parent-${i}-closure.json`) < h.order.indexOf('begin-' + (i + 1)));
     assert(h.order.indexOf('result-before-release.json') < h.order.indexOf('release'));
-    assert(h.order.indexOf('release') < h.order.indexOf('marker-release.json'));
+    assert(h.order.indexOf('marker-release.json') < h.order.indexOf('completion.json'));
+    assert(h.order.indexOf('completion.json') < h.order.indexOf('release'));
 
     assert(h.children.every((c) => c.kills.length === 0));
     assert.equal(h.events.listenerCount('SIGTERM'), 0);
@@ -804,4 +811,102 @@ test('complete modeled native collection is explicitly unreviewed; missing owner
         mutate(bad);
         assert.equal(inspectProductRaw(bad.raw(), bad.binding).valid, false);
     }
+});
+
+test('real fsynced soak writer/decoder proves healthy budget-refusal teardown without granting a completed observation', async () => {
+    const f = productRawModel(),
+        root = scratch(),
+        file = path.join(root, 'timeline.jsonl');
+    f.binding.job = {
+        schema: 1,
+        nonce: '11111111-1111-4111-8111-111111111111',
+        budgetMs: 2400000,
+        reserveMs: 60000,
+        deadlineMs: 2400000,
+    };
+    const identity = f.rows.find((r) => r.stage === 'identity').data;
+    identity.productJob = f.binding.job;
+    const context = f.rows.find((r) => r.stage === 'assessment-context').data.context;
+    context.scope.roles = ['qualification-harness', 'native-main'];
+    const receipt = f.rows.find((r) => r.stage === 'receipt').data;
+    Object.assign(receipt, {
+        status: 'failed',
+        failure: 'Soak lifetime budget: physicalBytes',
+        cycles: 97,
+        achievedMeasuredMs: 1400000,
+    });
+    f.binding.evidenceFormat = soakEvidenceContract.format;
+    f.binding.evidenceContractSHA256 = soakEvidenceContractSHA256;
+    const descriptor = await fs.promises.open(file, 'wx'),
+        writer = new SoakTimeline(descriptor, {
+            sourceSHA256: f.binding.sourceSHA256,
+            nonce: f.binding.job.nonce,
+        });
+    try {
+        await writer.start();
+        await writer.emit('identity', identity);
+        await writer.emit('assessment-context', { context });
+        writer.fail(Error(receipt.failure));
+        await writer.enterCleanup();
+        for (const row of f.rows.filter(
+            (r) => !['identity', 'assessment-context'].includes(r.stage),
+        ))
+            await (losslessReportStages.includes(row.stage)
+                ? writer.emit.publishIdentity(row.stage, row.data)
+                : writer.emit(row.stage, row.data));
+        await assert.rejects(writer.finish(), /Soak lifetime budget/);
+        assert.equal(descriptor.fd, -1);
+        const raw = { ...f.raw(), timeline: fs.readFileSync(file) },
+            result = inspectProductRaw(raw, f.binding);
+        assert.equal(result.valid, false);
+        assert.equal(result.ownershipComplete, true);
+        assert.equal(result.localIntegrity.complete, false);
+        assert.equal(result.observation.status, 'INCOMPLETE_UNQUALIFIED_OBSERVATION');
+        const truncated = { ...raw, timeline: raw.timeline.subarray(0, raw.timeline.length - 10) };
+        assert.equal(inspectProductRaw(truncated, f.binding).ownershipComplete, false);
+        f.native.snapshot.capture.services.storeOpen = true;
+        assert.equal(
+            inspectProductRaw(
+                { ...raw, nativeExit: Buffer.from(JSON.stringify(f.native)) },
+                f.binding,
+            ).ownershipComplete,
+            false,
+        );
+    } finally {
+        if (descriptor.fd !== -1) await descriptor.close();
+        fs.rmSync(root, { recursive: true });
+    }
+});
+test('controller stops the pair after one honestly incomplete or product-failed observation and releases only on positive closure', async () => {
+    for (const status of [
+        'INCOMPLETE_UNQUALIFIED_OBSERVATION',
+        'PRODUCT_OWNERSHIP_INTEGRITY_FAILURE',
+    ]) {
+        const h = await run({
+            inspect: async () => ({
+                valid: false,
+                ownershipComplete: true,
+                error: 'observed refusal',
+                observation: { status, memoryQualified: false },
+            }),
+        });
+        assert.equal(h.children.length, 1);
+        assert.equal(h.result.markerReleased, true);
+        assert.equal(h.result.observation.status, status);
+        assert.equal(h.state().summary, false);
+    }
+    const unknown = await run({
+        inspect: async () => ({
+            valid: false,
+            ownershipComplete: false,
+            error: 'missing close',
+            observation: {
+                status: 'INVALID_UNKNOWN_CLOSURE_OR_DURABILITY',
+                memoryQualified: false,
+            },
+        }),
+    });
+    assert.equal(unknown.children.length, 1);
+    assert.equal(unknown.result.markerReleased, false);
+    assert.equal(unknown.result.modelHoldObserved, true);
 });

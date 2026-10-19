@@ -6,10 +6,12 @@ import { exerciseNativeSaveCases } from './fixtures/memory-product-native-save-u
 import { createProductBrowser } from './fixtures/memory-product-browser-host';
 import { expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import type { ProductViewerDownload } from './fixtures/memory-product-ui';
+import { inspectOwnedArtifact } from '../scripts/lib/owned-artifact-stream.mjs';
+import type { ProductResultsDownload } from './fixtures/memory-product-results-ui';
 import {
     exerciseProductResults,
     inspectProductResultsReport,
+    inspectProductResultsStream,
     type ResultsCapture,
 } from './fixtures/memory-product-results-ui';
 import { NativeCaptureHost } from '../electron/capture-host';
@@ -173,7 +175,7 @@ try {
         .locator('[aria-label="Stored Serial captures"]');
     const before = await repository.page(0, 100);
     try {
-        const nativeDownload: ProductViewerDownload = async (extension, run, validate) => {
+        const nativeDownload: ProductResultsDownload = async (extension, run, validate) => {
             const file = path.join(root, 'report-' + ordinal++ + '.' + extension);
             control.arm(file, false);
             try {
@@ -187,15 +189,14 @@ try {
                 assert.equal(receipt?.decision, 'save');
                 await expect(view.getByRole('status')).toHaveText('Export saved.');
                 await expect(view.getByRole('alert')).toHaveCount(0);
-                const bytes = await fs.readFile(file);
-                if (validate) await validate(bytes);
+                const inspected = await inspectOwnedArtifact(file, validate);
                 await fs.unlink(file);
                 await emit('actual-native-report-validated', {
                     extension,
-                    bytes: bytes.length,
+                    bytes: inspected.bytes,
                     receipt,
                 });
-                return bytes;
+                return inspected.result;
             } finally {
                 control.cancelForShutdown();
             }
@@ -218,7 +219,7 @@ try {
                 begin: () => facade.beginNoReport(),
                 finish: () => facade.finishNoReport(),
             },
-            nativeDownload,
+            streamDownload: nativeDownload,
         });
         for (const scope of ['filtered', 'all'] as const) {
             await view
@@ -233,10 +234,10 @@ try {
                         view
                             .getByRole('button', { name: 'Download QA results', exact: true })
                             .click(),
-                    (bytes) =>
-                        inspectProductResultsReport(
+                    (chunks) =>
+                        inspectProductResultsStream(
                             format,
-                            bytes,
+                            chunks,
                             scope === 'filtered' ? expected.slice(0, 2) : expected,
                         ),
                 );

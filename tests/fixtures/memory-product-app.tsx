@@ -4,6 +4,7 @@ import App from '../../src/app/App';
 import '../../src/styles/workspace.css';
 import { productInstances, productOwnership, productFaults } from './memory-product-registry';
 import { installProductSerial } from './memory-product-serial';
+import { SerialGeometryRead } from './memory-product-geometry';
 import { openCaptureRepository } from '../../src/features/automation/capture/repository';
 import type { SerialSession } from '../../src/features/serial/session';
 import type { FlowRunner } from '../../src/features/automation/runner';
@@ -20,7 +21,7 @@ import {
     type ConsoleReadLimits,
 } from './memory-product-console-read';
 
-const serial = installProductSerial();
+const serial = installProductSerial({ chunkBytes: 16384, prompt: 'qualification# ' });
 const container = document.getElementById('root');
 if (!container) throw Error('Qualification root missing.');
 let root: Root | undefined;
@@ -252,7 +253,10 @@ const api = {
                 'browser origin estimate, includes intentional caches; not exact physical allocation',
         };
     },
-    async readSummary(id: string) {
+    async readSummary(id: string, expectedGeometry?: { bodyBytes: number; tail: string }) {
+        const geometry = expectedGeometry
+            ? new SerialGeometryRead(expectedGeometry.bodyBytes, expectedGeometry.tail)
+            : null;
         const repository = await openCaptureRepository();
         let bytes = 0,
             frames = 0;
@@ -264,6 +268,7 @@ const api = {
             else {
                 if (!verifier) throw Error('Raw product read returned a frame before metadata.');
                 verifier.append(item.frame);
+                geometry?.append(item.frame);
                 bytes += item.frame.bytes.length;
                 streamBytes[item.frame.stream] += item.frame.bytes.length;
                 for (const value of item.frame.bytes)
@@ -280,6 +285,7 @@ const api = {
             streamBytes,
             streamSamples,
             crcAndBoundariesVerified: true,
+            geometry: geometry?.finish() ?? null,
             outcome: await repository.result?.(id),
         };
     },

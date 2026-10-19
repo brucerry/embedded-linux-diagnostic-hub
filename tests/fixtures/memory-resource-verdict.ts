@@ -85,15 +85,22 @@ export const memoryMetrics = [
     'rssBytes',
 ] as const;
 type Metric = (typeof memoryMetrics)[number];
-type Budget = { maxDeltaBytes: number; maxSlopeBytesPerCycle: number; calibrationRuns: string[] };
+type Budget = {
+    maxDeltaBytes: number;
+    maxSlopeBytesPerComparableCheckpoint: number;
+    calibrationRuns: string[];
+};
 export type MemoryPolicy = {
     reviewed: true;
+    slopeUnit: 'bytes-per-comparable-checkpoint';
     identitySHA256: string;
     roles: Record<string, Partial<Record<Metric, Budget>>>;
 };
 const isHash = (value: unknown): value is string =>
     typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 export function validateMemoryPolicy(policy: MemoryPolicy, identity: string, roles: string[]) {
+    if (policy.slopeUnit !== 'bytes-per-comparable-checkpoint')
+        throw new QualificationBlocked('Memory slope unit/version mismatch.');
     if (policy.reviewed !== true || policy.identitySHA256 !== identity)
         throw new QualificationBlocked('Reviewed memory policy identity mismatch.');
     if (
@@ -113,8 +120,8 @@ export function validateMemoryPolicy(policy: MemoryPolicy, identity: string, rol
                 !budget ||
                 !Number.isFinite(budget.maxDeltaBytes) ||
                 budget.maxDeltaBytes < 0 ||
-                !Number.isFinite(budget.maxSlopeBytesPerCycle) ||
-                budget.maxSlopeBytesPerCycle < 0 ||
+                !Number.isFinite(budget.maxSlopeBytesPerComparableCheckpoint) ||
+                budget.maxSlopeBytesPerComparableCheckpoint < 0 ||
                 !Array.isArray(budget.calibrationRuns) ||
                 budget.calibrationRuns.length < 10 ||
                 !budget.calibrationRuns.every(isHash) ||
@@ -165,7 +172,10 @@ export class MemoryAssessment {
     private warmed = new Map<string, number[]>();
     private measured = new Map<string, Stats>();
     private unqualified = new Map<string, { role: string; metric: Metric; reason: string }>();
-    constructor(private policy: MemoryPolicy) {}
+    constructor(private policy: MemoryPolicy) {
+        if (policy.slopeUnit !== 'bytes-per-comparable-checkpoint')
+            throw new QualificationBlocked('Memory slope unit/version mismatch.');
+    }
     private visit(
         samples: ProcessSample[],
         stateKey: string,
@@ -285,9 +295,9 @@ export class MemoryAssessment {
                 slope = stats.sXY / stats.sXX;
             if (!Number.isFinite(slope)) throw Error(`Invalid retained-memory slope for ${key}.`);
             const budget = this.policy.roles[stats.role][stats.metric]!;
-            if (slope > budget.maxSlopeBytesPerCycle)
+            if (slope > budget.maxSlopeBytesPerComparableCheckpoint)
                 throw Error(
-                    `retained-memory-slope ${key}: ${slope} exceeds reviewed slope ${budget.maxSlopeBytesPerCycle}.`,
+                    `retained-memory-slope ${key}: ${slope} exceeds reviewed slope ${budget.maxSlopeBytesPerComparableCheckpoint}.`,
                 );
             return {
                 key,
@@ -298,7 +308,8 @@ export class MemoryAssessment {
                 maxDelta: stats.maxDelta,
                 firstMedian: median(stats.first),
                 lastMedian: median(stats.last),
-                bytesPerCycle: slope,
+                bytesPerComparableCheckpoint: slope,
+                slopeUnit: 'bytes-per-comparable-checkpoint' as const,
             };
         });
     }

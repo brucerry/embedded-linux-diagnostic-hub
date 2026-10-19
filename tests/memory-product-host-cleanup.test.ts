@@ -181,7 +181,7 @@ function host(file: string, control: Control = {}) {
         if (name === 'esbuild') return {};
         if (name.startsWith('./memory-product-') || name === './memory-resource-ssh-profile')
             return {};
-        return createRequire(import.meta.url)(name);
+        return createRequire(pathToFileURL(path.join(fixtureRoot, file)))(name);
     };
     const source = fs
         .readFileSync(path.join(fixtureRoot, file), 'utf8')

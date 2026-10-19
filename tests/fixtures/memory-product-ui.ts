@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { inspectViewerArtifact } from '../../scripts/lib/owned-artifact-stream.mjs';
 import { expect, type Page } from '@playwright/test';
 import type {} from './memory-product-app';
 
@@ -52,11 +54,14 @@ export async function disconnectProductSerial(page: Page) {
     });
     await page.getByRole('button', { name: 'Automation', exact: true }).click();
 }
+export type ProductViewerArtifact = Buffer | { length: number; prefix: Buffer; sha256: string };
+const viewerPrefix = (value: ProductViewerArtifact) =>
+    Buffer.isBuffer(value) ? value : value.prefix;
 export type ProductViewerDownload = (
     format: string,
     action: () => Promise<void>,
-    validate?: (bytes: Buffer) => unknown,
-) => Promise<Buffer>;
+    validate?: (bytes: ProductViewerArtifact) => unknown,
+) => Promise<ProductViewerArtifact>;
 export async function exerciseProductViewer(page: Page, nativeDownload?: ProductViewerDownload) {
     const coverage: string[] = [];
     await flowOf(page).getByRole('button', { name: 'Show flow', exact: true }).click();
@@ -84,11 +89,15 @@ export async function exerciseProductViewer(page: Page, nativeDownload?: Product
     for (const format of ['SVG', 'PNG', 'PDF']) {
         const action = () =>
             dialog.getByRole('button', { name: 'Export ' + format, exact: true }).click();
-        const validate = (bytes: Buffer) => {
+        const validate = (bytes: ProductViewerArtifact) => {
             assert.ok(bytes.length > 100, `${format} download was empty.`);
-            if (format === 'PDF') assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
+            if (format === 'PDF')
+                assert.equal(viewerPrefix(bytes).subarray(0, 5).toString(), '%PDF-');
             if (format === 'PNG')
-                assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+                assert.deepEqual(
+                    [...viewerPrefix(bytes).subarray(0, 8)],
+                    [137, 80, 78, 71, 13, 10, 26, 10],
+                );
         };
         const bytes = nativeDownload
             ? await nativeDownload(format, action, validate)
@@ -106,12 +115,20 @@ export async function exerciseProductViewer(page: Page, nativeDownload?: Product
                       'viewer-' + format.toLowerCase() + '.' + format.toLowerCase(),
                   );
                   await file.saveAs(destination);
-                  return fs.readFile(destination);
+                  const inspected = await inspectViewerArtifact(destination);
+                  return {
+                      length: inspected.bytes,
+                      prefix: inspected.prefix,
+                      sha256: inspected.sha256,
+                  };
               })();
         assert.ok(bytes.length > 100, `${format} download was empty.`);
-        if (format === 'PDF') assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
+        if (format === 'PDF') assert.equal(viewerPrefix(bytes).subarray(0, 5).toString(), '%PDF-');
         if (format === 'PNG')
-            assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+            assert.deepEqual(
+                [...viewerPrefix(bytes).subarray(0, 8)],
+                [137, 80, 78, 71, 13, 10, 26, 10],
+            );
         exportedBytes += bytes.length;
         await expect(dialog.getByRole('status', { name: 'Flow export status' })).toContainText(
             format + ' exported',
@@ -134,9 +151,34 @@ export async function exerciseProductSerial(
         viewer: boolean;
         faults?: boolean;
         nativeDownload?: ProductViewerDownload;
+        expectedTail?: string;
+        emit?: (stage: string, data: unknown) => Promise<void>;
     },
 ) {
-    const coverage: string[] = [];
+    const coverage: string[] = [],
+        geometryEvidence: { captureId: string; sha256: string; observations: number }[] = [];
+    const geometryRead = async (id: string, bodyBytes: number) => {
+        const actual = await page.evaluate(() => window.memoryProduct.serial.snapshot().geometry);
+        assert.deepEqual(actual.expected, { chunkBytes: 16384, prompt: 'qualification# ' });
+        assert.equal(actual.failure, null);
+        assert.equal(actual.actual.chunkBytes, 16384);
+        assert.equal(actual.actual.prompt, 'qualification# ');
+        assert.equal(actual.actual.bodyBytes, bodyBytes);
+        assert.equal(actual.actual.tail, context.expectedTail ?? '');
+        const read = await page.evaluate(
+            ({ id, bodyBytes, tail }) => window.memoryProduct.readSummary(id, { bodyBytes, tail }),
+            { id, bodyBytes, tail: context.expectedTail ?? '' },
+        );
+        assert.ok(read.geometry?.everyRawByteVerified);
+        const proof = { captureId: id, actualMode: actual.actual, read: read.geometry };
+        await context.emit?.('actual-product-serial-geometry', proof);
+        geometryEvidence.push({
+            captureId: id,
+            sha256: createHash('sha256').update(JSON.stringify(proof)).digest('hex'),
+            observations: read.frames,
+        });
+        return read;
+    };
     let capturedBytes = 0,
         exportedBytes = 0;
     await page.evaluate(
@@ -157,7 +199,7 @@ export async function exerciseProductSerial(
     let rows = await page.evaluate(() => window.memoryProduct.catalog());
     const first = rows.find((r) => r.command === command);
     assert.ok(first);
-    const read = await page.evaluate((id) => window.memoryProduct.readSummary(id), first.id);
+    const read = await geometryRead(first.id, context.payloadBytes);
     const expected = context.payloadBytes + new TextEncoder().encode('\r\nqualification# ').length;
     assert.equal(read.bytes, expected);
     assert.equal(first.committedBytes, expected);
@@ -169,7 +211,11 @@ export async function exerciseProductSerial(
     await page.evaluate(() => window.memoryProduct.serial.configure({ bytes: 64, delayMs: 0 }));
     await runProductOnce(page);
     rows = await page.evaluate(() => window.memoryProduct.catalog());
-    assert.equal(rows.filter((r) => r.command === command).length, 2);
+    const primaryRows = rows
+        .filter((r) => r.command === command)
+        .sort((a, b) => a.sequence - b.sequence);
+    assert.equal(primaryRows.length, 2);
+    await geometryRead(primaryRows[1].id, 64);
     coverage.push('same-generation-rearm');
     if (context.viewer) {
         const viewer = await exerciseProductViewer(page, context.nativeDownload);
@@ -256,6 +302,7 @@ export async function exerciseProductSerial(
         coverage,
         capturedBytes,
         exportedBytes,
+        geometryEvidence,
         catalog: await page.evaluate(() => window.memoryProduct.catalog()),
         ownership,
     };

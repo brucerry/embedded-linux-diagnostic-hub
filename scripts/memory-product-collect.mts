@@ -1,4 +1,10 @@
 // @ts-nocheck
+import {
+    inspectSoakPhysical,
+    inspectSoakCollector,
+    soakPhysicalLimits,
+} from './lib/soak-physical-budget.mjs';
+import { soakEvidenceContractSHA256, soakEvidenceContract } from './lib/soak-evidence.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,12 +13,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { collectProductPreparation, limits } from './lib/product-collector-controller.mjs';
+import {
+    collectProductPreparation,
+    limits as finiteCollectorLimits,
+} from './lib/product-collector-controller.mjs';
 import { observeCollector } from './lib/product-collector-observer.mjs';
 import {
     boundedRead,
     digest,
     readDurableArtifacts,
+    readStreamedDurableArtifacts,
     closeEntries,
     streamCollector,
 } from './lib/product-collector-evidence.mjs';
@@ -33,6 +43,26 @@ import {
     prepareProductLogs,
 } from './lib/product-entry-custody.mjs';
 import { productClock } from '../tests/fixtures/memory-product-owner';
+import {
+    assertObservationAuthority,
+    observationPorts,
+} from './lib/windows-observation-approval.mjs';
+import { observationOutcome } from './lib/observation-outcome.mjs';
+import { connectObservationCollector } from './lib/observation-handoff.mjs';
+import { collectorObservationSecurity } from './lib/observation-security.mjs';
+import {
+    pollObservationApproval,
+    observationDigest,
+    observationPolicy,
+} from './lib/windows-observation-approval.mjs';
+import { metadataIdentity } from './lib/windows-preflight.mjs';
+import { admitObservationShared } from './lib/observation-accounting.mjs';
+
+const limits = Object.freeze({
+    ...finiteCollectorLimits,
+    jobBytes: soakPhysicalLimits.job,
+    cohortBytes: soakPhysicalLimits.cohort,
+});
 
 const sourceRoot = fs.realpathSync(path.resolve(import.meta.dirname, '..')),
     require = createRequire(import.meta.url);
@@ -45,7 +75,10 @@ const argumentsOf = (argv) =>
             return [arg.slice(2, i), arg.slice(i + 1)];
         }),
     );
-export function treeInventory(root, { maxBytes = limits.jobBytes, maxFiles = 8192 } = {}) {
+export function treeInventory(
+    root: string,
+    { maxBytes = limits.jobBytes, maxFiles = 8192 }: { maxBytes?: number; maxFiles?: number } = {},
+) {
     let bytes = 0,
         count = 0;
     const files = {};
@@ -94,6 +127,7 @@ export function loadProductManifest(argv) {
     assert.equal(m.electron.version, '44.5.1');
     assert.equal(m.node.version, 'v24.22.0');
     assert.deepEqual(m.limits, limits);
+    assert.equal(m.localEvidenceContractSHA256, soakEvidenceContractSHA256);
     assert.deepEqual(m.jobs, [
         { ordinal: 0, observerMode: 'sampled', gcMode: 'normal', expectedParentCode: 0 },
         { ordinal: 1, observerMode: 'no-sampler', gcMode: 'normal', expectedParentCode: 0 },
@@ -117,12 +151,20 @@ export function loadProductManifest(argv) {
         args,
     };
 }
-function environment(m) {
+function environment(m, authority) {
+    if (authority) assertObservationAuthority(authority, m);
     for (const key of Object.keys(process.env))
         if (/^(NODE_|TSX_|ESBUILD_|ELECTRON_)/.test(key))
             throw Error('Unreviewed runtime environment: ' + key);
     for (const key of Object.keys(process.env))
-        if (key.startsWith('HUB_')) throw Error('Unreviewed Hub override: ' + key);
+        if (
+            key.startsWith('HUB_') &&
+            !(
+                authority &&
+                ['HUB_WINDOWS_OBSERVATION_PAIR', 'HUB_OBSERVATION_REQUEST_JSON'].includes(key)
+            )
+        )
+            throw Error('Unreviewed Hub override: ' + key);
     const allowed = [
         'GITHUB_RUN_ATTEMPT',
         'GITHUB_REPOSITORY',
@@ -156,10 +198,17 @@ function environment(m) {
     );
     return { ...env, PATH: m.childPATH, HUB_MEMORY_SSH_PROFILE: m.sshProfile.path };
 }
-export async function verifyProductManifest(m) {
-    throw Error(
-        'Collection disabled pending independent same-host approval/custody protocol review. Metadata from a previous hosted job cannot approve this host.',
+export async function verifyProductManifest(m, authority) {
+    assert.equal(
+        observationPolicy.executionEnabled,
+        true,
+        'Collection disabled pending independent review and activation approval.',
     );
+    const permission = assertObservationAuthority(authority, m);
+    if (permission.remote) {
+        await permission.ports.verify();
+        assertObservationAuthority(authority, m);
+    }
     assert.equal(process.platform, 'win32', 'Native Windows producer required.');
     assert.equal(process.arch, 'x64');
     assert.equal(
@@ -173,7 +222,7 @@ export async function verifyProductManifest(m) {
     assert.equal(process.version, m.node.version);
     assert.equal(fs.realpathSync(process.execPath), m.node.path);
     assert.deepEqual(process.execArgv, ['--import', pathToFileURL(m.tsx.path).href]);
-    environment(m);
+    environment(m, authority);
     assert.equal(await sourceFingerprint(sourceRoot), m.sourceSHA256);
     assert.equal(hashFile(m.node.path), m.node.sha256);
     assert.equal(hashFile(m.tsx.path), m.tsx.sha256);
@@ -193,7 +242,7 @@ export async function verifyProductManifest(m) {
         assert.equal(hashFile(path.join(path.dirname(m.sshProfile.path), name)), hash);
     assert.equal(m.sshPreload, path.join(path.dirname(m.sshProfile.path), 'preload.cjs'));
     parseNativeCoverage(boundedRead(m.coverage.path, 16384), m.coverage.sha256, m.sourceSHA256);
-    const principal = windowsPrincipalObserver(m);
+    const principal = observationPorts(authority, m).ownerCheck;
     principal(m.outputRoot);
     principal(m.canonicalTmp);
     assert.equal(m.runtimeVersions.node, process.versions.node);
@@ -210,30 +259,50 @@ function entries(guard, names, io = fs) {
 }
 function recordPort(guard) {
     let complete = true,
+        sealed = false,
         total = 0;
     const record = (name, value) => {
         try {
+            assert(complete && !sealed, 'Child evidence admission closed');
             const bytes = Buffer.from(JSON.stringify(value) + '\n');
             assert(bytes.length <= 262144 && total + bytes.length <= 4 * 1024 ** 2);
             total += bytes.length;
             guard.write(name, bytes);
+            return Object.freeze({ name, bytes: bytes.length, sha256: digest(bytes) });
         } catch (error) {
             complete = false;
             throw error;
         }
     };
-    return { record, complete: () => complete };
+    return {
+        record,
+        complete: () => complete,
+        seal() {
+            assert(complete && !sealed);
+            sealed = true;
+        },
+    };
 }
-function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
+export function prepareCollectorPorts(m, manifestSHA256, nonce, entry, authority) {
     let journal;
     try {
         entry.assertAdmissible();
-        const ownerCheck = windowsPrincipalObserver(m);
-        const rootGuard = new RootGuard(m.outputRoot, { ownerCheck });
+        const admitted = authority ? observationPorts(authority, m) : null;
+        const ownerCheck = admitted?.ownerCheck ?? windowsPrincipalObserver(m);
+        const writeAdmission = authority
+            ? (bytes) =>
+                  admitObservationShared(
+                      path.dirname(m.outputRoot),
+                      [m.observationPtyRoot],
+                      'collector',
+                      bytes,
+                  )
+            : () => {};
+        const rootGuard = new RootGuard(m.outputRoot, { ownerCheck, writeAdmission });
         entry.assertAdmissible();
         const directory = rootGuard.mkdir('collector');
         entry.assertAdmissible();
-        const guard = new RootGuard(directory, { ownerCheck });
+        const guard = new RootGuard(directory, { ownerCheck, writeAdmission });
         entry.assertAdmissible();
         const owner = {
             schema: 1,
@@ -250,18 +319,17 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                 attempt: process.env.GITHUB_RUN_ATTEMPT,
             },
         };
-        const lease = new ProductLease(canonicalMarker(), owner, { ownerCheck });
+        const lease = admitted?.lease ?? new ProductLease(canonicalMarker(), owner, { ownerCheck });
         entry.assertAdmissible();
         journal = new ProductJournal(guard, path.join(directory, 'journal.jsonl'));
         const records = recordPort(guard);
         const collectorSHA256 = hashFile(fileURLToPath(import.meta.url));
-        m = { ...m, collectorSHA256 };
         const ports = {
             owner,
             manifestSHA256,
             lease,
             journal,
-            verify: () => verifyProductManifest(m),
+            verify: () => verifyProductManifest(m, authority),
             record: records.record,
             evidenceComplete: records.complete,
             async prepare(spec, admit, onFailure, finalAdmission) {
@@ -298,7 +366,7 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                     options: () => ({
                         cwd: sourceRoot,
                         windowsHide: true,
-                        env: environment(m),
+                        env: environment(m, authority),
                         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
                     }),
                     spawn: (argv, options) => spawn(m.node.path, argv, options),
@@ -306,6 +374,7 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                 // Deliver queued IPC/signals from blocking Windows preparation before final admission.
                 try {
                     await new Promise((resolve) => setImmediate(resolve));
+                    if (admitted?.jobStart) await admitted.jobStart(spec.ordinal);
                 } catch (error) {
                     error.noChildStarted = true;
                     error.preparedLogs = prepared.logs;
@@ -318,7 +387,18 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                 const launch = prepared.commit();
                 const { child, job, directory: jobDirectory, logs, command: argv } = launch;
                 const streams = logs.map((e) => streamCollector(e.fd, { onFailure }));
-                let monitor;
+                let monitor,
+                    physicalPolls = 0,
+                    apparentPeak = 0,
+                    allocatedPeak = null;
+                const observePhysical = (options) => {
+                    const value = inspectSoakPhysical(jobDirectory, options);
+                    physicalPolls++;
+                    apparentPeak = Math.max(apparentPeak, value.bytes);
+                    if (value.allocatedBytes !== null)
+                        allocatedPeak = Math.max(allocatedPeak ?? 0, value.allocatedBytes);
+                    return value;
+                };
                 return {
                     child,
                     job,
@@ -339,9 +419,19 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                         monitor = setInterval(() => {
                             try {
                                 guard.check(jobDirectory);
-                                treeInventory(jobDirectory, {
-                                    maxBytes: limits.jobBytes - 10 * 1024 ** 2,
+                                const streamBytes = logs.reduce(
+                                    (sum, e) => sum + fs.fstatSync(e.fd).size,
+                                    0,
+                                );
+                                observePhysical({
+                                    extraStreams: streamBytes,
+                                    cleanup: fs
+                                        .readdirSync(jobDirectory, { recursive: true })
+                                        .some((name) =>
+                                            String(name).endsWith('native-will-quit.json'),
+                                        ),
                                 });
+                                inspectSoakCollector(directory);
                             } catch (error) {
                                 onFailure(error);
                             }
@@ -358,10 +448,17 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                                 closure.complete && streams.every((s) => !s.snapshot().truncated),
                         };
                     },
-                    inspect(parentLifecycle) {
+                    async inspect(parentLifecycle) {
                         assert.equal(parentLifecycle.closeObserved, true);
+                        const physical = observePhysical({
+                            cleanup: true,
+                            extraStreams: logs.reduce(
+                                (sum, e) => sum + fs.statSync(path.join(directory, e.name)).size,
+                                0,
+                            ),
+                        });
                         const tree = treeInventory(jobDirectory, {
-                                maxBytes: limits.jobBytes - 10 * 1024 ** 2,
+                                maxBytes: limits.jobBytes,
                             }),
                             directories = fs.readdirSync(jobDirectory);
                         assert.equal(directories.length, 1);
@@ -388,7 +485,7 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                         }));
                         for (let i = 0; i < specs.length; i += 32)
                             ownerCheck.many(specs.slice(i, i + 32).map((s) => s.path));
-                        const durable = readDurableArtifacts(specs, {
+                        const durable = readStreamedDurableArtifacts(specs, {
                             check: (file) => guard.check(file),
                         });
                         for (let i = 0; i < specs.length; i += 32)
@@ -402,9 +499,29 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                             job,
                             parentLifecycle,
                             noSampler: spec.observerMode === 'no-sampler',
+                            evidenceFormat: soakEvidenceContract.format,
+                            evidenceContractSHA256: soakEvidenceContractSHA256,
                         });
+                        if (admitted?.jobEnd) await admitted.jobEnd(spec.ordinal);
                         return {
                             ...result,
+                            physicalObservation: {
+                                polls: physicalPolls,
+                                apparentPeak,
+                                allocatedPeak,
+                                finalApparentBytes: physical.bytes,
+                                finalAllocatedBytes: physical.allocatedBytes,
+                                partitions: physical.totals,
+                                betweenPollPeakProved: false,
+                                filesystemQuotaClaim: false,
+                            },
+                            observation: durable.durability.complete
+                                ? result.observation
+                                : observationOutcome({
+                                      ownershipComplete: false,
+                                      durable: false,
+                                      complete: false,
+                                  }),
                             valid: result.valid && durable.durability.complete,
                             ownershipComplete:
                                 result.ownershipComplete && durable.durability.complete,
@@ -414,6 +531,9 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
                         };
                     },
                 };
+            },
+            async admissionRefused(spec) {
+                if (admitted?.jobEnd) await admitted.jobEnd(spec.ordinal);
             },
             summary(rows) {
                 records.record('pair-summary.json', {
@@ -430,6 +550,11 @@ function prepareCollectorPorts(m, manifestSHA256, nonce, entry) {
             },
             holdUnknown(state) {
                 return createOwnershipHold(state, records.record).outcome;
+            },
+            async finalEvidenceClosed(receipt, outcome) {
+                assert(admitted?.finalEvidenceClosed);
+                records.seal();
+                await admitted.finalEvidenceClosed(receipt, outcome);
             },
         };
         return ports;
@@ -461,11 +586,12 @@ export async function runCollector(
         clock = productClock,
         verify = verifyProductManifest,
         prepare = prepareCollectorPorts,
+        afterHandoff = () => {},
     } = {},
 ) {
     const entry = new CollectionEntry({
         nonce,
-        cohort,
+        cohort: typeof cohort === 'string' ? cohort : JSON.stringify(cohort),
         events,
         clock,
         requireIPC: true,
@@ -485,7 +611,12 @@ export async function runCollector(
             events,
             startedAt: entry.cohort.startedAt,
         });
-        assert(!result.leaseRetained && !result.leaseOwnershipUnverified);
+        assert(
+            (!result.leaseRetained || result.leaseReleaseDelegated === true) &&
+                !result.leaseOwnershipUnverified,
+        );
+        if (result.leaseReleaseDelegated) assert.equal(result.finalEvidenceAcknowledged, true);
+        afterHandoff();
         entry.dispose({ closed: true });
         if (!result.completionDurable || result.status !== 'COLLECTED_UNREVIEWED_WINDOWS_PAIR')
             events.exitCode = 1;
@@ -529,9 +660,19 @@ export async function runOuter(
         principalObserver = windowsPrincipalObserver,
         ownershipHold = createOwnershipHold,
         spawnChild = spawn,
+        authority = null,
+        handoff = null,
+        sharedAdmission = () => {},
+        nonce: suppliedNonce,
+        cohort,
     } = {},
 ) {
-    const entry = new CollectionEntry({ events, clock });
+    const entry = new CollectionEntry({
+        events,
+        clock,
+        nonce: suppliedNonce,
+        cohort: cohort && typeof cohort !== 'string' ? JSON.stringify(cohort) : cohort,
+    });
     let logs = [],
         child,
         records,
@@ -546,17 +687,21 @@ export async function runOuter(
             'One fresh reviewed empty evidence root, no retries.',
         );
         const ownerCheck = principalObserver(m);
-        const rootGuard = new RootGuard(m.outputRoot, { ownerCheck });
+        const rootGuard = new RootGuard(m.outputRoot, {
+            ownerCheck,
+            writeAdmission: sharedAdmission,
+        });
         entry.assertAdmissible();
         const directory = rootGuard.mkdir('outer');
         entry.assertAdmissible();
-        const guard = new RootGuard(directory, { ownerCheck });
+        const guard = new RootGuard(directory, { ownerCheck, writeAdmission: sharedAdmission });
         entry.assertAdmissible();
         records = recordPort(guard);
         logs = entries(guard, ['collector.stdout.log', 'collector.stderr.log'], logIO);
         const nonce = entry.nonce;
         const streams = logs.map((e) =>
             streamCollector(e.fd, {
+                admit: sharedAdmission,
                 onFailure: (error) => {
                     if (child?.connected)
                         child.send({
@@ -603,6 +748,7 @@ export async function runOuter(
         child.once('close', () => {
             actualClosed = true;
         });
+        handoff?.bind(child, nonce, entry.cohort);
         const observed = await observeCollector(child, {
             nonce,
             startedAt,
@@ -623,7 +769,51 @@ export async function runOuter(
             nativeWindowsQualified: false,
             policyQualified: false,
         };
-        records.record('outer-completion.json', result);
+        if (handoff) {
+            result.observation = observationOutcome({
+                ownershipComplete: false,
+                durable: false,
+                complete: false,
+            });
+            result.collectionOnly = true;
+            try {
+                const bytes = boundedRead(
+                        path.join(m.outputRoot, 'collector', 'completion.json'),
+                        262144,
+                    ),
+                    completion = JSON.parse(bytes);
+                Object.assign(
+                    result,
+                    await handoff.finish({
+                        observed,
+                        closure,
+                        evidenceComplete: records.complete(),
+                        completion,
+                        completionEvidence: {
+                            name: 'completion.json',
+                            bytes: bytes.length,
+                            sha256: digest(bytes),
+                        },
+                        record: records.record,
+                        publishOutcome: (outcome) =>
+                            records.record('outer-completion.json', {
+                                ...result,
+                                childObservation: outcome,
+                                pendingCanonicalRelease: true,
+                            }),
+                    }),
+                );
+            } catch (error) {
+                return ownershipHold(
+                    {
+                        ...result,
+                        phase: 'outer-final-child-evidence-unconfirmed',
+                        error: String(error),
+                    },
+                    records.record,
+                ).outcome;
+            }
+        } else records.record('outer-completion.json', result);
         if (
             !closure.complete ||
             !records.complete() ||
@@ -669,14 +859,76 @@ export async function runOuter(
         throw error;
     }
     function environmentForCollector() {
-        const env = environment(m);
+        const env = environment(m, authority);
         delete env.HUB_MEMORY_SSH_PROFILE;
+        if (authority) env.GITHUB_TOKEN = process.env.GITHUB_TOKEN;
         return env;
     }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-    console.error(
-        'Collection disabled: first use the separately reviewed preflight-only workflow. Same-host approval/custody remains unresolved.',
-    );
-    process.exitCode = 1;
+    if (process.connected && process.argv.slice(2).includes('--collector=1')) {
+        void (async () => {
+            assert.equal(
+                observationPolicy.executionEnabled,
+                true,
+                'Collection disabled pending independent review and activation approval.',
+            );
+            const { m, manifestSHA256, args } = loadProductManifest(process.argv.slice(2));
+            assert.equal(args.size, 5);
+            assert.deepEqual([...args.keys()].sort(), [
+                'cohort',
+                'collector',
+                'manifest',
+                'manifest-sha256',
+                'nonce',
+            ]);
+            const nonce = args.get('nonce'),
+                cohort = JSON.parse(args.get('cohort'));
+            assert.equal(
+                m.observationApprovalPath,
+                path.join(path.dirname(m.outputRoot), 'same-host-approval.json'),
+            );
+            const saved = JSON.parse(boundedRead(m.observationApprovalPath, 65536)),
+                b = saved.binding;
+            assert.equal(b.supervisorPID, process.ppid);
+            assert.equal(b.nonce, nonce);
+            assert.equal(b.manifestSHA256, observationDigest(m));
+            assert.equal(b.host.run, process.env.GITHUB_RUN_ID);
+            assert.equal(b.host.commit, process.env.GITHUB_SHA);
+            assert.equal(b.host.repository, process.env.GITHUB_REPOSITORY);
+            assert.equal(b.host.attempt, process.env.GITHUB_RUN_ATTEMPT);
+            assert(productClock.now() < b.preparationDeadline, 'Approval startup window expired');
+            for (const key of ['canonicalTemp', 'private', 'collection']) {
+                const old = b.roots[key],
+                    now = metadataIdentity(old.path);
+                assert.equal(now.dev, old.dev);
+                assert.equal(now.ino, old.ino);
+                assert.equal(now.realpath, old.realpath);
+            }
+            assert.equal(digest(boundedRead(b.marker.path, 4096)), b.marker.bodySHA256);
+            await pollObservationApproval(b, process.env.GITHUB_TOKEN, {
+                check: () => {
+                    assert(process.connected);
+                    assert(productClock.now() < b.preparationDeadline);
+                },
+            });
+            const ownerCheck = collectorObservationSecurity(m, sourceRoot);
+            const remote = await connectObservationCollector(m, nonce, cohort, { ownerCheck });
+            await runCollector(m, manifestSHA256, nonce, cohort, {
+                events: remote.events,
+                verify: () => verifyProductManifest(m, remote.authority),
+                prepare: (m, sha, nonce, entry) =>
+                    prepareCollectorPorts(m, sha, nonce, entry, remote.authority),
+                afterHandoff: () => remote.ports.dispose(),
+            });
+        })().catch((error) => {
+            console.error(String(error).slice(0, 4096));
+            process.exitCode = 1;
+        });
+    } else {
+        console.error(
+            'Collection disabled: live inherited same-host approval/custody handoff required.',
+        );
+        process.exitCode = 1;
+    }
 }

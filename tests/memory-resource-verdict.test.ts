@@ -19,11 +19,12 @@ import { viewerCoverage, viewerOwnerKinds } from './fixtures/memory-resource-cor
 import { verifySoak, verifyNegativeWrapper } from './fixtures/memory-resource-verifier';
 const budget = {
     maxDeltaBytes: 1024,
-    maxSlopeBytesPerCycle: 0.25,
+    maxSlopeBytesPerComparableCheckpoint: 0.25,
     calibrationRuns: Array.from({ length: 10 }, (_, i) => i.toString(16).padStart(64, '0')),
 };
 const policy = (): MemoryPolicy => ({
     reviewed: true,
+    slopeUnit: 'bytes-per-comparable-checkpoint',
     identitySHA256: 'a'.repeat(64),
     roles: { gateway: { heapUsedBytes: { ...budget }, arrayBuffersBytes: { ...budget } } },
 });

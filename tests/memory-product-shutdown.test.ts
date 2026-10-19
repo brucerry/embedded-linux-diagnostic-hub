@@ -413,12 +413,18 @@ test('actual harness wiring hands observation over before cleanup, final-samples
     );
     assert.ok(bind.indexOf('shutdown.start()') < bind.indexOf('stop = true'));
     assert.match(bind, /await sampling;[\s\S]*await inFlight;/);
+    assert.ok(
+        bind.indexOf('shutdown.start()') < bind.indexOf('await localEvidence.enterCleanup()'),
+    );
     const final = source.slice(source.indexOf('    } finally {\n        let ownershipJoined'));
     assert.ok(final.indexOf('await owner.join()') < final.indexOf('await shutdown.finish()'));
     assert.ok(
         final.indexOf('await shutdown.finish()') < final.indexOf('owner.closeObservations()'),
     );
-    assert.ok(final.indexOf('owner.closeObservations()') < final.indexOf('syncCloseEvidence'));
+    assert.ok(
+        final.indexOf('owner.closeObservations()') <
+            final.indexOf('await finishObservationTimeline(localEvidence, owner)'),
+    );
     assert.doesNotMatch(final.slice(0, final.indexOf('await owner.join()')), /stop = true/);
     assert.match(source, /workDeadlineMs: owner.job.deadlineMs - owner.job.reserveMs/);
 });

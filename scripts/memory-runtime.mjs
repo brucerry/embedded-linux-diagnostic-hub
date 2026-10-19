@@ -250,6 +250,41 @@ export async function prepareMemoryRuntime(root = process.cwd(), outputParent, o
         signal?.removeEventListener('abort', cancel);
     }
 }
+export function qualificationArguments(mode, forwarded, profile, loader) {
+    const metadata = mode === 'identity' || mode === 'policy';
+    const soakMetadata =
+        metadata &&
+        (forwarded.includes('--identity-for=soak') || forwarded.includes('--policy-kind=soak'));
+    const gc = forwarded.filter((value) => value.startsWith('--gc='));
+    assert(
+        gc.length <= 1 && (!gc.length || ['--gc=normal', '--gc=forced'].includes(gc[0])),
+        'Conflicting GC mode',
+    );
+    const expose = mode === 'soak' || soakMetadata ? gc[0] === '--gc=forced' : true;
+    const entries = {
+        fast: 'memory-resource-regression.ts',
+        calibrate: 'memory-resource-calibrate.ts',
+        negative: 'memory-resource-negative.ts',
+        soak: 'memory-resource-soak.ts',
+        'gateway-smoke': 'memory-resource-gateway-smoke.ts',
+        self: 'memory-resource-adoption.test.ts',
+        identity: 'memory-resource-invocation.ts',
+        policy: 'memory-resource-invocation.ts',
+    };
+    assert(Object.hasOwn(entries, mode));
+    return [
+        '--require',
+        profile.preloadPath,
+        ...(expose ? ['--expose-gc'] : []),
+        '--import',
+        loader,
+        ...(mode === 'self' ? ['--test', '--test-concurrency=1'] : []),
+        path.resolve('tests/fixtures', entries[mode]),
+        ...(mode === 'fast' ? ['--profile=fast'] : []),
+        ...forwarded,
+        ...(metadata ? ['--operation=' + mode] : []),
+    ];
+}
 async function main() {
     const argument = process.argv.find((value) => value.startsWith('--entry='));
     const mode = argument?.slice(8);
@@ -277,18 +312,7 @@ async function main() {
     const soakMetadata =
         metadata &&
         (forwarded.includes('--identity-for=soak') || forwarded.includes('--policy-kind=soak'));
-    const args = [
-        '--require',
-        profile.preloadPath,
-        ...(mode === 'soak' || soakMetadata ? [] : ['--expose-gc']),
-        '--import',
-        require.resolve('tsx'),
-        ...(mode === 'self' ? ['--test', '--test-concurrency=1'] : []),
-        path.resolve('tests/fixtures', entries[mode]),
-        ...(mode === 'fast' ? ['--profile=fast'] : []),
-        ...forwarded,
-        ...(metadata ? ['--operation=' + mode] : []),
-    ];
+    const args = qualificationArguments(mode, forwarded, profile, require.resolve('tsx'));
     // --import requires a file URL on Windows.
     args[args.indexOf('--import') + 1] = (await import('node:url')).pathToFileURL(
         args[args.indexOf('--import') + 1],

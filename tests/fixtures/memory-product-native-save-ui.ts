@@ -61,6 +61,7 @@ export async function exerciseNativeSaveCases(
                 );
                 await fs.unlink(file);
             }
+            await host.retireHeldReport(file);
             assert.deepEqual(
                 await page.evaluate(() => window.memoryProduct.catalog()),
                 before,

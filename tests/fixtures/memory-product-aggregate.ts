@@ -518,7 +518,9 @@ export async function createQualificationDriver(context: {
                     payloadBytes: input.payloadBytes,
                     viewer: Boolean(context.viewer),
                     faults: false,
-                    nativeDownload: host!.download,
+                    nativeDownload: host!.viewerDownload,
+                    expectedTail: tail,
+                    emit: context.emit,
                 });
                 await host!.joinDedicatedWorkers();
                 const actualViewerWorkers = viewerWorkers!.since(viewerToken);
@@ -572,7 +574,7 @@ export async function createQualificationDriver(context: {
                     clear: 'none',
                     reopen: 'none',
                     exportReadFault: inspection!.exportReadFaults(),
-                    nativeDownload: host!.download,
+                    streamDownload: host!.streamDownload,
                     browserDownloads: host!.downloadCount
                         ? { count: host!.downloadCount }
                         : undefined,

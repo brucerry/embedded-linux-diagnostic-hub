@@ -1,3 +1,7 @@
+import { reserveSoakArtifact } from '../../scripts/lib/soak-physical-budget.mjs';
+import { inspectOwnedArtifact } from '../../scripts/lib/owned-artifact-stream.mjs';
+import type { ProductResultsDownload } from './memory-product-results-ui';
+import type { ProductViewerArtifact } from './memory-product-ui';
 /** Actual CDP download events and completed files; never emits synthetic Page events. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -172,6 +176,7 @@ export async function createBrowserDownloads(input: {
     directory: string;
     emit(stage: string, value: unknown): Promise<void>;
     journal?: BrowserDownloadEvents;
+    signal?: AbortSignal;
 }) {
     assert.ok(path.isAbsolute(input.directory));
     await fs.mkdir(input.directory, { recursive: true });
@@ -202,57 +207,122 @@ export async function createBrowserDownloads(input: {
         input.root.off('Browser.downloadProgress', progress);
         throw error;
     }
-    return {
-        count: () => journal.count(),
-        snapshot: () => ({ ...journal.snapshot(), requestPending: busy }),
-        async download(format: string, action: () => Promise<void>) {
-            assert.equal(released, false, 'Download connection binding is released.');
-            assert.equal(busy, false, 'Actual browser download requests cannot overlap.');
-            busy = true;
-            try {
-                const extension = format.toLowerCase();
-                const frame = (await input.page.send('Page.getFrameTree')).frameTree.frame.id;
-                const ordinal = journal.count();
+    async function consume<T>(
+        format: string,
+        action: () => Promise<void>,
+        validate?: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
+    ): Promise<T | Buffer> {
+        assert.equal(released, false, 'Download connection binding is released.');
+        assert.equal(busy, false, 'Actual browser download requests cannot overlap.');
+        busy = true;
+        const reservation = reserveSoakArtifact(input.directory);
+        try {
+            const extension = format.toLowerCase();
+            const frame = (await input.page.send('Page.getFrameTree')).frameTree.frame.id;
+            const ordinal = journal.count();
+            assert.equal(journal.snapshot().unconsumed.length, 0, 'Unclaimed earlier download.');
+            await action();
+            // Preserve Results' existing five-second begin assertion.
+            await expect.poll(() => journal.since(ordinal).length, { timeout: 5000 }).toBe(1);
+            const receipt = journal.since(ordinal)[0];
+            const ancestry = ownedDownloadFrame(
+                (await input.page.send('Page.getFrameTree')).frameTree,
+                frame,
+                receipt.frameId,
+            );
+            await expect.poll(() => receipt.state !== 'inProgress', { timeout: 30000 }).toBe(true);
+            assert.equal(journal.since(ordinal).length, 1, 'Unexpected duplicate download.');
+            let artifact: any;
+            let bytes: Buffer | undefined;
+            if (validate) {
+                assert.equal(receipt.state, 'completed');
+                assert.match(receipt.guid, /^[a-zA-Z0-9-]{1,100}$/);
+                assert(['json', 'csv', 'md', 'txt', 'svg', 'png', 'pdf'].includes(extension));
                 assert.equal(
-                    journal.snapshot().unconsumed.length,
-                    0,
-                    'Unclaimed earlier download.',
+                    path.extname(receipt.suggestedFilename).toLowerCase(),
+                    '.' + extension,
                 );
-                await action();
-                // Preserve Results' existing five-second begin assertion.
-                await expect.poll(() => journal.since(ordinal).length, { timeout: 5000 }).toBe(1);
-                const receipt = journal.since(ordinal)[0];
-                const ancestry = ownedDownloadFrame(
-                    (await input.page.send('Page.getFrameTree')).frameTree,
-                    frame,
-                    receipt.frameId,
+                assert(receipt.receivedBytes > 0 && receipt.receivedBytes <= 128 * 1024 ** 2);
+                assert.equal(receipt.totalBytes, receipt.receivedBytes);
+                artifact = await inspectOwnedArtifact(
+                    path.join(input.directory, receipt.guid),
+                    validate,
+                    { expectedBytes: receipt.receivedBytes, signal: input.signal },
                 );
-                await expect
-                    .poll(() => receipt.state !== 'inProgress', { timeout: 30000 })
-                    .toBe(true);
-                assert.equal(journal.since(ordinal).length, 1, 'Unexpected duplicate download.');
-                const bytes = await readCompletedBrowserDownload(
+            } else
+                bytes = await readCompletedBrowserDownload(
                     input.directory,
                     receipt,
                     extension,
                     receipt.frameId,
                     128 * 1024 ** 2,
                 );
-                await input.emit('actual-cdp-download-completed-file', {
-                    ...receipt,
-                    owningPageFrameId: frame,
-                    downloadFrameAncestry: ancestry,
-                    path: path.join(input.directory, receipt.guid),
-                    bytes: bytes.length,
-                    sha256: createHash('sha256').update(bytes).digest('hex'),
-                    source: 'actual Browser.downloadWillBegin/progress and completed owned file',
+            await input.emit('actual-cdp-download-completed-file', {
+                ...receipt,
+                owningPageFrameId: frame,
+                downloadFrameAncestry: ancestry,
+                path: path.join(input.directory, receipt.guid),
+                bytes: artifact?.bytes ?? bytes!.length,
+                sha256: artifact?.sha256 ?? createHash('sha256').update(bytes!).digest('hex'),
+                source: 'actual Browser.downloadWillBegin/progress and completed owned file',
+            });
+            journal.consume(receipt.guid);
+            if (artifact) {
+                const file = path.join(input.directory, receipt.guid);
+                await fs.unlink(file);
+                reservation.retire([file], {
+                    descriptorClosed: artifact.descriptorClosed,
+                    producersJoined: true,
                 });
-                journal.consume(receipt.guid);
-                return bytes;
-            } finally {
-                busy = false;
+                await input.emit('native-artifact-retired', {
+                    file,
+                    bytes: artifact.bytes,
+                    reason: 'single streaming semantic validation acknowledged',
+                });
+                return artifact.result as T;
             }
-        },
+            return bytes!;
+        } finally {
+            busy = false;
+        }
+    }
+    return {
+        count: () => journal.count(),
+        snapshot: () => ({ ...journal.snapshot(), requestPending: busy }),
+        download: (format: string, action: () => Promise<void>) =>
+            consume<never>(format, action) as Promise<Buffer>,
+        streamDownload: (
+            format: string,
+            action: () => Promise<void>,
+            validate: Parameters<ProductResultsDownload>[2],
+        ) => consume(format, action, validate) as ReturnType<ProductResultsDownload>,
+        viewerDownload: (
+            format: string,
+            action: () => Promise<void>,
+            validate?: (artifact: ProductViewerArtifact) => unknown,
+        ) =>
+            consume(format, action, async (chunks) => {
+                let bytes = 0,
+                    used = 0;
+                const prefix = Buffer.alloc(64),
+                    hash = createHash('sha256');
+                for await (const raw of chunks) {
+                    bytes += raw.length;
+                    hash.update(raw);
+                    const n = Math.min(64 - used, raw.length);
+                    if (n > 0) {
+                        Buffer.from(raw.buffer, raw.byteOffset, n).copy(prefix, used);
+                        used += n;
+                    }
+                }
+                const artifact = {
+                    length: bytes,
+                    prefix: prefix.subarray(0, used),
+                    sha256: hash.digest('hex'),
+                };
+                await validate?.(artifact);
+                return artifact;
+            }) as Promise<ProductViewerArtifact>,
         releaseForInspection() {
             assert.equal(released, false, 'Download connection binding released twice.');
             assert.equal(busy, false, 'Actual download request is still pending.');

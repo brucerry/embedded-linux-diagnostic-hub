@@ -45,6 +45,7 @@ const config: FastConfig = {
 const hashes = Array.from({ length: 10 }, (_, i) => i.toString(16).padStart(64, '0'));
 const fastPolicy = () => ({
     reviewed: true,
+    slopeUnit: 'bytes-per-comparable-checkpoint',
     runtime: 'test/fixture/mock',
     ...config,
     cleanRuns: hashes,
@@ -204,10 +205,15 @@ test('product policy staging requires reviewed actual assessment context and nev
             requirements: requirements(false, [], false),
         }),
     };
-    const budget = { maxDeltaBytes: 1, maxSlopeBytesPerCycle: 1, calibrationRuns: hashes };
+    const budget = {
+        maxDeltaBytes: 1,
+        maxSlopeBytesPerComparableCheckpoint: 1,
+        calibrationRuns: hashes,
+    };
     const assessment = { assessmentIdentity: sha256(JSON.stringify(context)), context };
     const json = JSON.stringify({
         reviewed: true,
+        slopeUnit: 'bytes-per-comparable-checkpoint',
         identitySHA256: assessment.assessmentIdentity,
         roles: { gateway: { heapUsedBytes: budget, arrayBuffersBytes: budget } },
     });

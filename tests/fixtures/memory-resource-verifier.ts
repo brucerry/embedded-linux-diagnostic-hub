@@ -27,7 +27,7 @@ export async function verifySoak(options: Options = {}) {
         samples = 0,
         cycles = 0,
         policyIdentity = '';
-    let receipt: any, assessmentContext: any;
+    let receipt: any, assessmentContext: any, localDecoder: any;
     let checkpoints = 0,
         shutdownSamples = 0,
         finalShutdownSamples = 0;
@@ -65,9 +65,16 @@ export async function verifySoak(options: Options = {}) {
                 else complete(); // A failed/held virtual owner is an invalid verdict, not a live OS process.
             },
         },
-        setTimeout: (callback: () => void) => {
+        setTimeout: (callback: () => void, delay: number) => {
             const id = ++timerSequence;
             virtualTimers.set(id, callback);
+            if (delay > 0 && delay <= 250)
+                queueMicrotask(() => {
+                    if (virtualTimers.delete(id)) {
+                        clock += delay;
+                        callback();
+                    }
+                });
             return id;
         },
         clearTimeout: (id: number) => virtualTimers.delete(id),
@@ -149,7 +156,7 @@ export async function verifySoak(options: Options = {}) {
             if (String(file).endsWith('reviewed-policy.json')) {
                 const budget = {
                     maxDeltaBytes: 8 * 1024 ** 2,
-                    maxSlopeBytesPerCycle: 1,
+                    maxSlopeBytesPerComparableCheckpoint: 1,
                     calibrationRuns: Array.from({ length: 10 }, (_, i) =>
                         i.toString(16).padStart(64, '0'),
                     ),
@@ -157,6 +164,7 @@ export async function verifySoak(options: Options = {}) {
                 return Buffer.from(
                     JSON.stringify({
                         reviewed: true,
+                        slopeUnit: 'bytes-per-comparable-checkpoint',
                         identitySHA256: policyIdentity,
                         roles: { gateway: { heapUsedBytes: budget, arrayBuffersBytes: budget } },
                     }),
@@ -170,8 +178,12 @@ export async function verifySoak(options: Options = {}) {
         },
         async open() {
             return {
-                async writeFile(line: string) {
-                    const item = JSON.parse(line);
+                async writeFile(line: string | Buffer) {
+                    if (localDecoder) {
+                        localDecoder.accept(Buffer.from(line));
+                        return;
+                    }
+                    const item = JSON.parse(String(line));
                     if (item.stage === 'receipt') receipt = item.data;
                     if (item.stage === 'assessment-context') assessmentContext = item.data;
                     if (item.stage === 'quiescent-checkpoint') checkpoints++;
@@ -220,6 +232,7 @@ export async function verifySoak(options: Options = {}) {
                     nodeRuntimeIdentity: async () => ({
                         executableSHA256: 'c'.repeat(64),
                         launch: [],
+                        execArgv: [],
                     }),
                     sha256(bytes: string | Uint8Array) {
                         const value = hash(bytes);
@@ -229,6 +242,65 @@ export async function verifySoak(options: Options = {}) {
                     },
                 };
             if (id.startsWith('file:')) return { createQualificationDriver: async () => driver };
+            if (id.endsWith('/soak-evidence.mjs')) {
+                const actual = realRequire(path.resolve(path.dirname(file), id));
+                return {
+                    ...actual,
+                    SoakTimeline: class extends actual.SoakTimeline {
+                        constructor(handle: unknown, options: any) {
+                            super(handle, options);
+                            localDecoder = new actual.SoakDecoder({
+                                sourceSHA256: options.sourceSHA256,
+                                nonce: options.nonce,
+                                beginTransaction() {
+                                    const next = {
+                                        receipt,
+                                        assessmentContext,
+                                        checkpoints,
+                                        shutdownSamples,
+                                        finalShutdownSamples,
+                                    };
+                                    return {
+                                        record(item: any) {
+                                            if (item.stage === 'receipt') next.receipt = item.data;
+                                            if (item.stage === 'assessment-context')
+                                                next.assessmentContext = item.data;
+                                            if (item.stage === 'quiescent-checkpoint')
+                                                next.checkpoints++;
+                                            if (item.stage === 'shutdown-processes') {
+                                                next.shutdownSamples++;
+                                                if (item.data.phase === 'final-joined')
+                                                    next.finalShutdownSamples++;
+                                            }
+                                        },
+                                        commit() {
+                                            receipt = next.receipt;
+                                            assessmentContext = next.assessmentContext;
+                                            checkpoints = next.checkpoints;
+                                            shutdownSamples = next.shutdownSamples;
+                                            finalShutdownSamples = next.finalShutdownSamples;
+                                        },
+                                    };
+                                },
+                            });
+                        }
+                        snapshot(stage: string, data: unknown) {
+                            // The VM has a distinct Object.prototype. Cross only JSON values into the
+                            // real writer; production custom-object refusal remains unchanged.
+                            return super.snapshot(stage, JSON.parse(JSON.stringify(data)));
+                        }
+                    },
+                };
+            }
+            if (id.endsWith('/soak-physical-budget.mjs')) {
+                const actual = realRequire(path.resolve(path.dirname(file), id));
+                return {
+                    ...actual,
+                    registerSoakPhysicalScope() {
+                        return { inspect() {}, enterCleanup() {} };
+                    },
+                };
+            }
             if (id.endsWith('.mjs')) return realRequire(path.resolve(path.dirname(file), id));
             if (id.startsWith('.')) return load(path.resolve(path.dirname(file), id + '.ts'));
             return realRequire(id);

@@ -1,3 +1,16 @@
+# Windows collector custody history and observation successor
+
+The original repair below remains historical. The observation successor is specified in
+[windows-product-collection.md](windows-product-collection.md). It keeps the independent outer
+observer, actual collector IPC, unchanged nonce/cohort/job deadlines and all descriptor holds. The
+new inherited-IPC authority is single-use and PID/source/manifest/deadline bound. The child requests
+release only after positive controller closure; the outer owns the real marker through actual
+collector close and its own durable evidence closure. Final release additionally requires the
+child's last-record evidence-closed acknowledgment, bound to the exact completion bytes and final
+outcome. The child seals further evidence admission; the outer verifies the acknowledgment against
+its independent read after actual collector closure. A provisional intent cannot survive late
+evidence/ACK failure. The source remains execution-disabled.
+
 # Windows collector custody repair
 
 This is a separate repair candidate from the preflight-only workflow packet. Both start from the

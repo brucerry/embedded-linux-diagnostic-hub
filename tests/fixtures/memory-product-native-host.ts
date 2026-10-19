@@ -1,3 +1,4 @@
+import { reserveSoakArtifact } from '../../scripts/lib/soak-physical-budget.mjs';
 import {
     reportStartupIdentity,
     reportLifecycleEvidence,
@@ -15,6 +16,11 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID as cryptoRandomId } from 'node:crypto';
 import { build } from 'esbuild';
+import {
+    inspectOwnedArtifact,
+    inspectViewerArtifact,
+} from '../../scripts/lib/owned-artifact-stream.mjs';
+import type { ProductResultsDownload } from './memory-product-results-ui';
 import { _electron, expect } from '@playwright/test';
 import { ProcessSampler } from './memory-resource-processes';
 import { sshQualificationProfile } from './memory-resource-ssh-profile';
@@ -441,6 +447,8 @@ export async function createProductNative(options: {
             clearTimeout(timer);
         }
     };
+    let heldReservation: ReturnType<typeof reserveSoakArtifact> | undefined;
+    let heldFile: string | undefined;
     const sampler = new ProcessSampler([application.process().pid!]);
     let closed = false,
         captureExpected = false;
@@ -636,10 +644,11 @@ export async function createProductNative(options: {
             async reportDownload(
                 extension: string,
                 action: () => Promise<void>,
-                validate?: (bytes: Buffer) => unknown,
+                validate: Parameters<ProductResultsDownload>[2],
             ) {
                 if (!['json', 'csv', 'md', 'txt'].includes(extension))
                     throw Error('Unknown native report format.');
+                const reservation = reserveSoakArtifact(downloads);
                 const file = path.join(downloads, 'report-' + cryptoRandomId() + '.' + extension);
                 try {
                     await fs.lstat(file);
@@ -668,27 +677,33 @@ export async function createProductNative(options: {
                 );
                 if (!receipt.invoked || receipt.file !== file)
                     throw Error('Native trusted destination was not invoked.');
-                const stat = await fs.lstat(file);
-                if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 128 * 1024 ** 2)
-                    throw Error('Native report file is invalid/oversized.');
-                const bytes = await fs.readFile(file);
+                const inspected = await inspectOwnedArtifact(file, validate, {
+                    signal: options.signal,
+                });
+                const result = inspected.result;
+                assert.equal(result.bytes, inspected.bytes);
+                assert.equal(result.sha256, inspected.sha256);
                 await options.emit('actual-native-results-file', {
                     ...receipt,
-                    bytes: bytes.length,
-                    sha256: createHash('sha256').update(bytes).digest('hex'),
-                    scope: 'Actual UI/IPC/native store/export writer; private deterministic trusted-main destination replaces only Save selection, not the report pipeline.',
+                    bytes: inspected.bytes,
+                    sha256: inspected.sha256,
+                    readBufferBytes: inspected.readBufferBytes,
+                    descriptorClosed: inspected.descriptorClosed,
+                    scope: 'Actual UI/IPC/native export; complete owned stream verified once without whole-file allocation.',
                 });
-                if (validate) {
-                    await validate(bytes);
-                    await fs.unlink(file);
-                    await options.emit('native-artifact-retired', {
-                        file,
-                        reason: 'semantic validation acknowledged',
-                        bytes: bytes.length,
-                    });
-                }
-                return bytes;
+                await fs.unlink(file);
+                reservation.retire([file], {
+                    descriptorClosed: inspected.descriptorClosed,
+                    producersJoined: true,
+                });
+                await options.emit('native-artifact-retired', {
+                    file,
+                    reason: 'single streaming semantic validation acknowledged',
+                    bytes: inspected.bytes,
+                });
+                return result;
             },
+
             async beginNoReport() {
                 await application.evaluate(() =>
                     (globalThis as any).__memoryNativeQualification.beginNoReport(),
@@ -705,7 +720,10 @@ export async function createProductNative(options: {
                 return receipt;
             },
             async prepareHeldReport() {
+                assert.equal(heldReservation, undefined);
+                heldReservation = reserveSoakArtifact(downloads);
                 const file = path.join(downloads, 'held-' + cryptoRandomId() + '.json');
+                heldFile = file;
                 await application.evaluate(
                     (_electron, file) =>
                         (globalThis as any).__memoryNativeQualification.prepareReport(file, true),
@@ -726,9 +744,34 @@ export async function createProductNative(options: {
                 );
             },
             async finishReport() {
-                return application.evaluate(() =>
+                const receipt = await application.evaluate(() =>
                     (globalThis as any).__memoryNativeQualification.finishReport(),
                 );
+                const state = await snapshot();
+                assert(
+                    state.capture.owners.reader === 0 &&
+                        state.capture.owners.export === 0 &&
+                        state.capture.owners.pin === 0,
+                    'Held report producers/readers remain owned',
+                );
+                return receipt;
+            },
+            async retireHeldReport(file: string) {
+                assert.equal(file, heldFile);
+                const state = await snapshot();
+                assert(
+                    state.capture.owners.reader === 0 &&
+                        state.capture.owners.export === 0 &&
+                        state.capture.owners.pin === 0,
+                );
+                assert.equal(
+                    (await fs.readdir(downloads)).length,
+                    0,
+                    'Held report or temporary output remains',
+                );
+                heldReservation?.retire([file], { descriptorClosed: true, producersJoined: true });
+                heldReservation = undefined;
+                heldFile = undefined;
             },
             async releaseQualificationHolds() {
                 await application.evaluate(() =>
@@ -828,8 +871,9 @@ export async function createProductNative(options: {
             async download(
                 format: string,
                 action: () => Promise<void>,
-                validate?: (bytes: Buffer) => unknown,
+                validate?: (bytes: import('./memory-product-ui').ProductViewerArtifact) => unknown,
             ) {
+                const reservation = reserveSoakArtifact(downloads);
                 const ordinal = await application.evaluate(
                     () => (globalThis as any).__memoryNativeDownloads.next as number,
                 );
@@ -866,9 +910,14 @@ export async function createProductNative(options: {
                 }
                 if (!record.name.toLowerCase().endsWith('.' + format.toLowerCase()))
                     throw Error('Unexpected native download name.');
-                const bytes = await fs.readFile(record.file);
-                if (bytes.length !== record.receivedBytes)
-                    throw Error('Native download byte receipt mismatch.');
+                const inspected = await inspectViewerArtifact(record.file, record.receivedBytes, {
+                    signal: options.signal,
+                });
+                const bytes = {
+                    length: inspected.bytes,
+                    prefix: inspected.prefix,
+                    sha256: inspected.sha256,
+                };
                 await options.emit('actual-native-download', record);
                 await application.evaluate((_electron, index) => {
                     const records = (globalThis as any).__memoryNativeDownloads.records as {
@@ -885,6 +934,10 @@ export async function createProductNative(options: {
                 if (validate) {
                     await validate(bytes);
                     await fs.unlink(record.file);
+                    reservation.retire([record.file], {
+                        descriptorClosed: inspected.descriptorClosed,
+                        producersJoined: true,
+                    });
                     await options.emit('native-artifact-retired', {
                         file: record.file,
                         bytes: bytes.length,
@@ -902,6 +955,19 @@ export async function createProductNative(options: {
                 if (workers.size) throw Error('Native dedicated worker close event missing.');
             },
             sampleProcessHistory: () => sampler.sample(),
+            async preflightGc() {
+                if (closed) throw Error('Native GC capability queried after close');
+                const main = await application.evaluate(() => ({
+                    available: typeof (globalThis as any).gc === 'function',
+                    execArgv: [...process.execArgv],
+                }));
+                if (!main.available)
+                    throw Error('Native main forced GC unavailable before payload');
+                const schema = await rendererProtocol.send('Schema.getDomains');
+                if (!schema.domains.some((d: any) => d.name === 'HeapProfiler'))
+                    throw Error('Renderer HeapProfiler capability unavailable before payload');
+                return { main, rendererDomain: 'HeapProfiler', actualGcCalls: 0 };
+            },
             async sample(input?: { quiescent: boolean; forceGc: boolean }) {
                 if (closed) return sampler.sample();
                 if (input?.forceGc) {

@@ -1,57 +1,66 @@
-# Windows product collection preparation
+# Windows raw observation preparation
 
-Collection remains blocked by the independent Windows preparation review. The current workflow adds
-only the separate metadata preflight described in `windows-preflight-only.md`; it exposes no
-collection option. Earlier collection-enabled proposals are superseded and remain historical review
-artifacts. Observations from a completed hosted job cannot approve a later host.
+This source is disabled by `scripts/lib/observation-execution.json`. The manual workflow checks that
+fence before installing dependencies or running its PTY prerequisite. The collector and observation
+entry also refuse disabled source. Do not dispatch the review candidate as a test. Independent exact
+source/host-scope review, a separately reviewed activation successor, and direct human authorization
+for its push and first dispatch are still required. Old finite-pilot approvals do not authorize it.
 
-This candidate prepares the mandatory Windows-first Electron 44.5.1 source lane. It has no native
-Windows result and grants no permission to dispatch CI. Source review, independent native
-coverage-contract review, actual Windows preflight and a separately reviewed execution manifest must
-precede collection. Historical Mac finite calibration does not transfer.
+The proposed route extends the existing registered `windows-portable.yml` manual workflow. It has no
+push/PR trigger for observation and skips the standing build and finite modes. Its outer job allows
+130 minutes for setup, at most 20 minutes of owned preparation/approval waiting, the existing
+80-minute collection cohort, and artifact retention. Each of the two serialized normal-GC jobs has
+at most 40 minutes including a 60-second cleanup reserve. Cohort time starts once after approval;
+collector, parent and outer observer all use that same nonce/start/deadline. There is no restart,
+rerun, third parent, forced-GC run or automatic replacement.
 
-The existing hosted route is `.github/workflows/windows-portable.yml` on `windows-latest`. Its
-standing 30-minute build and all other standing workflows remain unchanged. A proposed separate
-manual producer is supplied with the review packet; do not fold an 80-minute pair into the build. No
-tag, release producer, protection setting, signing configuration or publication is changed.
+A completed raw job requires five representative warmup minutes, 25 measured minutes and at least
+100 completed cycles with the full product adapter, viewer and 33-MiB body in 16-KiB fragments.
+Diagnostics target roughly 250 ms and retain actual timing/coalescing and all observed identities.
+The 12,000-sample and 256-identity ceilings remain safety limits, not manufactured targets.
 
-## Reviewed inputs and admission
+## Exact proposed manual procedure
 
-Use pinned Node 24.22.0 and the existing installed dependencies. The collector refuses an unexpected
-platform, architecture, runtime version/flags, ambient Hub/Node/TSX/esbuild/Electron override,
-changed source, complete dependency inventory, loader, Electron executable, PowerShell executable,
-derived SSH bundle/preload, native applicability contract or independently supplied manifest digest.
-Windows `--import` receives a file URL. Each job gets a fresh private profile. No dependency or
-driver install is performed by the collector.
-
-`memory-product-preflight.mts` is preparation: it reads the actual hosted principal, ACLs, runtime,
-source and dependencies and creates only the existing derived JS-only SSH qualification bundle under
-validation. It does not launch Electron or a soak. Supply an already-created canonical empty owned
-output directory outside the source tree:
-
-```powershell
-node --import <absolute-tsx-loader-file-URL> scripts/memory-product-preflight.mts --out=<absolute-empty-owned-root>
-```
-
-The resulting manifest and native contract are drafts (`reviewed: false`), never automatically
-approved. Review the actual source/runtime/dependency hashes, root/temp owner SID and SDDL hashes,
-PATH, metadata and case contract externally. Provide the exact approved bytes and their independent
-SHA-256 digests outside the source tree. The collector requires the first hosted run attempt and
-records actual repository, source commit, run ID and attempt. These are source collection receipts;
-the instrumented build is not a shipping archive/ASAR qualification.
-
-After separate execution approval, the proposed entry is:
-
-```powershell
-node --import <same-absolute-tsx-loader-file-URL> scripts/memory-product-collect.mts --manifest=<approved-absolute-path> --manifest-sha256=<independently-approved-digest>
-```
-
-The manifest admits exactly two serialized normal-GC jobs: sampled, then matched no-sampler. There
-are no retries or replacement samples. Each preserves five warm-up minutes, 25 measured minutes, at
-least 100 completed cycles and the existing 30-minute measured coverage deadline. Each shared
-40-minute budget includes startup and a 60-second cleanup reserve. The pair shares an immutable
-80-minute cohort deadline, including preflight; the second deadline is capped by that cohort. Fewer
-than 31 minutes remaining prevents admission. Forced GC is a separate future full outcome.
+1. Review the sealed source, activation diff, bounds and applicability contract. Keep the request
+   JSON outside the source tree. `sourceSHA256` is the actual recursive runtime `sourceFingerprint`
+   of the exact successor, not the flat packet inventory digest; both identities are recorded
+   separately. Its fields are `schema:1`, independently reviewed `sourceSHA256`, `policySHA256`,
+   exact `coverageJSON`/`coverageSHA256`, and `pty` containing exact `policySHA256`, `scopeSHA256`,
+   and `scopeJSON`. The normal-pair policy digest is SHA-256 of `JSON.stringify(observationPolicy)`;
+   neither computing that digest nor setting `reviewed:true` supplies human approval. Both coverage
+   and PTY scope must bind the activated exact source.
+2. After direct execution authorization, manually dispatch the activated commit on the dedicated
+   validation branch with `windows_observation_pair=true` and `observation_request_json` equal to
+   those exact reviewed bytes. Leave every finite selector and `observation_approve_json` empty.
+   Only the first attempt and owner `brucerry` are accepted. No secrets belong in the request.
+3. On that same disposable Windows allocation, the existing guarded PTY-only entry runs its fresh
+   WinPS prerequisite and one real PTY stage, positively closes its owners/evidence and returns its
+   marker. Failure or unknown closure stops the workflow before collection. The new custodian then
+   owns the canonical marker, pinned Electron/Node/loader/tools, JS-only SSH runtime preparation,
+   root identities and security descriptors. It prints one nonsecret live host challenge.
+4. Review that challenge and its actual runtime/dependency/root/marker/free-space/PTY identities.
+   While this owner remains alive, manually dispatch the same activated commit again with only
+   `observation_approve_json` set to the exact displayed approval JSON. Leave the pair selector,
+   request and finite selectors empty. This approval-only job restores no dependencies, imports no
+   collector and launches no payload. Its artifact binds parent run, commit, source and challenge
+   digest. The pair owner uses read-only authenticated GitHub API calls, requires the exact reviewed
+   workflow/actor/first attempt and rejects foreign, stale or replayed artifacts. It never writes
+   GitHub messages or changes repository settings.
+5. Approval cannot migrate to another host or process. Immediately after waiting, and before each
+   payload admission, the owner rereads the durable PTY journal, actual binding, closure, source,
+   policy and scope, full evidence hashes, ancestry and descriptor identity. The separate collector
+   independently checks the approval artifact and actual parent PID/root/marker identity, then
+   completes a bounded single-use inherited-IPC handshake. A JSON manifest alone cannot admit it.
+6. The independent `runOuter`/`observeCollector` watches actual collector spawn, exit,
+   inherited-pipe close and stream durability. The collector owns actual harnesses and their
+   app/gateway leaves. Its positive release request is an intent: the outer retains the real marker
+   until actual collector closure, outer evidence closure, unchanged inputs and all controller
+   proofs agree. Nonzero known workload failure may close honestly; missing/late close or sync/close
+   uncertainty retains the marker and referenced owner. Cancellation uses nonce-bound IPC and never
+   kills a middle owner. Approval expiry or cancellation cannot mint a new deadline or new attempt.
+7. Preserve the 14-day evidence artifact and review the exact outcome before any next action. No
+   memory thresholds are selected by this route. A forced run, another lane or shipping
+   qualification requires separate reviewed work and authorization.
 
 ## Native cases
 
@@ -85,44 +94,49 @@ real-OS-PTY test must run on Windows; a skipped result is not native PTY coverag
 manual-channel separation uses its actual private SSH target's PTY request/channel; it does not
 prove an external Linux/ash/DUT shell or replace the ordinary installed-PTY prerequisite.
 
-## Ownership, evidence and bounds
+## Shared accounting, custody and outcomes
 
-The collector adapts the reviewed finite controller and actual outer observer, using ProductRunOwner
-cancellation. It bypasses the old exit-only `memory-runtime.mjs` soak launcher. The hierarchy is
-outer observer -> collector -> actual harness -> app/gateway descendants. Every middle cancellation
-uses nonce-bound IPC. No middle watchdog is killed. Unknown close, descendant history, evidence
-closure or path binding retains the canonical exclusive marker and attached owner. A deadline never
-fabricates an exit. The outer records actual spawn, exit and inherited-pipe close; the collector
-cannot self-attest its outer completion.
+The unchanged physical envelope is 416 MiB per job (406 MiB work) and 840 MiB per pair including 8
+MiB shared. The shared allowance has disjoint 4-MiB writer credits: parent preparation/runtime,
+coverage/approval, retained PTY evidence and outer records/logs; and collector records/journal/
+security evidence. These are allocations inside 8 MiB, not additional allowances. One measured
+inventory includes both complete persistent roots, excludes job trees and their attributed parent
+streams from shared bytes, and counts each file once. Metadata/journal/outer-stream writes check the
+appropriate credit before writing; independent local maxima need not fit simultaneously.
 
-The marker is `realpath(os.tmpdir())/diagnostic-hub-v060-check.lock`; no relocated temporary
-directory or stale-marker replacement is allowed. Marker proof binds complete bytes, nonce,
-dev/inode, nlink, ancestry and actual owner. Windows uses read-only current-principal/owner-SID
-checks and reviewed root/temp SDDL hashes. Unix UID checks apply only where available. These are
-temporal path/ACL checks, not a claim of an atomic NTFS handle capability or Windows association
-qualification.
+Owned preparation transients remain under the existing Electron/runtime helper bounds and must
+join/close and be removed before collection admission. Settled dependencies are pinned inputs, not
+newly created pair data. Retained preparation and PTY files remain charged to shared storage. A
+missing tree, alias, changed identity or actual excess refuses; no guessed 2-MiB charge remains.
 
-Timeline writes refuse a row above 1 MiB, more than 50,000 rows or 64 MiB total before writing. The
-native exit receipt refuses above 128 KiB before writing and syncs/closes its descriptor. Native
-report streaming refuses above 128 MiB before yielding to the actual writer. Each parent/outer
-stdout/stderr retains at most 1 MiB while continuing to drain/hash all attempted bytes; overflow
-invalidates collection. Collector journals have 1,024 rows/1 MiB; record streams have 4 MiB. Each
-private job tree is capped at 246 MiB with 8,192 files by admission/periodic/postflight observation,
-reserving the rest of the 256 MiB/job and 512 MiB/cohort envelope for logs/metadata. Native
-browser-cache/download writes are not an atomic disk quota: an oversized observation cancels and
-invalidates; its possible observation overshoot must be assessed on actual Windows before a run.
-Successful native reports are unlinked only after semantic acknowledgement; hashes/byte receipts
-remain in the bounded timeline. Failed semantic files remain in the bounded private tree for review.
+Canonical TEMP is inventoried before collection. Each new or grown external file identity is
+assigned once to the job that first observed its growth, at current bytes above baseline, within
+that job's existing auxiliary allowance. The owner monitors private/shared/job trees and available
+space every second, requires 2 GiB free at admission and stops work below 128 MiB available.
+Apparent and supported allocated-byte observations, actual phase transport charges, artifact sizes,
+retirement, sample timings and complete process histories remain evidence. Periodic peaks are lower
+bounds, not filesystem quotas or a universal bound on Chromium or other host writes.
 
-After actual harness close, every private file is bounded-read through a regular single-link
-identity-checked descriptor, synced using a writable handle for Windows and independently closed.
-Required timeline/native journals are revalidated; every observed PID/creation identity must appear
-in final shutdown history, descendants terminated with null memory values, and actual native exit
-and close must agree. Numerical failure and ownership closure are separate. Complete ownership and
-durable evidence may release a marker after a known failed workload; incomplete ownership cannot.
-Outer completion is retained separately and must also pass review.
+The canonical marker remains `realpath(os.tmpdir())/diagnostic-hub-v060-check.lock`. TEMP/TMP,
+credentials, owners, ACLs and security policy are unchanged. Temporal path/descriptor readback uses
+the existing strict trusted-three-ACE hosted policy; it does not claim an atomic NTFS capability.
+Windows metadata is fsynced through writable descriptors and actual closure is checked
+independently.
 
-The first pair collects unreviewed calibration data. It chooses no memory thresholds, transfers no
-Mac policy, qualifies no installer and certifies no leak freedom. Enforcement still requires at
-least ten distinct matched calibration hashes per declared role/metric, reviewed delta/slope policy,
-separate normal/forced outcomes and final shipping artifact qualification.
+Outcomes are distinct:
+
+- `COMPLETE_RAW_OBSERVATION`: required workload, coverage and durable closure completed; no memory
+  pass.
+- `PRODUCT_OWNERSHIP_INTEGRITY_FAILURE`: observed product/integrity failure, with exact evidence.
+- `INCOMPLETE_UNQUALIFIED_OBSERVATION`: budget, duration, cycles or supported-measurement shortfall;
+  it earns no qualification credit and admits no second parent after first-job failure.
+- `INVALID_UNKNOWN_CLOSURE_OR_DURABILITY`: missing ownership, binding or durability proof; hold
+  custody.
+
+A work refusal can coexist with a valid incomplete footer and actual closed descriptor. Producer and
+inspector preserve that distinction without absorbing footer/write/sync/close failures. Unknown
+ownership cannot be replaced by a successful exit code or a collector-authored completion claim.
+
+Full calibration/policy/enforcement, supported normal/forced separation, other platform/lane gates
+and shipping artifact qualification remain open. The historical finite 64-KiB pilot established only
+its own finite source/host result.

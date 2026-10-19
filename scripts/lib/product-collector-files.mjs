@@ -57,11 +57,12 @@ export function windowsPrincipalObserver(profile) {
 }
 /** Reviewed temporal path binding, not an atomic NTFS handle-capability guarantee. */
 export class RootGuard {
-    constructor(root, { ownerCheck = () => {}, io = fs } = {}) {
+    constructor(root, { ownerCheck = () => {}, io = fs, writeAdmission = () => {} } = {}) {
         assert(path.isAbsolute(root) && path.resolve(root) === root);
         this.root = root;
         this.io = io;
         this.ownerCheck = ownerCheck;
+        this.writeAdmission = writeAdmission;
         this.bindings = new Map();
         let current = root,
             ancestry = [];
@@ -118,6 +119,7 @@ export class RootGuard {
         const file = path.resolve(this.root, relative);
         this.check(file);
         this.bind(path.dirname(file));
+        this.writeAdmission(Buffer.byteLength(bytes));
         const fd = this.io.openSync(file, 'wx', 0o600);
         const entry = { fd, errors: [], attempted: false };
         try {
@@ -216,6 +218,7 @@ export class ProductJournal {
             this.guard.check(this.file);
             assert(!this.entry.attempted);
             const bytes = Buffer.from(JSON.stringify({ sequence: this.rows, stage, data }) + '\n');
+            this.guard.writeAdmission(bytes.length);
             assert(
                 bytes.length <= 65536 && this.rows < 1024 && this.bytes + bytes.length <= 1048576,
                 'Collector journal pre-write bound.',

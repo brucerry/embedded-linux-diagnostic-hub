@@ -13,6 +13,12 @@ import {
     type StoredCapture,
 } from '../../shared/capture-store';
 import type { CaptureReportFormat } from '../../shared/capture-report';
+import {
+    ReportCursor,
+    parseReportJson,
+    parseReportCsv,
+} from '../../scripts/lib/bounded-report-reader.mjs';
+import { inspectOwnedArtifact } from '../../scripts/lib/owned-artifact-stream.mjs';
 import type {} from './memory-product-app';
 import type { ProductViewerDownload } from './memory-product-ui';
 
@@ -74,7 +80,7 @@ export interface ProductResultsOptions {
         begin(): Promise<void>;
         finish(): Promise<{ calls: number; returned: number }>;
     };
-    nativeDownload?: ProductViewerDownload;
+    streamDownload?: ProductResultsDownload;
     browserDownloads?: { count(): number };
 }
 const sha = (value: Uint8Array | string) => createHash('sha256').update(value).digest('hex');
@@ -278,6 +284,325 @@ export function assertResultsCatalogEvolution(
     };
 }
 
+export const resultsCsvFields = [
+    'capture_id',
+    'sequence',
+    'name',
+    'command',
+    'capture_state',
+    'reason',
+    'committed_bytes',
+    'observed_bytes',
+    'completed_observations',
+    'partial_observation',
+    'receive_clock',
+    'record_started_utc',
+    'finalized_or_recovered_utc',
+    'observation',
+    'received_utc',
+    'stream',
+    'observation_offset',
+    'observation_bytes',
+    'raw_base64_prefixed',
+    'transformedFields',
+    'outcome_json_base64_prefixed',
+    'export_scope',
+];
+
+export type ResultsReportInspection = {
+    format: CaptureReportFormat;
+    captures: number;
+    captureIds: string[] | null;
+    identityAttested: boolean;
+    readableOutputAttested?: boolean;
+    bytes: number;
+    sha256: string;
+    limitation?: string;
+    allocation?: unknown;
+};
+export type ProductResultsDownload = (
+    extension: string,
+    action: () => Promise<void>,
+    validate: (chunks: AsyncIterable<Uint8Array>) => Promise<ResultsReportInspection>,
+) => Promise<ResultsReportInspection>;
+
+/** Same membership, outcome and full-output checks as the bounded reference parser. */
+export async function inspectProductResultsStream(
+    format: CaptureReportFormat,
+    input: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+    expected: readonly ResultsCapture[],
+    maximum = 128 * 1024 ** 2,
+): Promise<ResultsReportInspection> {
+    assert(expected.length > 0 && expected.length <= 500);
+    assert(maximum > 0 && maximum <= 128 * 1024 ** 2);
+    exactIds(
+        expected.map((value) => value.id),
+        [...new Set(expected.map((value) => value.id))],
+    );
+    const byId = new Map(expected.map((value) => [value.id, value])),
+        seen = new Set<string>();
+    async function* chunks() {
+        for await (const value of input) {
+            assert(value instanceof Uint8Array);
+            for (let offset = 0; offset < value.length; offset += 65536)
+                yield value.subarray(offset, offset + 65536);
+        }
+    }
+    const cursor = new ReportCursor(chunks(), maximum);
+    try {
+        if (format === 'json') {
+            let current: any,
+                total = 0,
+                complete = 0;
+            const root = await parseReportJson(cursor, {
+                rawStart(row: any) {
+                    assert(!current, 'Overlapping capture rows');
+                    assert.equal(row.schemaVersion, 3);
+                    const capture = storedCapture(row.capture),
+                        wanted = byId.get(capture.id);
+                    assert(wanted, 'Unexpected JSON capture');
+                    assert(!seen.has(capture.id), 'Duplicate capture membership');
+                    seen.add(capture.id);
+                    assert.equal(capture.header.command, wanted.command);
+                    assert.equal(capture.header.transport, wanted.transport);
+                    assert.equal(capture.sequence, wanted.sequence);
+                    if (wanted.name !== undefined) assert.equal(capture.header.name, wanted.name);
+                    assert.equal(capture.state, wanted.state);
+                    assert.equal(capture.committedBytes, wanted.committedBytes);
+                    outcome(row.outcome, wanted);
+                    current = {
+                        capture,
+                        wanted,
+                        verify: captureVerifier(capture),
+                        raw: streamAccumulator(),
+                        frames: 0,
+                    };
+                },
+                frame(input: any) {
+                    assert(current, 'JSON frame before metadata');
+                    assert(++current.frames <= current.capture.committedFrames, 'Excess raw frame');
+                    const { base64, ...provenance } = record(input),
+                        frame = { ...provenance, bytes: base64Bytes(base64) } as CaptureFrame;
+                    current.verify.append(frame);
+                    current.raw.add(frame.stream, frame.bytes);
+                },
+                capture(row: any) {
+                    assert(current, 'JSON capture omitted raw observations');
+                    assert.equal(row.captureComplete, current.wanted.state === 'complete');
+                    assert.equal(row.verifiedCommittedBytes, current.wanted.committedBytes);
+                    current.verify.finish();
+                    current.raw.finish(current.wanted);
+                    total += current.wanted.committedBytes;
+                    if (current.wanted.state === 'complete') complete++;
+                    current = null;
+                },
+            });
+            assert(!current);
+            assert.equal(root.schemaVersion, 3);
+            assert(
+                Number.isSafeInteger(root.throughSequence) &&
+                    root.throughSequence >= Math.max(...expected.map((value) => value.sequence)),
+            );
+            exactIds([...seen], [...byId.keys()]);
+            assert.deepEqual(root.summary, {
+                captures: expected.length,
+                complete,
+                incomplete: expected.length - complete,
+                verifiedCommittedBytes: total,
+            });
+            return {
+                format,
+                captures: seen.size,
+                captureIds: [...seen],
+                identityAttested: true,
+                ...(await cursor.finish()),
+            };
+        }
+        if (format === 'csv') {
+            let header: string[] | undefined;
+            const raw = new Map<string, ReturnType<typeof streamAccumulator>>();
+            await parseReportCsv(cursor, (cells: string[]) => {
+                if (!header) {
+                    assert.deepEqual(cells, resultsCsvFields, 'Actual CSV schema changed');
+                    header = cells;
+                    return;
+                }
+                assert.equal(cells.length, header.length, 'CSV cell count differs');
+                const row = Object.fromEntries(header.map((name, index) => [name, cells[index]])),
+                    wanted = byId.get(row.capture_id);
+                assert(wanted, 'Unexpected CSV capture');
+                seen.add(wanted.id);
+                let accumulator = raw.get(wanted.id);
+                if (!accumulator) raw.set(wanted.id, (accumulator = streamAccumulator()));
+                const transformed = new Set(row.transformedFields.split(';').filter(Boolean));
+                const original = (name: string) =>
+                    transformed.has(name)
+                        ? (assert(row[name].startsWith("'")), row[name].slice(1))
+                        : row[name];
+                assert.equal(original('command'), wanted.command);
+                if (wanted.name !== undefined) assert.equal(original('name'), wanted.name);
+                assert.equal(Number(row.sequence), wanted.sequence);
+                assert.equal(row.capture_state, wanted.state);
+                assert.equal(Number(row.committed_bytes), wanted.committedBytes);
+                if (row.stream) {
+                    assert(row.raw_base64_prefixed.startsWith('base64:'));
+                    accumulator.add(
+                        row.stream as Stream,
+                        base64Bytes(row.raw_base64_prefixed.slice(7)),
+                    );
+                } else assert.equal(row.raw_base64_prefixed, 'base64:');
+                if (wanted.completion !== undefined) {
+                    if (wanted.completion === null)
+                        assert.equal(row.outcome_json_base64_prefixed, '');
+                    else {
+                        assert(row.outcome_json_base64_prefixed.startsWith('base64:'));
+                        outcome(
+                            JSON.parse(
+                                new TextDecoder('utf-8', { fatal: true }).decode(
+                                    Buffer.from(
+                                        row.outcome_json_base64_prefixed.slice(7),
+                                        'base64',
+                                    ),
+                                ),
+                            ),
+                            wanted,
+                        );
+                    }
+                }
+            });
+            assert(header);
+            exactIds([...seen], [...byId.keys()]);
+            for (const wanted of expected) raw.get(wanted.id)!.finish(wanted);
+            return {
+                format,
+                captures: seen.size,
+                captureIds: [...seen],
+                identityAttested: true,
+                ...(await cursor.finish()),
+            };
+        }
+        const readable = async (wanted: ResultsCapture) => {
+            assert(wanted.readableOutput, 'Full readable output expectation required');
+            const target = wanted.readableOutput;
+            assert(Number.isSafeInteger(target.bytes) && target.bytes >= 0);
+            assert.match(target.sha256, /^[a-f0-9]{64}$/);
+            const hash = createHash('sha256'),
+                tokens = (wanted.readableTokens ?? []).map((token) => {
+                    const raw = Buffer.from(token);
+                    assert(raw.length > 0 && raw.length <= 8192);
+                    return { raw, found: false };
+                });
+            const overlap = Math.max(0, ...tokens.map((token) => token.raw.length - 1));
+            let tail = Buffer.alloc(0);
+            const decoder = new TextDecoder('utf-8', { fatal: true });
+            await cursor.exact(target.bytes, (part: Buffer) => {
+                hash.update(part);
+                decoder.decode(part, { stream: true });
+                if (tokens.length) {
+                    const search = Buffer.concat([tail, part]);
+                    for (const token of tokens) token.found ||= search.includes(token.raw);
+                    tail = Buffer.from(search.subarray(Math.max(0, search.length - overlap)));
+                }
+            });
+            decoder.decode();
+            assert.equal(
+                hash.digest('hex'),
+                target.sha256,
+                'Complete readable output body differs',
+            );
+            assert(
+                tokens.every((token) => token.found),
+                'Readable output omitted expected content',
+            );
+        };
+        if (format === 'markdown') {
+            for (let index = 0; index < expected.length; index++) {
+                await cursor.until('**Capture ID:** ');
+                const id = new TextDecoder('utf-8', { fatal: true }).decode(await cursor.small(36)),
+                    wanted = byId.get(id);
+                assert(wanted, 'Unexpected Markdown capture');
+                assert(!seen.has(id), 'Duplicate capture membership');
+                seen.add(id);
+                await cursor.until('### ⌨️ Command\n\n');
+                const commandFence = await cursor.fence('sh'),
+                    command = await cursor.small(Buffer.byteLength(wanted.command), 8192);
+                assert.equal(
+                    new TextDecoder('utf-8', { fatal: true }).decode(command),
+                    wanted.command,
+                );
+                await cursor.expect('\n');
+                await cursor.closeFence(commandFence);
+                const middle = await cursor.until(
+                    '### 📥 Detailed received output\n\nDecoded per stream as UTF-8 in receive-observation order; invalid bytes use replacement characters.\n\n',
+                );
+                const metadata = markdownResultsSections(
+                    '**Capture ID:** ' +
+                        id +
+                        '\n' +
+                        new TextDecoder('utf-8', { fatal: true }).decode(middle),
+                );
+                assert.equal(metadata.length, 1);
+                outcome(metadata[0].outcome ?? null, wanted);
+                const outputFence = await cursor.fence('text');
+                await readable(wanted);
+                await cursor.expect('\n');
+                await cursor.closeFence(outputFence);
+            }
+            const trailer = new TextDecoder('utf-8', { fatal: true }).decode(
+                await cursor.until('\u0000', 1048576, true),
+            );
+            assert.equal(
+                trailer,
+                '\n---\n\n**Export integrity:** all ' +
+                    expected.length +
+                    ' captures read through their pinned committed high-water marks. **Incomplete captures:** ' +
+                    expected.filter((value) => value.state !== 'complete').length +
+                    '.\n',
+                'Truncated or substituted Markdown integrity trailer',
+            );
+            exactIds([...seen], [...byId.keys()]);
+            return {
+                format,
+                captures: seen.size,
+                captureIds: [...seen],
+                identityAttested: true,
+                readableOutputAttested: true,
+                ...(await cursor.finish()),
+            };
+        }
+        assert.equal(format, 'text');
+        let first = true;
+        for (const wanted of [...expected].sort((a, b) => a.sequence - b.sequence)) {
+            const header = new TextDecoder('utf-8', { fatal: true }).decode(
+                await cursor.until(
+                    '\nCommand:\n' + wanted.command + '\nReceived output (UTF-8 projection):\n',
+                ),
+            );
+            if (first) {
+                assert(
+                    header.includes('\nCaptures: ' + expected.length + ';'),
+                    'Text report count differs',
+                );
+                first = false;
+            }
+            await readable(wanted);
+            await cursor.expect('\n');
+        }
+        return {
+            format,
+            captures: expected.length,
+            captureIds: null,
+            identityAttested: false,
+            readableOutputAttested: true,
+            limitation:
+                'Text schema omits capture IDs; count/command/output semantics do not independently prove ID membership.',
+            ...(await cursor.finish()),
+        };
+    } finally {
+        await cursor.close();
+    }
+}
+
 /** Semantic validation of actual downloaded bytes. Does not fetch or manufacture capture data. */
 export function inspectProductResultsReport(
     format: CaptureReportFormat,
@@ -351,30 +676,7 @@ export function inspectProductResultsReport(
     }
     if (format === 'csv') {
         const [header, ...rows] = parseResultsCsv(text);
-        const required = [
-            'capture_id',
-            'sequence',
-            'name',
-            'command',
-            'capture_state',
-            'reason',
-            'committed_bytes',
-            'observed_bytes',
-            'completed_observations',
-            'partial_observation',
-            'receive_clock',
-            'record_started_utc',
-            'finalized_or_recovered_utc',
-            'observation',
-            'received_utc',
-            'stream',
-            'observation_offset',
-            'observation_bytes',
-            'raw_base64_prefixed',
-            'transformedFields',
-            'outcome_json_base64_prefixed',
-            'export_scope',
-        ];
+        const required = resultsCsvFields;
         assert.deepEqual(header, required, 'Actual CSV schema changed.');
         const seen = new Set<string>(),
             raw = new Map<string, ReturnType<typeof streamAccumulator>>();
@@ -576,38 +878,33 @@ async function boundedDownload(
     expected: readonly ResultsCapture[],
     directory: string,
     limit: number,
-    nativeDownload?: ProductViewerDownload,
+    streamDownload?: ProductResultsDownload,
     browserDownloads?: { count(): number },
 ) {
     await view.getByLabel('Export format', { exact: true }).selectOption(format);
-    if (nativeDownload) {
+    if (streamDownload) {
         const extension = { markdown: 'md', text: 'txt', json: 'json', csv: 'csv' }[format];
-        const bytes = await nativeDownload(
+        const result = await streamDownload(
             extension,
             () => view.getByRole('button', { name: 'Download QA results', exact: true }).click(),
-            (bytes) => {
-                assert.ok(bytes.length > 0 && bytes.length <= limit);
-                return inspectProductResultsReport(format, bytes, expected);
-            },
+            (chunks) => inspectProductResultsStream(format, chunks, expected, limit),
         );
-        assert.ok(bytes.length > 0 && bytes.length <= limit);
-        const destination = null; // Native host retires the owned file only after semantic acknowledgement.
-        const result = inspectProductResultsReport(format, bytes, expected);
+        assert(result.bytes > 0 && result.bytes <= limit);
         await expect(
             view.getByRole('button', { name: 'Download QA results', exact: true }),
         ).toBeEnabled();
         return {
             ...result,
-            path: destination,
+            path: null,
             suggestedFilename: null,
             ...(browserDownloads
                 ? {
                       browserAttestation:
-                          'Actual CDP download begin/progress/completed-file receipt is emitted by the supplied browser host.',
+                          'Actual CDP begin/progress and completed owned file stream verified once.',
                   }
                 : {
                       nativeAttestation:
-                          'Actual Electron will-download/done receipt is emitted by the supplied native host.',
+                          'Actual trusted Save/store/export and owned file stream verified once.',
                   }),
         };
     }
@@ -633,15 +930,13 @@ async function boundedDownload(
             before.isFile() && !before.isSymbolicLink() && before.size > 0 && before.size <= limit,
             'Actual report exceeds the explicitly bounded semantic fixture budget.',
         );
-        const chunks: Buffer[] = [];
-        let length = 0;
-        for await (const chunk of createReadStream(destination)) {
-            length += chunk.length;
-            assert.ok(length <= limit);
-            chunks.push(chunk);
-        }
-        const bytes = Buffer.concat(chunks),
-            result = inspectProductResultsReport(format, bytes, expected);
+        const inspected = await inspectOwnedArtifact(
+            destination,
+            (chunks) => inspectProductResultsStream(format, chunks, expected, limit),
+            { limit },
+        );
+        const result = inspected.result;
+        await fs.unlink(destination);
         assert.equal(duplicate, false);
         await expect(
             view.getByRole('button', { name: 'Download QA results', exact: true }),
@@ -833,7 +1128,7 @@ export async function exerciseProductResults(page: Page, input: ProductResultsOp
                 input.selection,
                 directory,
                 input.maxDownloadBytes,
-                input.nativeDownload,
+                input.streamDownload,
                 input.browserDownloads,
             ),
         );
@@ -858,7 +1153,7 @@ export async function exerciseProductResults(page: Page, input: ProductResultsOp
             searchExpected,
             directory,
             input.maxDownloadBytes,
-            input.nativeDownload,
+            input.streamDownload,
             input.browserDownloads,
         ),
     );
@@ -877,7 +1172,7 @@ export async function exerciseProductResults(page: Page, input: ProductResultsOp
             scoped,
             directory,
             input.maxDownloadBytes,
-            input.nativeDownload,
+            input.streamDownload,
             input.browserDownloads,
         ),
     );

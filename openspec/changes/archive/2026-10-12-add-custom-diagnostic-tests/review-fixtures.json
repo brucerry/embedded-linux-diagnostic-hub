@@ -1,0 +1,181 @@
+{
+  "format": "diagnostic-capability-review-fixtures",
+  "schemaVersion": 1,
+  "status": "planning data only; not implemented or executed",
+  "runtimeRequirement": "none for new driver/command measurements",
+  "executionPolicy": {
+    "trustedCode": "fixed application-owned POSIX shell only",
+    "targetDeployment": "none",
+    "pythonInvocations": 0,
+    "hardwareOperationsThisTurn": 0
+  },
+  "qualificationRules": [
+    "Mock metadata/protocol fixtures are not physical architecture qualification.",
+    "Positive shell/group profiles also require controlled real installed-tool process tests before support is advertised.",
+    "Unsupported/missing capability fixtures must not trigger installation, helper upload or target filesystem policy changes.",
+    "Use existing available test facilities; do not reinstall removed qualification distributions."
+  ],
+  "cases": [
+    {
+      "id": "R01",
+      "pythonPresence": "none",
+      "targetProfile": "ARM32 / BusyBox ash",
+      "givenCapabilities": "qualified driver-read primitives; no ip",
+      "expected": "driver available; ip recipe Blocked; zero Python invocations"
+    },
+    {
+      "id": "R02",
+      "pythonPresence": "Python 2 only",
+      "targetProfile": "MIPS32 / BusyBox ash",
+      "givenCapabilities": "same qualified primitives",
+      "expected": "new driver path available; Python 2 not invoked/upgraded"
+    },
+    {
+      "id": "R03",
+      "pythonPresence": "Python 3.8",
+      "targetProfile": "x86-64 / dash",
+      "givenCapabilities": "qualified driver and ip recipe primitives",
+      "expected": "same new paths; no target Python invocation"
+    },
+    {
+      "id": "R04",
+      "pythonPresence": "Python 3.11 without optional modules",
+      "targetProfile": "ARM64 / ash",
+      "givenCapabilities": "qualified driver primitives",
+      "expected": "driver available regardless of Python module set"
+    },
+    {
+      "id": "R05",
+      "pythonPresence": "Python 3.14 or unexpected python alias",
+      "targetProfile": "ARM64 / POSIX sh",
+      "givenCapabilities": "qualified new measurement primitives",
+      "expected": "no interpreter selection by name/version; same results"
+    },
+    {
+      "id": "T01",
+      "pythonPresence": "none",
+      "targetProfile": "BusyBox tool variant A",
+      "givenCapabilities": "timeout lacks GNU -k; qualified anchored shell watchdog available",
+      "expected": "use qualified watchdog syntax; never send guessed GNU flags"
+    },
+    {
+      "id": "T02",
+      "pythonPresence": "Python 2 only",
+      "targetProfile": "BusyBox minimal variant B",
+      "givenCapabilities": "no qualified remote deadline/group ownership primitive",
+      "expected": "affected new operation Blocked even though shell exists"
+    },
+    {
+      "id": "T03",
+      "pythonPresence": "none",
+      "targetProfile": "BusyBox head/readlink/stat variant C",
+      "givenCapabilities": "byte limit or descriptor-follow semantics fail probe; no qualified equivalent",
+      "expected": "driver read Blocked with exact missing capability"
+    },
+    {
+      "id": "T04",
+      "pythonPresence": "none",
+      "targetProfile": "BusyBox / restricted proc",
+      "givenCapabilities": "fd metadata or current owned-process visibility unavailable",
+      "expected": "Block affected read/lifecycle; retain unresolved recovery"
+    },
+    {
+      "id": "T05",
+      "pythonPresence": "none",
+      "targetProfile": "read-only root; noexec /tmp",
+      "givenCapabilities": "installed shell/read/group tools qualified; no staging directory",
+      "expected": "driver path available; zero target file upload/write/remount"
+    },
+    {
+      "id": "C01",
+      "pythonPresence": "none",
+      "targetProfile": "BusyBox ip variant",
+      "givenCapabilities": "driver primitives qualified; ip -j or required JSON field unsupported",
+      "expected": "driver available; ip recipe Blocked; no text-parser fallback"
+    },
+    {
+      "id": "C02",
+      "pythonPresence": "Python 2 only",
+      "targetProfile": "native ip / missing sha256sum or fd execution",
+      "givenCapabilities": "driver primitives qualified; executable pin/fingerprint unavailable",
+      "expected": "driver available; command recipe Blocked"
+    },
+    {
+      "id": "C03",
+      "pythonPresence": "none",
+      "targetProfile": "native utility path replacement",
+      "givenCapabilities": "pinned executable object verified then pathname replaced",
+      "expected": "invoke only opened object; record/reject observed identity changes"
+    },
+    {
+      "id": "L01",
+      "pythonPresence": "none",
+      "targetProfile": "SSH server ignores signal request",
+      "givenCapabilities": "qualified independent deadline/control profile present or absent",
+      "expected": "qualified profile records bounded cancellation; absent profile Blocked"
+    },
+    {
+      "id": "L02",
+      "pythonPresence": "none",
+      "targetProfile": "slow/uninterruptible sysfs read",
+      "givenCapabilities": "ownership acknowledged; read deadline or completion proof lost",
+      "expected": "Inconclusive; durable quarantine; SSH close never proves stop"
+    },
+    {
+      "id": "L03",
+      "pythonPresence": "none",
+      "targetProfile": "crash after intent / before GO",
+      "givenCapabilities": "ownership handshake incomplete or durable commit fails",
+      "expected": "no GO; zero hardware acquisition; startup recovery explicit"
+    },
+    {
+      "id": "L04",
+      "pythonPresence": "Python 2 only",
+      "targetProfile": "crash after GO / PID reused",
+      "givenCapabilities": "durable old boot/start/group nonce; current PID identity differs",
+      "expected": "no stale-PID kill; affected tests Blocked until verified recovery"
+    },
+    {
+      "id": "L05",
+      "pythonPresence": "none",
+      "targetProfile": "ledger missing/corrupt; proc restricted",
+      "givenCapabilities": "incomplete reconciliation",
+      "expected": "no reset/restart bypass; Blocked with recovery reason"
+    },
+    {
+      "id": "S01",
+      "pythonPresence": "none",
+      "targetProfile": "hostile positional resource data",
+      "givenCapabilities": "quote/dollar/substitution/newline/NUL/option-shaped strings",
+      "expected": "reject invalid grammar; accepted literals never enter wrapper source"
+    },
+    {
+      "id": "S02",
+      "pythonPresence": "none",
+      "targetProfile": "framed byte evidence",
+      "givenCapabilities": "overlong data, duplicate frame, malformed hex, nonce mismatch",
+      "expected": "reject/inconclusive; no successful number extracted from truncation"
+    },
+    {
+      "id": "D01",
+      "pythonPresence": "all runtime variants",
+      "targetProfile": "32-bit and big-endian metadata profiles",
+      "givenCapabilities": "large integer > 2^53; signed/raw/processed conversions; boolean carrier",
+      "expected": "backend exact comparisons; no target-width arithmetic or cross-type coercion"
+    },
+    {
+      "id": "D02",
+      "pythonPresence": "none",
+      "targetProfile": "SPI/I2C hwmon, thermal, network, block, USB",
+      "givenCapabilities": "same typed resource/read protocol with explicit registered descriptors",
+      "expected": "interface-neutral criteria/provenance; no raw bus/media/control operations"
+    },
+    {
+      "id": "G01",
+      "pythonPresence": "Python 2 only / none",
+      "targetProfile": "legacy UART resource",
+      "givenCapabilities": "new read primitives qualified but python3 absent",
+      "expected": "new measurements available; legacy UART separately Blocked by its existing prerequisite"
+    }
+  ]
+}

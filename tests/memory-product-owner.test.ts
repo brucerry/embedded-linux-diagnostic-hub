@@ -300,7 +300,17 @@ test('soak caller wires ownership before product factory and waits for direct cl
     assert.match(source, /owner.run\(\(\) =>[\s\S]*?createQualificationDriver/);
     assert.match(source, /signal: owner.signal/);
     assert.match(source, /await owner.join\(\)/);
-    assert.match(source, /syncCloseEvidence\(\[timeline\]\)/);
+    assert.match(source, /await localEvidence\.finish\(\)/);
+    const final = source.slice(source.indexOf('    } finally {\n        let ownershipJoined'));
+    assert.ok(
+        final.indexOf('assertArtifactReadersClosed()') <
+            final.indexOf('await finishObservationTimeline(localEvidence, owner)'),
+    );
+    assert.ok(
+        final.indexOf('await finishObservationTimeline(localEvidence, owner)') <
+            final.indexOf('owner.finish(true)'),
+    );
+    assert.match(final, /owner\.hold\('Product timeline sync\/close failed\.'\)/);
     const supervisor = source.slice(
         source.indexOf('async function supervise()'),
         source.indexOf('async function runChild()'),

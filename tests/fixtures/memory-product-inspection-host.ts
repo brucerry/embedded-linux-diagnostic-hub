@@ -41,6 +41,7 @@ export async function createBrowserInspectionHost(input: {
     origin: string;
     directory: string;
     journal: BrowserDownloadEvents;
+    signal?: AbortSignal;
     monitor: Monitor;
     rootChild: ChildProcess;
     emit(stage: string, value: unknown): Promise<void>;
@@ -228,6 +229,7 @@ export async function createBrowserInspectionHost(input: {
                 page: current.pageProtocol,
                 directory: input.directory,
                 journal: input.journal,
+                signal: input.signal,
                 emit: input.emit,
             });
             monitors.add(monitor);
