@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { processQueryStage, validateProcessQueryBatch } from './pilot-process-query.mjs';
 import {
     startupIdentityDecoder,
-    startupIdentityStages,
+    losslessReportStages,
     identityManifestStage,
     identityPartStage,
     identityReportLimits,
@@ -77,8 +77,8 @@ export function pilotEvidenceReceiver({
                 } else {
                     identities.assertComplete();
                     assert(
-                        !startupIdentityStages.includes(message.stage),
-                        'Identity must use lossless bounded reporting',
+                        !losslessReportStages.includes(message.stage),
+                        'Identity/lifecycle evidence must use lossless bounded reporting',
                     );
                     assert(
                         rows + reservedRows < identityReportLimits.rows,

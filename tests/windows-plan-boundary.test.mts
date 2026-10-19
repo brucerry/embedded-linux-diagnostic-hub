@@ -57,40 +57,28 @@ function predecessorCopy(directory) {
         path.join(target, 'node_modules'),
         process.platform === 'win32' ? 'junction' : 'dir',
     );
-    const restore = (relative, replacements) => {
-        const file = path.join(target, relative);
-        let text = fs.readFileSync(file, 'utf8');
-        for (const [from, to] of replacements) {
-            assert.equal(text.split(from).length, 2);
-            text = text.replace(from, to);
-        }
+    // Retain exact historical bytes independently of later transport source refactors.
+    const predecessor = JSON.parse(
+        fs.readFileSync(
+            path.join(root, 'tests/fixtures/windows-plan-boundary-predecessor.json'),
+            'utf8',
+        ),
+    );
+    assert.equal(predecessor.schema, 1);
+    assert.equal(
+        predecessor.sourceSHA256,
+        '40588334a03ae4e539d1156202527167719a12c03dbf036a0bd7e21f88ba8950',
+    );
+    assert.deepEqual(Object.keys(predecessor.files).sort(), Object.keys(predecessorHashes).sort());
+    for (const [relative, expected] of Object.entries(predecessorHashes)) {
+        const text = predecessor.files[relative];
         assert.equal(
             hash(text),
-            predecessorHashes[relative],
+            expected,
             'Red control must restore exact sealed predecessor bytes.',
         );
-        fs.writeFileSync(file, text);
-    };
-    restore('scripts/lib/startup-identity-report.mjs', [
-        [
-            "    if (typeof emit.publishIdentity === 'function') return emit.publishIdentity(stage, data);\n    const plan = planStartupIdentity(stage, data);",
-            "    const plan = planStartupIdentity(stage, data);\n    if (typeof emit.publishIdentity === 'function') return emit.publishIdentity(plan);",
-        ],
-    ]);
-    restore('scripts/lib/pilot-runtime-startup.mjs', [
-        [
-            '                        // The IPC connected flag can lag a committed owned termination.\n                        // Do not admit a new credit write into that closing transport.\n                        if (child.connected && !startup.children.get(child)?.terminationRequested)',
-            '                        if (child.connected)',
-        ],
-        [
-            "import {\n    planStartupIdentity,\n    requireIdentityPlan,\n    reportingRefusal,\n} from './startup-identity-report.mjs';",
-            "import { requireIdentityPlan, reportingRefusal } from './startup-identity-report.mjs';",
-        ],
-        [
-            '    emit.publishIdentity = (stage, data) => {\n        const plan = planStartupIdentity(stage, data);',
-            '    emit.publishIdentity = (plan) => {',
-        ],
-    ]);
+        fs.writeFileSync(path.join(target, relative), text);
+    }
     return target;
 }
 async function runCase(caseRoot, version, mode, evidenceDirectory) {

@@ -1,3 +1,9 @@
+import {
+    startupIdentityDecoder,
+    identityManifestStage,
+    identityPartStage,
+    reportLifecycleEvidence,
+} from '../scripts/lib/startup-identity-report.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
@@ -40,14 +46,25 @@ function step(
 ) {
     let requests = 0;
     const module = { exports: {} as any };
+    const decoder = startupIdentityDecoder();
+    const wireEmit = async (stage: string, data: any) => {
+        if (stage === identityManifestStage || stage === identityPartStage) {
+            const value = decoder.accept(stage, data);
+            if (value) await emit(value.stage, value.data);
+        } else {
+            decoder.assertComplete();
+            await emit(stage, data);
+        }
+    };
     const realm: any = {
+        reportLifecycleEvidence,
         __memoryNativeQualification: snapshot ? { snapshot } : undefined,
         __memoryNativeQuit: {
             request() {
                 requests++;
             },
         },
-        options: { emit },
+        options: { emit: wireEmit },
         module,
         exports: module.exports,
     };

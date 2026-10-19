@@ -19,10 +19,36 @@ export const startupIdentityStages = Object.freeze([
     'aggregate-actual-process-launches',
     'actual-native-product',
 ]);
+// Observational reports only. Control/admission/final/hold frames cannot use this route.
+export const lifecycleEvidenceStages = Object.freeze([
+    'gateway-process-history',
+    'gateway-node-memory',
+    'gateway-host-resources',
+    'gateway-host-teardown',
+    'gateway-host-abort',
+    'native-product-shutdown-request',
+    'native-will-quit',
+]);
+export const losslessReportStages = Object.freeze([
+    ...startupIdentityStages,
+    ...lifecycleEvidenceStages,
+]);
+const lifecycle = (stage) => lifecycleEvidenceStages.includes(stage);
+const ordinalFields = (stage, ordinal) => {
+    if (!lifecycle(stage)) {
+        assert(ordinal === undefined, 'Startup identity cannot carry lifecycle ordinal');
+        return {};
+    }
+    assert(
+        Number.isSafeInteger(ordinal) && ordinal >= 1 && ordinal <= identityReportLimits.rows,
+        'Lifecycle report ordinal',
+    );
+    return { ordinal };
+};
 export const identityManifestStage = 'startup-identity-manifest';
 export const identityPartStage = 'startup-identity-part';
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const allowed = (stage) => startupIdentityStages.includes(stage);
+const allowed = (stage) => losslessReportStages.includes(stage);
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const exact = (value, keys) => {
     assert(object(value), 'Identity record must be an object');
@@ -45,7 +71,15 @@ export const identityFrameCharge = (stage, data) =>
 
 /** Exact manifest validation precedes any allocation, reservation or accepted part. */
 export function identityManifestBudget(value) {
-    exact(value, ['schema', 'stage', 'bytes', 'parts', 'sha256']);
+    exact(value, [
+        'schema',
+        'stage',
+        'bytes',
+        'parts',
+        'sha256',
+        ...(lifecycle(value?.stage) ? ['ordinal'] : []),
+    ]);
+    ordinalFields(value.stage, value.ordinal);
     assert(value.schema === 1 && allowed(value.stage), 'Identity schema/stage');
     assert(
         Number.isSafeInteger(value.bytes) &&
@@ -73,6 +107,7 @@ export function identityManifestBudget(value) {
         const data = {
             schema: 1,
             stage: value.stage,
+            ...ordinalFields(value.stage, value.ordinal),
             sha256: value.sha256,
             index,
             base64: 'A'.repeat(4 * Math.ceil(n / 3)),
@@ -100,7 +135,8 @@ export function identityManifestBudget(value) {
     return budget;
 }
 const plans = new WeakSet();
-export function planStartupIdentity(stage, data) {
+export function planStartupIdentity(stage, data, ordinal) {
+    const extra = ordinalFields(stage, ordinal);
     assert(allowed(stage), 'Startup identity stage allowlist');
     const serialized = JSON.stringify({ stage, data });
     exact(JSON.parse(serialized), ['stage', 'data']);
@@ -116,6 +152,7 @@ export function planStartupIdentity(stage, data) {
     const manifest = Object.freeze({
         schema: 1,
         stage,
+        ...extra,
         bytes: bytes.length,
         parts: Math.ceil(bytes.length / identityReportLimits.partBytes),
         sha256: sha(bytes),
@@ -132,6 +169,7 @@ export function planStartupIdentity(stage, data) {
                     data: {
                         schema: 1,
                         stage,
+                        ...extra,
                         sha256: manifest.sha256,
                         index,
                         base64: bytes
@@ -155,14 +193,24 @@ const ordinaryLedgers = new WeakMap();
 /** Native pilot emitters reserve atomically; ordinary aggregate reporters await every frame. */
 export async function reportStartupIdentity(emit, stage, data) {
     if (typeof emit.publishIdentity === 'function') return emit.publishIdentity(stage, data);
-    const plan = planStartupIdentity(stage, data);
     let ledger = ordinaryLedgers.get(emit);
     if (!ledger)
         ordinaryLedgers.set(
             emit,
-            (ledger = { rows: 0, bytes: 0, tail: Promise.resolve(), failure: null }),
+            (ledger = {
+                rows: 0,
+                bytes: 0,
+                tail: Promise.resolve(),
+                failure: null,
+                lifecycleOrdinal: 0,
+            }),
         );
     if (ledger.failure) throw ledger.failure;
+    const plan = planStartupIdentity(
+        stage,
+        data,
+        lifecycle(stage) ? ledger.lifecycleOrdinal + 1 : undefined,
+    );
     if (ledger.rows + plan.budget.rows > identityReportLimits.rows)
         throw reportingRefusal(
             stage,
@@ -179,6 +227,7 @@ export async function reportStartupIdentity(emit, stage, data) {
             ledger.bytes,
             identityReportLimits.totalBytes,
         );
+    if (lifecycle(stage)) ledger.lifecycleOrdinal++;
     ledger.rows += plan.budget.rows;
     ledger.bytes += plan.budget.chargedBytes;
     const task = ledger.tail.then(async () => {
@@ -191,9 +240,17 @@ export async function reportStartupIdentity(emit, stage, data) {
     return task;
 }
 
+/** Same lossless wire/ACK protocol, with a distinct ordinal for repeated observations. */
+export async function reportLifecycleEvidence(emit, stage, data) {
+    assert(lifecycle(stage), 'Lifecycle evidence stage allowlist');
+    return reportStartupIdentity(emit, stage, data);
+}
+
 /** A single bounded logical report. No schema, integrity, ordering or completeness inference. */
 export function startupIdentityDecoder({ reserve = () => {} } = {}) {
-    let active, failed;
+    let active,
+        failed,
+        nextLifecycleOrdinal = 1;
     const seen = new Set();
     let rows = 0,
         bytes = 0;
@@ -207,7 +264,16 @@ export function startupIdentityDecoder({ reserve = () => {} } = {}) {
                 if (stage === identityManifestStage) {
                     assert(!active, 'Identity manifest before previous report completed');
                     const budget = identityManifestBudget(data);
-                    const key = data.stage + ':' + data.sha256;
+                    if (lifecycle(data.stage))
+                        assert(
+                            data.ordinal === nextLifecycleOrdinal,
+                            'Lifecycle manifest ordering/uniqueness',
+                        );
+                    const key =
+                        data.stage +
+                        ':' +
+                        (lifecycle(data.stage) ? data.ordinal + ':' : '') +
+                        data.sha256;
                     assert(!seen.has(key), 'Duplicate identity manifest');
                     assert(rows + budget.rows <= identityReportLimits.rows, 'Identity rows');
                     assert(
@@ -228,10 +294,20 @@ export function startupIdentityDecoder({ reserve = () => {} } = {}) {
                     return null;
                 }
                 assert(stage === identityPartStage && active, 'Identity part without manifest');
-                exact(data, ['schema', 'stage', 'sha256', 'index', 'base64']);
+                exact(data, [
+                    'schema',
+                    'stage',
+                    'sha256',
+                    'index',
+                    'base64',
+                    ...(lifecycle(data.stage) ? ['ordinal'] : []),
+                ]);
                 const h = active.manifest;
                 assert(
-                    data.schema === 1 && data.stage === h.stage && data.sha256 === h.sha256,
+                    data.schema === 1 &&
+                        data.stage === h.stage &&
+                        data.sha256 === h.sha256 &&
+                        data.ordinal === h.ordinal,
                     'Identity part binding',
                 );
                 assert(
@@ -272,7 +348,14 @@ export function startupIdentityDecoder({ reserve = () => {} } = {}) {
                     'Identity original canonical UTF8 JSON bytes',
                 );
                 seen.add(active.key);
-                const result = { ...value, bytes: h.bytes, parts: h.parts, sha256: h.sha256 };
+                const result = {
+                    ...value,
+                    ...ordinalFields(h.stage, h.ordinal),
+                    bytes: h.bytes,
+                    parts: h.parts,
+                    sha256: h.sha256,
+                };
+                if (lifecycle(h.stage)) nextLifecycleOrdinal++;
                 active = null;
                 return result;
             } catch (error) {

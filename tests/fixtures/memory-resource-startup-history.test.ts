@@ -1,3 +1,8 @@
+import {
+    startupIdentityDecoder,
+    identityManifestStage,
+    identityPartStage,
+} from '../../scripts/lib/startup-identity-report.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -31,6 +36,7 @@ async function scenario(config: {
         exitChecks: number[] = [],
         kills: number[] = [];
     const events: { stage: string; data: unknown }[] = [];
+    const decoder = startupIdentityDecoder();
     const forkChild = ((_module, args) => {
         const current = ++ordinal,
             pid = 40 + current,
@@ -136,7 +142,13 @@ async function scenario(config: {
             'http://127.0.0.1:5173',
             'normal',
             async (stage, data) => {
-                events.push({ stage, data });
+                if (stage === identityManifestStage || stage === identityPartStage) {
+                    const value = decoder.accept(stage, data);
+                    if (value) events.push({ stage: value.stage, data: value.data });
+                } else {
+                    decoder.assertComplete();
+                    events.push({ stage, data });
+                }
             },
             {
                 forkChild,
@@ -174,6 +186,7 @@ async function scenario(config: {
             /* Failed teardown remains unavailable, never a zero-owner result. */
         }
     }
+    decoder.assertComplete();
     return {
         caught,
         rows,

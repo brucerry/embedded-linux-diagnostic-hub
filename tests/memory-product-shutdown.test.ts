@@ -1,3 +1,8 @@
+import {
+    startupIdentityDecoder,
+    identityManifestStage,
+    identityPartStage,
+} from '../scripts/lib/startup-identity-report.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -340,10 +345,16 @@ test('gateway cancellation during startup history prevents init and second fork,
         init = 0,
         alive = true,
         heldOnce = false;
+    const decoder = startupIdentityDecoder();
     const pending = isolatedGateway(
         'http://127.0.0.1:5173',
         'normal',
-        async (stage) => {
+        async (stage, data) => {
+            if (stage === identityManifestStage || stage === identityPartStage) {
+                const value = decoder.accept(stage, data);
+                if (!value) return;
+                stage = value.stage;
+            } else decoder.assertComplete();
             if (stage === 'gateway-process-history' && !heldOnce) {
                 heldOnce = true;
                 entered.resolve();

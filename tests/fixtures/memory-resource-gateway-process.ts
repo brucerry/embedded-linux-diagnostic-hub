@@ -1,3 +1,4 @@
+import { reportLifecycleEvidence } from '../../scripts/lib/startup-identity-report.mjs';
 import {
     namedCleanupFailure,
     cleanupHostReply,
@@ -466,7 +467,7 @@ export async function isolatedGateway(
                     'Root exited before its descendants could be refreshed.',
                 );
             entry.created ??= root.created;
-            await emit('gateway-process-history', {
+            await reportLifecycleEvidence(emit, 'gateway-process-history', {
                 stage,
                 role: entry.host.role,
                 pid: entry.pid,
@@ -560,7 +561,7 @@ export async function isolatedGateway(
             const result = outcomes[i];
             if (result.status === 'rejected') problems.push(result.reason);
             try {
-                await emit('gateway-host-abort', {
+                await reportLifecycleEvidence(emit, 'gateway-host-abort', {
                     role: hosts[i].role,
                     pid: hosts[i].child.pid ?? null,
                     outcome:
@@ -661,7 +662,7 @@ export async function isolatedGateway(
                         arrayBuffersBytes: value.memory.arrayBuffers,
                         unsupported: [],
                     });
-                    await emit('gateway-node-memory', {
+                    await reportLifecycleEvidence(emit, 'gateway-node-memory', {
                         pid: row.pid,
                         created: row.created,
                         role: host.role,
@@ -709,7 +710,7 @@ export async function isolatedGateway(
                     const result: Record<string, number> = {};
                     for (const host of hosts) {
                         const value = await host.sample(false);
-                        await emit('gateway-host-resources', {
+                        await reportLifecycleEvidence(emit, 'gateway-host-resources', {
                             role: host.role,
                             ...value.resources,
                             productOwnership: value.productOwnership,
@@ -763,7 +764,7 @@ export async function isolatedGateway(
                                 },
                                 { pid: entry.pid, created: entry.created },
                             );
-                            await emit('gateway-host-teardown', {
+                            await reportLifecycleEvidence(emit, 'gateway-host-teardown', {
                                 role: host.role,
                                 ...result,
                                 childExit: 'normal-zero',

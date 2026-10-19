@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { pilotLimits } from './hosted-pilot-contract.mjs';
 import {
     planStartupIdentity,
+    lifecycleEvidenceStages,
     requireIdentityPlan,
     reportingRefusal,
 } from './startup-identity-report.mjs';
@@ -11,7 +12,8 @@ export function terminalRuntimeDiagnostics(send, hold) {
         failed,
         rows = 0,
         bytes = 0,
-        pending = 0;
+        pending = 0,
+        lifecycleOrdinal = 0;
     let reservation,
         normalClosed = false,
         terminalRows = 0,
@@ -93,13 +95,15 @@ export function terminalRuntimeDiagnostics(send, hold) {
     };
     const emit = (stage, data) => add(stage, data);
     emit.publishIdentity = (stage, data) => {
-        const plan = planStartupIdentity(stage, data);
+        const lifecycle = lifecycleEvidenceStages.includes(stage);
+        const plan = planStartupIdentity(stage, data, lifecycle ? lifecycleOrdinal + 1 : undefined);
         requireIdentityPlan(plan);
         if (failed) return Promise.reject(failed);
         if (normalClosed)
             return Promise.reject(Error('Normal diagnostic admission closed by hold'));
         const b = plan.budget;
         budget(plan.manifest.stage, b.rows, b.chargedBytes, b.peakBytes, b.peakBytes);
+        if (lifecycle) lifecycleOrdinal++;
         rows += b.rows;
         bytes += b.chargedBytes;
         return enqueue(async () => {

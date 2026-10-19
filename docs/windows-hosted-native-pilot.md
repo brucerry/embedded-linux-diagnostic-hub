@@ -204,6 +204,22 @@ reserves the logical and prefixed journal cost before accepting its manifest, va
 and exact reconstruction, and ACKs only after the bounded frame is fsynced. It keeps the
 manifest/parts in the journal rather than writing an oversized reconstructed record.
 
+The same transport also admits the observational lifecycle stages `gateway-process-history`,
+`gateway-node-memory`, `gateway-host-resources`, `gateway-host-teardown`, `gateway-host-abort`,
+`native-product-shutdown-request` and `native-will-quit`. Their complete original data uses the
+truthful original stage. Each lifecycle manifest and part carries a per-producer ordinal; the
+decoder requires consecutive ordinals starting at one. Identical repeated snapshots remain distinct
+observations, while startup identity replay rejection is unchanged. Control, admission, held and
+final records retain their existing routes and bounds.
+
+Gateway teardown awaits every durable frame ACK before checking history and setting the manager
+closed. Failed, incomplete or unacknowledged publication cannot supply closure or release proof. The
+full shutdown, release, termination and child-exit data is retained without projection or
+truncation. The captured hosted refusal was 71047 bytes; its original rejected JSON was not
+retained. Local controls use exact-size representative JSON and the retained 197-event target
+snapshot through the actual OwnedHost and manager closure method. They do not establish a successful
+Windows cleanup.
+
 Use `startupIdentityDecoder` from `scripts/lib/startup-identity-report.mjs` to reconstruct the
 allowlisted original stage from journal frames. The decoder requires exact schemas, byte/count
 bounds, ordering, unique parts, canonical base64, SHA-256, valid UTF-8, canonical JSON and matching

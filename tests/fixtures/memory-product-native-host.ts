@@ -1,4 +1,7 @@
-import { reportStartupIdentity } from '../../scripts/lib/startup-identity-report.mjs';
+import {
+    reportStartupIdentity,
+    reportLifecycleEvidence,
+} from '../../scripts/lib/startup-identity-report.mjs';
 import assert from 'node:assert/strict';
 import { settledElectronExecutable } from '../../scripts/lib/pilot-dependencies.mjs';
 import { NativePilotStartup } from './native-pilot-startup';
@@ -489,12 +492,17 @@ export async function createProductNative(options: {
                             }
                             return diagnostic;
                         });
-                        await options.emit(
-                            before.available
-                                ? 'native-product-shutdown-request'
-                                : 'native-product-shutdown-snapshot-unavailable',
-                            before,
-                        );
+                        if (before.available)
+                            await reportLifecycleEvidence(
+                                options.emit,
+                                'native-product-shutdown-request',
+                                before,
+                            );
+                        else
+                            await options.emit(
+                                'native-product-shutdown-snapshot-unavailable',
+                                before,
+                            );
                     },
                 },
                 {
@@ -551,7 +559,10 @@ export async function createProductNative(options: {
                             captureExpected,
                             downloads: receipt.downloads,
                         });
-                        await options.emit('native-will-quit', { ...receipt, verdict });
+                        await reportLifecycleEvidence(options.emit, 'native-will-quit', {
+                            ...receipt,
+                            verdict,
+                        });
                     },
                 },
             ],

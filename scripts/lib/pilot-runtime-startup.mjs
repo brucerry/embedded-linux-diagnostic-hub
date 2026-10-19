@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { pilotLimits } from './hosted-pilot-contract.mjs';
 import {
     planStartupIdentity,
+    lifecycleEvidenceStages,
     requireIdentityPlan,
     reportingRefusal,
 } from './startup-identity-report.mjs';
@@ -16,7 +17,8 @@ export function runtimeDiagnostics(send, hold) {
         failed,
         rows = 0,
         bytes = 0,
-        pending = 0;
+        pending = 0,
+        lifecycleOrdinal = 0;
     const budget = (stage, count, charge, queued, encoded) => {
         for (const [counter, requested, current, limit] of [
             ['frameBytes', encoded, 0, 65536],
@@ -55,11 +57,13 @@ export function runtimeDiagnostics(send, hold) {
         return enqueue(() => send(stage, data), size);
     };
     emit.publishIdentity = (stage, data) => {
-        const plan = planStartupIdentity(stage, data);
+        const lifecycle = lifecycleEvidenceStages.includes(stage);
+        const plan = planStartupIdentity(stage, data, lifecycle ? lifecycleOrdinal + 1 : undefined);
         requireIdentityPlan(plan);
         if (failed) return Promise.reject(failed);
         const b = plan.budget;
         budget(plan.manifest.stage, b.rows, b.chargedBytes, b.peakBytes, b.peakBytes);
+        if (lifecycle) lifecycleOrdinal++;
         rows += b.rows;
         bytes += b.chargedBytes;
         // One atomic queue operation, one current frame, one durable credit. Other
