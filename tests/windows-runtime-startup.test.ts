@@ -146,6 +146,7 @@ async function runtimeFixture({
     fault = null,
     workMs = 450,
     realProcessTable = false,
+    retentionIO = fs,
 } = {}) {
     const dir = temp(),
         out = path.join(dir, 'runtime'),
@@ -160,9 +161,73 @@ async function runtimeFixture({
         scope,
         queries = 0,
         lateResolve;
+    const transportEvents = [],
+        retentionErrors = [];
+    let firstHold,
+        traceOverflow = false;
+    const retainedRoot =
+        process.env.HUB_RUNTIME_HOLD_EVIDENCE_ROOT ??
+        path.join(path.dirname(dir), 'hub-runtime-hold-retained-' + process.pid);
+    const retainedPath = path.join(retainedRoot, path.basename(dir) + '.json');
+    const trace = (kind, data = {}) => {
+        if (transportEvents.length < 256)
+            transportEvents.push({
+                sequence: transportEvents.length,
+                monoMs: now(),
+                kind,
+                ...data,
+            });
+        else traceOverflow = true;
+    };
+    const retain = (phase) => {
+        if (!firstHold) return;
+        try {
+            const journalBytes = fs.readFileSync(path.join(report, 'pilot.jsonl'));
+            let row = {
+                schema: 1,
+                phase,
+                firstHold,
+                transportEvents,
+                traceOverflow,
+                owner: scope?.snapshot(),
+                journalPrefix: journalBytes.subarray(0, 131072).toString('utf8'),
+                journalBytes: journalBytes.length,
+                journalComplete: journalBytes.length <= 131072,
+                logClosure: { synced: journal.entry.synced, closed: journal.entry.closed },
+                retentionErrors: [...retentionErrors],
+            };
+            let bytes = Buffer.from(JSON.stringify(row, null, 2));
+            if (bytes.length > 524288) {
+                row = { ...row, journalPrefix: undefined, journalComplete: false };
+                bytes = Buffer.from(JSON.stringify(row, null, 2));
+            }
+            assert(bytes.length <= 524288);
+            retentionIO.mkdirSync(retainedRoot, { recursive: true });
+            retentionIO.writeFileSync(retainedPath, bytes, { mode: 0o600 });
+        } catch (error) {
+            retentionErrors.push(String(error).slice(0, 1024));
+            try {
+                console.error(
+                    JSON.stringify({
+                        kind: 'runtime-hold-retention-failed',
+                        originalReason: firstHold.reason,
+                        originalStack: firstHold.stack,
+                        error: String(error).slice(0, 1024),
+                    }),
+                );
+            } catch {}
+        }
+    };
     const files = controlFiles(dir, mode);
     const heldIdentity = new Promise((r) => (lateResolve = r));
     const hold = (e) => {
+        firstHold ??= {
+            reason: String(e).slice(0, 1024),
+            stack: String(e?.stack ?? '').slice(0, 4096),
+            monoMs: now(),
+            owner: scope?.snapshot(),
+        };
+        trace('hold', { reason: String(e).slice(0, 1024) });
         scope?.stopQueryAdmission();
         if (!holds.length) {
             const probe = { ref: false };
@@ -182,10 +247,12 @@ async function runtimeFixture({
             );
             holds.push({ probe, actual });
         }
+        retain('first-hold-latched');
         controller.abort(e);
         scope?.cancel();
     };
     const diagnostics = runtimeDiagnostics(async (s, d) => {
+        trace('durable-phase', { stage: s });
         rows.push({ stage: s, data: d });
         journal.append(s, d);
     }, hold);
@@ -225,6 +292,38 @@ async function runtimeFixture({
                 `process.send({kind:'native-runtime-ready',nonce:'control-runtime-nonce',bindingSHA256:'${'b'.repeat(64)}',pid:process.pid});process.once('message',()=>{process.disconnect();});`,
             ];
         child = spawn(exe, next, opts);
+        const send = child.send;
+        child.send = function (message, ...rest) {
+            trace('ipc-send', {
+                kindName: message?.kind,
+                sequenceValue: message?.sequence,
+                connected: child.connected,
+                terminationRequested: scope.children.get(child)?.terminationRequested ?? false,
+            });
+            const last = rest.at(-1);
+            if (typeof last === 'function')
+                rest[rest.length - 1] = function (error, ...values) {
+                    trace('ipc-send-callback', {
+                        kindName: message?.kind,
+                        sequenceValue: message?.sequence,
+                        error: error ? String(error) : null,
+                        terminationRequested:
+                            scope.children.get(child)?.terminationRequested ?? false,
+                    });
+                    return last(error, ...values);
+                };
+            return send.call(child, message, ...rest);
+        };
+        child.on('message', (message) =>
+            trace('ipc-receive', {
+                kindName: message?.kind,
+                sequenceValue: message?.sequence,
+                stage: message?.stage,
+                terminationRequested: scope.children.get(child)?.terminationRequested ?? false,
+            }),
+        );
+        child.once('exit', (code, signal) => trace('exit', { code, signal }));
+        child.once('close', (code, signal) => trace('pipe-close', { code, signal }));
         return child;
     };
     const promise = preparePilotStageRuntime(
@@ -254,6 +353,9 @@ async function runtimeFixture({
         rows,
         controller,
         holds,
+        retainedPath,
+        retentionErrors,
+        firstHold: () => firstHold,
         scope,
         promise,
         diagnostics,
@@ -271,7 +373,9 @@ async function runtimeFixture({
                 await bounded(new Promise((r) => child.once('close', r)));
             }
             await turn();
+            retain('before-log-close');
             journal.close();
+            retain('after-log-close-before-fixture-delete');
             fs.rmSync(dir, { recursive: true, force: true });
         },
     };
@@ -701,4 +805,29 @@ test('exact runtime-worker stderr is retained immediately as a bounded prefix wh
     } finally {
         await f.dispose();
     }
+});
+
+test('first runtime hold survives failure-evidence persistence failure and remains referenced', async () => {
+    const f = await runtimeFixture({
+        mode: 'healthy',
+        fault: 'descendant-unknown',
+        workMs: 1000,
+        retentionIO: {
+            mkdirSync() {
+                throw Error('controlled hold evidence write failure');
+            },
+        },
+    });
+    try {
+        await assert.rejects(f.promise);
+        assert(f.holds.length > 0);
+        assert.match(f.firstHold().reason, /controlled surviving descendant/);
+        assert(f.retentionErrors.length > 0);
+        assert(f.holds[0].probe.ref);
+        assert.equal(f.holds[0].actual.snapshot().referencedHandleCreated, true);
+    } finally {
+        await f.dispose();
+    }
+    assert.match(f.firstHold().reason, /controlled surviving descendant/);
+    assert(f.holds[0].probe.ref);
 });

@@ -129,6 +129,30 @@ test('native generation reset rejects actual stale readers and pins and permits 
     assert.equal(reopened.ok, true);
 });
 
+test('expected-empty destination guard records and rejects an unexpected chooser, then restores only after actual export join', async (t) => {
+    const { host, port, control, capture } = await fixture(t);
+    control.forbidDestination();
+    const reply = await host.dispatch({
+        op: 'export',
+        format: 'json',
+        scope: { ids: [capture.id] },
+    });
+    assert.equal(reply.ok, false);
+    if (!reply.ok) assert.match(reply.error.message, /Unexpected native Save/);
+    await Promise.allSettled([...port.exports]);
+    assert.deepEqual(control.finishNoDestination(), { calls: 1, returned: 1 });
+    assert.equal(control.noDestinationStatus(), null);
+    assert.equal((port.store as any).pins, 0);
+    control.forbidDestination();
+    const empty = await host.dispatch({ op: 'export', format: 'json', scope: { ids: [] } });
+    assert.equal(empty.ok, false);
+    if (!empty.ok) assert.equal(empty.error.message, 'No stored captures match this export.');
+    await Promise.allSettled([...port.exports]);
+    assert.deepEqual(control.finishNoDestination(), { calls: 0, returned: 0 });
+    assert.equal(port.exports.size, 0);
+    assert.equal((port.store as any).pins, 0);
+});
+
 test('backend applicability fails closed without exact independent review and does not credit IndexedDB versionchange', () => {
     const source = 'a'.repeat(64),
         draft = nativeCoverageDraft(source),

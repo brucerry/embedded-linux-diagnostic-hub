@@ -7,6 +7,11 @@ interface SavePort {
 }
 /** Private build only. It controls Save selection; the actual trusted host owns pins and streaming. */
 export class NativeSaveControl {
+    private forbidden?: {
+        original: SavePort['destination'];
+        calls: number;
+        returned: number;
+    };
     private active?: {
         file: string;
         original: SavePort['destination'];
@@ -21,6 +26,7 @@ export class NativeSaveControl {
         private readonly validate: (file: string) => void,
     ) {}
     arm(file: string, held: boolean) {
+        assert.equal(this.forbidden, undefined, 'A no-destination guard is still owned.');
         assert.equal(this.active, undefined, 'Native Save control already owned.');
         assert.equal(this.host.exports.size, 0, 'An actual export is still owned.');
         this.validate(file);
@@ -76,11 +82,41 @@ export class NativeSaveControl {
     cancelForShutdown() {
         if (this.active?.resolve) this.release('cancel');
     }
+    forbidDestination() {
+        assert.equal(this.active, undefined);
+        assert.equal(this.forbidden, undefined);
+        assert.equal(this.host.exports.size, 0);
+        const state = { original: this.host.destination, calls: 0, returned: 0 };
+        this.forbidden = state;
+        this.host.destination = async () => {
+            state.calls++;
+            try {
+                throw Error('Unexpected native Save during an expected no-destination export.');
+            } finally {
+                state.returned++;
+            }
+        };
+    }
+    noDestinationStatus() {
+        return this.forbidden
+            ? { calls: this.forbidden.calls, returned: this.forbidden.returned }
+            : null;
+    }
+    finishNoDestination() {
+        const state = this.forbidden;
+        assert.ok(state, 'No no-destination guard is owned.');
+        assert.equal(this.host.exports.size, 0, 'Unexpected export is still owned.');
+        const receipt = this.noDestinationStatus()!;
+        this.host.destination = state.original;
+        this.forbidden = undefined;
+        return receipt;
+    }
     restoreAfterJoin() {
         assert.equal(this.host.exports.size, 0);
         assert.ok(!this.active?.resolve, 'Save decision is still pending.');
         if (this.active) this.host.destination = this.active.original;
         this.active = undefined;
+        if (this.forbidden) this.finishNoDestination();
     }
     finish() {
         const state = this.active;

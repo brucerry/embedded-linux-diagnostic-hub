@@ -79,6 +79,10 @@ function predecessorCopy(directory) {
     ]);
     restore('scripts/lib/pilot-runtime-startup.mjs', [
         [
+            '                        // The IPC connected flag can lag a committed owned termination.\n                        // Do not admit a new credit write into that closing transport.\n                        if (child.connected && !startup.children.get(child)?.terminationRequested)',
+            '                        if (child.connected)',
+        ],
+        [
             "import {\n    planStartupIdentity,\n    requireIdentityPlan,\n    reportingRefusal,\n} from './startup-identity-report.mjs';",
             "import { requireIdentityPlan, reportingRefusal } from './startup-identity-report.mjs';",
         ],

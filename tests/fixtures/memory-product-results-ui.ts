@@ -70,6 +70,10 @@ export interface ProductResultsOptions {
     evolution?: ResultsCatalogEvolution;
     exportReadFault?: ResultsExportReadFault;
     nativeSaveCases?: (view: Locator) => Promise<unknown>;
+    nativeEmptyExport?: {
+        begin(): Promise<void>;
+        finish(): Promise<{ calls: number; returned: number }>;
+    };
     nativeDownload?: ProductViewerDownload;
     browserDownloads?: { count(): number };
 }
@@ -910,7 +914,13 @@ export async function exerciseProductResults(page: Page, input: ProductResultsOp
         refusalListener = (file: Download) => refusedDownloads.push(file);
     page.on('download', refusalListener);
     const browserRefusalBaseline = input.browserDownloads?.count();
+    let destinationGuard: { calls: number; returned: number } | undefined;
+    let destinationGuardArmed = false;
     try {
+        if (input.nativeEmptyExport) {
+            await input.nativeEmptyExport.begin();
+            destinationGuardArmed = true;
+        }
         await view.getByRole('button', { name: 'Download QA results', exact: true }).click();
         await expect(view.getByRole('alert')).toContainText(
             'No stored captures match this export.',
@@ -927,6 +937,11 @@ export async function exerciseProductResults(page: Page, input: ProductResultsOp
             );
     } finally {
         page.off('download', refusalListener);
+        if (destinationGuardArmed) destinationGuard = await input.nativeEmptyExport!.finish();
+    }
+    if (destinationGuard) {
+        assert.equal(destinationGuard.calls, 0, 'Empty export unexpectedly requested native Save.');
+        assert.equal(destinationGuard.returned, 0);
     }
     assertCatalog(await actualCatalog(page), all);
     covered.push('stored-results-empty-export-refusal');

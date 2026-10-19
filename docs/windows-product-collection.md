@@ -68,6 +68,17 @@ Save, arms a real store-read failure, releases Save, verifies the existing desti
 proves no export temporary remains and joins the real owners. These boundaries require independent
 contract review; they do not claim an unsupported native mid-write cancel button.
 
+Native command-capture export validates the pinned report's first bounded chunk before opening Save.
+An empty selected, filtered or retained scope therefore reports its error without opening a dialog
+or allocating a destination. The same iterator continues after Save confirmation; cancellation
+closes that iterator and both snapshot pins before the owned export settles. This ordering preserves
+the existing stream verification, atomic replacement and shutdown joins. Local browser/native-host
+regressions do not establish an actual Windows quit-barrier or complete native-cycle result.
+Expected-empty native UI cases own a private no-destination guard: an unexpected chooser is recorded
+and rejected without opening a dialog, and the callback is restored only after its actual export
+joins. A successful empty refusal requires zero chooser calls. Failure and shutdown-request receipts
+retain bounded native owner counts and Save-entry/return state; missing receipts remain unknown.
+
 Installed Git/MSYS winpty and PowerShell discovery uses the actual host PATH and Git installation,
 with explicit unavailable results. It has no user cache path and installs nothing. The ordinary
 real-OS-PTY test must run on Windows; a skipped result is not native PTY coverage. Aggregate SSH

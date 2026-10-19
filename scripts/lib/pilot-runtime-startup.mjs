@@ -219,7 +219,9 @@ export async function preparePilotStageRuntime(
                 } else if (m.kind === 'native-runtime-event') {
                     assert.equal(m.sequence, eventSequence++);
                     void emit(m.stage, { pid: child.pid, ...m.data }).then(() => {
-                        if (child.connected)
+                        // The IPC connected flag can lag a committed owned termination.
+                        // Do not admit a new credit write into that closing transport.
+                        if (child.connected && !startup.children.get(child)?.terminationRequested)
                             child.send(
                                 {
                                     kind: 'native-runtime-event-ack',

@@ -53,13 +53,15 @@ const mainProbe = String.raw`
             capture={owners:{writer:Number(Boolean(s.writer))+Number(Boolean(s.beginning))+Number(Boolean(d.active))+Number(d.modifying),reader:s.readers.size+[...d.readers.values()].reduce((a:number,b:number)=>a+b,0),pin:s.pins.size+s.pinReservations+d.pins,export:h.exports.size,rpc:s.calls,cleanup:s.mutations.size+d.deleting.size+d.resultWriting.size+Number(Boolean(d.operation))+d.listing+d.metadataQueues.size+d.metadataUncertain.size+d.jsonOperations.size+Number(d.closing)},services:{rpcTimer:!s.disposed,storeOpen:!d.closed,catalogOpen:Boolean(d.catalog)},cache:{completed:s.completed.size,expiredPins:s.expiredPins.size}};
         }
         const activity=(globalThis as any).__memoryProductActivity;
-        return {ssh:ssh.ownershipSnapshot,sshHasResources:ssh.hasResources,console:consoleService.snapshot,consoleHasResources:consoleService.hasResources,capture,activity:activity?{lease:Boolean(activity.lease),suspended:activity.suspended}:null,memory:process.memoryUsage(),versions:process.versions};
+        return {ssh:ssh.ownershipSnapshot,sshHasResources:ssh.hasResources,console:consoleService.snapshot,consoleHasResources:consoleService.hasResources,capture,destination:{save:__memoryNativeSave?.status()??null,noDestination:__memoryNativeSave?.noDestinationStatus()??null},activity:activity?{lease:Boolean(activity.lease),suspended:activity.suspended}:null,memory:process.memoryUsage(),versions:process.versions};
     };
     (globalThis as any).__memoryNativeQualification={snapshot:__memoryNativeSnapshot,
     prepareReport(file:string,held=false){__memorySave().arm(file,held);},
     reportStatus(){return __memorySave().status();},
     releaseReport(decision:'save'|'cancel'){__memorySave().release(decision);},
     finishReport(){return __memorySave().finish();},
+    beginNoReport(){__memorySave().forbidDestination();},
+    async finishNoReport(){const host=(globalThis as any).__memoryProductCapture;await Promise.allSettled([...host.exports]);return __memorySave().finishNoDestination();},
     releaseHolds(){__memoryNativeSave?.cancelForShutdown();const fault=__memoryNativeReadFault.status();if(fault?.action==='hold'&&fault.entered&&!fault.released)__memoryNativeReadFault.release();},
     readFault:{
         arm(action:any){const host=(globalThis as any).__memoryProductCapture;if(!host?.store)throw Error('Actual native capture store missing.');if(!__memoryNativeReadWrapped){__memoryNativeReadFault.wrap(host.store);__memoryNativeReadWrapped=true;}__memoryNativeReadFault.arm(action);},
@@ -207,7 +209,7 @@ __pilotApp.setPath('temp',__pilot.temp);__pilotApp.setPath('crashDumps',__pilot.
                         [
                             'capture-host',
                             'NativeCaptureHost',
-                            'a939da5ab4819be7306427db68c34bfe6b07593f73bdc056b2a3661ac227b2e3',
+                            '272c6a9a63a652c893a76e79f00abaa1809217c59f5305aeee988284319a9850',
                             '__memoryProductCapture',
                         ],
                         [
@@ -453,10 +455,47 @@ export async function createProductNative(options: {
                 },
                 {
                     name: 'request-actual-product-shutdown',
-                    run: () =>
-                        application.evaluate(() => {
-                            (globalThis as any).__memoryNativeQuit.request();
-                        }),
+                    run: async () => {
+                        const before = await application.evaluate(() => {
+                            let diagnostic: {
+                                available: boolean;
+                                snapshot?: unknown;
+                                error?: string;
+                            };
+                            try {
+                                const snapshot = (
+                                    globalThis as any
+                                ).__memoryNativeQualification.snapshot();
+                                if (snapshot && typeof snapshot.then === 'function') {
+                                    void Promise.resolve(snapshot).catch(() => {});
+                                    diagnostic = {
+                                        available: false,
+                                        error: 'Native shutdown snapshot was asynchronous; it was not awaited.',
+                                    };
+                                } else if (!snapshot || typeof snapshot !== 'object') {
+                                    diagnostic = {
+                                        available: false,
+                                        error: 'Native shutdown snapshot was unavailable.',
+                                    };
+                                } else diagnostic = { available: true, snapshot };
+                            } catch (error) {
+                                let detail = 'Native shutdown snapshot failed.';
+                                try {
+                                    detail = String(error).slice(0, 1024);
+                                } catch {}
+                                diagnostic = { available: false, error: detail };
+                            } finally {
+                                (globalThis as any).__memoryNativeQuit.request();
+                            }
+                            return diagnostic;
+                        });
+                        await options.emit(
+                            before.available
+                                ? 'native-product-shutdown-request'
+                                : 'native-product-shutdown-snapshot-unavailable',
+                            before,
+                        );
+                    },
                 },
                 {
                     name: 'join-actual-product-shutdown-barrier',
@@ -638,6 +677,21 @@ export async function createProductNative(options: {
                     });
                 }
                 return bytes;
+            },
+            async beginNoReport() {
+                await application.evaluate(() =>
+                    (globalThis as any).__memoryNativeQualification.beginNoReport(),
+                );
+            },
+            async finishNoReport(): Promise<{ calls: number; returned: number }> {
+                const receipt = await application.evaluate(() =>
+                    (globalThis as any).__memoryNativeQualification.finishNoReport(),
+                );
+                const ownership = await snapshot();
+                await options.emit('native-empty-destination-guard', { receipt, ownership });
+                for (const kind of ['reader', 'pin', 'export', 'rpc'])
+                    assert.equal(ownership.capture.owners[kind], 0);
+                return receipt;
             },
             async prepareHeldReport() {
                 const file = path.join(downloads, 'held-' + cryptoRandomId() + '.json');

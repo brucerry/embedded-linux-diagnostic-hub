@@ -49,18 +49,31 @@ export class NativeCaptureHost {
         scope = captureScope(scope);
         const pending = (async () => {
             const pin = await this.store.pin();
+            const report = streamCaptureReport(this.store, format, scope, pin.through);
             try {
+                // Validate pinned membership before opening a native Save dialog. Retain
+                // only the first bounded report chunk, then continue the same iterator.
+                const first = await report.next();
+                if (first.done)
+                    throw new CaptureStorageError('integrity', 'Capture report produced no data.');
                 const file = await this.destination(format);
                 if (!file) return false;
                 // Native Save dialog confirmation is the sole authority to replace a destination.
                 await saveCaptureExport(
                     file,
-                    streamCaptureReport(this.store, format, scope, pin.through),
+                    (async function* () {
+                        yield first.value;
+                        yield* report;
+                    })(),
                     true,
                 );
                 return true;
             } finally {
-                await pin.release();
+                try {
+                    await report.return(undefined);
+                } finally {
+                    await pin.release();
+                }
             }
         })();
         this.exports.add(pending);

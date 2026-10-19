@@ -324,6 +324,10 @@ export async function createNativeAggregateDriver(context: {
                     nativeDownload: host!.reportDownload,
                     nativeSaveCases: (view) =>
                         exerciseNativeSaveCases(page, view, host!, context.emit),
+                    nativeEmptyExport: {
+                        begin: () => host!.beginNoReport(),
+                        finish: () => host!.finishNoReport(),
+                    },
                 });
                 assertDistinctAggregateScopes(scopes, {
                     selected: results.exports[0].captureIds!,
@@ -503,6 +507,13 @@ export async function createNativeAggregateDriver(context: {
                     primary: String(error),
                     stack: error instanceof Error ? error.stack : null,
                 });
+                try {
+                    await context.emit('aggregate-native-failure-owners', await host!.snapshot());
+                } catch (diagnostic) {
+                    await context.emit('aggregate-native-failure-owners-unavailable', {
+                        error: String(diagnostic).slice(0, 1024),
+                    });
+                }
                 throw error;
             } finally {
                 busy = false;
