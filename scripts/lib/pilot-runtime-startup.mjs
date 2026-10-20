@@ -1,3 +1,4 @@
+import { stageClockSample, stageReasonDigest } from './pty-stage-timeline.mjs';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -330,35 +331,107 @@ export async function waitPilotStage({
     hold,
     emit,
     clock = now,
+    recordFirstCancellation = undefined,
 }) {
-    let stageTimer, runtimeTimer, abort;
-    const failure = new Promise((_, reject) => {
-        const stop = (reason) => {
+    let stageTimer, runtimeTimer, abort, firstFailure, rejectFailure;
+    const stop = (reason, origin) => {
+        if (firstFailure) {
+            if (state.parentCancellationDiagnostics) {
+                if (state.parentCancellationDiagnostics.laterCount < 16)
+                    state.parentCancellationDiagnostics.laterCount++;
+                else hold(Error('Parent diagnostic cancellation counter bound'));
+            }
+            return firstFailure;
+        }
+        firstFailure = Error(reason);
+        let diagnosticFirstCancellation;
+        if (state.diagnosticAdmission) {
+            try {
+                diagnosticFirstCancellation = Object.freeze({
+                    origin,
+                    clock: Object.freeze(stageClockSample()),
+                    deadline: state.stageDeadline,
+                    alreadyAborted: signal.aborted,
+                    phase: 'parent-wait-close',
+                    authority: false,
+                });
+                state.parentCancellationDiagnostics = {
+                    first: diagnosticFirstCancellation,
+                    laterCount: 0,
+                };
+            } catch (error) {
+                hold(error);
+            }
+        }
+        // Latch before cancellation/reporting can synchronously deliver another cause.
+        rejectFailure(firstFailure);
+        try {
             cancel(reason);
+        } catch (error) {
+            hold(error);
+        }
+        if (diagnosticFirstCancellation && recordFirstCancellation) {
+            try {
+                const pending = recordFirstCancellation({
+                    schema: 1,
+                    processRole: 'parent',
+                    pid: process.pid,
+                    firstCancellation: diagnosticFirstCancellation,
+                    reasonSHA256: stageReasonDigest(reason),
+                    authority: false,
+                });
+                state.parentFirstCauseDurable = pending === undefined;
+                if (pending !== undefined) {
+                    state.parentFirstCauseTask = Promise.resolve(pending);
+                    void state.parentFirstCauseTask.catch(hold);
+                    hold(Error('Parent first-cause persistence must be synchronous and durable'));
+                }
+            } catch (error) {
+                state.parentFirstCauseDurable = false;
+                hold(error);
+            }
+        }
+        try {
             void emit('stage-watchdog', {
                 stage: state.stage,
                 reason,
                 stageDeadline: state.stageDeadline,
                 runtimeDeadline: state.runtimeDeadline,
+                ...(diagnosticFirstCancellation ? { diagnosticFirstCancellation } : {}),
             }).catch(hold);
-            reject(Error(reason));
-        };
+        } catch (error) {
+            hold(error);
+        }
+        return firstFailure;
+    };
+    const failure = new Promise((_, reject) => {
+        rejectFailure = reject;
         runtimeTimer = setTimeout(
             () => {
-                if (!state.runtimeReady) stop('Stage runtime startup absolute deadline');
+                if (!state.runtimeReady)
+                    stop('Stage runtime startup absolute deadline', 'parent-runtime-timer');
             },
             Math.max(0, state.runtimeDeadline - clock()),
         );
         stageTimer = setTimeout(
-            () => stop('Stage absolute work deadline'),
+            () => stop('Stage absolute work deadline', 'parent-stage-timer'),
             Math.max(0, state.stageDeadline - clock()),
         );
-        abort = () => stop(String(signal.reason ?? 'Stage parent cancelled'));
+        abort = () => stop(String(signal.reason ?? 'Stage parent cancelled'), 'parent-signal');
         signal.addEventListener('abort', abort, { once: true });
         if (signal.aborted) abort();
+        if (clock() >= state.stageDeadline)
+            stop('Stage absolute work deadline', 'parent-entry-cutoff');
     });
     try {
         await Promise.race([startup.children.get(child).closed, failure]);
+        // A queued pipe-close/microtask can beat a delayed timer callback. The original
+        // monotonic cutoff and any already-latched cancellation still govern success.
+        if (firstFailure) throw firstFailure;
+        if (signal.aborted)
+            throw stop(String(signal.reason ?? 'Stage parent cancelled'), 'parent-signal');
+        if (clock() >= state.stageDeadline)
+            throw stop('Stage absolute work deadline', 'parent-completion-cutoff');
     } catch (e) {
         try {
             await startupBound(startup.children.get(child).closed, {

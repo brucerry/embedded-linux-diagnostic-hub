@@ -1,4 +1,10 @@
 // @ts-nocheck
+import {
+    stageClockSample,
+    ptyStageTimeline,
+    timelineJournalBudget,
+    timelineJournalTags,
+} from './lib/pty-stage-timeline.mjs';
 /** Separately fenced finite pilot. No product collector is imported or dispatched. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -388,8 +394,12 @@ export async function nativePilotMain(
             },
         );
         let charged = entryCharge + contract.evidenceBytes;
-        const reserve = (n) => {
-            assert(charged + n <= pilotLimits.evidenceBytes);
+        const timelineJournal = ptyOnly
+            ? timelineJournalBudget(charged, pilotLimits.evidenceBytes)
+            : undefined;
+        const reserve = (n, tag) => {
+            if (timelineJournal) timelineJournal.reserve(n, tag);
+            else assert(charged + n <= pilotLimits.evidenceBytes);
             charged += n;
         };
         reserveShared = reserve;
@@ -399,10 +409,40 @@ export async function nativePilotMain(
                 checkAncestry(evidenceAncestors);
             },
         });
+        let parentTiming;
         const record = (stage, data) => {
-            reserve(Buffer.byteLength(JSON.stringify({ stage, data })) + 256);
-            evidence.append(stage, data);
+            const cost = parentTiming?.costStart('parent-evidence');
+            let complete = false;
+            try {
+                const tag =
+                    timelineJournal && timelineJournalTags.includes(stage) ? stage : undefined;
+                reserve(Buffer.byteLength(JSON.stringify({ stage, data })) + 256, tag);
+                timelineJournal?.row(tag);
+                evidence.append(stage, data);
+                complete = true;
+            } finally {
+                parentTiming?.costEnd(cost, complete);
+            }
         };
+        parentTiming = ptyOnly
+            ? ptyStageTimeline({
+                  deadline: binding.deadline,
+                  emit: async () => {
+                      throw Error('Parent timing uses existing final receipt only');
+                  },
+                  hold: (e) => {
+                      if (owner) owner.hold(e);
+                      else
+                          hold(
+                              {
+                                  kind: 'parent-diagnostic-unknown',
+                                  reason: 'Parent diagnostic failed before owner',
+                              },
+                              () => {},
+                          );
+                  },
+              })
+            : undefined;
         signal = new AbortController();
         startup = new NativePilotStartup({
             signal: signal.signal,
@@ -410,6 +450,7 @@ export async function nativePilotMain(
             cleanupDeadline: binding.deadline,
             emit: async (s, d) => record(s, d),
             hold: (e) => owner?.hold(e),
+            timeline: parentTiming,
             diagnostics: true,
         });
         let markerProof;
@@ -486,10 +527,18 @@ export async function nativePilotMain(
         const sendStageCancel = (child, message, callback = () => {}) => {
             if (cancellationRequests.has(child)) return;
             cancellationRequests.add(child);
+            let diagnosticClock;
+            try {
+                diagnosticClock = ptyOnly ? stageClockSample() : undefined;
+            } catch (error) {
+                owner?.hold(error);
+            }
+            if (diagnosticClock) message = { ...message, diagnosticClock };
             try {
                 record('stage-cancel-request', {
                     pid: child.pid,
                     kind: message.kind,
+                    ...(diagnosticClock ? { diagnosticClock } : {}),
                     reason: message.reason,
                     deadline: binding.deadline,
                 });
@@ -568,8 +617,17 @@ export async function nativePilotMain(
             },
             spawnStage: (stage, o) => {
                 requirePilotStage(o.binding, stage, environment, productClock.now());
-                const deadlines = pilotStageDeadlines(binding, stage, productClock.now());
-                record('stage-spawn-deadlines', { stage, ...deadlines });
+                const admittedAt = productClock.now();
+                const deadlines = pilotStageDeadlines(binding, stage, admittedAt);
+                const diagnosticAdmission =
+                    ptyOnly && stage === 'real-os-pty'
+                        ? { admittedAt, clock: stageClockSample() }
+                        : undefined;
+                record('stage-spawn-deadlines', {
+                    stage,
+                    ...deadlines,
+                    ...(diagnosticAdmission ? { diagnosticAdmission } : {}),
+                });
                 const child = startup.spawn(
                     'stage-' + stage,
                     () =>
@@ -582,6 +640,7 @@ export async function nativePilotMain(
                                 JSON.stringify({
                                     binding: o.binding,
                                     stage,
+                                    diagnosticAdmission,
                                     coverageJSON,
                                     scopeJSON,
                                     ...deadlines,
@@ -604,6 +663,8 @@ export async function nativePilotMain(
                 );
                 const state = {
                     stage,
+                    diagnosticPID: child.pid,
+                    diagnosticAdmission,
                     ...deadlines,
                     runtimeReady: false,
                     sequence: 0,
@@ -650,7 +711,10 @@ export async function nativePilotMain(
                     state,
                     record,
                     reserve,
-                    recordReserved: (s, d) => evidence.append(s, d),
+                    recordReserved: (s, d) => {
+                        timelineJournal?.row();
+                        evidence.append(s, d);
+                    },
                     send: (m, callback) => child.send(m, callback),
                     hold: (e) => o.hold(e),
                     clock: () => productClock.now(),
@@ -670,14 +734,44 @@ export async function nativePilotMain(
                     cancel: (e) => o.cancel(e),
                     hold: (e) => o.hold(e),
                     emit: async (stage, data) => record(stage, data),
+                    ...(ptyOnly
+                        ? {
+                              recordFirstCancellation: (data) =>
+                                  record('pty-parent-first-cancel', data),
+                          }
+                        : {}),
                 }),
-            joinStage: async (child) =>
-                joinPilotStage(child, {
+            joinStage: async (child) => {
+                const proof = await joinPilotStage(child, {
                     state: stages.get(child),
                     startup,
                     cancel: (reason) => owner.cancel(reason),
                     observe,
-                }),
+                });
+                if (!ptyOnly || stages.get(child).stage !== 'real-os-pty') return proof;
+                const waits = parentTiming?.snapshot();
+                return {
+                    ...proof,
+                    diagnosticParentClose: stageClockSample(),
+                    diagnosticParentCancellation:
+                        stages.get(child).parentCancellationDiagnostics ?? null,
+                    diagnosticParentFirstCauseDurable:
+                        stages.get(child).parentFirstCauseDurable ?? null,
+                    diagnosticParentWaits: waits
+                        ? {
+                              processRole: 'parent',
+                              pid: process.pid,
+                              counters: waits.counters,
+                              counterNames: waits.counterNames,
+                              measuredThrough: waits.measuredThrough,
+                              diagnosticClock: waits.diagnosticClock,
+                              diagnosticFailed: waits.diagnosticFailed,
+                              authority: false,
+                              ownFinalReceiptCostIncluded: false,
+                          }
+                        : null,
+                };
+            },
             recheckInputs: recheck,
             cleanupRoots: async () => {
                 clearInterval(timer);

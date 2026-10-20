@@ -1,3 +1,4 @@
+import { stageClockMapping, validateTimelineRecord } from './pty-stage-timeline.mjs';
 import assert from 'node:assert/strict';
 import { processQueryStage, validateProcessQueryBatch } from './pilot-process-query.mjs';
 import {
@@ -91,7 +92,34 @@ export function pilotEvidenceReceiver({
                             'Query closure receiver unavailable',
                         );
                     }
-                    record(stage + ':' + message.stage, message.data);
+                    let data = message.data;
+                    if (['pty-stage-first-cancel', 'pty-stage-timeline'].includes(message.stage)) {
+                        validateTimelineRecord(message.stage, data);
+                        if (state.diagnosticPID !== undefined)
+                            assert.equal(data.pid, state.diagnosticPID, 'Foreign diagnostic PID');
+                    }
+                    if (state.diagnosticAdmission) {
+                        const sample =
+                            data?.diagnosticClock ??
+                            (message.stage === 'pty-stage-first-cancel'
+                                ? data?.firstCancellation?.clock
+                                : null);
+                        if (sample) {
+                            const delivery = {
+                                sent: state.diagnosticAdmission.admittedAt,
+                                received: clock(),
+                            };
+                            data = {
+                                ...data,
+                                diagnosticDelivery: {
+                                    ...delivery,
+                                    ...stageClockMapping(sample, delivery),
+                                    authority: false,
+                                },
+                            };
+                        }
+                    }
+                    record(stage + ':' + message.stage, data);
                 }
                 state.sequence++;
                 rows++;

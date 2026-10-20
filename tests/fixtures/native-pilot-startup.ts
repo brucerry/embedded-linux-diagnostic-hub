@@ -21,6 +21,11 @@ export class NativePilotStartup {
     private joinTask: Promise<any> | undefined;
     private queryClosures: any[] = [];
     private terminalTask: Promise<void> | undefined;
+    private heldDrainTask: Promise<unknown> | undefined;
+    private heldDrainWork: Promise<unknown> | undefined;
+    private heldChildDrains = new Map<any, Promise<unknown>>();
+    private heldDrainTimeout: unknown;
+    private heldDrainDeadline: number | undefined;
     constructor(
         readonly options: {
             signal: AbortSignal;
@@ -33,6 +38,7 @@ export class NativePilotStartup {
             proveDescendants?: (child: ChildProcess) => Promise<void>;
             timeoutMs?: number;
             diagnostics?: boolean;
+            timeline?: any;
             terminalEmit?: (stage: string, data: unknown) => Promise<void>;
         },
     ) {
@@ -133,9 +139,10 @@ export class NativePilotStartup {
                     this.cancel();
                 }
             });
-        const sampler = new ProcessSampler(
-            child.pid ? [child.pid] : [],
-            this.options.readTable ??
+        const sampler = new ProcessSampler(child.pid ? [child.pid] : [], () => {
+            assert(!this.halted, 'Held startup query admission closed');
+            const read =
+                this.options.readTable ??
                 (() =>
                     readProcessTable(
                         this.options.diagnostics
@@ -149,8 +156,11 @@ export class NativePilotStartup {
                                       this.flushQueryClosures();
                               }
                             : undefined,
-                    )),
-        );
+                    ));
+            return this.options.timeline
+                ? this.options.timeline.measure('process-query', read)
+                : read();
+        });
         row.sampler = sampler;
         row.identityTask = this.observe(row, async () => {
             const id = await (this.options.identity
@@ -166,11 +176,19 @@ export class NativePilotStartup {
             this.note('child-identity', { label, pid: row.pid, identity: id });
         });
         row.descendants = () =>
-            this.observe(row, () =>
-                this.options.proveDescendants
-                    ? this.options.proveDescendants(child)
-                    : sampler.assertExited(),
-            );
+            (row.descendantsTask ??= this.observe(
+                row,
+                () => {
+                    const prove = () =>
+                        this.options.proveDescendants
+                            ? this.options.proveDescendants(child)
+                            : sampler.assertExited();
+                    return this.options.timeline
+                        ? this.options.timeline.measure('descendant-proof', prove)
+                        : prove();
+                },
+                true,
+            ));
         let sampling = false;
         row.sampleTimer = setInterval(() => {
             if (
@@ -459,10 +477,17 @@ export class NativePilotStartup {
         }
     }
     async drainDiagnostics() {
-        this.flushQueryClosures();
-        if (this.diagnosticFailure) throw this.diagnosticFailure;
-        await this.bounded(this.bound(), () => Promise.all([...this.diagnosticTasks]));
-        if (this.diagnosticFailure) throw this.diagnosticFailure;
+        const cost = this.options.timeline?.costStart('startup-diagnostics');
+        let complete = false;
+        try {
+            this.flushQueryClosures();
+            if (this.diagnosticFailure) throw this.diagnosticFailure;
+            await this.bounded(this.bound(), () => Promise.all([...this.diagnosticTasks]));
+            if (this.diagnosticFailure) throw this.diagnosticFailure;
+            complete = true;
+        } finally {
+            this.options.timeline?.costEnd(cost, complete);
+        }
     }
     private operation(opaque: boolean) {
         let settled!: () => void;
@@ -477,11 +502,11 @@ export class NativePilotStartup {
             settled,
         };
     }
-    private observe(row: any, read: () => Promise<unknown>) {
+    private observe(row: any, read: () => Promise<unknown>, settlement = false) {
         assert(!row.joined, 'No observation after a completed child receipt');
         const task = Promise.resolve()
             .then(() => {
-                assert(!this.halted, 'Held startup query admission closed');
+                assert(settlement || !this.halted, 'Held startup query admission closed');
                 return read();
             })
             .catch((e) => {
@@ -555,6 +580,7 @@ export class NativePilotStartup {
             stop,
             identityTask,
             descendants,
+            descendantsTask,
             sampleTimer,
             observations,
             joinTask,
@@ -571,6 +597,103 @@ export class NativePilotStartup {
                 ? { processHistory: history }
                 : {}),
         };
+    }
+    /** Diagnostic failure is still terminal, but cannot discard already-owned cleanup.
+     * No admission is reopened: the sampler read port above remains closed when halted.
+     * The original descendant attempt is memoized, so this drain cannot retry a query/proof.
+     */
+    private drainAfterDiagnosticFailure(deadline: number, onlyChild?: any): Promise<unknown> {
+        if (!this.halted || !this.options.timeline?.failure?.()) return Promise.resolve();
+        if (!onlyChild && this.heldDrainTask) return this.heldDrainTask;
+        this.heldDrainDeadline ??= deadline;
+        deadline = Math.min(deadline, this.heldDrainDeadline);
+        const settle = async (task: Promise<unknown>) => {
+            try {
+                await task;
+                return null;
+            } catch (e) {
+                this.options.hold(e);
+                return e;
+            }
+        };
+        const timeout = () =>
+            (this.heldDrainTimeout ??= Error(
+                'Startup cleanup deadline exhausted; closure unknown',
+            ));
+        const drainChild = (row: any): Promise<unknown> => {
+            const previous = this.heldChildDrains.get(row);
+            if (previous) return previous;
+            const task = (async () => {
+                this.stopObservations(row);
+                const admittedErrors = await Promise.all([
+                    settle(row.closed),
+                    ...[...row.observations].map(settle),
+                ]);
+                // Already-admitted waits remain owned after timeout, but cannot start a late
+                // final proof. No new sampler query is allowed even before this cutoff.
+                if (Number(process.hrtime.bigint() / 1000000n) >= deadline) {
+                    this.options.hold(timeout());
+                    return { admittedErrors, timeout: timeout() };
+                }
+                let childProofError = null;
+                try {
+                    this.childProof(row);
+                } catch (e) {
+                    childProofError = e;
+                    this.options.hold(e);
+                }
+                const descendantError = await settle(row.descendants());
+                const followupErrors = await Promise.all([...row.observations].map(settle));
+                // Keep secondary rejection reasons in this once-owned task, without another
+                // output record, per-poll history, or replacing the first diagnostic cause.
+                return { admittedErrors, childProofError, descendantError, followupErrors };
+            })();
+            this.heldChildDrains.set(row, task);
+            return task;
+        };
+        // A per-child join can itself belong to a pending opaque operation. Drain that
+        // child's original custody without waiting for its caller's operation slot.
+        // The full join drains the current inventory concurrently with operations, then
+        // includes any child adopted by an already-admitted operation while settling.
+        const work = (async () => {
+            let ownedErrors;
+            if (onlyChild) ownedErrors = await drainChild(onlyChild);
+            else
+                ownedErrors = await Promise.all([
+                    ...[...this.children.values()].map(drainChild),
+                    (async () => {
+                        await Promise.all([...this.operations.values()].map((r) => settle(r.done)));
+                        await Promise.all([...this.children.values()].map(drainChild));
+                    })(),
+                ]);
+            const diagnosticErrors = await Promise.all([...this.diagnosticTasks].map(settle));
+            return { ownedErrors, diagnosticErrors };
+        })();
+        if (!onlyChild) this.heldDrainWork = work;
+        const waiting = (async () => {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+                return await Promise.race([
+                    work,
+                    new Promise<never>(
+                        (_, reject) =>
+                            (timer = setTimeout(
+                                () => reject(timeout()),
+                                Math.max(0, deadline - Number(process.hrtime.bigint() / 1000000n)),
+                            )),
+                    ),
+                ]);
+            } catch (e) {
+                this.options.hold(e);
+                return { timeout: e };
+            } finally {
+                clearTimeout(timer);
+            }
+            // This is only a drain. The caller rethrows its original failure and never
+            // marks a child joined, emits success, or releases the referenced hold.
+        })();
+        if (!onlyChild) this.heldDrainTask = waiting;
+        return waiting;
     }
     private finishChild(row: any, deadline: number): Promise<any> {
         this.stopObservations(row);
@@ -594,6 +717,9 @@ export class NativePilotStartup {
             row.joined = true;
             row.observationsDrained = true;
             return { complete: true, child: this.snapshotChild(row) };
+        }).catch(async (e) => {
+            await this.drainAfterDiagnosticFailure(deadline, row);
+            throw e;
         }));
     }
     joinChild(child: ChildProcess) {
@@ -639,6 +765,9 @@ export class NativePilotStartup {
                 complete: true,
                 children: [...this.children.values()].map((row) => this.snapshotChild(row)),
             };
+        }).catch(async (e) => {
+            await this.drainAfterDiagnosticFailure(deadline);
+            throw e;
         }));
     }
 }

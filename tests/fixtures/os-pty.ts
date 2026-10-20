@@ -20,6 +20,7 @@ import type { Session } from 'ssh2';
 export async function osPtyFixture(
     options: {
         homeParent?: string;
+        timeline?: any;
         bridgePreparation?: {
             deadline: number;
             cleanupDeadline: number;
@@ -92,8 +93,10 @@ export async function osPtyFixture(
                 .find((file) => path.isAbsolute(file) && !/["\r\n]/.test(file)) ?? null
         );
     };
+    const discoveryPhase = options.timeline?.begin('tool-discovery');
     const git = find('git.exe'),
         pwsh = find('pwsh.exe');
+    options.timeline?.end(discoveryPhase);
     if (!git || !pwsh) return null; // Explicit unsupported caller result; never mandatory native proof.
     const roots = [path.resolve(path.dirname(git), '..'), path.resolve(path.dirname(git), '../..')];
     let gitRoot = roots[0];
@@ -117,6 +120,7 @@ export async function osPtyFixture(
         return null;
     }
     let toolIdentities;
+    const identityPhase = options.timeline?.begin('tool-identities');
     try {
         toolIdentities = Object.fromEntries(
             await Promise.all(
@@ -142,6 +146,8 @@ export async function osPtyFixture(
             if (!b || a.path !== b.path || a.sha256 !== b.sha256)
                 throw Error('PTY bound runtime changed: ' + fixture);
         }
+    options.timeline?.end(identityPhase);
+    const homePhase = options.timeline?.begin('home');
     const bashExecutable = toolIdentities.bash.path;
     options.signal?.throwIfAborted();
     options.check?.();
@@ -193,13 +199,16 @@ export async function osPtyFixture(
         HUB_TEST_WINPTY_IDENTITIES: JSON.stringify(toolIdentities),
         PATH: binary + ';' + path.join(gitRoot, 'bin') + ';' + process.env.PATH,
     };
+    options.timeline?.end(homePhase);
     let prepared: Awaited<ReturnType<typeof preparePtyBridge>> | undefined;
     if (options.bridgePreparation) {
+        const compilerPhase = options.timeline?.begin('compiler');
         const scope = options.bridgePreparation;
         const compileTemp = path.join(home, 'compiler-temp');
         await fs.mkdir(compileTemp);
         prepared = await preparePtyBridge({
             ...scope,
+            timeline: options.timeline,
             signal: options.signal!,
             hold: holdUnknown,
             check: () => {
@@ -226,6 +235,7 @@ export async function osPtyFixture(
                 path.resolve('tests/fixtures/winpty-bridge.ps1'),
             ],
         });
+        options.timeline?.end(compilerPhase);
     }
     if (options.diagnostic) {
         const source = [];

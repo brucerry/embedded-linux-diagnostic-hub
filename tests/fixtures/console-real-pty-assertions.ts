@@ -19,6 +19,8 @@ export async function exerciseRealPtyAssertions(
         diagnostic?: (value: string) => void;
     } = {},
 ) {
+    const phase = <T>(name: string, work: () => T): T =>
+        options.timeline ? options.timeline.phase(name, work) : work();
     let primary: unknown;
     let actorOpenPending = false;
     const timing = (phase: string, extra: Record<string, unknown> = {}) => {
@@ -50,7 +52,7 @@ export async function exerciseRealPtyAssertions(
         });
     options = { ...options, holdUnknown };
     options.signal?.throwIfAborted();
-    const pty = await osPtyFixture(options).catch((e) => {
+    const pty = await phase('fixture', () => osPtyFixture(options)).catch((e) => {
         holdUnknown(e);
         throw e;
     });
@@ -69,15 +71,15 @@ export async function exerciseRealPtyAssertions(
     const cleanup = async () => {
         timing('cleanup-enter', { primary: primary ? String(primary).slice(0, 512) : null });
         const errors: unknown[] = [];
-        for (const close of [
-            () => actor?.cancel(),
-            () => session.disconnect(),
-            () => pty.close(),
-            () => server?.close(),
-            () => store?.close(),
-        ])
+        for (const [name, close] of [
+            ['cleanup-actor', () => actor?.cancel()],
+            ['cleanup-session', () => session.disconnect()],
+            ['cleanup-pty', () => pty.close()],
+            ['cleanup-server', () => server?.close()],
+            ['cleanup-store', () => store?.close()],
+        ] as const)
             try {
-                await close();
+                await phase<unknown>(name, close);
             } catch (e) {
                 errors.push(e);
             }
@@ -102,12 +104,14 @@ export async function exerciseRealPtyAssertions(
             profile.startsWith(temp + path.sep) &&
                 path.basename(profile).startsWith('hub-pty-journal-'),
         );
+        const cleanupRootPhase = options.timeline?.begin('cleanup-journal');
         const current = await fs.lstat(profile, { bigint: true });
         assert.equal(current.dev, profileIdentity.dev);
         assert.equal(current.ino, profileIdentity.ino);
         assert.equal(await fs.realpath(profile), profile);
         options.check?.();
         await fs.rm(profile, { recursive: true, force: true });
+        options.timeline?.end(cleanupRootPhase);
         timing('cleanup-known-closed');
     };
     const abort = () => {
@@ -121,22 +125,31 @@ export async function exerciseRealPtyAssertions(
             options.check?.();
         };
         admit();
-        server = await gatewayFixture(undefined, { attachShell: pty.attachShell }).catch((e) => {
+        server = await phase('gateway', () =>
+            gatewayFixture(undefined, { attachShell: pty.attachShell }),
+        ).catch((e) => {
             holdUnknown(e);
             throw e;
         });
         admit();
+        const journalPhase = options.timeline?.begin('journal-open');
         profile = await fs.mkdtemp(path.join(temp, 'hub-pty-journal-'));
         profileIdentity = await fs.lstat(profile, { bigint: true });
         admit();
-        store = await NativeConsoleJournal.open(profile, { profileOwned: true }).catch((e) => {
+        store = await NativeConsoleJournal.open(profile, {
+            profileOwned: true,
+            diagnostic: options.timeline,
+        }).catch((e) => {
             holdUnknown(e);
             throw e;
         });
         admit();
-        await session.connect(
-            { ...server.options, auth: 'password' },
-            async (key) => key === server!.pinned,
+        options.timeline?.end(journalPhase);
+        await phase('connect', () =>
+            session.connect(
+                { ...server!.options, auth: 'password' },
+                async (key) => key === server!.pinned,
+            ),
         );
         const bound = session.createAutomationConsole(
             store,
@@ -148,16 +161,18 @@ export async function exerciseRealPtyAssertions(
         actor = bound.actor;
         timing('actor-open-before', { readyTimeoutMs: 7000 });
         actorOpenPending = true;
-        await actor.open(
-            {
-                flowId: 'real-os-pty',
-                startedAt: new Date().toISOString(),
-                receiveTimeSource: 'local-client',
-                target: bound.target,
-                ready: { role: 'shell-prompt', literals: ['hub-pty:~#'] },
-            },
-            bound.signal,
-            7000,
+        await phase('actor-open', () =>
+            actor!.open(
+                {
+                    flowId: 'real-os-pty',
+                    startedAt: new Date().toISOString(),
+                    receiveTimeSource: 'local-client',
+                    target: bound.target,
+                    ready: { role: 'shell-prompt', literals: ['hub-pty:~#'] },
+                },
+                bound.signal,
+                7000,
+            ),
         );
         actorOpenPending = false;
         timing('actor-open-return');
@@ -195,32 +210,35 @@ export async function exerciseRealPtyAssertions(
             requestBase64: bytesBase64(Buffer.from(enter ? '\r' : command + '\r')),
             criterion: { role, literals: [literal] },
         });
-        await actor.step(step('cd /', 1), 3000);
-        await actor.step(step('pwd', 2), 3000);
-        await actor.step(step('ll', 3), 3000);
-        await actor.step(step('fixture_hi', 4), 3000);
-        await actor.step(
-            step(
-                "read -p 'OS_CONFIRM [Enter]?'; printf 'REAL_CONFIRMED\\n'",
-                5,
-                'OS_CONFIRM [Enter]?',
-                false,
-                'intermediate-input-prompt',
+        await phase('step-1', () => actor!.step(step('cd /', 1), 3000));
+        await phase('step-2', () => actor!.step(step('pwd', 2), 3000));
+        await phase('step-3', () => actor!.step(step('ll', 3), 3000));
+        await phase('step-4', () => actor!.step(step('fixture_hi', 4), 3000));
+        await phase('step-5', () =>
+            actor!.step(
+                step(
+                    "read -p 'OS_CONFIRM [Enter]?'; printf 'REAL_CONFIRMED\\n'",
+                    5,
+                    'OS_CONFIRM [Enter]?',
+                    false,
+                    'intermediate-input-prompt',
+                ),
+                3000,
             ),
-            3000,
         );
         assert.equal(pty.state.inputs.length, 5);
-        await actor.step(step('', 6, 'hub-pty:/#', true), 3000);
-        await actor.step(step('', 7, 'hub-pty:/#', true), 3000);
-        await actor.step(step('pwd', 8), 3000);
-        const capture = await actor.finish();
+        await phase('step-6', () => actor!.step(step('', 6, 'hub-pty:/#', true), 3000));
+        await phase('step-7', () => actor!.step(step('', 7, 'hub-pty:/#', true), 3000));
+        await phase('step-8', () => actor!.step(step('pwd', 8), 3000));
+        const capture = await phase('finish', () => actor!.finish());
         assert.equal(capture?.state, 'complete');
         assert.equal(session.consoleBusy, false);
-        await pty.settled();
+        await phase('settled', () => pty.settled());
         assert.equal(pty.state.opens, 1);
         assert.equal(pty.state.closes, 1);
         assert.deepEqual(pty.state.helperErrors, []);
         assert.match(pty.state.stderr, /HUB_OS_PTY_CLOSE .*"outputDrained":true/);
+        const readbackPhase = options.timeline?.begin('readback');
         const reader = await NativeConsoleJournal.open(profile, { profileOwned: true });
         let text = '',
             outcomes = 0;
@@ -245,6 +263,7 @@ export async function exerciseRealPtyAssertions(
             Buffer.concat(pty.state.inputs).toString(),
             "cd /\rpwd\rll\rfixture_hi\rread -p 'OS_CONFIRM [Enter]?'; printf 'REAL_CONFIRMED\\n'\r\r\rpwd\r",
         );
+        options.timeline?.end(readbackPhase);
     } catch (error) {
         primary = error;
         timing(actorOpenPending ? 'actor-open-error' : 'actor-or-assertions-error', {
@@ -254,7 +273,7 @@ export async function exerciseRealPtyAssertions(
         throw error;
     } finally {
         options.signal?.removeEventListener('abort', abort);
-        await cleanup();
+        await phase('cleanup', cleanup);
         if (actor?.readinessDiagnosticFailure) {
             options.holdUnknown?.(actor.readinessDiagnosticFailure);
             if (!primary) throw actor.readinessDiagnosticFailure;

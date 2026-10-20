@@ -207,8 +207,15 @@ export class NativeConsoleJournal implements ConsoleRepository, ConsoleArchive {
     private constructor(
         private root: string,
         private key: string,
+        private diagnostic?: { measure<T>(name: string, work: () => Promise<T>): Promise<T> },
     ) {}
-    static async open(profile: string, ownership: { profileOwned: true }) {
+    static async open(
+        profile: string,
+        ownership: {
+            profileOwned: true;
+            diagnostic?: { measure<T>(name: string, work: () => Promise<T>): Promise<T> };
+        },
+    ) {
         if (ownership?.profileOwned !== true)
             throw new CaptureStorageError(
                 'busy',
@@ -223,7 +230,7 @@ export class NativeConsoleJournal implements ConsoleRepository, ConsoleArchive {
         try {
             await fs.mkdir(root, { recursive: true, mode: 0o700 });
             await directory(root);
-            const store = new NativeConsoleJournal(root, key);
+            const store = new NativeConsoleJournal(root, key, ownership.diagnostic);
             const entries = await fs.opendir(root);
             for await (const entry of entries)
                 if (/^\.deleting-[a-f0-9-]{36}$/.test(entry.name)) {
@@ -302,7 +309,12 @@ export class NativeConsoleJournal implements ConsoleRepository, ConsoleArchive {
             return structuredClone(meta);
         });
     }
-    private async commit(records: Iterable<ConsoleRecord>) {
+    private commit(records: Iterable<ConsoleRecord>) {
+        return this.diagnostic
+            ? this.diagnostic.measure('journal', () => this.commitOwned(records))
+            : this.commitOwned(records);
+    }
+    private async commitOwned(records: Iterable<ConsoleRecord>) {
         if (!this.meta || !this.raw || this.meta.state !== 'active')
             throw new CaptureStorageError('busy', 'Console journal is not writable.');
         const next = structuredClone(this.cursor);

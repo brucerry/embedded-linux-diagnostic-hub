@@ -373,6 +373,26 @@ test('held-stage source establishes referenced ownership before hostile error se
         held: undefined,
         terminal: undefined,
         terminalReportStarted: false,
+        trace: {
+            cancel() {
+                assert(order.includes('hold'));
+                order.push('timeline-cancel');
+            },
+            first() {
+                assert(order.includes('hold'));
+                return { origin: 'controlled' };
+            },
+            finish() {
+                assert(order.includes('hold'));
+                return Promise.resolve();
+            },
+        },
+        abortCause(reason: unknown, origin: string) {
+            assert(order.includes('hold'));
+            assert.equal(origin, 'ownership-hold');
+            assert.equal(reason, error);
+            aborted = true;
+        },
         startup: {
             stopQueryAdmission() {
                 order.push('stop');
@@ -401,6 +421,7 @@ test('held-stage source establishes referenced ownership before hostile error se
             },
         },
         controller: {
+            signal: { aborted: false },
             abort() {
                 aborted = true;
             },

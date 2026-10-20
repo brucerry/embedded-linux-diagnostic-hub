@@ -5,7 +5,7 @@ export function stageChannel(
     nonce: string,
     bindingSHA256: string,
     signal: AbortSignal,
-    { deadline = Infinity } = {},
+    { deadline = Infinity, observer = undefined as any } = {},
 ) {
     let sequence = 0,
         pending: { sequence: number; resolve(): void; reject(e: unknown): void } | undefined;
@@ -37,28 +37,46 @@ export function stageChannel(
             stage,
             data,
         };
-        const encodedBytes = Buffer.byteLength(JSON.stringify(m));
+        const encoding = observer?.costStart('diagnostic-encode');
+        let encodedBytes;
+        try {
+            encodedBytes = Buffer.byteLength(JSON.stringify(m));
+            observer?.costEnd(encoding);
+        } catch (error) {
+            observer?.costEnd(encoding, false);
+            throw error;
+        }
         if (encodedBytes > 65536)
             throw reportingRefusal(stage, 'completeFrameBytes', encodedBytes, 0, 65536);
-        await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(
-                () => reject(Error('Durable evidence ACK missing')),
-                Math.max(0, Math.min(10000, deadline - Number(process.hrtime.bigint() / 1000000n))),
-            );
-            pending = {
-                sequence: m.sequence,
-                resolve() {
-                    clearTimeout(timer);
-                    resolve();
-                },
-                reject(e) {
-                    clearTimeout(timer);
-                    reject(e);
-                },
-            };
-            process.send!(m, (e) => {
-                if (e) pending?.reject(e);
+        const cost = observer?.costStart('diagnostic-ack');
+        try {
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(
+                    () => reject(Error('Durable evidence ACK missing')),
+                    Math.max(
+                        0,
+                        Math.min(10000, deadline - Number(process.hrtime.bigint() / 1000000n)),
+                    ),
+                );
+                pending = {
+                    sequence: m.sequence,
+                    resolve() {
+                        clearTimeout(timer);
+                        resolve();
+                    },
+                    reject(e) {
+                        clearTimeout(timer);
+                        reject(e);
+                    },
+                };
+                process.send!(m, (e) => {
+                    if (e) pending?.reject(e);
+                });
             });
-        });
+            observer?.costEnd(cost);
+        } catch (error) {
+            observer?.costEnd(cost, false);
+            throw error;
+        }
     };
 }

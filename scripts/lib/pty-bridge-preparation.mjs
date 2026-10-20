@@ -164,12 +164,14 @@ export async function preparePtyBridge(
             label: 'PTY compiler exit/pipe close',
             clock,
         });
+        const joinPhase = options.timeline?.begin('compiler-join');
         await startupBound(startup.joinChild(child), {
             signal,
             deadline,
             label: 'PTY compiler identity/descendant join',
             clock,
         });
+        options.timeline?.end(joinPhase);
         check();
         assert(!overflow, 'PTY compilation output bound');
         assert.deepEqual(exit, { code: 0, signal: null }, 'PTY compiler failed');
@@ -204,6 +206,7 @@ export async function preparePtyBridge(
                 [],
                 'Compiler temporary files remain',
             );
+        const artifactPhase = options.timeline?.begin('artifact');
         const artifact = await preparedPtyIdentity(options.artifactPath, { durable: true, fsPort });
         const artifactLines = stderr
             .split(/\r?\n/)
@@ -248,6 +251,7 @@ export async function preparePtyBridge(
             compilerArguments,
         });
         await verifyPreparedPtyBridge(prepared);
+        options.timeline?.end(artifactPhase);
         check();
         await emit('pty-compile-closed', {
             deadline,
