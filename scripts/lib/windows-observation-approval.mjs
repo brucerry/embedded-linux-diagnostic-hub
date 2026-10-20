@@ -116,6 +116,7 @@ export async function pollObservationApproval(
         fetchPort = fetch,
         check = () => {},
         record = () => {},
+        guard = check,
         wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     } = {},
 ) {
@@ -146,13 +147,17 @@ export async function pollObservationApproval(
             '/actions/artifacts?name=' + encodeURIComponent(approvalName(binding)) + '&per_page=10',
         );
         assert.equal(response.status, 200);
-        const listing = JSON.parse((await boundedResponse(response, 131072)).toString());
+        const listingBytes = await boundedResponse(response, 131072);
+        guard();
+        const listing = JSON.parse(listingBytes.toString());
         assert(Array.isArray(listing.artifacts) && listing.artifacts.length <= 10);
         for (const artifact of listing.artifacts) {
             assert.equal(artifact.name, approvalName(binding));
             const reply = await api('/actions/runs/' + artifact.workflow_run.id);
             assert.equal(reply.status, 200);
-            const run = JSON.parse((await boundedResponse(reply, 131072)).toString());
+            const runBytes = await boundedResponse(reply, 131072);
+            guard();
+            const run = JSON.parse(runBytes.toString());
             if (run.status !== 'completed') continue;
             validateObservationDecision(binding, artifact, run, {
                 schema: 1,
@@ -168,12 +173,15 @@ export async function pollObservationApproval(
             assert.equal(location.protocol, 'https:');
             assert(!location.username && !location.password);
             // URL is supplied by the authenticated GitHub endpoint; credentials are omitted on the download.
+            guard();
             const download = await fetchPort(location.href, {
                 redirect: 'error',
                 signal: AbortSignal.timeout(observationPolicy.requestMs),
             });
+            guard();
             assert.equal(download.status, 200);
             const zip = await boundedResponse(download, 32768);
+            guard();
             let files = 0;
             const extracted = unzipSync(zip, {
                 filter: (entry) => {
@@ -202,6 +210,7 @@ export async function pollObservationApproval(
             return receipt;
         }
         await wait(observationPolicy.approvalPollMs);
+        guard();
     }
     throw Error('Same-host approval preparation deadline');
 }

@@ -37,9 +37,19 @@ import {
     preparationObservationSecurity,
     closedObservationSecurityRefusal,
 } from './lib/observation-security.mjs';
+import { runSecurityCommand } from './lib/pilot-security-command.mjs';
+import {
+    PreparationEvidence,
+    provedPreparationRefusal,
+} from './lib/observation-preparation-evidence.mjs';
+import { observationChallengeLines } from './lib/observation-challenge.mjs';
 import { bindObservationDirectory } from './lib/observation-paths.mjs';
 import { ObservationHandoff } from './lib/observation-handoff.mjs';
-import { ObservationAccounting, admitObservationShared } from './lib/observation-accounting.mjs';
+import {
+    ObservationAccounting,
+    admitObservationShared,
+    observationInventory,
+} from './lib/observation-accounting.mjs';
 import { preserveObservationPty } from './lib/observation-pty-receipt.mjs';
 import {
     observationPolicy,
@@ -134,6 +144,7 @@ export async function refuseObservationPreparation(
         sourceUnchanged: true,
         resources,
         securityRefusal: closedObservationSecurityRefusal(error),
+        preparationRefusal: provedPreparationRefusal(error),
         releasePending: true,
         proof,
     });
@@ -170,19 +181,18 @@ export async function observationMain(
         unknown,
         stage = 'preparation',
         cohortDeadline = null,
-        recordBytes = 0,
-        recordRows = 0,
         startup,
         initialSource,
         monitor,
-        accounting,
-        preparationEvidenceComplete = true;
+        accounting;
     const preparationResources = { electron: 'not-started', runtime: 'not-started' };
     const held = (state) => {
         if (unknown) return unknown;
         return createOwnershipHold(
             {
                 ...state,
+                firstError: evidence.snapshot().firstError,
+                reportingErrors: evidence.snapshot().reportingErrors,
                 stage,
                 sourceSHA256: initialSource ?? null,
                 lease: lease?.state() ?? null,
@@ -217,41 +227,20 @@ export async function observationMain(
     };
     const prep = path.join(out, 'preparation');
     fs.mkdirSync(prep);
-    const record = (name, value) => {
-        try {
+    const prepAncestry = ancestryIdentity(prep);
+    const evidence = new PreparationEvidence(prep, {
+        check: () => {
             context.check();
             checkAncestry(ancestry);
-            const bytes = Buffer.from(
-                JSON.stringify({ sequence: recordRows, stage: name, data: value }) + '\n',
-            );
-            assert(
-                recordRows < 2048 && bytes.length <= 65536 && recordBytes + bytes.length <= 1048576,
-                'Observation preparation evidence bound',
-            );
+            checkAncestry(prepAncestry);
+        },
+        admit: (bytes) => {
             if (accounting)
-                admitObservationShared(out, accounting.prerequisiteRoots, 'parent', bytes.length);
-            const ordinal = recordRows++;
-            recordBytes += bytes.length;
-            const fd = fs.openSync(
-                    path.join(prep, String(ordinal).padStart(6, '0') + '.json'),
-                    'wx',
-                    0o600,
-                ),
-                e = { fd, errors: [], attempted: false };
-            try {
-                writeAll(fd, bytes);
-            } finally {
-                const closed = closeEntries([e]);
-                if (!closed.complete) {
-                    held({ phase: 'preparation-evidence-close-unknown', closed });
-                    throw Error('Preparation evidence not durable/closed');
-                }
-            }
-        } catch (error) {
-            preparationEvidenceComplete = false;
-            throw error;
-        }
-    };
+                admitObservationShared(out, accounting.prerequisiteRoots, 'parent', bytes);
+        },
+        hold: held,
+    });
+    const record = (name, value) => evidence.record(name, value);
     const freeSpace = () => {
         const s = fs.statfsSync(context.tmp, { bigint: true });
         return Number(s.bavail * s.bsize);
@@ -353,12 +342,18 @@ export async function observationMain(
             {
                 environment: env,
                 record,
+                query: evidence.securityQuery(runSecurityCommand),
                 check,
                 onProcessState: (s) => {
                     if (!s.closed) held({ phase: 'security-query-close-unknown', state: s });
                 },
             },
         );
+        evidence.admitApprovalWait({
+            ptyFiles: observationInventory(ptyRoot).files.size,
+            ptyPasses: 2,
+            remainingMs: Math.ceil(deadline - productClock.now()),
+        });
         refuseMarker(context.tmp);
         lease = new ProductLease(
             path.join(context.tmp, 'diagnostic-hub-v060-check.lock'),
@@ -562,21 +557,25 @@ export async function observationMain(
             bindingSHA256: observationDigest(binding),
             manifest,
         });
-        console.log(
-            JSON.stringify({
-                status: 'AWAITING_SAME_HOST_HUMAN_APPROVAL',
-                binding,
-                approval: {
-                    schema: 1,
-                    decision: 'approve-one-normal-pair',
-                    parentRun: binding.host.run,
-                    bindingSHA256: observationDigest(binding),
-                    sourceSHA256: binding.sourceSHA256,
-                    commit: binding.host.commit,
-                },
-            }),
-        );
+        evidence.admitApprovalWait({
+            ptyFiles: observationInventory(ptyRoot).files.size,
+            remainingMs: Math.ceil(deadline - productClock.now()),
+        });
+        for (const line of observationChallengeLines({
+            status: 'AWAITING_SAME_HOST_HUMAN_APPROVAL',
+            binding,
+            approval: {
+                schema: 1,
+                decision: 'approve-one-normal-pair',
+                parentRun: binding.host.run,
+                bindingSHA256: observationDigest(binding),
+                sourceSHA256: binding.sourceSHA256,
+                commit: binding.host.commit,
+            },
+        }))
+            console.log(line);
         const approval = await pollObservationApproval(binding, env.GITHUB_TOKEN, {
+            guard: check,
             check: () => {
                 check();
                 lease.check();
@@ -617,7 +616,7 @@ export async function observationMain(
         record('preparation-closed', {
             startup: startup.snapshot(),
             approval,
-            recordBytes,
+            recordBytes: evidence.snapshot().bytes,
             availableBytes: freeSpace(),
         });
         assert(!unknown);
@@ -688,6 +687,7 @@ export async function observationMain(
         assert(result.markerReleased === true && lease.state().released === true);
         return result;
     } catch (error) {
+        evidence.beginFailure(error, stage);
         if (startup)
             try {
                 assert.equal((await startup.join()).complete, true);
@@ -710,7 +710,7 @@ export async function observationMain(
                     check,
                     record,
                     resourceStates: () => ({ ...preparationResources }),
-                    evidenceComplete: () => preparationEvidenceComplete,
+                    evidenceComplete: () => evidence.complete(),
                 });
             } catch (e) {
                 return held({ phase: 'preparation-release-unknown', error: String(e) }).outcome;
