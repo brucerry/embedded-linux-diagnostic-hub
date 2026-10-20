@@ -131,7 +131,13 @@ export function preparationObservationSecurity(
 export function collectorObservationSecurity(
     manifest,
     sourceRoot,
-    { query = runSecurityCommand, retainOwnership = createOwnershipHold, check = () => {} } = {},
+    {
+        query = runSecurityCommand,
+        retainOwnership = createOwnershipHold,
+        check = () => {},
+        prerequisiteRoots = [manifest.observationPtyRoot],
+        admit = () => {},
+    } = {},
 ) {
     const directory = path.join(manifest.outputRoot, 'collector-security');
     fs.mkdirSync(directory, { mode: 0o700 });
@@ -159,9 +165,10 @@ export function collectorObservationSecurity(
                 b.length <= 65536 && bytes + b.length <= 1048576 && rows < 2048,
                 'Collector security evidence bound',
             );
+            admit(b.length);
             admitObservationShared(
                 path.dirname(manifest.outputRoot),
-                [manifest.observationPtyRoot],
+                prerequisiteRoots,
                 'collector',
                 b.length,
             );

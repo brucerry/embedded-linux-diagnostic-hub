@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { projectCollectorEnvironment } from './lib/product-collector-environment.mjs';
 import {
     inspectSoakPhysical,
     inspectSoakCollector,
@@ -165,38 +166,10 @@ function environment(m, authority) {
             )
         )
             throw Error('Unreviewed Hub override: ' + key);
-    const allowed = [
-        'GITHUB_RUN_ATTEMPT',
-        'GITHUB_REPOSITORY',
-        'GITHUB_SHA',
-        'GITHUB_RUN_ID',
-        'SystemRoot',
-        'SYSTEMROOT',
-        'WINDIR',
-        'TEMP',
-        'TMP',
-        'USERPROFILE',
-        'HOMEDRIVE',
-        'HOMEPATH',
-        'APPDATA',
-        'LOCALAPPDATA',
-        'COMSPEC',
-        'ComSpec',
-        'PATHEXT',
-        'PSModulePath',
-        'NUMBER_OF_PROCESSORS',
-        'PROCESSOR_ARCHITECTURE',
-        'ProgramFiles',
-        'ProgramFiles(x86)',
-        'ProgramData',
-        'PUBLIC',
-    ];
-    const env = Object.fromEntries(
-        allowed
-            .filter((key) => process.env[key] !== undefined)
-            .map((key) => [key, process.env[key]]),
-    );
-    return { ...env, PATH: m.childPATH, HUB_MEMORY_SSH_PROFILE: m.sshProfile.path };
+    return {
+        ...projectCollectorEnvironment(process.env, m.childPATH),
+        HUB_MEMORY_SSH_PROFILE: m.sshProfile.path,
+    };
 }
 export async function verifyProductManifest(m, authority) {
     assert.equal(

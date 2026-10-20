@@ -4,17 +4,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import {
     preparationObservationSecurity,
     collectorObservationSecurity,
     closedObservationSecurityRefusal,
 } from '../scripts/lib/observation-security.mjs';
-import { runSecurityCommand } from '../scripts/lib/pilot-security-command.mjs';
+import {
+    runSecurityCommand,
+    firstCollectorSecurityQuery,
+} from '../scripts/lib/pilot-security-command.mjs';
 import { ProductLease } from '../scripts/lib/product-collector-files.mjs';
 import { createOwnershipHold } from '../scripts/lib/product-entry-custody.mjs';
 import { closeEntries, writeAll, digest } from '../scripts/lib/product-collector-evidence.mjs';
 import { refuseObservationPreparation } from '../scripts/windows-observation-pair.mts';
 import { preserveObservationPty } from '../scripts/lib/observation-pty-receipt.mjs';
+import { runCollector } from '../scripts/memory-product-collect.mts';
 const sourceRoot = path.resolve(import.meta.dirname, '..'),
     principal = 'S-1-5-21-1-2-3-500';
 function ace(sid, flags) {
@@ -49,7 +54,7 @@ function report(plans) {
         })),
     };
 }
-function fixture(kind) {
+function fixture(kind, diagnostic = false) {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hub-security-adapter-'))),
         root = path.join(tmp, 'private'),
         collection = path.join(root, 'collection'),
@@ -92,8 +97,15 @@ function fixture(kind) {
     const check = () => {
         assert(!cancelled, 'Cancelled/deadline before next batch');
     };
+    const securityQuery = diagnostic
+        ? firstCollectorSecurityQuery({
+              outputRoot: collection,
+              diagnostic: true,
+              clock: () => 100,
+          })
+        : runSecurityCommand;
     const query = (src, pwsh, raw, options) =>
-        runSecurityCommand(src, pwsh, raw, {
+        securityQuery(src, pwsh, raw, {
             ...options,
             identity: (p) => ({ path: p, sha256: 'a'.repeat(64), pe: { architecture: 'x64' } }),
             spawn(_exe, _args, launch) {
@@ -106,6 +118,16 @@ function fixture(kind) {
                 let v = report(plans);
                 const active = calls.length === faultAt ? fault : null;
                 if (active === 'throw') throw Error('spawn uncertain');
+                if (active === 'timeout')
+                    return {
+                        status: null,
+                        signal: 'SIGTERM',
+                        error: Object.assign(Error('spawnSync fixture-winps.exe ETIMEDOUT'), {
+                            code: 'ETIMEDOUT',
+                        }),
+                        stdout: '',
+                        stderr: '',
+                    };
                 if (active === 'signal')
                     return { status: null, signal: 'SIGTERM', stdout: '', stderr: '' };
                 if (
@@ -234,6 +256,7 @@ for (const kind of ['preparation', 'collector'])
         'descriptor',
         'cancel',
         'signal',
+        'timeout',
         'throw',
     ])
         test(kind + ' batch2 ' + fault + ' stops before batch3; no partial success', () => {
@@ -263,7 +286,7 @@ for (const kind of ['preparation', 'collector'])
                     });
                     assert.equal(f.holds.length, 0);
                 } else assert.equal(closedObservationSecurityRefusal(error), null);
-                if (['signal', 'throw'].includes(fault)) {
+                if (['signal', 'timeout', 'throw'].includes(fault)) {
                     assert.equal(f.holds.length, 1);
                     assert(f.holds[0].handle.referenced);
                 }
@@ -271,6 +294,84 @@ for (const kind of ['preparation', 'collector'])
                 f.close();
             }
         });
+for (const diagnostic of [false, true])
+    test(
+        'exact first collector query timeout holds before result reporting/controller preparation; diagnostic=' +
+            diagnostic,
+        async () => {
+            const f = fixture('collector', diagnostic),
+                events = Object.assign(new EventEmitter(), { connected: true }),
+                timers = new Set(),
+                clock = {
+                    now: () => 100,
+                    set: (fn) => (timers.add(fn), fn),
+                    clear: (fn) => timers.delete(fn),
+                },
+                nonce = '00000000-0000-4000-8000-000000000058',
+                lease = new ProductLease(path.join(f.root, 'fixture-only-marker'), { nonce });
+            let prepared = 0;
+            lease.acquire();
+            f.setFault('timeout', 1);
+            try {
+                await assert.rejects(
+                    runCollector(
+                        {},
+                        'a'.repeat(64),
+                        nonce,
+                        { schema: 1, nonce, startedAt: 100, deadlineMs: 4800100 },
+                        {
+                            events,
+                            clock,
+                            verify: () => f.ownerCheck(path.join(f.root, 'collection')),
+                            prepare: () => {
+                                prepared++;
+                                throw Error('Must not reach controller preparation');
+                            },
+                        },
+                    ),
+                    /Collector security custody remains held/,
+                );
+                assert.equal(f.calls.length, 1);
+                assert.equal(prepared, 0);
+                assert.equal(f.holds.length, 1);
+                assert(f.holds[0].handle.referenced);
+                const directory = path.join(f.root, 'collection', 'collector-security'),
+                    records = fs
+                        .readdirSync(directory)
+                        .map((name) =>
+                            JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')),
+                        );
+                assert.deepEqual(
+                    records.map((r) => r.stage),
+                    ['security-input', 'ownership-held.json', 'security-command-closed'],
+                );
+                assert.deepEqual(records[1].data.state, {
+                    attempted: true,
+                    closed: false,
+                    status: null,
+                    signal: 'SIGTERM',
+                    errorPresent: true,
+                });
+                assert.match(records[2].data.error, /ETIMEDOUT/);
+                assert.equal(records[2].data.streams.stdout.bytes, 0);
+                assert.equal(records[2].data.streams.stderr.bytes, 0);
+                assert.equal(Boolean(records[0].data.diagnostic), diagnostic);
+                assert.equal(Boolean(records[2].data.diagnostic), diagnostic);
+                if (diagnostic) assert.equal(records[2].data.diagnostic.returnedPID, null);
+                assert(lease.state().retained);
+                assert(!lease.state().released);
+                assert(!fs.existsSync(path.join(f.root, 'collection', 'collector')));
+                assert.equal(
+                    timers.size,
+                    0,
+                    'Entry timer retirement does not retire the independent referenced hold',
+                );
+            } finally {
+                // Only this fresh fixture tree is removed; no production or historical lease is touched.
+                f.close();
+            }
+        },
+    );
 for (const fault of ['open', 'write', 'sync', 'close'])
     test(
         'collector actual record ' +

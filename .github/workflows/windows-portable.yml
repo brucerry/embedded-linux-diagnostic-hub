@@ -9,6 +9,15 @@ on:
                 required: false
     workflow_dispatch:
         inputs:
+            windows_security_query_only:
+                description: 'One reviewed metadata query; no product workload'
+                type: boolean
+                required: false
+                default: false
+            security_query_request_json:
+                description: 'Exact reviewed query-only request JSON'
+                type: string
+                required: false
             windows_preflight_only:
                 description: 'One nonqualifying metadata preflight; skips the standing build'
                 type: boolean
@@ -89,18 +98,21 @@ permissions:
 
 concurrency:
     group:
-        windows-${{ github.workflow }}-${{ github.ref }}${{ inputs.observation_approve_json &&
-        format('-observation-approval-{0}', github.run_id) || inputs.windows_observation_pair &&
-        '-observation-pair' || github.event_name == 'workflow_dispatch' &&
-        inputs.windows_pty_observation_only && '-pty-observation' || github.event_name ==
-        'workflow_dispatch' && inputs.windows_pilot_winps_contract && '-winps-contract' ||
+        windows-${{ github.workflow }}-${{ github.ref }}${{ (inputs.windows_security_query_only ||
+        inputs.security_query_request_json) && '-security-query-only' ||
+        inputs.observation_approve_json && format('-observation-approval-{0}', github.run_id) ||
+        inputs.windows_observation_pair && '-observation-pair' || github.event_name ==
+        'workflow_dispatch' && inputs.windows_pty_observation_only && '-pty-observation' ||
+        github.event_name == 'workflow_dispatch' && inputs.windows_pilot_winps_contract &&
+        '-winps-contract' || github.event_name == 'workflow_dispatch' &&
+        !inputs.windows_observation_pair && !inputs.observation_request_json &&
+        !inputs.observation_approve_json && inputs.windows_preflight_only && '-preflight' ||
         github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
         !inputs.observation_request_json && !inputs.observation_approve_json &&
-        inputs.windows_preflight_only && '-preflight' || github.event_name == 'workflow_dispatch' &&
-        !inputs.windows_observation_pair && !inputs.observation_request_json &&
-        !inputs.observation_approve_json && inputs.windows_native_pilot && '-native-pilot' || '' }}
+        inputs.windows_native_pilot && '-native-pilot' || '' }}
     cancel-in-progress:
-        ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
+        ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_security_query_only ||
+        inputs.security_query_request_json || inputs.windows_preflight_only ||
         inputs.windows_native_pilot || inputs.windows_pilot_winps_contract ||
         inputs.windows_pty_observation_only || inputs.windows_observation_pair ||
         inputs.observation_request_json || inputs.observation_approve_json)) }}
@@ -108,7 +120,8 @@ concurrency:
 jobs:
     build:
         if:
-            ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_preflight_only ||
+            ${{ !(github.event_name == 'workflow_dispatch' && (inputs.windows_security_query_only ||
+            inputs.security_query_request_json || inputs.windows_preflight_only ||
             inputs.windows_native_pilot || inputs.windows_pilot_winps_contract ||
             inputs.windows_pty_observation_only || inputs.windows_observation_pair ||
             inputs.observation_request_json || inputs.observation_approve_json)) }}
@@ -206,7 +219,8 @@ jobs:
     windows-preflight-only:
         name: Windows metadata preflight (nonqualifying)
         if:
-            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            github.event_name == 'workflow_dispatch' && !inputs.windows_security_query_only &&
+            !inputs.security_query_request_json && !inputs.windows_observation_pair &&
             !inputs.observation_request_json && !inputs.observation_approve_json &&
             inputs.windows_preflight_only && !inputs.windows_native_pilot &&
             !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
@@ -258,7 +272,8 @@ jobs:
     windows-native-pilot:
         name: Finite Windows native readiness pilot (nonqualifying)
         if:
-            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            github.event_name == 'workflow_dispatch' && !inputs.windows_security_query_only &&
+            !inputs.security_query_request_json && !inputs.windows_observation_pair &&
             !inputs.observation_request_json && !inputs.observation_approve_json &&
             inputs.windows_native_pilot && !inputs.windows_pilot_winps_contract &&
             !inputs.windows_pty_observation_only
@@ -319,7 +334,8 @@ jobs:
 
     winps-provider-contract:
         if:
-            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            github.event_name == 'workflow_dispatch' && !inputs.windows_security_query_only &&
+            !inputs.security_query_request_json && !inputs.windows_observation_pair &&
             !inputs.observation_request_json && !inputs.observation_approve_json &&
             inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
         runs-on: windows-latest
@@ -375,7 +391,8 @@ jobs:
     windows-pty-observation:
         name: One Windows PTY observation stage (nonqualifying)
         if:
-            github.event_name == 'workflow_dispatch' && !inputs.windows_observation_pair &&
+            github.event_name == 'workflow_dispatch' && !inputs.windows_security_query_only &&
+            !inputs.security_query_request_json && !inputs.windows_observation_pair &&
             !inputs.observation_request_json && !inputs.observation_approve_json &&
             inputs.windows_pty_observation_only
         runs-on: windows-latest
@@ -446,7 +463,8 @@ jobs:
     windows-observation-pair:
         name: One manually approved full Windows raw observation pair
         if: >-
-            github.event_name == 'workflow_dispatch' && inputs.windows_observation_pair &&
+            github.event_name == 'workflow_dispatch' && !inputs.windows_security_query_only &&
+            !inputs.security_query_request_json && inputs.windows_observation_pair &&
             inputs.observation_request_json && !inputs.observation_approve_json &&
             !inputs.windows_preflight_only && !inputs.windows_native_pilot &&
             !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
@@ -528,7 +546,8 @@ jobs:
     windows-observation-approval:
         name: Human same-host approval record only
         if: >-
-            github.event_name == 'workflow_dispatch' && inputs.observation_approve_json &&
+            github.event_name == 'workflow_dispatch' && !inputs.windows_security_query_only &&
+            !inputs.security_query_request_json && inputs.observation_approve_json &&
             !inputs.windows_observation_pair && !inputs.observation_request_json &&
             !inputs.windows_preflight_only && !inputs.windows_native_pilot &&
             !inputs.windows_pilot_winps_contract && !inputs.windows_pty_observation_only
@@ -554,3 +573,45 @@ jobs:
                   path: approval.json
                   if-no-files-found: error
                   retention-days: 1
+
+    windows-security-query-only:
+        name: One Windows security metadata query (nonqualifying)
+        if: >-
+            github.event_name == 'workflow_dispatch' && inputs.windows_security_query_only &&
+            inputs.security_query_request_json && !inputs.windows_preflight_only &&
+            !inputs.windows_native_pilot && !inputs.windows_pty_observation_only &&
+            !inputs.windows_pilot_winps_contract && !inputs.windows_observation_pair &&
+            !inputs.pty_source_sha256 && !inputs.pty_policy_sha256 && !inputs.pty_scope_sha256 &&
+            !inputs.pty_scope_json && !inputs.pilot_source_sha256 && !inputs.pilot_policy_sha256 &&
+            !inputs.pilot_coverage_sha256 && !inputs.pilot_coverage_json &&
+            !inputs.contract_source_sha256 && !inputs.observation_request_json &&
+            !inputs.observation_approve_json
+        runs-on: windows-latest
+        timeout-minutes: 15
+        permissions:
+            contents: read
+        env:
+            HUB_WINDOWS_SECURITY_QUERY_ONLY: '1'
+            SECURITY_QUERY_REQUEST_JSON: ${{ inputs.security_query_request_json }}
+            SECURITY_QUERY_INPUTS_JSON: ${{ toJSON(inputs) }}
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+            - name: Fresh prerequisites then at most one metadata query
+              shell: cmd
+              run: >-
+                  "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\node.exe" --experimental-transform-types
+                  scripts/windows-security-query-diagnostic.mjs
+            - name: Retain exact metadata evidence including failures
+              if: always()
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+              with:
+                  name:
+                      windows-security-query-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+                  path:
+                      ~/AppData/Local/Temp/diagnostic-hub-security-query-${{ github.run_id }}-${{
+                      github.run_attempt }}/
+                  if-no-files-found: error
+                  retention-days: 14

@@ -3,6 +3,68 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { digest, fileIdentity } from './windows-preflight.mjs';
+const diagnosticVariable = 'HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC';
+const diagnosticTokens = new WeakMap();
+const diagnosticEnvironmentKeys = Object.freeze([
+    'SystemRoot',
+    'WINDIR',
+    'TEMP',
+    'TMP',
+    'USERPROFILE',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'COMSPEC',
+    'PATHEXT',
+    'PSModulePath',
+    'PATH',
+    'ProgramFiles',
+    'ProgramW6432',
+    'ProgramData',
+    'PUBLIC',
+    'USERNAME',
+    'USERDOMAIN',
+    'OS',
+    'SESSIONNAME',
+    'PROCESSOR_ARCHITECTURE',
+    'NUMBER_OF_PROCESSORS',
+]);
+const diagnosticTick = (clock) => {
+    const value = clock();
+    assert(Number.isSafeInteger(value) && value >= 0, 'Diagnostic monotonic clock');
+    return value;
+};
+function environmentPresence(environment) {
+    const names = new Set(Object.keys(environment).map((key) => key.toUpperCase()));
+    return Object.fromEntries(
+        diagnosticEnvironmentKeys.map((key) => [key, names.has(key.toUpperCase())]),
+    );
+}
+/** Inert until explicitly supplied by a separately reviewed diagnostic caller. No route/env activation. */
+export function firstCollectorSecurityQuery({
+    outputRoot,
+    diagnostic = false,
+    clock = () => Number(process.hrtime.bigint() / 1000000n),
+} = {}) {
+    assert.equal(typeof diagnostic, 'boolean');
+    if (diagnostic) {
+        assert(typeof outputRoot === 'string' && path.isAbsolute(outputRoot));
+        assert.equal(typeof clock, 'function');
+    }
+    const token = Object.freeze({});
+    diagnosticTokens.set(token, { outputRoot, clock, consumed: false });
+    let first = true;
+    return (sourceRoot, powershell, rawJSON, options = {}) => {
+        assert.equal(options.diagnostic, undefined, 'Diagnostic capability cannot be overridden');
+        const enabled = first && diagnostic;
+        first = false;
+        return runSecurityCommand(sourceRoot, powershell, rawJSON, {
+            ...options,
+            ...(enabled ? { diagnostic: token } : {}),
+        });
+    };
+}
 export function securityLaunch(
     sourceRoot,
     powershell,
@@ -15,7 +77,11 @@ export function securityLaunch(
     const script = path.join(sourceRoot, 'scripts/lib/hosted-pilot-security.ps1');
     const env = { ...environment, HUB_NATIVE_PILOT_SECURITY_PATHS: rawJSON };
     for (const key of Object.keys(env))
-        if (key.toUpperCase() === 'PSMODULEPATH' || key === 'HUB_NATIVE_PILOT_SECURITY_RED_CONTROL')
+        if (
+            key.toUpperCase() === 'PSMODULEPATH' ||
+            key === 'HUB_NATIVE_PILOT_SECURITY_RED_CONTROL' ||
+            key.toUpperCase() === diagnosticVariable
+        )
             delete env[key];
     if (red) env.HUB_NATIVE_PILOT_SECURITY_RED_CONTROL = '1';
     return {
@@ -46,9 +112,34 @@ export function runSecurityCommand(
         identity = fileIdentity,
         check = () => {},
         onProcessState = () => {},
+        diagnostic,
     } = {},
 ) {
     const launch = securityLaunch(sourceRoot, powershell, rawJSON, environment, { red, timeout });
+    const diagnosticState = diagnostic === undefined ? null : diagnosticTokens.get(diagnostic);
+    assert(diagnostic === undefined || diagnosticState, 'Foreign diagnostic capability');
+    let diagnosticInput;
+    if (diagnosticState) {
+        assert(!diagnosticState.consumed, 'First-query diagnostic already consumed');
+        diagnosticState.consumed = true;
+        assert.equal(red, false);
+        assert.deepEqual(JSON.parse(rawJSON), [
+            { path: diagnosticState.outputRoot, kind: 'directory' },
+        ]);
+        diagnosticInput = {
+            schema: 1,
+            kind: 'first-collector-security-query',
+            admittedAtMs: diagnosticTick(diagnosticState.clock),
+            pid: process.pid,
+            parentPID: process.ppid,
+            cwdMatchesSourceRoot: path.resolve(process.cwd()) === path.resolve(sourceRoot),
+            ipcConnected: process.connected === true,
+            inheritedPresence: environmentPresence(environment),
+            effectivePresence: environmentPresence(launch.options.env),
+        };
+        assert(Buffer.byteLength(JSON.stringify(diagnosticInput)) <= 2048);
+        launch.options.env[diagnosticVariable] = 'first-collector-query-v1';
+    }
     check();
     const executable = identity(powershell, { pe: true, check }),
         script = identity(launch.script, { check });
@@ -69,8 +160,11 @@ export function runSecurityCommand(
         executable,
         script,
         red,
+        ...(diagnosticInput ? { diagnostic: diagnosticInput } : {}),
     });
     let r;
+    const spawnStartedAtMs = diagnosticState ? diagnosticTick(diagnosticState.clock) : null;
+    if (diagnosticState) assert(spawnStartedAtMs >= diagnosticInput.admittedAtMs);
     try {
         r = spawn(launch.executable, launch.args, launch.options);
     } catch (error) {
@@ -86,6 +180,41 @@ export function runSecurityCommand(
         errorPresent: Boolean(r.error),
     });
     onProcessState(processState);
+    // The original hold callback always runs before any diagnostic clock/readback can fail.
+    let diagnosticResult;
+    if (diagnosticState) {
+        let returnedObservedAtMs = null;
+        try {
+            const value = diagnosticTick(diagnosticState.clock);
+            if (value >= spawnStartedAtMs) returnedObservedAtMs = value;
+        } catch {
+            /* Missing diagnostic time never changes the actual process result or hold. */
+        }
+        diagnosticResult = {
+            schema: 1,
+            kind: 'first-collector-security-query',
+            clockComplete: returnedObservedAtMs !== null,
+            spawnStartedAtMs,
+            returnedObservedAtMs,
+            observedElapsedMs:
+                returnedObservedAtMs === null ? null : returnedObservedAtMs - spawnStartedAtMs,
+            returnedPID: Number.isSafeInteger(r.pid) && r.pid > 0 ? r.pid : null,
+            errorCode: ['ETIMEDOUT', 'ENOENT', 'EACCES', 'EPERM', 'ENOBUFS', 'ECANCELED'].includes(
+                r.error?.code,
+            )
+                ? r.error.code
+                : r.error
+                  ? 'OTHER'
+                  : null,
+            errno: Number.isSafeInteger(r.error?.errno) ? r.error.errno : null,
+            syscall:
+                typeof r.error?.syscall === 'string' && r.error.syscall.startsWith('spawnSync')
+                    ? 'spawnSync'
+                    : null,
+            actualExitOrPipeCloseObserved: false,
+        };
+        assert(Buffer.byteLength(JSON.stringify(diagnosticResult)) <= 1024);
+    }
     const streams = {};
     for (const name of ['stdout', 'stderr']) {
         const full = Buffer.from(typeof r[name] === 'string' ? r[name] : '', 'utf8'),
@@ -109,6 +238,7 @@ export function runSecurityCommand(
         signal: r.signal ?? null,
         error: r.error ? String(r.error).slice(0, 1024) : null,
         streams,
+        ...(diagnosticResult ? { diagnostic: diagnosticResult } : {}),
     };
     record('security-command-closed', result);
     check();
