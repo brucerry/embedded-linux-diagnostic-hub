@@ -20,7 +20,7 @@ import {
     queryPolicy as policy,
     querySourceRoot,
     parseQueryRequest,
-    requireQueryInputs,
+    decodeQueryInputTransport,
     queryHostedContext,
     QueryLifecycle,
     QueryAccounting,
@@ -322,8 +322,9 @@ export async function queryOwner(
     assert.deepEqual(ports.execArgv ?? process.execArgv, policy.runtimeArgs);
     assert.equal(ports.version ?? process.version, policy.node);
     const request = parseQueryRequest(environment.SECURITY_QUERY_REQUEST_JSON, environment);
-    requireQueryInputs(
-        JSON.parse(environment.SECURITY_QUERY_INPUTS_JSON),
+    const transportInputs = JSON.parse(environment.SECURITY_QUERY_INPUTS_JSON);
+    const canonicalInputs = decodeQueryInputTransport(
+        transportInputs,
         environment.SECURITY_QUERY_REQUEST_JSON,
     );
     const context = (ports.context ?? queryHostedContext)(environment);
@@ -449,6 +450,17 @@ export async function queryOwner(
             hold: retain,
         });
         const record = (stage, data) => evidence.record(stage, data);
+        record('query-input-transport', {
+            observedKeys: Object.keys(transportInputs).sort(),
+            filledEmptyKeys: Object.keys(canonicalInputs)
+                .filter((key) => !Object.hasOwn(transportInputs, key))
+                .sort(),
+            canonicalKeys: Object.keys(canonicalInputs).sort(),
+            rawBytes: Buffer.byteLength(environment.SECURITY_QUERY_INPUTS_JSON),
+            rawSHA256: digest(environment.SECURITY_QUERY_INPUTS_JSON),
+            authority:
+                'Actual owner environment projection; not an attestation of submitted event inputs',
+        });
         record('job-time-admission', { ...jobTime.admission, runtimeAdmission });
         for (let offset = 0; offset < jobTime.raw.length; offset += 24576)
             record('job-time-metadata', {

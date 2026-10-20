@@ -15,6 +15,7 @@ export const queryJobLimits = Object.freeze({
     clockSlackMs: 2000,
 });
 const admissions = new WeakSet();
+const runtimeAdmissions = new WeakSet();
 const tick = () => Number(process.hrtime.bigint() / 1000000n);
 function sameWindowsPath(a, b) {
     return path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase();
@@ -56,14 +57,38 @@ export function requirePreinstalledQueryRuntime(
     );
     assert(sameWindowsPath(io.realpathSync(expected), expected));
     assert(sameWindowsPath(io.realpathSync(marker), marker));
-    return Object.freeze({
+    const admission = Object.freeze({
         kind: 'exact-preinstalled-query-runtime',
         version,
+        platform,
+        arch,
         executable: expected,
         completeMarker: marker,
         installation: false,
         fallback: false,
     });
+    runtimeAdmissions.add(admission);
+    return admission;
+}
+/** Runtime-only receipt, after successful launch and all fixed-runtime checks.
+ * No file writes, helpers, provider imports or job/query/closure admission. */
+export function queryRuntimeAdmissionReceipt(admission) {
+    assert(runtimeAdmissions.has(admission), 'Validated runtime admission required');
+    const line =
+        JSON.stringify({
+            kind: 'query-runtime-admitted',
+            version: admission.version,
+            platform: admission.platform,
+            arch: admission.arch,
+            executable: admission.executable,
+            completeMarker: admission.completeMarker,
+            checks: 'Exact version/architecture/executable; nonaliased ancestry; regular single-link executable and empty complete marker',
+            jobAdmitted: false,
+            queryAdmitted: false,
+            closureAttested: false,
+        }) + '\n';
+    assert(Buffer.byteLength(line) <= 4096, 'Runtime receipt bound');
+    return line;
 }
 function hostBinding(env) {
     for (const [k, v] of Object.entries({

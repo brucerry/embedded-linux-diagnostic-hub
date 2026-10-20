@@ -45,7 +45,12 @@ const mutate = (file, kind) => {
 };
 /** Actual owner, actual contract and security adapters, controlled in-memory child.
  * No OS child/provider process and no production referenced hold/timer is used. */
-async function ownerCase({ mutation, when = 'before-close', cleanupCutoff = false } = {}) {
+async function ownerCase({
+    mutation,
+    when = 'before-close',
+    cleanupCutoff = false,
+    sparseInputs = false,
+} = {}) {
     const tmp = temp(),
         request = {
             schema: 1,
@@ -83,6 +88,14 @@ async function ownerCase({ mutation, when = 'before-close', cleanupCutoff = fals
                 security_query_request_json: raw,
             }),
         };
+    if (sparseInputs)
+        environment.SECURITY_QUERY_INPUTS_JSON = JSON.stringify(
+            Object.fromEntries(
+                Object.entries(JSON.parse(environment.SECURITY_QUERY_INPUTS_JSON)).filter(
+                    ([, value]) => value !== '',
+                ),
+            ),
+        );
     const owned = path.join(tmp, 'diagnostic-hub-security-query-123456-1'),
         file = path.join(owned, 'outer', 'leaf.stdout.log');
     let inContract = false,
@@ -249,6 +262,8 @@ async function ownerCase({ mutation, when = 'before-close', cleanupCutoff = fals
         fs.rmSync(tmp, { recursive: true });
     }
 }
+test('Sparse7 transport completes actual owner/contract/model-leaf path with unchanged positive cleanup checks', () =>
+    ownerCase({ sparseInputs: true }));
 for (const mutation of ['append', 'truncate', 'overwrite', 'replace'])
     for (const when of ['before-close', 'after-close', 'release-query'])
         test('F1 actual owner retains ' + mutation + ' ' + when, () =>

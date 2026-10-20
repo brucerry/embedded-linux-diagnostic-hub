@@ -54,7 +54,7 @@ test('B1 only query-job body changes; two immutable reviewed Actions, no setup-n
     assert.deepEqual(job.permissions, { contents: 'read' });
     assert.equal(job.steps[1].shell, 'cmd');
     assert.match(
-        job.steps[1].run,
+        job.steps[1].run.trim().split(/\r?\n/).at(-1),
         /^"%RUNNER_TOOL_CACHE%\\node\\24\.22\.0\\x64\\node\.exe" --experimental-transform-types scripts\/windows-security-query-diagnostic\.mjs$/,
     );
     assert.doesNotMatch(

@@ -1,0 +1,9 @@
+{
+    "windows_security_query_only": true,
+    "security_query_request_json": "{\"schema\":1,\"kind\":\"windows-security-query-only\",\"repository\":\"brucerry/embedded-linux-diagnostic-hub\",\"ref\":\"refs/heads/validation/windows-metadata-3577982-20261018\",\"commit\":\"f4089a147ded61ecb4ed13006f4cfcb9ed386008\",\"sourceSHA256\":\"31857cdcbd1cbc467a23bfbc14fdf2bd97e52334a9b5d3660dce04eadee6d9ba\",\"policySHA256\":\"af429e9210f5d6f6964847e712f982b65679d2264f1f577531cf109f13e576e8\",\"workflowSHA256\":\"4d46685dea6aeb88df826e56228473c7832c383720942b4bf3787537ba78e1f8\",\"lockfileSHA256\":\"19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3\",\"diagnostic\":true}",
+    "windows_preflight_only": false,
+    "windows_native_pilot": false,
+    "windows_pty_observation_only": false,
+    "windows_pilot_winps_contract": false,
+    "windows_observation_pair": false
+}

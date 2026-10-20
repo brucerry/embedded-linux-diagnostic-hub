@@ -47,6 +47,38 @@ export function requireQueryInputs(inputs, request) {
     for (const [k, v] of Object.entries(oldQueryInputs))
         assert.equal(inputs[k], v, 'Exclusive query input: ' + k);
 }
+/** Decode only the reviewed optional empty-string transport omissions.
+ * Canonical dispatch validation stays strict; retain the original projection. */
+export function decodeQueryInputTransport(inputs, request) {
+    assert(
+        inputs !== null &&
+            typeof inputs === 'object' &&
+            !Array.isArray(inputs) &&
+            Object.getPrototypeOf(inputs) === Object.prototype,
+        'Query input transport object required',
+    );
+    assert(typeof request === 'string' && request.length > 0, 'Exact request required');
+    const required = ['windows_security_query_only', 'security_query_request_json'];
+    const allowed = new Set([...Object.keys(oldQueryInputs), ...required]);
+    for (const key of Reflect.ownKeys(inputs)) {
+        assert(typeof key === 'string' && allowed.has(key), 'Unknown query input transport field');
+        const descriptor = Object.getOwnPropertyDescriptor(inputs, key);
+        assert(
+            descriptor?.enumerable && Object.hasOwn(descriptor, 'value'),
+            'Query input transport fields must be JSON data',
+        );
+    }
+    for (const key of [
+        ...required,
+        ...Object.keys(oldQueryInputs).filter((key) => oldQueryInputs[key] === false),
+    ])
+        assert(Object.hasOwn(inputs, key), 'Required query input transport field: ' + key);
+    const canonical = { ...inputs };
+    for (const [key, value] of Object.entries(oldQueryInputs))
+        if (value === '' && !Object.hasOwn(inputs, key)) canonical[key] = '';
+    requireQueryInputs(canonical, request);
+    return Object.freeze(canonical);
+}
 export function parseQueryRequest(raw, environment) {
     assert(typeof raw === 'string' && Buffer.byteLength(raw) <= 8192);
     const r = JSON.parse(raw);

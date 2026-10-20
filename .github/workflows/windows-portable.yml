@@ -601,9 +601,50 @@ jobs:
                   persist-credentials: false
             - name: Fresh prerequisites then at most one metadata query
               shell: cmd
-              run: >-
-                  "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\node.exe" --experimental-transform-types
-                  scripts/windows-security-query-diagnostic.mjs
+              run: |
+                  @echo off
+                  if defined RUNNER_TOOL_CACHE (
+                    echo {"kind":"query-runtime-prelaunch","component":"cache-env","present":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"cache-env","present":false}
+                    exit /b 1
+                  )
+                  if exist "%RUNNER_TOOL_CACHE%\" (
+                    echo {"kind":"query-runtime-prelaunch","component":"cache-base","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"cache-base","pathExists":false}
+                  )
+                  if exist "%RUNNER_TOOL_CACHE%\node\" (
+                    echo {"kind":"query-runtime-prelaunch","component":"node-tool","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"node-tool","pathExists":false}
+                  )
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\" (
+                    echo {"kind":"query-runtime-prelaunch","component":"version-24.22.0","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"version-24.22.0","pathExists":false}
+                  )
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\" (
+                    echo {"kind":"query-runtime-prelaunch","component":"arch-x64","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"arch-x64","pathExists":false}
+                  )
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\node.exe" (
+                    echo {"kind":"query-runtime-prelaunch","component":"node-exe-path","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"node-exe-path","pathExists":false}
+                  )
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\x64.complete" (
+                    echo {"kind":"query-runtime-prelaunch","component":"complete-marker-path","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"complete-marker-path","pathExists":false}
+                  )
+                  if exist "scripts\windows-security-query-diagnostic.mjs" (
+                    echo {"kind":"query-runtime-prelaunch","component":"entry-script-path","pathExists":true}
+                  ) else (
+                    echo {"kind":"query-runtime-prelaunch","component":"entry-script-path","pathExists":false}
+                  )
+                  "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs
             - name: Retain exact metadata evidence including failures
               if: always()
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
