@@ -170,6 +170,19 @@ try {
             await emit('pty-assertions-before', {});
             await exerciseRealPtyAssertions({
                 expectedRuntime: binding.runtime,
+                bridgePreparation: {
+                    deadline: envelope.stageDeadline,
+                    cleanupDeadline: binding.deadline,
+                    startup,
+                    context: {
+                        sourceSHA256: binding.sourceSHA256,
+                        bindingSHA256: hash,
+                        nonce: binding.nonce,
+                        root: paths.root,
+                    },
+                    cancel: (e: unknown) => controller.abort(e),
+                    emit,
+                },
                 homeParent: paths.ptyHomeParent,
                 journalParent: paths.ptyJournalParent,
                 signal: controller.signal,

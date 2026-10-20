@@ -151,6 +151,8 @@ async function exercise(kind, { active = false, unknown = false, badReceipt = fa
         homeIdentity,
         temp: parent,
         homeUnix: home,
+        prepared: undefined,
+        helperEnvironment: {},
         toolIdentities: {
             pwsh: { path: 'controlled-node-port' },
             dll: { path: 'controlled-dll-port' },

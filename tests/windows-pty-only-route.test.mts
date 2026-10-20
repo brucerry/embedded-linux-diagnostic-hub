@@ -665,9 +665,9 @@ for (const wrong of ['none', 'source', 'scope', 'mode'])
 test('loaded assembly diagnostics contain metadata only with no new file reads before managed Run', () => {
     const ps = fs.readFileSync(path.join(root, 'tests/fixtures/winpty-bridge.ps1'), 'utf8');
     const a = ps.indexOf('function Read-PtyLoadedRuntime'),
-        b = ps.indexOf('$beforeLoggingStart=', a),
+        b = ps.indexOf('$sourceLocks=', a),
         end = ps.indexOf('$cpuAfter=Read-PtySelfCpu'),
-        run = ps.indexOf('[HubWinptyFixture]::Run');
+        run = ps.indexOf('if($CompileOnly){', end);
     assert(a > 0 && b > a && run > end);
     for (const span of [ps.slice(a, b), ps.slice(end, run)])
         assert(
@@ -676,7 +676,7 @@ test('loaded assembly diagnostics contain metadata only with no new file reads b
             ),
         );
     assert(ps.includes('No physical assembly read authorized on readiness path.'));
-    assert.equal((ps.match(/Add-Type -Path/g) || []).length, 1);
+    assert.equal((ps.match(/Add-Type -Path/g) || []).length, 2);
 });
 test('actual PTY opening guard rejects a second helper before accepting its channel or spawning', () => {
     const source = fs.readFileSync(path.join(root, 'tests/fixtures/os-pty.ts'), 'utf8');

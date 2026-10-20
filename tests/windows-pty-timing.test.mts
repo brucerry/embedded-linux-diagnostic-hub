@@ -37,8 +37,9 @@ async function replay({
     observe = true,
     throwObserver = false,
     slowStore = false,
+    preparation = 0,
 }) {
-    let now = 0,
+    let now = preparation,
         id = 0,
         released = 0,
         writeCalls = 0,
@@ -91,7 +92,7 @@ async function replay({
                     this.stderr.emit('end');
                     this.emit('close');
                 },
-                Math.max(now, arrival) + 10 - now,
+                Math.max(now, preparation + arrival) + 10 - now,
             );
         }
     }
@@ -210,14 +211,14 @@ async function replay({
         now = until;
         await flush();
     };
-    await advance(12000);
+    await advance(preparation + 12000);
     await open;
     assert(finished);
     diagnosticError = actor.readinessDiagnosticFailure;
     if (finished.state === 'ready') {
         const close = actor.finish();
         await flush();
-        await advance(12020);
+        await advance(preparation + 12020);
         await close;
     } else await assert.rejects(actor.step({}, 3000), /Console is unavailable/);
     assert.equal(released, 1);
@@ -385,7 +386,7 @@ test('dependency content partitions reuse exact canonical identity, cover every 
 test('helper instrumentation remains finite and brackets existing operations without changed waits', () => {
     const ps = fs.readFileSync(path.join(root, 'tests/fixtures/winpty-bridge.ps1'), 'utf8'),
         cs = fs.readFileSync(path.join(root, 'tests/fixtures/winpty-bridge.cs'), 'utf8');
-    assert.equal((ps.match(/^\s*Write-PtyTiming '/gm) || []).length, 9);
+    assert.equal((ps.match(/^\s*Write-PtyTiming '/gm) || []).length, 11);
     assert.equal((cs.match(/Timing\("[^"\n]+"\)/g) || []).length, 10);
     for (const phase of [
         'helper-entry',
@@ -424,3 +425,25 @@ test('helper instrumentation remains finite and brackets existing operations wit
     assert(cs.includes('HUB_OS_PTY_CLOSE'));
     assert(ps.includes("clockDomain='helper-stopwatch'"));
 });
+
+for (const [arrival, ready] of [
+    [6890, true],
+    [6900, false],
+    [7000, false],
+    [7000.1, false],
+    [7608.3743, false],
+])
+    test(
+        'cold preparation outside readiness leaves fresh runtime boundary intact at ' +
+            arrival +
+            'ms',
+        async () => {
+            const p = await replay({ preparation: 6028.8829, arrival, bytes: passingBytes });
+            const arm = p.diagnostics.find((d) => d.phase === 'readiness-wait-armed');
+            assert.equal(Number(arm.armedAtMono.toFixed(4)), 6028.8829);
+            assert.equal(Number(arm.deadlineMono.toFixed(4)), 13028.8829);
+            assert.equal(p.finished.state, ready ? 'ready' : 'rejected');
+            assert.equal(p.writeCalls, 0);
+            assert.equal(p.released, 1);
+        },
+    );

@@ -4,6 +4,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import {
+    preparePtyBridge,
+    verifyPreparedPtyBridge,
+    verifyPreparedPtyBridgeSync,
+    ptyLoadObservation,
+    verifyPtyProcessBirth,
+} from '../../scripts/lib/pty-bridge-preparation.mjs';
 import { installedPtyIdentity, ptyBridgeArguments } from './winpty-identity';
 import { finalPtyClosure } from './pty-closure';
 import { ptyTerminalObservation, ptyCompileObservation } from './pty-terminal-observation.mjs';
@@ -13,6 +20,14 @@ import type { Session } from 'ssh2';
 export async function osPtyFixture(
     options: {
         homeParent?: string;
+        bridgePreparation?: {
+            deadline: number;
+            cleanupDeadline: number;
+            startup: any;
+            context: { sourceSHA256: string; bindingSHA256: string; nonce: string; root: string };
+            cancel: (reason: unknown) => void;
+            emit: (stage: string, data: any) => Promise<void>;
+        };
         maxOpenings?: 1;
         expectedRuntime?: Record<string, { path: string; sha256: string }>;
         signal?: AbortSignal;
@@ -27,6 +42,13 @@ export async function osPtyFixture(
     } = {},
 ) {
     if (process.platform !== 'win32') return null;
+    if (
+        options.bridgePreparation &&
+        (!options.signal || !options.terminalDiagnostic || !options.registerChild)
+    )
+        throw Error(
+            'Owned prepared PTY requires cancellation, child custody and durable load evidence',
+        );
     let hold: unknown;
     const holdUnknown = (reason: unknown) => {
         if (options.holdUnknown) options.holdUnknown(reason);
@@ -162,6 +184,49 @@ export async function osPtyFixture(
             '',
         ].join('\n'),
     );
+    const helperEnvironment = {
+        ...process.env,
+        HOME: homeUnix,
+        HUB_TEST_WINPTY_DLL: toolIdentities.dll.path,
+        HUB_TEST_WINPTY_BASH: bashExecutable,
+        HUB_TEST_WINPTY_AGENT: toolIdentities.agent.path,
+        HUB_TEST_WINPTY_IDENTITIES: JSON.stringify(toolIdentities),
+        PATH: binary + ';' + path.join(gitRoot, 'bin') + ';' + process.env.PATH,
+    };
+    let prepared: Awaited<ReturnType<typeof preparePtyBridge>> | undefined;
+    if (options.bridgePreparation) {
+        const scope = options.bridgePreparation;
+        const compileTemp = path.join(home, 'compiler-temp');
+        await fs.mkdir(compileTemp);
+        prepared = await preparePtyBridge({
+            ...scope,
+            signal: options.signal!,
+            hold: holdUnknown,
+            check: () => {
+                options.signal?.throwIfAborted();
+                options.check?.();
+            },
+            executable: toolIdentities.pwsh.path,
+            expectedCompiler: toolIdentities.pwsh,
+            args: [
+                ...ptyBridgeArguments(
+                    bashExecutable,
+                    path.resolve('tests/fixtures/winpty-bridge.ps1'),
+                    home,
+                ),
+                '-CompileOnly',
+                '-AssemblyOutput',
+                path.join(home, 'winpty-bridge.dll'),
+            ],
+            env: { ...helperEnvironment, TMP: compileTemp, TEMP: compileTemp },
+            compileTemp,
+            artifactPath: path.join(home, 'winpty-bridge.dll'),
+            inputs: [
+                path.resolve('tests/fixtures/winpty-bridge.cs'),
+                path.resolve('tests/fixtures/winpty-bridge.ps1'),
+            ],
+        });
+    }
     if (options.diagnostic) {
         const source = [];
         for (const relative of [
@@ -197,6 +262,10 @@ export async function osPtyFixture(
     };
     const children = new Map<ChildProcessWithoutNullStreams, () => void>();
     let compileObservations = 0;
+    let loadObservations = 0;
+    const preparedLoadTasks = new Set<Promise<unknown>>();
+    const loadedConsumers = new Map<ChildProcessWithoutNullStreams, any>();
+    let preparedEvidenceFailure: unknown;
     const terminalObservers = new Set<ReturnType<typeof ptyTerminalObservation>>();
     const closed = new Set<Promise<void>>();
     const attachShell = (session: Session) => {
@@ -209,28 +278,49 @@ export async function osPtyFixture(
                 holdUnknown(error);
                 throw error;
             }
+            const admit = () => {
+                options.signal?.throwIfAborted();
+                options.check?.();
+                options.signal?.throwIfAborted();
+                if (
+                    options.bridgePreparation &&
+                    Number(process.hrtime.bigint() / 1000000n) >= options.bridgePreparation.deadline
+                )
+                    throw Error('PTY preparation absolute deadline');
+            };
+            admit();
+            if (prepared) {
+                try {
+                    verifyPreparedPtyBridgeSync(prepared);
+                } catch (error) {
+                    holdUnknown(error);
+                    throw error;
+                }
+            }
+            admit();
             const channel = accept();
             state.opens++;
-            options.signal?.throwIfAborted();
-            options.check?.();
+            admit();
             const child = spawn(
                 toolIdentities.pwsh.path,
                 ptyBridgeArguments(
                     bashExecutable,
                     path.resolve('tests/fixtures/winpty-bridge.ps1'),
                     home,
+                    prepared?.artifact.path,
                 ),
                 {
                     windowsHide: true,
                     stdio: ['pipe', 'pipe', 'pipe'],
                     env: {
-                        ...process.env,
-                        HOME: homeUnix,
-                        HUB_TEST_WINPTY_DLL: toolIdentities.dll.path,
-                        HUB_TEST_WINPTY_BASH: bashExecutable,
-                        HUB_TEST_WINPTY_AGENT: toolIdentities.agent.path,
-                        HUB_TEST_WINPTY_IDENTITIES: JSON.stringify(toolIdentities),
-                        PATH: binary + ';' + path.join(gitRoot, 'bin') + ';' + process.env.PATH,
+                        ...helperEnvironment,
+                        ...(prepared
+                            ? {
+                                  HUB_TEST_WINPTY_ASSEMBLY: JSON.stringify(prepared.artifact),
+                                  HUB_TEST_WINPTY_PREPARED_INPUTS: JSON.stringify(prepared.inputs),
+                                  HUB_TEST_WINPTY_PREPARED: JSON.stringify(prepared),
+                              }
+                            : {}),
                     },
                 },
             );
@@ -335,11 +425,16 @@ export async function osPtyFixture(
                     state.stderr += bytes.toString();
                     if (options.terminalDiagnostic) {
                         try {
-                            const fact = ptyCompileObservation(state.stderr, child.pid);
+                            const fact = prepared
+                                ? ptyLoadObservation(state.stderr, child.pid, prepared)
+                                : ptyCompileObservation(state.stderr, child.pid);
                             if (fact && !compileSeen) {
                                 compileSeen = true;
-                                compileObservations++;
-                                void Promise.resolve(
+                                if (prepared) {
+                                    loadObservations++;
+                                    loadedConsumers.set(child, fact);
+                                } else compileObservations++;
+                                const task = Promise.resolve(
                                     options.terminalDiagnostic({
                                         ...fact,
                                         ownedRootIdentity:
@@ -347,9 +442,15 @@ export async function osPtyFixture(
                                         authority:
                                             'Call observation only; no custody-release authority.',
                                     }),
-                                ).catch(holdUnknown);
+                                );
+                                if (prepared) preparedLoadTasks.add(task);
+                                void task.catch((error) => {
+                                    if (prepared) preparedEvidenceFailure ??= error;
+                                    holdUnknown(error);
+                                });
                             }
                         } catch (error) {
+                            if (prepared) preparedEvidenceFailure ??= error;
                             holdUnknown(error);
                         }
                     }
@@ -458,7 +559,22 @@ export async function osPtyFixture(
                 let timer: ReturnType<typeof setTimeout> | undefined;
                 try {
                     await Promise.race([
-                        Promise.all([...closed]),
+                        (async () => {
+                            await Promise.all([...closed]);
+                            await Promise.all([...preparedLoadTasks]);
+                            if (prepared)
+                                for (const [consumer, receipt] of loadedConsumers) {
+                                    const row =
+                                        options.bridgePreparation!.startup.children.get(consumer);
+                                    if (!row) throw Error('Prepared consumer is not owned');
+                                    await row.identityTask;
+                                    verifyPtyProcessBirth(
+                                        consumer.pid,
+                                        receipt.createdFileTime,
+                                        row.identity,
+                                    );
+                                }
+                        })(),
                         new Promise<never>(
                             (_, reject) =>
                                 (timer = setTimeout(
@@ -488,9 +604,13 @@ export async function osPtyFixture(
                     terminal.event('fixture-join');
                     terminal.snapshot('final', { outcome: 'outer-close-observed' });
                 }
-                if (options.terminalDiagnostic && compileObservations !== state.opens) {
+                if (preparedEvidenceFailure) throw preparedEvidenceFailure;
+                if (
+                    (prepared && loadObservations !== state.opens) ||
+                    (!prepared && options.terminalDiagnostic && compileObservations !== state.opens)
+                ) {
                     const error = Error(
-                        'Complete compile observation missing; diagnostic evidence remains unknown.',
+                        'Complete compile/load receipt missing; diagnostic evidence remains unknown.',
                     );
                     holdUnknown(error);
                     throw error;
@@ -498,6 +618,7 @@ export async function osPtyFixture(
                 if (state.opens > 0) finalPtyClosure(state.stderr);
                 options.check?.();
                 assertOwned();
+                if (prepared) await verifyPreparedPtyBridge(prepared);
                 const current = await fs.lstat(home, { bigint: true });
                 if (
                     current.dev !== homeIdentity.dev ||

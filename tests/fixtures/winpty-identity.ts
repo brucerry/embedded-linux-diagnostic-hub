@@ -3,7 +3,12 @@ import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-export function ptyBridgeArguments(bash: string, script: string, home: string) {
+export function ptyBridgeArguments(
+    bash: string,
+    script: string,
+    home: string,
+    preparedAssembly?: string,
+) {
     assert.ok(path.win32.isAbsolute(bash) && !/["\r\n]/.test(bash));
     return [
         '-NoProfile',
@@ -17,6 +22,7 @@ export function ptyBridgeArguments(bash: string, script: string, home: string) {
         home,
         '-DeadlineMs',
         '15000',
+        ...(preparedAssembly ? ['-PreparedAssembly', preparedAssembly] : []),
     ];
 }
 export async function installedPtyIdentity(file: string) {

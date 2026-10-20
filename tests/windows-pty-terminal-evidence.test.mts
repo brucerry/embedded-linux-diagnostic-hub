@@ -490,22 +490,22 @@ test('terminal observation deadline reports incomplete pending ownership without
     await scope.children.get(child).identityTask;
     finish(child);
 });
-test('helper source keeps one Add-Type and no diagnostic writes between captured call stamps', () => {
+test('helper source keeps bounded preparation/runtime Add-Type branches and no diagnostic writes between captured call stamps', () => {
     const ps = fs.readFileSync(
         path.join(import.meta.dirname, 'fixtures/winpty-bridge.ps1'),
         'utf8',
     );
-    assert.equal((ps.match(/Add-Type -Path/g) || []).length, 1);
+    assert.equal((ps.match(/Add-Type -Path/g) || []).length, 2);
     const a = ps.indexOf('$callStart=[Diagnostics.Stopwatch]::GetTimestamp()'),
         b = ps.indexOf('finally { $callEnd=[Diagnostics.Stopwatch]::GetTimestamp() }');
     assert(a > 0 && b > a);
     const span = ps.slice(a, b);
-    assert(span.includes('try { Add-Type -Path'));
+    assert(span.includes('Add-Type -Path'));
     assert(!/WriteLine|Write-PtyTiming|ConvertTo-Json/.test(span));
     assert(ps.indexOf('$cpuBefore=Read-PtySelfCpu') < a);
     assert(ps.indexOf('$cpuAfter=Read-PtySelfCpu') > b);
     assert(ps.indexOf("'HUB_OS_PTY_COMPILE '") > b);
     assert(ps.includes('[int]$DeadlineMs=15000'));
     assert(ps.includes('GetAssemblies()'));
-    assert(!/Start-Process|Set-ExecutionPolicy|Set-MpPreference|Assembly\]::Load/.test(ps));
+    assert(!/Start-Process|Set-ExecutionPolicy|Set-MpPreference/.test(ps));
 });
