@@ -384,8 +384,20 @@ test('held final reporting drains an already-admitted OS census without starting
     const pending = scope.terminalObservation('held');
     assert.equal(records.length, 0);
     release([
-        { pid: 1234, parent: 1, created: 'root-created', rssBytes: 1 },
-        { pid: 1235, parent: 1234, created: 'desc-created', rssBytes: 1 },
+        {
+            pid: 1234,
+            parent: 1,
+            created: '2026-10-20T03:49:21.0000000Z',
+            rssBytes: 1,
+            creationClock: 'windows-utc-100ns' as const,
+        },
+        {
+            pid: 1235,
+            parent: 1234,
+            created: '2026-10-20T03:49:21.0000001Z',
+            rssBytes: 1,
+            creationClock: 'windows-utc-100ns' as const,
+        },
     ]);
     await pending;
     assert.equal(reads, 1);
@@ -394,8 +406,8 @@ test('held final reporting drains an already-admitted OS census without starting
     assert.equal(d.newQueryAdmitted, false);
     assert.equal(d.releaseAuthorized, false);
     assert.deepEqual(d.children[0].census.tuples, [
-        [1234, 'root-created', 'fixture-root', 'running'],
-        [1235, 'desc-created', 'owned-descendant', 'running'],
+        [1234, '2026-10-20T03:49:21.0000000Z', 'fixture-root', 'running'],
+        [1235, '2026-10-20T03:49:21.0000001Z', 'owned-descendant', 'running'],
     ]);
     assert.equal(d.children[0].close, false);
     assert(owner.held && owner.referenced);
@@ -411,7 +423,17 @@ test('normal final report reuses the existing final descendant read and preserve
         deadline: now() + 5000,
         cleanupDeadline: now() + 5000,
         readTable: async () =>
-            ++reads === 1 ? [{ pid: 1234, parent: 1, created: 'root-created', rssBytes: 1 }] : [],
+            ++reads === 1
+                ? [
+                      {
+                          pid: 1234,
+                          parent: 1,
+                          created: '2026-10-20T03:49:21.0000000Z',
+                          rssBytes: 1,
+                          creationClock: 'windows-utc-100ns' as const,
+                      },
+                  ]
+                : [],
         emit: async () => {},
         terminalEmit: async (s, d) => records.push({ s, d }),
         hold: (e) => {
@@ -456,7 +478,15 @@ test('terminal observation deadline reports incomplete pending ownership without
     assert.equal(records[0].outcomes, null);
     assert.equal(reads, 1);
     assert(owner.held && owner.referenced);
-    release([{ pid: 1234, parent: 1, created: 'root-created', rssBytes: 1 }]);
+    release([
+        {
+            pid: 1234,
+            parent: 1,
+            created: '2026-10-20T03:49:21.0000000Z',
+            rssBytes: 1,
+            creationClock: 'windows-utc-100ns' as const,
+        },
+    ]);
     await scope.children.get(child).identityTask;
     finish(child);
 });

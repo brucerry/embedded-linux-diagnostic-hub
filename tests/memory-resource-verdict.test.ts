@@ -104,16 +104,51 @@ test('reviewed assessment checks slopes, missing metrics, matched state and cali
 });
 test('PID reuse retains replacement ownership through reparenting and rejects unreadable liveness', async () => {
     let rows: ProcessRow[] = [
-        { pid: 10, parent: 1, created: 'root-A', rssBytes: 1 },
-        { pid: 20, parent: 10, created: 'child-A', rssBytes: 1 },
+        {
+            pid: 10,
+            parent: 1,
+            creationClock: 'windows-utc-100ns' as const,
+            created: '2026-10-20T03:49:21.0000000Z',
+            rssBytes: 1,
+        },
+        {
+            pid: 20,
+            parent: 10,
+            creationClock: 'windows-utc-100ns' as const,
+            created: '2026-10-20T03:49:21.0000001Z',
+            rssBytes: 1,
+        },
     ];
     const sampler = new ProcessSampler([10], async () => rows);
     await sampler.sample();
-    rows = [rows[0], { pid: 20, parent: 10, created: 'child-B', rssBytes: 2 }];
+    rows = [
+        rows[0],
+        {
+            pid: 20,
+            parent: 10,
+            creationClock: 'windows-utc-100ns' as const,
+            created: '2026-10-20T03:49:21.0000002Z',
+            rssBytes: 2,
+        },
+    ];
     const reused = await sampler.sample();
-    assert.equal(reused.find((row) => row.created === 'child-A')!.state, 'terminated');
-    assert.equal(reused.find((row) => row.created === 'child-B')!.state, 'running');
-    rows = [{ pid: 20, parent: 1, created: 'child-B', rssBytes: 2 }];
+    assert.equal(
+        reused.find((row) => row.created === '2026-10-20T03:49:21.0000001Z')!.state,
+        'terminated',
+    );
+    assert.equal(
+        reused.find((row) => row.created === '2026-10-20T03:49:21.0000002Z')!.state,
+        'running',
+    );
+    rows = [
+        {
+            pid: 20,
+            parent: 1,
+            creationClock: 'windows-utc-100ns' as const,
+            created: '2026-10-20T03:49:21.0000002Z',
+            rssBytes: 2,
+        },
+    ];
     await assert.rejects(sampler.assertExited(), /still running/);
     rows = [];
     await sampler.assertExited();

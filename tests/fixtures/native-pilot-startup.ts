@@ -564,7 +564,10 @@ export class NativePilotStartup {
         const history = sampler.historyProof();
         return {
             ...receipt,
-            ...(history.retiredCount || history.failure || history.pendingClosedQueries
+            ...(history.retiredCount ||
+            history.failure ||
+            history.pendingClosedQueries ||
+            history.ancestry
                 ? { processHistory: history }
                 : {}),
         };

@@ -359,7 +359,8 @@ async function observedFixture({
                 {
                     pid: child.child.pid,
                     parent: process.pid,
-                    created: String(id.created),
+                    created: new Date(id.created).toISOString().replace('Z', '0000Z'),
+                    creationClock: 'windows-utc-100ns' as const,
                     rssBytes: null,
                 },
             ];

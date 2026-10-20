@@ -21,12 +21,19 @@ import {
 } from '../scripts/lib/pilot-process-query.mjs';
 import { pilotEvidenceReceiver } from '../scripts/lib/pilot-evidence-channel.mjs';
 
-const root: ProcessRow = { pid: 10, parent: 1, created: 'root-created', rssBytes: 1 };
+const root: ProcessRow = {
+    pid: 10,
+    parent: 1,
+    created: '2026-10-20T03:49:21.0000000Z',
+    rssBytes: 1,
+    creationClock: 'windows-utc-100ns' as const,
+};
 const query = (n: number): ProcessRow => ({
     pid: 1000 + n,
     parent: 10,
-    created: 'query-' + n,
+    created: `2026-10-20T03:49:22.${String(n).padStart(7, '0')}Z`,
     rssBytes: 1,
+    creationClock: 'windows-utc-100ns' as const,
 });
 const proof = (row: ProcessRow) => ({
     schema: 1,
@@ -115,7 +122,7 @@ test('closed query witness never retires a creation-matched live or reparented d
 });
 test('old PID proof does not retire reused creation identity or transfer ownership to an ambient replacement', async () => {
     const old = query(0),
-        fresh = { ...old, created: 'new-created' };
+        fresh = { ...old, created: '2026-10-20T03:49:23.0000000Z' };
     let rows = [root, old];
     const s = new ProcessSampler([10], async () => rows);
     await s.sample();
@@ -487,174 +494,214 @@ test('malformed query frames hold before persistence and before forwarding', () 
     assert.equal(holds, 1);
     assert.equal(r.ack.length, 0);
 });
-test('real custody lease stays held when a late inner final arrives after sampler overflow', async (t) => {
-    const hash = 'a'.repeat(64),
-        nonce = '9536ac3c-b0ea-44dc-a4b6-9b1feec7975e';
-    const binding: any = {
-        schema: 1,
-        kind: 'windows-hosted-native-readiness-pilot-v1',
-        collectionApproval: false,
-        host: {
-            repository: 'brucerry/embedded-linux-diagnostic-hub',
-            attempt: '1',
-            run: '39184109993',
-            commit: 'a'.repeat(40),
-            environment: 'github-hosted',
-        },
-        nonce,
-        principalSID: 'S-1-5-21-1-2-3-500',
-        sourceSHA256: hash,
-        coveragePolicySHA256: hash,
-        pilotPolicySHA256: hash,
-        dependenciesSHA256: hash,
-        runtime: {
-            platform: 'win32',
-            arch: 'x64',
-            ...Object.fromEntries(
-                [
-                    'node',
-                    'tsx',
-                    'electron',
-                    'powershell',
-                    'git',
-                    'bash',
-                    'cygpath',
-                    'winptyDll',
-                    'winptyAgent',
-                ].map((k) => [
+for (const failure of [
+    'overflow',
+    'unknown-ancestry',
+    'live-descendant',
+    'late-parent-absent',
+    'late-parent-reused',
+    'late-grandchild',
+    'late-unknown',
+])
+    test(`real custody lease stays held after ${failure}, child close and late inner final`, async (t) => {
+        const hash = 'a'.repeat(64),
+            nonce = '9536ac3c-b0ea-44dc-a4b6-9b1feec7975e';
+        const binding: any = {
+            schema: 1,
+            kind: 'windows-hosted-native-readiness-pilot-v1',
+            collectionApproval: false,
+            host: {
+                repository: 'brucerry/embedded-linux-diagnostic-hub',
+                attempt: '1',
+                run: '39184109993',
+                commit: 'a'.repeat(40),
+                environment: 'github-hosted',
+            },
+            nonce,
+            principalSID: 'S-1-5-21-1-2-3-500',
+            sourceSHA256: hash,
+            coveragePolicySHA256: hash,
+            pilotPolicySHA256: hash,
+            dependenciesSHA256: hash,
+            runtime: {
+                platform: 'win32',
+                arch: 'x64',
+                ...Object.fromEntries(
+                    [
+                        'node',
+                        'tsx',
+                        'electron',
+                        'powershell',
+                        'git',
+                        'bash',
+                        'cygpath',
+                        'winptyDll',
+                        'winptyAgent',
+                    ].map((k) => [
+                        k,
+                        {
+                            path: 'C:\\runtime\\' + k,
+                            sha256: hash,
+                            ...(k === 'node'
+                                ? { version: 'v24.22.0' }
+                                : k === 'electron'
+                                  ? { version: '44.5.1' }
+                                  : {}),
+                        },
+                    ]),
+                ),
+            },
+            roots: Object.fromEntries(
+                ['canonicalTemp', 'privateRoot', 'evidenceRoot'].map((k, i) => [
                     k,
                     {
-                        path: 'C:\\runtime\\' + k,
-                        sha256: hash,
-                        ...(k === 'node'
-                            ? { version: 'v24.22.0' }
-                            : k === 'electron'
-                              ? { version: '44.5.1' }
-                              : {}),
+                        path:
+                            k === 'privateRoot'
+                                ? 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\diagnostic-hub-native-pilot-' +
+                                  nonce
+                                : k === 'canonicalTemp'
+                                  ? 'C:\\Users\\runneradmin\\AppData\\Local\\Temp'
+                                  : 'D:\\report',
+                        dev: '1',
+                        ino: String(i + 1),
+                        ...(k === 'evidenceRoot'
+                            ? { identitySHA256: hash }
+                            : { descriptorSHA256: hash }),
                     },
                 ]),
             ),
-        },
-        roots: Object.fromEntries(
-            ['canonicalTemp', 'privateRoot', 'evidenceRoot'].map((k, i) => [
-                k,
-                {
-                    path:
-                        k === 'privateRoot'
-                            ? 'C:\\Users\\runneradmin\\AppData\\Local\\Temp\\diagnostic-hub-native-pilot-' +
-                              nonce
-                            : k === 'canonicalTemp'
-                              ? 'C:\\Users\\runneradmin\\AppData\\Local\\Temp'
-                              : 'D:\\report',
-                    dev: '1',
-                    ino: String(i + 1),
-                    ...(k === 'evidenceRoot'
-                        ? { identitySHA256: hash }
-                        : { descriptorSHA256: hash }),
-                },
-            ]),
-        ),
-        startedAt: 0,
-        deadline: 600000,
-        limits: pilotLimits,
-    };
-    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-query-custody-')),
-        marker = path.join(dir, 'controlled.lock');
-    const journal = new PilotEvidence(dir);
-    const lease = new ProductLease(marker, { nonce, bindingSHA256: bindingDigest(binding) });
-    let referenced = false,
-        released = false;
-    t.after(() => {
-        journal.close();
-        fs.rmSync(dir, { recursive: true });
-    });
-    const owner = new SameJobPilotCustody(binding, {
-        lease,
-        verify: async (b: any) => b,
-        record: (stage: any, data: any) => journal.append(stage, data),
-        closeEvidence: async () => journal.close(),
-        events: new EventEmitter(),
-        clock: { now: () => 0, set: () => 0, clear: () => {} },
-        executionGate: () => {},
-        hold: (state: any, record: any) =>
-            createOwnershipHold(state, record, {
-                interval: (() => ({
-                    ref() {
-                        referenced = true;
-                    },
-                })) as any,
-            }),
-    });
-    const token = await owner.acquireAndVerify();
-    const child: any = Object.assign(new EventEmitter(), {
-        pid: 10,
-        connected: true,
-        stdout: new EventEmitter(),
-        stderr: new EventEmitter(),
-        send(_m: any, cb: any) {
-            cb?.();
-            return true;
-        },
-    });
-    owner.start('real-os-pty', token, binding, () => child);
-    child.emit('spawn');
-    const manager = new NativePilotStartup({
-        signal: new AbortController().signal,
-        deadline: Number(process.hrtime.bigint() / 1000000n) + 10000,
-        readTable: async () => [root, ...Array.from({ length: 256 }, (_, n) => query(n))],
-        emit: async () => {},
-        hold: (e) => {
-            manager.stopQueryAdmission();
-            owner.hold(e);
-        },
-    });
-    t.after(() => manager.stopQueryAdmission());
-    manager.adopt('stage', child, () => {});
-    await assert.rejects(manager.children.get(child).identityTask, /identity bound/);
-    const state: any = { sequence: 0, final: null, runtimeDeadline: 1000 };
-    const receiver = pilotEvidenceReceiver({
-        nonce,
-        bindingSHA256: owner.hash,
-        stage: 'real-os-pty',
-        state,
-        record: (s: any, d: any) => journal.append(s, d),
-        reserve: () => {},
-        recordReserved: (s: any, d: any) => journal.append(s, d),
-        send: (_m: any, cb: any) => cb(),
-        hold: (e: any) => owner.hold(e),
-        clock: () => 0,
-        acceptQueryClosures: (b: any) => manager.acceptQueryClosures(child, b),
-    });
-    assert(
-        receiver.receive({
-            kind: 'pilot-evidence',
+            startedAt: 0,
+            deadline: 600000,
+            limits: pilotLimits,
+        };
+        const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-query-custody-')),
+            marker = path.join(dir, 'controlled.lock');
+        const journal = new PilotEvidence(dir);
+        const lease = new ProductLease(marker, { nonce, bindingSHA256: bindingDigest(binding) });
+        let referenced = false,
+            released = false;
+        t.after(() => {
+            journal.close();
+            fs.rmSync(dir, { recursive: true });
+        });
+        const owner = new SameJobPilotCustody(binding, {
+            lease,
+            verify: async (b: any) => b,
+            record: (stage: any, data: any) => journal.append(stage, data),
+            closeEvidence: async () => journal.close(),
+            events: new EventEmitter(),
+            clock: { now: () => 0, set: () => 0, clear: () => {} },
+            executionGate: () => {},
+            hold: (state: any, record: any) =>
+                createOwnershipHold(state, record, {
+                    interval: (() => ({
+                        ref() {
+                            referenced = true;
+                        },
+                    })) as any,
+                }),
+        });
+        const token = await owner.acquireAndVerify();
+        const child: any = Object.assign(new EventEmitter(), {
+            pid: 10,
+            connected: true,
+            stdout: new EventEmitter(),
+            stderr: new EventEmitter(),
+            send(_m: any, cb: any) {
+                cb?.();
+                return true;
+            },
+        });
+        owner.start('real-os-pty', token, binding, () => child);
+        child.emit('spawn');
+        let custodyChildClosed = false;
+        const manager = new NativePilotStartup({
+            signal: new AbortController().signal,
+            deadline: Number(process.hrtime.bigint() / 1000000n) + 10000,
+            readTable: async () =>
+                failure === 'overflow'
+                    ? [root, ...Array.from({ length: 256 }, (_, n) => query(n))]
+                    : failure.startsWith('late-')
+                      ? custodyChildClosed
+                          ? failure === 'late-grandchild'
+                              ? [{ ...query(1), parent: query(0).pid }]
+                              : failure === 'late-parent-reused'
+                                ? [{ ...root, created: '2026-10-20T03:49:24.0000000Z' }, query(0)]
+                                : failure === 'late-unknown'
+                                  ? [{ ...query(0), created: '' }]
+                                  : [query(0)]
+                          : failure === 'late-grandchild'
+                            ? [root, query(0)]
+                            : [root]
+                      : failure === 'unknown-ancestry'
+                        ? custodyChildClosed
+                            ? []
+                            : [root, { ...query(0), created: '' }]
+                        : custodyChildClosed
+                          ? [{ ...query(0), parent: 1 }]
+                          : [root, query(0)],
+            emit: async () => {},
+            hold: (e) => {
+                manager.stopQueryAdmission();
+                owner.hold(e);
+            },
+        });
+        t.after(() => manager.stopQueryAdmission());
+        manager.adopt('stage', child, () => {});
+        if (failure === 'live-descendant' || failure.startsWith('late-'))
+            await manager.children.get(child).identityTask;
+        else
+            await assert.rejects(
+                manager.children.get(child).identityTask,
+                failure === 'overflow' ? /identity bound/ : /creation|chronology/,
+            );
+        const state: any = { sequence: 0, final: null, runtimeDeadline: 1000 };
+        const receiver = pilotEvidenceReceiver({
             nonce,
             bindingSHA256: owner.hash,
-            sequence: 0,
-            stage: 'stage-final',
-            data: {
-                stage: 'real-os-pty',
-                passed: false,
-                startup: { complete: true },
-                leafReceiptsClosed: true,
-                descendantsClosed: true,
-            },
-        }),
-    );
-    child.emit('exit', 0, null);
-    child.emit('close', 0, null);
-    assert(state.final);
-    await assert.rejects(
-        owner.release({ inputsUnchanged: true, rootsCleanupClosed: true, resultClosed: true }),
-    );
-    released = owner.state === 'released';
-    assert.equal(released, false);
-    assert.equal(owner.state, 'held');
-    assert(referenced);
-    assert(fs.existsSync(marker));
-    assert.equal(lease.state().released, false);
-    assert.equal(journal.entry.attempted, false);
-});
+            stage: 'real-os-pty',
+            state,
+            record: (s: any, d: any) => journal.append(s, d),
+            reserve: () => {},
+            recordReserved: (s: any, d: any) => journal.append(s, d),
+            send: (_m: any, cb: any) => cb(),
+            hold: (e: any) => owner.hold(e),
+            clock: () => 0,
+            acceptQueryClosures: (b: any) => manager.acceptQueryClosures(child, b),
+        });
+        assert(
+            receiver.receive({
+                kind: 'pilot-evidence',
+                nonce,
+                bindingSHA256: owner.hash,
+                sequence: 0,
+                stage: 'stage-final',
+                data: {
+                    stage: 'real-os-pty',
+                    passed: false,
+                    startup: { complete: true },
+                    leafReceiptsClosed: true,
+                    descendantsClosed: true,
+                },
+            }),
+        );
+        custodyChildClosed = true;
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+        if (failure === 'live-descendant' || failure.startsWith('late-'))
+            await assert.rejects(manager.join());
+        assert(state.final);
+        await assert.rejects(
+            owner.release({ inputsUnchanged: true, rootsCleanupClosed: true, resultClosed: true }),
+        );
+        released = owner.state === 'released';
+        assert.equal(released, false);
+        assert.equal(owner.state, 'held');
+        assert(referenced);
+        assert(fs.existsSync(marker));
+        assert.equal(lease.state().released, false);
+        assert.equal(journal.entry.attempted, false);
+    });
 
 async function queryReaderControl(mode: string) {
     const context = vm.createContext({ Buffer, process: { pid: 10, platform: 'win32' } }),
@@ -674,13 +721,13 @@ async function queryReaderControl(mode: string) {
             const owner = {
                 ProcessId: 10,
                 ParentProcessId: 1,
-                Created: 'root-created',
+                Created: root.created,
                 WorkingSetSize: 1,
             };
             const query = {
                 ProcessId: 20,
                 ParentProcessId: 10,
-                Created: mode === 'missing-creation' ? '' : 'query-created',
+                Created: mode === 'missing-creation' ? '' : '2026-10-20T03:49:22.0000000Z',
                 WorkingSetSize: 1,
             };
             const rows =

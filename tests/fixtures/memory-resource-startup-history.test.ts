@@ -51,8 +51,12 @@ async function scenario(config: {
             rows.push({
                 pid,
                 parent: 1,
-                created: selected && mode === 'missing-created' ? '' : 'root-' + current,
+                created:
+                    selected && mode === 'missing-created'
+                        ? ''
+                        : `2026-10-20T03:49:21.${String(current).padStart(7, '0')}Z`,
                 rssBytes: 1,
+                creationClock: 'windows-utc-100ns' as const,
             });
         if (!delayed) addRoot();
         else
@@ -68,8 +72,9 @@ async function scenario(config: {
                 rows.push({
                     pid: pid + 100,
                     parent: pid,
-                    created: 'helper-' + current,
+                    created: `2026-10-20T03:49:22.${String(current).padStart(7, '0')}Z`,
                     rssBytes: 1,
+                    creationClock: 'windows-utc-100ns' as const,
                 });
         };
         const finish = (code: number | null, signal: string | null) => {
