@@ -8,7 +8,7 @@ export const fixtureJobEnvironment = {
 export function fixtureRuntime() {
     return {
         kind: 'exact-preinstalled-query-runtime',
-        version: 'v24.22.0',
+        version: 'v24.21.0',
         fixture: true,
         installation: false,
         fallback: false,

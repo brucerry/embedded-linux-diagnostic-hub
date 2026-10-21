@@ -134,7 +134,7 @@ test('new job is 15min read-only, credential-free checkout, no npm/native instal
     assert.match(body, /timeout-minutes: 15/);
     assert.match(body, /permissions:\s*contents: read/);
     assert.match(body, /persist-credentials: false/);
-    assert.match(body, /RUNNER_TOOL_CACHE.*24\.22\.0/);
+    assert.match(body, /RUNNER_TOOL_CACHE.*24\.21\.0/);
     assert.doesNotMatch(body, /setup-node@|node-version:/);
     assert.match(body, /shell: cmd/);
     assert.match(
@@ -908,7 +908,7 @@ test('host contract requires manual owner/first attempt, pinned platform/runtime
     const opts = {
             platform: 'win32',
             arch: 'x64',
-            version: 'v24.22.0',
+            version: 'v24.21.0',
             tmp: 'C:\\Users\\runner\\AppData\\Local\\Temp',
             bind: (a) => ({ path: a, check() {} }),
         },

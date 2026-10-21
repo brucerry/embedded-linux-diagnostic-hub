@@ -1,7 +1,7 @@
 {
     "schema": 1,
     "kind": "windows-security-query-only",
-    "node": "v24.22.0",
+    "node": "v24.21.0",
     "runtimeArgs": ["--experimental-transform-types"],
     "jobMinutes": 15,
     "ownerMs": 600000,

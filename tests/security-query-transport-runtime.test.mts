@@ -206,13 +206,13 @@ for (const input of [
         },
     );
 function runtimeFixture(fault, cache = 'D:\\hosted tool cache\\windows') {
-    const file = path.win32.join(cache, 'node', '24.22.0', 'x64', 'node.exe'),
-        marker = path.win32.join(cache, 'node', '24.22.0', 'x64.complete');
+    const file = path.win32.join(cache, 'node', '24.21.0', 'x64', 'node.exe'),
+        marker = path.win32.join(cache, 'node', '24.21.0', 'x64.complete');
     const missing = {
         base: cache,
         tool: path.win32.join(cache, 'node'),
-        version: path.win32.join(cache, 'node', '24.22.0'),
-        arch: path.win32.join(cache, 'node', '24.22.0', 'x64'),
+        version: path.win32.join(cache, 'node', '24.21.0'),
+        arch: path.win32.join(cache, 'node', '24.21.0', 'x64'),
         exe: file,
         marker,
     };
@@ -239,7 +239,7 @@ function runtimeFixture(fault, cache = 'D:\\hosted tool cache\\windows') {
         },
     };
     const env = { RUNNER_TOOL_CACHE: cache, UNSAFE_SECRET: 'never-include-this-value' };
-    const opts = { platform: 'win32', arch: 'x64', version: 'v24.22.0', execPath: file, io };
+    const opts = { platform: 'win32', arch: 'x64', version: 'v24.21.0', execPath: file, io };
     if (fault === 'wrong-version') opts.version = 'v24.22.1';
     if (fault === 'wrong-arch') opts.arch = 'arm64';
     if (fault === 'quoted-exec') opts.execPath = '"' + file + '"';
@@ -253,7 +253,7 @@ test('runtime receipt comes only from successful exact checks, and is runtime-on
         r = JSON.parse(line);
     assert(Buffer.byteLength(line) <= 4096);
     assert.equal(r.kind, 'query-runtime-admitted');
-    assert.equal(r.version, 'v24.22.0');
+    assert.equal(r.version, 'v24.21.0');
     assert.equal(r.platform, 'win32');
     assert.equal(r.arch, 'x64');
     assert.equal(r.executable, f.file);
@@ -307,7 +307,7 @@ test('CMD diagnostics are fixed bounded facts, all targets quoted, sole original
         'cache-env',
         'cache-base',
         'node-tool',
-        'version-24.22.0',
+        'version-24.21.0',
         'arch-x64',
         'node-exe-path',
         'complete-marker-path',
@@ -339,7 +339,7 @@ test('CMD diagnostics are fixed bounded facts, all targets quoted, sole original
         ),
     );
     const invoke =
-        '"%RUNNER_TOOL_CACHE%\\node\\24.22.0\\x64\\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs';
+        '"%RUNNER_TOOL_CACHE%\\node\\24.21.0\\x64\\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs';
     assert.equal(lines.at(-1), invoke);
     assert.equal(lines.filter((x) => x === invoke).length, 1);
     assert.doesNotMatch(
@@ -362,7 +362,7 @@ test('entry checks and bounds receipt before capture/import; receipt follows cap
         dynamic = entry.indexOf("void import('./lib/security-query-diagnostic-runtime.mjs')");
     assert(gate >= 0 && gate < capture && capture < write && write < dynamic);
     assert(entry.indexOf('entryStartedAt =') < gate);
-    assert.equal(queryPolicy.node, 'v24.22.0');
+    assert.equal(queryPolicy.node, 'v24.21.0');
     assert.equal(queryPolicy.ownerMs, 600000);
     assert.equal(queryPolicy.cleanupMs, 60000);
     assert.equal(queryPolicy.queryMs, 10000);

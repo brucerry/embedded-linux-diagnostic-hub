@@ -55,7 +55,7 @@ test('B1 only query-job body changes; two immutable reviewed Actions, no setup-n
     assert.equal(job.steps[1].shell, 'cmd');
     assert.match(
         job.steps[1].run.trim().split(/\r?\n/).at(-1),
-        /^"%RUNNER_TOOL_CACHE%\\node\\24\.22\.0\\x64\\node\.exe" --experimental-transform-types scripts\/windows-security-query-diagnostic\.mjs$/,
+        /^"%RUNNER_TOOL_CACHE%\\node\\24\.21\.0\\x64\\node\.exe" --experimental-transform-types scripts\/windows-security-query-diagnostic\.mjs$/,
     );
     assert.doesNotMatch(
         job.steps.map((s) => s.run ?? s.uses).join('\n'),
@@ -72,8 +72,8 @@ test('B1 only query-job body changes; two immutable reviewed Actions, no setup-n
 });
 function runtime(fault) {
     const cache = 'C:\\hostedtoolcache\\windows',
-        file = cache + '\\node\\24.22.0\\x64\\node.exe',
-        marker = cache + '\\node\\24.22.0\\x64.complete';
+        file = cache + '\\node\\24.21.0\\x64\\node.exe',
+        marker = cache + '\\node\\24.21.0\\x64.complete';
     const io = {
         lstatSync(p) {
             if (
@@ -100,9 +100,52 @@ function runtime(fault) {
 test('B2 exact completed preinstalled cache runtime admits with no tool/version child', () => {
     const { env, opts } = runtime();
     const r = requirePreinstalledQueryRuntime(env, opts);
-    assert.equal(r.version, 'v24.22.0');
+    assert.equal(r.version, 'v24.21.0');
     assert.equal(r.installation, false);
     assert.equal(r.fallback, false);
+});
+test('B2 image-bound query runtime requires exact24.21.0, not an available major or fallback', () => {
+    const { env, opts } = runtime();
+    assert.equal(queryRuntimeVersion, 'v24.21.0');
+    assert.equal(queryPolicy.node, 'v24.21.0');
+    const admitted = requirePreinstalledQueryRuntime(env, { ...opts, version: 'v24.21.0' });
+    assert.equal(admitted.version, 'v24.21.0');
+    assert.equal(admitted.executable, env.RUNNER_TOOL_CACHE + '\\node\\24.21.0\\x64\\node.exe');
+    assert.equal(admitted.completeMarker, env.RUNNER_TOOL_CACHE + '\\node\\24.21.0\\x64.complete');
+    assert.equal(admitted.installation, false);
+    assert.equal(admitted.fallback, false);
+});
+for (const version of ['v24.20.0', 'v24.21.1', 'v24.22.0', 'v24.22.1', 'v24.23.0'])
+    test('B2 image-bound query refuses nonexact ' + version + ' before cache effects', () => {
+        const { env, opts } = runtime();
+        let calls = 0;
+        const io = {
+            lstatSync() {
+                calls++;
+                throw Error('No cache inspection allowed after version refusal');
+            },
+            realpathSync() {
+                calls++;
+                throw Error('No cache inspection allowed after version refusal');
+            },
+        };
+        assert.throws(
+            () => requirePreinstalledQueryRuntime(env, { ...opts, version, io }),
+            /Exact preinstalled query runtime required/,
+        );
+        assert.equal(calls, 0);
+    });
+test('B2 image-bound query never pairs exact24.21.0 with the old24.22 executable path', () => {
+    const { env, opts } = runtime();
+    assert.throws(
+        () =>
+            requirePreinstalledQueryRuntime(env, {
+                ...opts,
+                version: 'v24.21.0',
+                execPath: env.RUNNER_TOOL_CACHE + '\\node\\24.22.0\\x64\\node.exe',
+            }),
+        /Runtime must be the exact tool-cache executable/,
+    );
 });
 for (const fault of [
     'missing-node',

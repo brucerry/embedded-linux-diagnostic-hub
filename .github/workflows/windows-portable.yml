@@ -619,22 +619,22 @@ jobs:
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"node-tool","pathExists":false}
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\" (
-                    echo {"kind":"query-runtime-prelaunch","component":"version-24.22.0","pathExists":true}
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\" (
+                    echo {"kind":"query-runtime-prelaunch","component":"version-24.21.0","pathExists":true}
                   ) else (
-                    echo {"kind":"query-runtime-prelaunch","component":"version-24.22.0","pathExists":false}
+                    echo {"kind":"query-runtime-prelaunch","component":"version-24.21.0","pathExists":false}
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\" (
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\x64\" (
                     echo {"kind":"query-runtime-prelaunch","component":"arch-x64","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"arch-x64","pathExists":false}
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\node.exe" (
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\x64\node.exe" (
                     echo {"kind":"query-runtime-prelaunch","component":"node-exe-path","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"node-exe-path","pathExists":false}
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.22.0\x64.complete" (
+                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\x64.complete" (
                     echo {"kind":"query-runtime-prelaunch","component":"complete-marker-path","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"complete-marker-path","pathExists":false}
@@ -644,7 +644,7 @@ jobs:
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"entry-script-path","pathExists":false}
                   )
-                  "%RUNNER_TOOL_CACHE%\node\24.22.0\x64\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs
+                  "%RUNNER_TOOL_CACHE%\node\24.21.0\x64\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs
             - name: Retain exact metadata evidence including failures
               if: always()
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

@@ -5,7 +5,7 @@ import https from 'node:https';
 import { createHash } from 'node:crypto';
 
 // Core-only and inert on import: entry starts its clock before calling any preflight.
-export const queryRuntimeVersion = 'v24.22.0';
+export const queryRuntimeVersion = 'v24.21.0';
 export const queryJobLimits = Object.freeze({
     outerMs: 900000,
     ownerMs: 600000,
@@ -36,8 +36,8 @@ export function requirePreinstalledQueryRuntime(
     assert.equal(version, queryRuntimeVersion, 'Exact preinstalled query runtime required');
     const cache = environment.RUNNER_TOOL_CACHE;
     assert(typeof cache === 'string' && path.win32.isAbsolute(cache) && !cache.includes('\0'));
-    const expected = path.win32.join(cache, 'node', '24.22.0', 'x64', 'node.exe'),
-        marker = path.win32.join(cache, 'node', '24.22.0', 'x64.complete');
+    const expected = path.win32.join(cache, 'node', '24.21.0', 'x64', 'node.exe'),
+        marker = path.win32.join(cache, 'node', '24.21.0', 'x64.complete');
     assert(sameWindowsPath(execPath, expected), 'Runtime must be the exact tool-cache executable');
     for (let p = path.win32.dirname(expected); ; p = path.win32.dirname(p)) {
         const s = io.lstatSync(p);
