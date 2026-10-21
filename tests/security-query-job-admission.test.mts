@@ -8,7 +8,6 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import {
     requirePreinstalledQueryRuntime,
-    queryRuntimeVersion,
     queryJobLimits,
     validateQueryJobTime,
     requireQueryJobAdmission,
@@ -22,6 +21,7 @@ import {
     oldQueryInputs,
 } from '../scripts/lib/security-query-diagnostic.mjs';
 import { fixtureJobEnvironment } from './fixtures/security-query-job-admission.mjs';
+const queryRuntimeVersion = queryPolicy.runtimeImages[0].node;
 const require = createRequire(import.meta.url),
     { load } = require('js-yaml');
 const current = fs.readFileSync(
@@ -55,7 +55,7 @@ test('B1 only query-job body changes; two immutable reviewed Actions, no setup-n
     assert.equal(job.steps[1].shell, 'cmd');
     assert.match(
         job.steps[1].run.trim().split(/\r?\n/).at(-1),
-        /^"%RUNNER_TOOL_CACHE%\\node\\24\.21\.0\\x64\\node\.exe" --experimental-transform-types scripts\/windows-security-query-diagnostic\.mjs$/,
+        /^"!RUNNER_TOOL_CACHE!\\node\\!SECURITY_QUERY_NODE_VERSION!\\x64\\node\.exe" --experimental-transform-types scripts\/windows-security-query-diagnostic\.mjs$/,
     );
     assert.doesNotMatch(
         job.steps.map((s) => s.run ?? s.uses).join('\n'),
@@ -93,7 +93,7 @@ function runtime(fault) {
         realpathSync: (p) => (fault === 'rebound' ? p + '-other' : p),
     };
     return {
-        env: { RUNNER_TOOL_CACHE: cache },
+        env: { ...fixtureJobEnvironment, RUNNER_TOOL_CACHE: cache },
         opts: { platform: 'win32', arch: 'x64', version: queryRuntimeVersion, execPath: file, io },
     };
 }
@@ -107,7 +107,7 @@ test('B2 exact completed preinstalled cache runtime admits with no tool/version 
 test('B2 image-bound query runtime requires exact24.21.0, not an available major or fallback', () => {
     const { env, opts } = runtime();
     assert.equal(queryRuntimeVersion, 'v24.21.0');
-    assert.equal(queryPolicy.node, 'v24.21.0');
+    assert.equal(queryPolicy.runtimeImages[0].node, 'v24.21.0');
     const admitted = requirePreinstalledQueryRuntime(env, { ...opts, version: 'v24.21.0' });
     assert.equal(admitted.version, 'v24.21.0');
     assert.equal(admitted.executable, env.RUNNER_TOOL_CACHE + '\\node\\24.21.0\\x64\\node.exe');
@@ -131,7 +131,7 @@ for (const version of ['v24.20.0', 'v24.21.1', 'v24.22.0', 'v24.22.1', 'v24.23.0
         };
         assert.throws(
             () => requirePreinstalledQueryRuntime(env, { ...opts, version, io }),
-            /Exact preinstalled query runtime required/,
+            /Exact selected query runtime required/,
         );
         assert.equal(calls, 0);
     });
@@ -549,11 +549,16 @@ for (const gate of ['runtime', 'unknown-job-time'])
                     {
                         argv: ['node', 'entry'],
                         execArgv: queryPolicy.runtimeArgs,
-                        version: queryPolicy.node,
+                        version: queryPolicy.runtimeImages[0].node,
+                        platform: 'win32',
+                        arch: 'x64',
                         context: () => ({ check() {}, parent: 'never-created', host: {} }),
                         runtime() {
                             if (gate === 'runtime') throw Error('cache unavailable');
-                            return {};
+                            return {
+                                selection: queryPolicy.runtimeImages[0],
+                                version: queryPolicy.runtimeImages[0].node,
+                            };
                         },
                         async jobTime() {
                             timeCalls++;

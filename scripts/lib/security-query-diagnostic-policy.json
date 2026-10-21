@@ -1,7 +1,22 @@
 {
     "schema": 1,
     "kind": "windows-security-query-only",
-    "node": "v24.21.0",
+    "runtimeImages": [
+        {
+            "imageOS": "win25-vs2026",
+            "imageVersion": "20261007.264.1",
+            "node": "v24.21.0",
+            "arch": "x64",
+            "manifestCommit": "aee0669dd04510a11756664eb77f5630debabed3"
+        },
+        {
+            "imageOS": "win25-vs2026",
+            "imageVersion": "20261018.275.1",
+            "node": "v24.22.0",
+            "arch": "x64",
+            "manifestCommit": "5fd1e8a2974fa507db165974a2acad9e4f7bf677"
+        }
+    ],
     "runtimeArgs": ["--experimental-transform-types"],
     "jobMinutes": 15,
     "ownerMs": 600000,

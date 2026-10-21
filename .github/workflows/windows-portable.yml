@@ -603,48 +603,117 @@ jobs:
               shell: cmd
               run: |
                   @echo off
+                  setlocal EnableExtensions EnableDelayedExpansion
+                  set "SECURITY_QUERY_NODE_VERSION="
+                  if not defined RUNNER_OS (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_META_REMAINDER=!RUNNER_OS:Windows=!"
+                  if defined SECURITY_QUERY_META_REMAINDER (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_META_REMAINDER=!RUNNER_OS:~7!"
+                  if defined SECURITY_QUERY_META_REMAINDER (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  if not defined RUNNER_ARCH (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_META_REMAINDER=!RUNNER_ARCH:X64=!"
+                  if defined SECURITY_QUERY_META_REMAINDER (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_META_REMAINDER=!RUNNER_ARCH:~3!"
+                  if defined SECURITY_QUERY_META_REMAINDER (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  if not defined ImageOS (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_META_REMAINDER=!ImageOS:win25-vs2026=!"
+                  if defined SECURITY_QUERY_META_REMAINDER (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_META_REMAINDER=!ImageOS:~12!"
+                  if defined SECURITY_QUERY_META_REMAINDER (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
+                  set "SECURITY_QUERY_IMAGE_OLD=1"
+                  if not defined ImageVersion set "SECURITY_QUERY_IMAGE_OLD="
+                  set "SECURITY_QUERY_META_REMAINDER=!ImageVersion:20261007.264.1=!"
+                  if defined SECURITY_QUERY_META_REMAINDER set "SECURITY_QUERY_IMAGE_OLD="
+                  set "SECURITY_QUERY_META_REMAINDER=!ImageVersion:~14!"
+                  if defined SECURITY_QUERY_META_REMAINDER set "SECURITY_QUERY_IMAGE_OLD="
+                  if defined SECURITY_QUERY_IMAGE_OLD set "SECURITY_QUERY_NODE_VERSION=24.21.0"
+                  set "SECURITY_QUERY_IMAGE_NEW=1"
+                  if not defined ImageVersion set "SECURITY_QUERY_IMAGE_NEW="
+                  set "SECURITY_QUERY_META_REMAINDER=!ImageVersion:20261018.275.1=!"
+                  if defined SECURITY_QUERY_META_REMAINDER set "SECURITY_QUERY_IMAGE_NEW="
+                  set "SECURITY_QUERY_META_REMAINDER=!ImageVersion:~14!"
+                  if defined SECURITY_QUERY_META_REMAINDER set "SECURITY_QUERY_IMAGE_NEW="
+                  if defined SECURITY_QUERY_IMAGE_NEW set "SECURITY_QUERY_NODE_VERSION=24.22.0"
+                  if not defined SECURITY_QUERY_NODE_VERSION (
+                    echo {"kind":"query-runtime-selection","reviewed":false}
+                    exit /b 1
+                  )
                   if defined RUNNER_TOOL_CACHE (
                     echo {"kind":"query-runtime-prelaunch","component":"cache-env","present":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"cache-env","present":false}
                     exit /b 1
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\" (
+                  if exist "!RUNNER_TOOL_CACHE!\" (
                     echo {"kind":"query-runtime-prelaunch","component":"cache-base","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"cache-base","pathExists":false}
+                    exit /b 1
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\" (
+                  if exist "!RUNNER_TOOL_CACHE!\node\" (
                     echo {"kind":"query-runtime-prelaunch","component":"node-tool","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"node-tool","pathExists":false}
+                    exit /b 1
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\" (
-                    echo {"kind":"query-runtime-prelaunch","component":"version-24.21.0","pathExists":true}
+                  if exist "!RUNNER_TOOL_CACHE!\node\!SECURITY_QUERY_NODE_VERSION!\" (
+                    echo {"kind":"query-runtime-prelaunch","component":"selected-version","pathExists":true}
                   ) else (
-                    echo {"kind":"query-runtime-prelaunch","component":"version-24.21.0","pathExists":false}
+                    echo {"kind":"query-runtime-prelaunch","component":"selected-version","pathExists":false}
+                    exit /b 1
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\x64\" (
+                  if exist "!RUNNER_TOOL_CACHE!\node\!SECURITY_QUERY_NODE_VERSION!\x64\" (
                     echo {"kind":"query-runtime-prelaunch","component":"arch-x64","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"arch-x64","pathExists":false}
+                    exit /b 1
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\x64\node.exe" (
+                  if exist "!RUNNER_TOOL_CACHE!\node\!SECURITY_QUERY_NODE_VERSION!\x64\node.exe" (
                     echo {"kind":"query-runtime-prelaunch","component":"node-exe-path","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"node-exe-path","pathExists":false}
+                    exit /b 1
                   )
-                  if exist "%RUNNER_TOOL_CACHE%\node\24.21.0\x64.complete" (
+                  if exist "!RUNNER_TOOL_CACHE!\node\!SECURITY_QUERY_NODE_VERSION!\x64.complete" (
                     echo {"kind":"query-runtime-prelaunch","component":"complete-marker-path","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"complete-marker-path","pathExists":false}
+                    exit /b 1
                   )
                   if exist "scripts\windows-security-query-diagnostic.mjs" (
                     echo {"kind":"query-runtime-prelaunch","component":"entry-script-path","pathExists":true}
                   ) else (
                     echo {"kind":"query-runtime-prelaunch","component":"entry-script-path","pathExists":false}
+                    exit /b 1
                   )
-                  "%RUNNER_TOOL_CACHE%\node\24.21.0\x64\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs
+                  "!RUNNER_TOOL_CACHE!\node\!SECURITY_QUERY_NODE_VERSION!\x64\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs
             - name: Retain exact metadata evidence including failures
               if: always()
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

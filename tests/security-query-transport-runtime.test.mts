@@ -121,6 +121,10 @@ function ownerEnvironment(input) {
     const r = JSON.parse(request),
         raw = JSON.stringify(r);
     return {
+        ImageOS: 'win25-vs2026',
+        ImageVersion: '20261007.264.1',
+        RUNNER_OS: 'Windows',
+        RUNNER_ARCH: 'X64',
         GITHUB_SHA: r.commit,
         GITHUB_REF: r.ref,
         SECURITY_QUERY_REQUEST_JSON: raw,
@@ -140,7 +144,9 @@ for (const input of [captured, wire])
                     {
                         argv: ['node', 'entry'],
                         execArgv: queryPolicy.runtimeArgs,
-                        version: queryPolicy.node,
+                        version: queryPolicy.runtimeImages[0].node,
+                        platform: 'win32',
+                        arch: 'x64',
                         context() {
                             contexts++;
                             throw Error('controlled-after-input-decoding');
@@ -183,7 +189,9 @@ for (const input of [
                     {
                         argv: ['node', 'entry'],
                         execArgv: queryPolicy.runtimeArgs,
-                        version: queryPolicy.node,
+                        version: queryPolicy.runtimeImages[0].node,
+                        platform: 'win32',
+                        arch: 'x64',
                         context() {
                             effects++;
                         },
@@ -238,7 +246,14 @@ function runtimeFixture(fault, cache = 'D:\\hosted tool cache\\windows') {
             throw Error('must never open owned file');
         },
     };
-    const env = { RUNNER_TOOL_CACHE: cache, UNSAFE_SECRET: 'never-include-this-value' };
+    const env = {
+        ImageOS: 'win25-vs2026',
+        ImageVersion: '20261007.264.1',
+        RUNNER_OS: 'Windows',
+        RUNNER_ARCH: 'X64',
+        RUNNER_TOOL_CACHE: cache,
+        UNSAFE_SECRET: 'never-include-this-value',
+    };
     const opts = { platform: 'win32', arch: 'x64', version: 'v24.21.0', execPath: file, io };
     if (fault === 'wrong-version') opts.version = 'v24.22.1';
     if (fault === 'wrong-arch') opts.arch = 'arm64';
@@ -307,14 +322,14 @@ test('CMD diagnostics are fixed bounded facts, all targets quoted, sole original
         'cache-env',
         'cache-base',
         'node-tool',
-        'version-24.21.0',
+        'selected-version',
         'arch-x64',
         'node-exe-path',
         'complete-marker-path',
         'entry-script-path',
     ];
     const echo = lines
-        .filter((x) => x.trimStart().startsWith('echo '))
+        .filter((x) => x.trimStart().startsWith('echo ') && x.includes('query-runtime-prelaunch'))
         .map((x) => JSON.parse(x.trimStart().slice(5)));
     assert.equal(echo.length, 16);
     assert.deepEqual([...new Set(echo.map((x) => x.component))], names);
@@ -334,17 +349,17 @@ test('CMD diagnostics are fixed bounded facts, all targets quoted, sole original
     assert(
         checks.every(
             (x) =>
-                x.includes('%RUNNER_TOOL_CACHE%') ||
+                x.includes('!RUNNER_TOOL_CACHE!') ||
                 x.includes('scripts\\windows-security-query-diagnostic.mjs'),
         ),
     );
     const invoke =
-        '"%RUNNER_TOOL_CACHE%\\node\\24.21.0\\x64\\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs';
+        '"!RUNNER_TOOL_CACHE!\\node\\!SECURITY_QUERY_NODE_VERSION!\\x64\\node.exe" --experimental-transform-types scripts/windows-security-query-diagnostic.mjs';
     assert.equal(lines.at(-1), invoke);
     assert.equal(lines.filter((x) => x === invoke).length, 1);
     assert.doesNotMatch(
         script,
-        /\b(?:where|powershell|pwsh|npm|npx|yarn|curl|wget|for|start|call|set)\b|--version|setup-node/i,
+        /\b(?:where|powershell|pwsh|npm|npx|yarn|curl|wget|for|start|call)\b|--version|setup-node/i,
     );
     assert(script.includes('pathExists'));
     assert(!echo.some((x) => Object.hasOwn(x, 'admitted') || Object.hasOwn(x, 'executable')));
@@ -362,7 +377,7 @@ test('entry checks and bounds receipt before capture/import; receipt follows cap
         dynamic = entry.indexOf("void import('./lib/security-query-diagnostic-runtime.mjs')");
     assert(gate >= 0 && gate < capture && capture < write && write < dynamic);
     assert(entry.indexOf('entryStartedAt =') < gate);
-    assert.equal(queryPolicy.node, 'v24.21.0');
+    assert.equal(queryPolicy.runtimeImages[0].node, 'v24.21.0');
     assert.equal(queryPolicy.ownerMs, 600000);
     assert.equal(queryPolicy.cleanupMs, 60000);
     assert.equal(queryPolicy.queryMs, 10000);

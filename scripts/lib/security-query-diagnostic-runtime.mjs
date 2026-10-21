@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import {
     requirePreinstalledQueryRuntime,
+    requireBoundQueryRuntime,
     admitQueryJobTime,
     requireQueryJobAdmission,
     queryJobLimits,
 } from './security-query-job-admission.mjs';
+import {
+    selectQueryRuntime,
+    requireSelectedQueryVersion,
+    requireKnownQueryRuntime,
+} from './security-query-runtime-selection.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -325,7 +331,13 @@ export async function queryOwner(
 ) {
     assert.equal((ports.argv ?? process.argv).length, 2, 'Owner accepts no command overrides');
     assert.deepEqual(ports.execArgv ?? process.execArgv, policy.runtimeArgs);
-    assert.equal(ports.version ?? process.version, policy.node);
+    const runtimeSelection = selectQueryRuntime(environment);
+    requireSelectedQueryVersion(
+        runtimeSelection,
+        ports.version ?? process.version,
+        ports.platform ?? process.platform,
+        ports.arch ?? process.arch,
+    );
     const request = parseQueryRequest(environment.SECURITY_QUERY_REQUEST_JSON, environment);
     const transportInputs = JSON.parse(environment.SECURITY_QUERY_INPUTS_JSON);
     const canonicalInputs = decodeQueryInputTransport(
@@ -334,6 +346,8 @@ export async function queryOwner(
     );
     const context = (ports.context ?? queryHostedContext)(environment);
     const runtimeAdmission = (ports.runtime ?? requirePreinstalledQueryRuntime)(environment);
+    assert.deepEqual(runtimeAdmission.selection, runtimeSelection);
+    assert.equal(runtimeAdmission.version, runtimeSelection.node);
     const jobTime = await (ports.jobTime ?? admitQueryJobTime)(environment, {
         ownerStartedAt: startedAt,
         now: ports.now ?? tick,
@@ -685,6 +699,7 @@ export async function queryOwner(
             outputIdentity: metadataIdentity(path.join(root, 'collection')),
             tempIdentity: metadataIdentity(context.parent),
             node,
+            runtimeAdmission,
             ps,
             provider,
             principalSID: security.initial.principal,
@@ -863,7 +878,7 @@ export async function queryOwner(
 /** Inherited environment is the exact shared projection. No production entry/controller is run. */
 export async function queryLeaf(args, ports = {}) {
     assert.deepEqual(process.execArgv, policy.runtimeArgs);
-    assert.equal(process.version, policy.node);
+    requireKnownQueryRuntime(process.version, process.platform, process.arch);
     assert.equal(ports.platform ?? process.platform, 'win32');
     assert.equal(ports.arch ?? process.arch, 'x64');
     assert.equal(args.length, 2);
@@ -895,6 +910,8 @@ export async function queryLeaf(args, ports = {}) {
     assert.equal(b.host.attempt, '1');
     assert.equal(b.host.run, process.env.GITHUB_RUN_ID);
     requireLeafEnvironment(process.env, b.childPATH, (row) => process.stderr.write(row));
+    requireBoundQueryRuntime(b.runtimeAdmission);
+    assert.equal(b.runtimeAdmission.executable, b.node.path, 'Leaf selected executable identity');
     assert(process.env.PATH === b.childPATH, 'Leaf PATH binding');
     let held,
         cancelled = false,

@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { metadataIdentity, ancestryIdentity, checkAncestry, digest } from './windows-preflight.mjs';
 import { bindObservationDirectory } from './observation-paths.mjs';
 import { observationInventory } from './observation-accounting.mjs';
+import {
+    selectQueryRuntime,
+    requireSelectedQueryVersion,
+} from './security-query-runtime-selection.mjs';
 import { bindQueryOwnerEnvironment } from './security-query-owner-environment.mjs';
 export const queryPolicy = Object.freeze(
     JSON.parse(
@@ -15,6 +19,8 @@ export const queryPolicy = Object.freeze(
         ),
     ),
 );
+for (const row of queryPolicy.runtimeImages) Object.freeze(row);
+Object.freeze(queryPolicy.runtimeImages);
 export const querySourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const oldQueryInputs = Object.freeze({
     windows_preflight_only: false,
@@ -123,7 +129,7 @@ export function queryHostedContext(
 ) {
     assert.equal(platform, 'win32');
     assert.equal(arch, 'x64');
-    assert.equal(version, queryPolicy.node);
+    requireSelectedQueryVersion(selectQueryRuntime(env), version, platform, arch);
     for (const [k, v] of Object.entries({
         GITHUB_ACTIONS: 'true',
         RUNNER_ENVIRONMENT: 'github-hosted',

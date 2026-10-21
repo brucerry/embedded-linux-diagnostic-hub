@@ -1,5 +1,10 @@
 import { validateQueryJobTime } from '../../scripts/lib/security-query-job-admission.mjs';
+import { queryRuntimeImages } from '../../scripts/lib/security-query-runtime-selection.mjs';
 export const fixtureJobEnvironment = {
+    ImageOS: 'win25-vs2026',
+    ImageVersion: '20261007.264.1',
+    RUNNER_OS: 'Windows',
+    RUNNER_ARCH: 'X64',
     GITHUB_SERVER_URL: 'https://github.com',
     GITHUB_API_URL: 'https://api.github.com',
     GITHUB_JOB: 'windows-security-query-only',
@@ -8,7 +13,8 @@ export const fixtureJobEnvironment = {
 export function fixtureRuntime() {
     return {
         kind: 'exact-preinstalled-query-runtime',
-        version: 'v24.21.0',
+        version: queryRuntimeImages[0].node,
+        selection: queryRuntimeImages[0],
         fixture: true,
         installation: false,
         fallback: false,

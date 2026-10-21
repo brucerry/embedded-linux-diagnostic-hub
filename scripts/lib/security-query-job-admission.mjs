@@ -4,8 +4,14 @@ import path from 'node:path';
 import https from 'node:https';
 import { createHash } from 'node:crypto';
 
+import {
+    selectQueryRuntime,
+    requireQueryRuntimeSelection,
+    queryRuntimePaths,
+    requireSelectedQueryVersion,
+} from './security-query-runtime-selection.mjs';
+
 // Core-only and inert on import: entry starts its clock before calling any preflight.
-export const queryRuntimeVersion = 'v24.21.0';
 export const queryJobLimits = Object.freeze({
     outerMs: 900000,
     ownerMs: 600000,
@@ -31,13 +37,10 @@ export function requirePreinstalledQueryRuntime(
         io = fs,
     } = {},
 ) {
-    assert.equal(platform, 'win32');
-    assert.equal(arch, 'x64');
-    assert.equal(version, queryRuntimeVersion, 'Exact preinstalled query runtime required');
+    const selection = selectQueryRuntime(environment);
+    requireSelectedQueryVersion(selection, version, platform, arch);
     const cache = environment.RUNNER_TOOL_CACHE;
-    assert(typeof cache === 'string' && path.win32.isAbsolute(cache) && !cache.includes('\0'));
-    const expected = path.win32.join(cache, 'node', '24.21.0', 'x64', 'node.exe'),
-        marker = path.win32.join(cache, 'node', '24.21.0', 'x64.complete');
+    const { executable: expected, completeMarker: marker } = queryRuntimePaths(selection, cache);
     assert(sameWindowsPath(execPath, expected), 'Runtime must be the exact tool-cache executable');
     for (let p = path.win32.dirname(expected); ; p = path.win32.dirname(p)) {
         const s = io.lstatSync(p);
@@ -59,6 +62,8 @@ export function requirePreinstalledQueryRuntime(
     assert(sameWindowsPath(io.realpathSync(marker), marker));
     const admission = Object.freeze({
         kind: 'exact-preinstalled-query-runtime',
+        selection,
+        toolCache: cache,
         version,
         platform,
         arch,
@@ -70,6 +75,59 @@ export function requirePreinstalledQueryRuntime(
     runtimeAdmissions.add(admission);
     return admission;
 }
+/** Revalidate the parent's durable bound selection without forwarding image metadata to a leaf.
+ * The caller must first verify the existing binding-file proof. No environment changes or launch. */
+export function requireBoundQueryRuntime(binding, options = {}) {
+    const selection = requireQueryRuntimeSelection(binding?.selection);
+    const keys = [
+        'kind',
+        'selection',
+        'toolCache',
+        'version',
+        'platform',
+        'arch',
+        'executable',
+        'completeMarker',
+        'installation',
+        'fallback',
+    ];
+    assert(
+        binding &&
+            Reflect.ownKeys(binding).length === keys.length &&
+            keys.every((key) => Object.hasOwn(binding, key)),
+        'Exact bound runtime fields required',
+    );
+    assert(
+        binding.kind === 'exact-preinstalled-query-runtime' &&
+            binding.installation === false &&
+            binding.fallback === false,
+        'Exact bound runtime required',
+    );
+    requireSelectedQueryVersion(selection, binding.version, binding.platform, binding.arch);
+    const paths = queryRuntimePaths(selection, binding.toolCache);
+    assert(
+        binding.executable === paths.executable && binding.completeMarker === paths.completeMarker,
+        'Bound runtime paths required',
+    );
+    // This validates the current process, not merely the strings recorded by its parent.
+    const admission = requirePreinstalledQueryRuntime(
+        {
+            ImageOS: selection.imageOS,
+            ImageVersion: selection.imageVersion,
+            RUNNER_OS: 'Windows',
+            RUNNER_ARCH: 'X64',
+            RUNNER_TOOL_CACHE: binding.toolCache,
+        },
+        options,
+    );
+    assert(
+        admission.version === binding.version &&
+            admission.executable === binding.executable &&
+            admission.completeMarker === binding.completeMarker,
+        'Parent and leaf runtime binding required',
+    );
+    return admission;
+}
 /** Runtime-only receipt, after successful launch and all fixed-runtime checks.
  * No file writes, helpers, provider imports or job/query/closure admission. */
 export function queryRuntimeAdmissionReceipt(admission) {
@@ -77,6 +135,7 @@ export function queryRuntimeAdmissionReceipt(admission) {
     const line =
         JSON.stringify({
             kind: 'query-runtime-admitted',
+            selection: admission.selection,
             version: admission.version,
             platform: admission.platform,
             arch: admission.arch,

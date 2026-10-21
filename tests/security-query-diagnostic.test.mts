@@ -681,7 +681,9 @@ for (const mode of ['success', 'target-timeout'])
                         jobTime: fixtureJobTime,
                         argv: ['node', 'entry'],
                         execArgv: p.runtimeArgs,
-                        version: p.node,
+                        version: p.runtimeImages[0].node,
+                        platform: 'win32',
+                        arch: 'x64',
                         cancellation: { events: new EventEmitter(), set: () => 0, clear() {} },
                         accounting: { free: () => 3 * 1024 ** 3 },
                         identity,
@@ -887,6 +889,8 @@ for (const fault of ['open-second', 'write', 'sync', 'close', 'overflow'])
         }
     });
 const hostEnv = () => ({
+    ImageOS: 'win25-vs2026',
+    ImageVersion: '20261007.264.1',
     GITHUB_ACTIONS: 'true',
     RUNNER_ENVIRONMENT: 'github-hosted',
     RUNNER_OS: 'Windows',
