@@ -29,6 +29,7 @@ import {
 } from './security-query-diagnostic.mjs';
 import { observationInventory } from './observation-accounting.mjs';
 import { projectCollectorEnvironment } from './product-collector-environment.mjs';
+import { requireLeafEnvironment } from './security-query-leaf-refusal.mjs';
 import {
     ancestryIdentity,
     checkAncestry,
@@ -872,12 +873,7 @@ export async function queryLeaf(args, ports = {}) {
     assert.equal(b.host.attempt, process.env.GITHUB_RUN_ATTEMPT);
     assert.equal(b.host.attempt, '1');
     assert.equal(b.host.run, process.env.GITHUB_RUN_ID);
-    assert(
-        Object.keys(process.env).every((k) =>
-            Object.hasOwn(projectCollectorEnvironment(process.env, b.childPATH), k),
-        ),
-        'Unexpected leaf environment key',
-    );
+    requireLeafEnvironment(process.env, b.childPATH, (row) => process.stderr.write(row));
     assert(process.env.PATH === b.childPATH, 'Leaf PATH binding');
     let held,
         cancelled = false,
