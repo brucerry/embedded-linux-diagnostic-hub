@@ -29,7 +29,11 @@ function Get-HubShape {
 }
 $trace = [ordered]@{ root = $null; rootElements = @(); validation = @(); rows = @(); getItemCalls = 0; getAclCalls = 0; red = $null }
 Write-HubSecurityPhase -Phase 'before-interpreter'
-$interpreter = [ordered]@{ path = (Get-Process -Id $PID).Path; version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition; x64 = [Environment]::Is64BitProcess; script = $PSCommandPath }
+$interpreterProcess = Get-Process -Id $PID
+Write-HubSecurityPhase -Phase 'after-process-acquisition'
+$interpreterPath = $interpreterProcess.Path
+Write-HubSecurityPhase -Phase 'after-process-path'
+$interpreter = [ordered]@{ path = $interpreterPath; version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition; x64 = [Environment]::Is64BitProcess; script = $PSCommandPath }
 Write-HubSecurityPhase -Phase 'after-interpreter'
 $report = $null
 $exitCode = 0
