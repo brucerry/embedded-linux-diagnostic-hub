@@ -58,7 +58,7 @@ import {
 } from './observation-security.mjs';
 import { runSecurityCommand, firstCollectorSecurityQuery } from './pilot-security-command.mjs';
 import { PreparationEvidence } from './observation-preparation-evidence.mjs';
-import { PilotEvidence } from './pilot-evidence.mjs';
+import { createQueryContractEvidence } from './query-contract-failure-evidence.mjs';
 import { runWinpsSecurityContract } from './pilot-winps-contract.mjs';
 import { matchedOneDirectoryCommand } from './security-query-contract-profile.mjs';
 const tick = () => Number(process.hrtime.bigint() / 1000000n);
@@ -567,30 +567,39 @@ export async function queryOwner(
         );
         lease.acquire();
         const contractWorkDeadline = Math.min(life.tick() + 180000, life.workDeadline) - 30000;
+        let contractEvidence;
         const contractCommand = (...args) => {
             life.admit('contract');
             const opts = args[3];
-            return (ports.command ?? runSecurityCommand)(...args.slice(0, 3), {
-                ...opts,
-                identity,
-                spawn: (...values) =>
-                    ownerEnvironment.beforeSpawn(
-                        () => {
-                            life.check({ headroom: policy.queryMs });
-                            opts.check();
-                            assert(
-                                life.tick() + policy.queryMs < contractWorkDeadline,
-                                'Original contract work and cleanup reserve',
-                            );
-                        },
-                        spawnSync,
-                        ...values,
-                    ),
-                onProcessState: (s) => {
-                    if (!s.closed) retain({ phase: 'contract-query-unknown' });
-                    opts.onProcessState?.(s);
+            assert(contractEvidence, 'Acquired contract ledger required');
+            const invoke = contractEvidence.bindCommand({
+                record: opts.record,
+                check: opts.check,
+                onProcessState: (state) => {
+                    if (!state.closed) retain({ phase: 'contract-query-unknown', state });
+                    opts.onProcessState?.(state);
                 },
             });
+            return invoke((completion) =>
+                (ports.command ?? runSecurityCommand)(...args.slice(0, 3), {
+                    ...opts,
+                    ...completion,
+                    identity,
+                    spawn: (...values) =>
+                        ownerEnvironment.beforeSpawn(
+                            () => {
+                                life.check({ headroom: policy.queryMs });
+                                opts.check();
+                                assert(
+                                    life.tick() + policy.queryMs < contractWorkDeadline,
+                                    'Original contract work and cleanup reserve',
+                                );
+                            },
+                            spawnSync,
+                            ...values,
+                        ),
+                }),
+            );
         };
         const contract = await (ports.contract ?? runWinpsSecurityContract)(
             {
@@ -615,32 +624,37 @@ export async function queryOwner(
                     command: contractCommand,
                 }),
                 evidenceFactory: (directory) => {
-                    let e;
                     try {
-                        e = new PilotEvidence(directory, { check });
+                        contractEvidence = createQueryContractEvidence(directory, {
+                            check,
+                            failureCheck: () => {
+                                assert(holdOwner && life.held && life.cancelled);
+                                context.check();
+                                ownerEnvironment.assertAbsent();
+                                checkTree();
+                                requireQueryJobAdmission(jobTime.admission, environment, {
+                                    ownerStartedAt: startedAt,
+                                    now: () => life.tick(),
+                                });
+                                assert(
+                                    !life.workClosed &&
+                                        life.tick() < life.workDeadline &&
+                                        life.tick() < contractWorkDeadline,
+                                    'Original owner/contract failure-evidence deadline',
+                                );
+                                assert.deepEqual(identity(node.path), node);
+                                assert.deepEqual(identity(powershell, { pe: true }), ps);
+                                assert.deepEqual(identity(provider.path), provider);
+                                accounting.scan();
+                            },
+                            admit: (n) => accounting.scan(n),
+                            hold: retain,
+                        });
                     } catch (error) {
                         retain({ phase: 'contract-open-unknown' });
                         throw error;
                     }
-                    return {
-                        append(stage, data) {
-                            try {
-                                accounting.scan(
-                                    Buffer.byteLength(
-                                        JSON.stringify({ sequence: e.rows, stage, data }),
-                                    ) + 1,
-                                );
-                                e.append(stage, data);
-                                accounting.scan();
-                            } catch (error) {
-                                retain({ phase: 'contract-persistence-unknown' });
-                                throw error;
-                            }
-                        },
-                        close() {
-                            return e.close();
-                        },
-                    };
+                    return contractEvidence;
                 },
             },
         );
