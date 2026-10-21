@@ -31,6 +31,10 @@ import { observationInventory } from './observation-accounting.mjs';
 import { projectCollectorEnvironment } from './product-collector-environment.mjs';
 import { requireLeafEnvironment } from './security-query-leaf-refusal.mjs';
 import {
+    normalizeQueryOwnerEnvironment,
+    assertQueryOwnerEnvironmentAbsent,
+} from './security-query-owner-environment.mjs';
+import {
     ancestryIdentity,
     checkAncestry,
     fileIdentity,
@@ -469,6 +473,15 @@ export async function queryOwner(
                 bytes: Math.min(24576, jobTime.raw.length - offset),
                 base64: jobTime.raw.subarray(offset, offset + 24576).toString('base64'),
             });
+        // Only the admitted dedicated owner may change its native process environment.
+        // A detached options.env object cannot suppress libuv's native-parent completion.
+        const nativeOwnerEnvironment = ports.nativeOwnerEnvironment ?? process.env;
+        const ownerEnvironment = normalizeQueryOwnerEnvironment(
+            environment,
+            nativeOwnerEnvironment,
+        );
+        context.acceptOwnerEnvironmentNormalization(ownerEnvironment);
+        check();
         record('query-only-start', {
             request,
             requestSHA256: digest(environment.SECURITY_QUERY_REQUEST_JSON),
@@ -483,6 +496,7 @@ export async function queryOwner(
             runtimeProfile:
                 'Node builtin transform, no npm/tsx/esbuild; differs from original collector loader',
             environmentPresence: present(environment),
+            environmentNormalization: ownerEnvironment.flags,
             inventory: { Node: 2, WinPS: 45, parent: 14, contract: 30, target: 1 },
             accounting: accounting.snapshot(),
         });
@@ -492,10 +506,12 @@ export async function queryOwner(
                 ...options,
                 identity,
                 environment,
-                spawn: (...args) => {
-                    life.check({ cleanup, headroom: policy.queryMs });
-                    return spawnSync(...args);
-                },
+                spawn: (...args) =>
+                    ownerEnvironment.beforeSpawn(
+                        () => life.check({ cleanup, headroom: policy.queryMs }),
+                        spawnSync,
+                        ...args,
+                    ),
                 onProcessState: (s) => {
                     if (!s.closed) retain({ phase: 'parent-query-unknown', state: s });
                     options.onProcessState?.(s);
@@ -556,15 +572,19 @@ export async function queryOwner(
                     return (ports.command ?? runSecurityCommand)(...args.slice(0, 3), {
                         ...opts,
                         identity,
-                        spawn: (...values) => {
-                            life.check({ headroom: policy.queryMs });
-                            opts.check();
-                            assert(
-                                life.tick() + policy.queryMs < contractWorkDeadline,
-                                'Original contract work and cleanup reserve',
-                            );
-                            return spawnSync(...values);
-                        },
+                        spawn: (...values) =>
+                            ownerEnvironment.beforeSpawn(
+                                () => {
+                                    life.check({ headroom: policy.queryMs });
+                                    opts.check();
+                                    assert(
+                                        life.tick() + policy.queryMs < contractWorkDeadline,
+                                        'Original contract work and cleanup reserve',
+                                    );
+                                },
+                                spawnSync,
+                                ...values,
+                            ),
                         onProcessState: (s) => {
                             if (!s.closed) retain({ phase: 'contract-query-unknown' });
                             opts.onProcessState?.(s);
@@ -696,8 +716,9 @@ export async function queryOwner(
         });
         accounting.reserve();
         life.admit('node');
-        check();
-        child = (ports.spawn ?? spawn)(
+        child = ownerEnvironment.beforeSpawn(
+            check,
+            ports.spawn ?? spawn,
             process.execPath,
             [
                 ...policy.runtimeArgs,
@@ -1028,6 +1049,8 @@ export async function queryLeaf(args, ports = {}) {
                 environment: process.env,
                 timeout: policy.queryMs,
                 spawn: (...launch) => {
+                    assertQueryOwnerEnvironmentAbsent(process.env);
+                    assert(process.env.PATH === b.childPATH, 'Leaf PATH binding');
                     check();
                     assert(
                         tick() - asked < policy.grantMs,

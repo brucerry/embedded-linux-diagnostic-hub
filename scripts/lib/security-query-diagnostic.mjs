@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { metadataIdentity, ancestryIdentity, checkAncestry, digest } from './windows-preflight.mjs';
 import { bindObservationDirectory } from './observation-paths.mjs';
 import { observationInventory } from './observation-accounting.mjs';
+import { bindQueryOwnerEnvironment } from './security-query-owner-environment.mjs';
 export const queryPolicy = Object.freeze(
     JSON.parse(
         fs.readFileSync(
@@ -154,7 +155,7 @@ export function queryHostedContext(
         bind(env.LOCALAPPDATA, path.win32.dirname(expected)),
         bind(env.USERPROFILE, env.USERPROFILE),
     ];
-    const pinned = { ...env };
+    const pinned = bindQueryOwnerEnvironment(env);
     return {
         parent: bindings[0].path,
         host: {
@@ -164,10 +165,11 @@ export function queryHostedContext(
             commit: env.GITHUB_SHA,
             actor: env.GITHUB_ACTOR,
         },
+        acceptOwnerEnvironmentNormalization(normalization) {
+            pinned.acceptNormalization(normalization);
+        },
         check() {
-            for (const k of Object.keys(pinned))
-                assert.equal(env[k], pinned[k], 'Host environment rebound');
-            assert.deepEqual(Object.keys(env).sort(), Object.keys(pinned).sort());
+            pinned.check();
             for (const b of bindings) b.check();
         },
     };
