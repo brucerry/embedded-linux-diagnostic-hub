@@ -9,8 +9,6 @@ const source = fs.readFileSync(
     path.join(import.meta.dirname, '../scripts/lib/hosted-pilot-security.ps1'),
     'utf8',
 );
-const original =
-    '$interpreter = [ordered]@{ path = (Get-Process -Id $PID).Path; version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition; x64 = [Environment]::Is64BitProcess; script = $PSCommandPath }';
 const replacement = [
     '$interpreterProcess = Get-Process -Id $PID',
     "Write-HubSecurityPhase -Phase 'after-process-acquisition'",
@@ -18,9 +16,9 @@ const replacement = [
     "Write-HubSecurityPhase -Phase 'after-process-path'",
     '$interpreter = [ordered]@{ path = $interpreterPath; version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition; x64 = [Environment]::Is64BitProcess; script = $PSCommandPath }',
 ].join('\n');
-const phases = [...source.matchAll(/Write-HubSecurityPhase -Phase '([a-z-]+)'/g)].map(
-    (match) => match[1],
-);
+const phases = [...source.matchAll(/Write-HubSecurityPhase -Phase '([a-z-]+)'/g)]
+    .map((match) => match[1])
+    .filter((phase) => !['before-stdout', 'after-stdout'].includes(phase));
 const row = (phase, newline = '\r\n') =>
     JSON.stringify({
         schema: 1,
@@ -31,12 +29,16 @@ const row = (phase, newline = '\r\n') =>
         frequency: '9223372036854775807',
     }) + newline;
 
-test('exact source delta preserves every byte outside the approved metadata split', () => {
-    assert.equal(source.split(replacement).length, 2);
-    const restored = source.replace(replacement, original);
+test('metadata/provider/validation/report body remains accepted86 except stricter total stdout pre-write bound', () => {
+    const guard =
+        "if ($script:hubSecurityDiagnostic -and $script:hubSecurityDiagnosticStdoutBytes + [Text.Encoding]::UTF8.GetByteCount($json + [Environment]::NewLine) -gt 65536) { throw 'Diagnostic stdout report bound exceeded.' }\n";
+    assert.equal(source.split(guard).length, 2);
+    const body = source
+        .slice(source.indexOf("Write-HubSecurityPhase -Phase 'entry'"))
+        .replace(guard, '');
     assert.equal(
-        createHash('sha256').update(restored).digest('hex'),
-        '0a31509c803185b0523f3e2de991ca7a3a77de7a06401cba69f1cd7a7cbf7142',
+        createHash('sha256').update(body).digest('hex'),
+        'dee25d9dc67241e46d8a51bd2f7e8fc2dca7e97f45a0d063675b89959c4d98c8',
     );
 });
 
@@ -66,13 +68,8 @@ test('all declared tags stay unique, fixed, private-data-free and within the ori
     assert.equal(phases.length, 16);
     assert.equal(new Set(phases).size, 16);
     assert(phases.every((phase) => /^[a-z-]{1,32}$/.test(phase)));
-    assert.deepEqual(phases.slice(0, 5), [
-        'entry',
-        'before-interpreter',
-        'after-process-acquisition',
-        'after-process-path',
-        'after-interpreter',
-    ]);
+    assert.deepEqual(phases.slice(0, 2), ['stderr-write-returned', 'stderr-flush-returned']);
+    assert(source.includes("if ($Phase -cin @('before-stdout', 'after-stdout')) { return }"));
     assert(source.includes('$script:hubSecurityDiagnosticRows -ge 16'));
     assert(source.includes('$bytes -gt 256'));
     assert(source.includes('$script:hubSecurityDiagnosticBytes + $bytes -gt 4096'));
@@ -101,7 +98,7 @@ test('even all sixteen declared rows fit the unchanged byte reservation', () => 
     assert.equal(phases.filter((phase) => phase !== 'refused').length, 15);
 });
 
-test('disabled diagnostic flag returns before clocks, accounting and stderr writes', () => {
+test('disabled diagnostic flag returns before clocks, accounting and either stream write', () => {
     const writer = source.slice(
         source.indexOf('function Write-HubSecurityPhase {'),
         source.indexOf("Write-HubSecurityPhase -Phase 'entry'"),
@@ -112,9 +109,19 @@ test('disabled diagnostic flag returns before clocks, accounting and stderr writ
         '$script:hubSecurityDiagnosticRows++',
         '[Console]::Error.WriteLine($line)',
         '[Console]::Error.Flush()',
+        '[Console]::Out.WriteLine($line)',
+        '[Console]::Out.Flush()',
     ])
         assert(guard >= 0 && guard < writer.indexOf(operation));
     assert(!writer.includes('$interpreterProcess'));
     assert(!writer.includes('$interpreterPath'));
-    assert(!writer.includes('[Console]::Out'));
+    assert(
+        writer.indexOf('[Console]::Error.WriteLine($line)') <
+            writer.indexOf("Write-HubSecurityPhase -Phase 'stderr-write-returned'"),
+    );
+    assert(
+        writer.indexOf('[Console]::Error.Flush()') <
+            writer.indexOf("Write-HubSecurityPhase -Phase 'stderr-flush-returned'"),
+    );
+    assert(writer.includes("'after-process-acquisition', 'after-process-path'"));
 });

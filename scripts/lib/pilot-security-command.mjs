@@ -3,6 +3,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { digest, fileIdentity } from './windows-preflight.mjs';
+import {
+    diagnosticProgressProfile,
+    decodeDiagnosticProgress,
+} from './security-diagnostic-progress.mjs';
 const diagnosticVariable = 'HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC';
 const diagnosticTokens = new WeakMap();
 const diagnosticEnvironmentKeys = Object.freeze([
@@ -46,8 +50,10 @@ export function firstCollectorSecurityQuery({
     outputRoot,
     diagnostic = false,
     clock = () => Number(process.hrtime.bigint() / 1000000n),
+    command = runSecurityCommand,
 } = {}) {
     assert.equal(typeof diagnostic, 'boolean');
+    assert.equal(typeof command, 'function');
     if (diagnostic) {
         assert(typeof outputRoot === 'string' && path.isAbsolute(outputRoot));
         assert.equal(typeof clock, 'function');
@@ -59,7 +65,7 @@ export function firstCollectorSecurityQuery({
         assert.equal(options.diagnostic, undefined, 'Diagnostic capability cannot be overridden');
         const enabled = first && diagnostic;
         first = false;
-        return runSecurityCommand(sourceRoot, powershell, rawJSON, {
+        return command(sourceRoot, powershell, rawJSON, {
             ...options,
             ...(enabled ? { diagnostic: token } : {}),
         });
@@ -138,7 +144,9 @@ export function runSecurityCommand(
             effectivePresence: environmentPresence(launch.options.env),
         };
         assert(Buffer.byteLength(JSON.stringify(diagnosticInput)) <= 2048);
-        launch.options.env[diagnosticVariable] = 'first-collector-query-v1';
+        launch.options.env[diagnosticVariable] = diagnosticProgressProfile;
+        // Match the diagnostic contract control and leaf helper without changing default launches.
+        launch.options.cwd = sourceRoot;
     }
     check();
     const executable = identity(powershell, { pe: true, check }),
@@ -156,6 +164,7 @@ export function runSecurityCommand(
             shell: false,
             PSModulePathIsolatedInChild: true,
             executionPolicyChanged: false,
+            ...(diagnosticInput ? { cwd: sourceRoot } : {}),
         },
         executable,
         script,
@@ -244,10 +253,14 @@ export function runSecurityCommand(
     check();
     assert.deepEqual(identity(powershell, { pe: true, check }), executable);
     assert.deepEqual(identity(launch.script, { check }), script);
+    const stdout =
+        diagnosticState && processState.closed
+            ? decodeDiagnosticProgress(r.stdout, r.stderr, r.pid)
+            : (r.stdout ?? '');
     return {
         processState,
         result,
-        stdout: r.stdout ?? '',
+        stdout,
         stderr: r.stderr ?? '',
         script,
         executable,

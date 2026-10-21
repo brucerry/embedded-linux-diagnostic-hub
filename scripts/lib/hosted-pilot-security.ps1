@@ -1,12 +1,14 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Set-StrictMode -Version Latest
-$script:hubSecurityDiagnostic = $env:HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC -ceq 'first-collector-query-v1'
+$script:hubSecurityDiagnostic = $env:HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC -ceq 'first-collector-query-v2'
 $script:hubSecurityDiagnosticRows = 0
 $script:hubSecurityDiagnosticBytes = 0
+$script:hubSecurityDiagnosticStdoutBytes = 0
 function Write-HubSecurityPhase {
     param([string]$Phase)
     if (-not $script:hubSecurityDiagnostic) { return }
+    if ($Phase -cin @('before-stdout', 'after-stdout')) { return }
     if ($Phase -notmatch '^[a-z-]{1,32}$') { throw 'Bounded diagnostic phase required.' }
     # Fixed tags/numbers only: no extra cmdlet/module initialization, paths or environment values.
     $ticks = [Diagnostics.Stopwatch]::GetTimestamp().ToString([Globalization.CultureInfo]::InvariantCulture)
@@ -16,8 +18,17 @@ function Write-HubSecurityPhase {
     if ($script:hubSecurityDiagnosticRows -ge 16 -or $bytes -gt 256 -or $script:hubSecurityDiagnosticBytes + $bytes -gt 4096) { throw 'Security diagnostic pre-write bound.' }
     $script:hubSecurityDiagnosticRows++
     $script:hubSecurityDiagnosticBytes += $bytes
+    if ($Phase -cin @('stderr-write-returned', 'stderr-flush-returned', 'after-process-acquisition', 'after-process-path')) {
+        if ($script:hubSecurityDiagnosticStdoutBytes + $bytes -gt 65536) { throw 'Diagnostic stdout pre-write bound.' }
+        $script:hubSecurityDiagnosticStdoutBytes += $bytes
+        [Console]::Out.WriteLine($line)
+        [Console]::Out.Flush()
+        return
+    }
     [Console]::Error.WriteLine($line)
+    if ($Phase -ceq 'before-interpreter') { Write-HubSecurityPhase -Phase 'stderr-write-returned' }
     [Console]::Error.Flush()
+    if ($Phase -ceq 'before-interpreter') { Write-HubSecurityPhase -Phase 'stderr-flush-returned' }
 }
 Write-HubSecurityPhase -Phase 'entry'
 function Get-HubShape {
@@ -117,6 +128,7 @@ Write-HubSecurityPhase -Phase 'before-serialize'
 $json = $report | ConvertTo-Json -Depth 12 -Compress
 Write-HubSecurityPhase -Phase 'after-serialize'
 if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 65536) { throw 'Provider reply byte bound exceeded.' }
+if ($script:hubSecurityDiagnostic -and $script:hubSecurityDiagnosticStdoutBytes + [Text.Encoding]::UTF8.GetByteCount($json + [Environment]::NewLine) -gt 65536) { throw 'Diagnostic stdout report bound exceeded.' }
 Write-HubSecurityPhase -Phase 'before-stdout'
 [Console]::Out.WriteLine($json)
 Write-HubSecurityPhase -Phase 'after-stdout'

@@ -187,6 +187,7 @@ export async function runWinpsSecurityContract(
         now = clock,
         context: contextPort,
         command = runSecurityCommand,
+        oneDirectoryCommand,
         fingerprint = sourceFingerprint,
         identity = fileIdentity,
         resolvePowerShell = (env) =>
@@ -206,6 +207,7 @@ export async function runWinpsSecurityContract(
     const startedAt = now(),
         deadline = Math.min(startedAt + winpsContractLimits.totalMs, outerDeadline),
         workDeadline = deadline - winpsContractLimits.reserveMs;
+    assert(oneDirectoryCommand === undefined || typeof oneDirectoryCommand === 'function');
     assert(/^[a-f0-9]{64}$/.test(expectedSourceSHA256));
     assert(deadline > startedAt + winpsContractLimits.reserveMs);
     assert(path.isAbsolute(outputRoot) && fs.realpathSync(outputRoot) === outputRoot);
@@ -362,7 +364,11 @@ export async function runWinpsSecurityContract(
                 'Reserve bounded command evidence before launch',
             );
             const rawJSON = JSON.stringify(testCase.plans);
-            const reply = command(sourceRoot, powershell, rawJSON, {
+            const invoke =
+                testCase.name === 'one-directory' && oneDirectoryCommand
+                    ? oneDirectoryCommand
+                    : command;
+            const reply = invoke(sourceRoot, powershell, rawJSON, {
                 environment,
                 red: testCase.expected === 'legacy-red',
                 timeout: winpsContractLimits.commandMs,

@@ -60,6 +60,7 @@ import { runSecurityCommand, firstCollectorSecurityQuery } from './pilot-securit
 import { PreparationEvidence } from './observation-preparation-evidence.mjs';
 import { PilotEvidence } from './pilot-evidence.mjs';
 import { runWinpsSecurityContract } from './pilot-winps-contract.mjs';
+import { matchedOneDirectoryCommand } from './security-query-contract-profile.mjs';
 const tick = () => Number(process.hrtime.bigint() / 1000000n);
 const present = (env) =>
     Object.fromEntries(
@@ -566,6 +567,31 @@ export async function queryOwner(
         );
         lease.acquire();
         const contractWorkDeadline = Math.min(life.tick() + 180000, life.workDeadline) - 30000;
+        const contractCommand = (...args) => {
+            life.admit('contract');
+            const opts = args[3];
+            return (ports.command ?? runSecurityCommand)(...args.slice(0, 3), {
+                ...opts,
+                identity,
+                spawn: (...values) =>
+                    ownerEnvironment.beforeSpawn(
+                        () => {
+                            life.check({ headroom: policy.queryMs });
+                            opts.check();
+                            assert(
+                                life.tick() + policy.queryMs < contractWorkDeadline,
+                                'Original contract work and cleanup reserve',
+                            );
+                        },
+                        spawnSync,
+                        ...values,
+                    ),
+                onProcessState: (s) => {
+                    if (!s.closed) retain({ phase: 'contract-query-unknown' });
+                    opts.onProcessState?.(s);
+                },
+            });
+        };
         const contract = await (ports.contract ?? runWinpsSecurityContract)(
             {
                 sourceRoot,
@@ -580,31 +606,14 @@ export async function queryOwner(
                 identity,
                 fingerprint: ports.fingerprint ?? sourceFingerprint,
                 hold: retain,
-                command: (...args) => {
-                    life.admit('contract');
-                    const opts = args[3];
-                    return (ports.command ?? runSecurityCommand)(...args.slice(0, 3), {
-                        ...opts,
-                        identity,
-                        spawn: (...values) =>
-                            ownerEnvironment.beforeSpawn(
-                                () => {
-                                    life.check({ headroom: policy.queryMs });
-                                    opts.check();
-                                    assert(
-                                        life.tick() + policy.queryMs < contractWorkDeadline,
-                                        'Original contract work and cleanup reserve',
-                                    );
-                                },
-                                spawnSync,
-                                ...values,
-                            ),
-                        onProcessState: (s) => {
-                            if (!s.closed) retain({ phase: 'contract-query-unknown' });
-                            opts.onProcessState?.(s);
-                        },
-                    });
-                },
+                command: contractCommand,
+                oneDirectoryCommand: matchedOneDirectoryCommand({
+                    sourceRoot,
+                    nodeExecutable: node.path,
+                    powershell,
+                    environment,
+                    command: contractCommand,
+                }),
                 evidenceFactory: (directory) => {
                     let e;
                     try {

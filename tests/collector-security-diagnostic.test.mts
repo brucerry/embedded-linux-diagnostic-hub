@@ -13,6 +13,7 @@ import {
     preparationEvidenceLimits,
     readPreparationEvidence,
 } from '../scripts/lib/observation-preparation-evidence.mjs';
+import { progressReply } from './fixtures/security-diagnostic-progress.mjs';
 const sourceRoot = path.resolve(import.meta.dirname, '..');
 const diagnosticVariable = 'HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC';
 const raw = (root) => JSON.stringify([{ path: root, kind: 'directory' }]);
@@ -32,7 +33,7 @@ function ports(result = { status: 0, signal: null, stdout: '{}', stderr: '' }) {
                 USERNAME: 'private-name',
                 GITHUB_TOKEN: 'NEVER_RECORD_THIS_TOKEN',
                 UNSAFE_SECRET: 'NEVER_RECORD_THIS_VALUE',
-                [diagnosticVariable]: 'first-collector-query-v1',
+                [diagnosticVariable]: 'first-collector-query-v2',
             },
             identity: (file) => ({
                 path: file,
@@ -43,6 +44,14 @@ function ports(result = { status: 0, signal: null, stdout: '{}', stderr: '' }) {
             onProcessState: (state) => states.push(state),
             spawn(exe, args, options) {
                 launches.push({ exe, args, options });
+                if (
+                    options.env[diagnosticVariable] === 'first-collector-query-v2' &&
+                    result.status === 0 &&
+                    !result.error &&
+                    !result.signal &&
+                    result.stdout === '{}'
+                )
+                    return { ...result, ...progressReply() };
                 return result;
             },
         },
@@ -92,7 +101,7 @@ test('only the bound first query receives safe metadata and phase tracing; timeo
     query(sourceRoot, 'fixture-winps.exe', raw(root), options);
     query(sourceRoot, 'fixture-winps.exe', raw(root), options);
     assert.deepEqual(order, ['clock', 'clock', 'hold-first', 'clock', 'hold-first']);
-    assert.equal(f.launches[0].options.env[diagnosticVariable], 'first-collector-query-v1');
+    assert.equal(f.launches[0].options.env[diagnosticVariable], 'first-collector-query-v2');
     assert.equal(f.launches[1].options.env[diagnosticVariable], undefined);
     const input = f.records[0].data.diagnostic,
         result = f.records[1].data.diagnostic;
@@ -238,7 +247,14 @@ test('opt-in metadata fits the unchanged eight-row whole-query reservation with 
         query(sourceRoot, 'fixture-winps.exe', raw(f.root), {
             ...p.options,
             record: f.record,
-            spawn: () => ({ pid: 99, status: 0, signal: null, stdout: body(), stderr: body() }),
+            spawn: () => ({
+                pid: 99,
+                status: null,
+                signal: 'SIGTERM',
+                error: Object.assign(Error('fixture timeout'), { code: 'ETIMEDOUT' }),
+                stdout: body(),
+                stderr: body(),
+            }),
         });
         assert.equal(f.ledger.snapshot().rows, preparationEvidenceLimits.queryRows);
         assert(f.ledger.snapshot().bytes <= preparationEvidenceLimits.queryBytes);
@@ -270,8 +286,8 @@ test('first-query telemetry leaves subsequent stable query compression and origi
             .readdirSync(f.root)
             .map((name) => JSON.parse(fs.readFileSync(path.join(f.root, name), 'utf8')));
         assert.equal(physical.length, 360);
-        // The first stdout already supplies the reusable origin for the second call.
-        assert.equal(physical.filter((r) => r.reference).length, 355);
+        // Framed diagnostic stdout and later plain stdout require separate durable origins.
+        assert.equal(physical.filter((r) => r.reference).length, 354);
         const decoded = [...readPreparationEvidence(f.root)];
         assert(decoded.slice(3).every((r) => !r.data.diagnostic));
         assert(
@@ -308,15 +324,15 @@ test('failed input admission cannot start the diagnostic helper or transfer its 
     assert.equal(f.launches.length, 1);
     assert.equal(f.launches[0].options.env[diagnosticVariable], undefined);
 });
-test('declared WinPS phase sites fit the proposed trace contract without consuming stdout or query rows', () => {
+test('declared active WinPS phase sites fit the combined stdout/stderr trace budget without extra query rows', () => {
     // Static cross-language bound only; this does not execute or syntax-validate Windows PowerShell.
     const source = fs.readFileSync(
             path.join(sourceRoot, 'scripts/lib/hosted-pilot-security.ps1'),
             'utf8',
         ),
-        phases = [...source.matchAll(/Write-HubSecurityPhase -Phase '([a-z-]+)'/g)].map(
-            (m) => m[1],
-        );
+        phases = [...source.matchAll(/Write-HubSecurityPhase -Phase '([a-z-]+)'/g)]
+            .map((m) => m[1])
+            .filter((phase) => !['before-stdout', 'after-stdout'].includes(phase));
     assert(phases.length > 0 && phases.length <= 16);
     let bytes = 0;
     for (const phase of phases) {
