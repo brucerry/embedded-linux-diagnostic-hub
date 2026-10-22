@@ -61,6 +61,7 @@ import { PreparationEvidence } from './observation-preparation-evidence.mjs';
 import { createQueryContractEvidence } from './query-contract-failure-evidence.mjs';
 import { runWinpsSecurityContract } from './pilot-winps-contract.mjs';
 import { matchedOneDirectoryCommand } from './security-query-contract-profile.mjs';
+import { firstPlainParentLaunchEvidence } from './plain-parent-launch-evidence.mjs';
 const tick = () => Number(process.hrtime.bigint() / 1000000n);
 const present = (env) =>
     Object.fromEntries(
@@ -515,31 +516,46 @@ export async function queryOwner(
             inventory: { Node: 2, WinPS: 45, parent: 14, contract: 30, target: 1 },
             accounting: accounting.snapshot(),
         });
+        const initialParentPlans = [context.parent, root, path.join(root, 'collection')].map(
+            (p) => ({
+                path: p,
+                kind: 'directory',
+            }),
+        );
+        const firstParentEvidence = firstPlainParentLaunchEvidence({
+            sourceRoot,
+            powershell,
+            plans: initialParentPlans,
+            environment,
+        });
         const parentQuery = evidence.securityQuery((source, exe, raw, options) => {
             life.admit('parent', { cleanup });
-            return (ports.command ?? runSecurityCommand)(source, exe, raw, {
-                ...options,
-                identity,
-                environment,
-                spawn: (...args) =>
-                    ownerEnvironment.beforeSpawn(
-                        () => life.check({ cleanup, headroom: policy.queryMs }),
-                        spawnSync,
-                        ...args,
-                    ),
-                onProcessState: (s) => {
-                    if (!s.closed) retain({ phase: 'parent-query-unknown', state: s });
-                    options.onProcessState?.(s);
-                },
-            });
+            assert.equal(options.parentLaunchEvidence, undefined);
+            const invoke = (parentLaunchEvidence, native) =>
+                (ports.command ?? runSecurityCommand)(source, exe, raw, {
+                    ...options,
+                    ...(parentLaunchEvidence ? { parentLaunchEvidence } : {}),
+                    identity,
+                    environment,
+                    spawn: (...args) =>
+                        ownerEnvironment.beforeSpawn(
+                            () => life.check({ cleanup, headroom: policy.queryMs }),
+                            native,
+                            ...args,
+                        ),
+                    onProcessState: (s) => {
+                        if (!s.closed) retain({ phase: 'parent-query-unknown', state: s });
+                        options.onProcessState?.(s);
+                    },
+                });
+            return life.counts.parent === 1 && !cleanup
+                ? firstParentEvidence.run(invoke, spawnSync)
+                : invoke(undefined, spawnSync);
         });
         const security = preparationObservationSecurity(
             sourceRoot,
             powershell,
-            [context.parent, root, path.join(root, 'collection')].map((p) => ({
-                path: p,
-                kind: 'directory',
-            })),
+            initialParentPlans,
             { environment, record, check, query: parentQuery },
         );
         const ownerCheck = security.ownerCheck;

@@ -7,6 +7,7 @@ import {
     diagnosticProgressProfile,
     decodeDiagnosticProgress,
 } from './security-diagnostic-progress.mjs';
+import { takePlainParentLaunchEvidence } from './plain-parent-launch-evidence.mjs';
 const diagnosticVariable = 'HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC';
 const diagnosticTokens = new WeakMap();
 const diagnosticEnvironmentKeys = Object.freeze([
@@ -119,11 +120,25 @@ export function runSecurityCommand(
         check = () => {},
         onProcessState = () => {},
         diagnostic,
+        parentLaunchEvidence,
     } = {},
 ) {
     const launch = securityLaunch(sourceRoot, powershell, rawJSON, environment, { red, timeout });
     const diagnosticState = diagnostic === undefined ? null : diagnosticTokens.get(diagnostic);
     assert(diagnostic === undefined || diagnosticState, 'Foreign diagnostic capability');
+    const parentObservation =
+        parentLaunchEvidence === undefined
+            ? null
+            : takePlainParentLaunchEvidence(parentLaunchEvidence, {
+                  sourceRoot,
+                  powershell,
+                  rawJSON,
+                  environment,
+                  red,
+                  timeout,
+                  diagnostic,
+                  launch,
+              });
     let diagnosticInput;
     if (diagnosticState) {
         assert(!diagnosticState.consumed, 'First-query diagnostic already consumed');
@@ -170,6 +185,7 @@ export function runSecurityCommand(
         script,
         red,
         ...(diagnosticInput ? { diagnostic: diagnosticInput } : {}),
+        ...(parentObservation ? { parentLaunch: parentObservation.input } : {}),
     });
     let r;
     const spawnStartedAtMs = diagnosticState ? diagnosticTick(diagnosticState.clock) : null;
@@ -189,6 +205,7 @@ export function runSecurityCommand(
         errorPresent: Boolean(r.error),
     });
     onProcessState(processState);
+    parentObservation?.afterCustody();
     // The original hold callback always runs before any diagnostic clock/readback can fail.
     let diagnosticResult;
     if (diagnosticState) {
@@ -248,6 +265,7 @@ export function runSecurityCommand(
         error: r.error ? String(r.error).slice(0, 1024) : null,
         streams,
         ...(diagnosticResult ? { diagnostic: diagnosticResult } : {}),
+        ...(parentObservation ? { parentLaunch: parentObservation.result(r, processState) } : {}),
     };
     record('security-command-closed', result);
     check();

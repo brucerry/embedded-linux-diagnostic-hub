@@ -340,7 +340,13 @@ export class PreparationEvidence {
             if (
                 bytes.length > this.limits.rowBytes ||
                 this.rows >= rowLimit ||
-                this.bytes + bytes.length > byteLimit
+                this.bytes + bytes.length > byteLimit ||
+                // Every record during the live query, including custody reporting,
+                // consumes its existing partition before any ordinal/open/write.
+                (this.activeQuery &&
+                    (this.rows - this.activeQuery.sequence >= this.limits.queryRows ||
+                        this.bytes - this.activeQuery.bytes + bytes.length >
+                            this.limits.queryBytes))
             ) {
                 budgetRefusal = Error('Preparation evidence refused before descriptor acquisition');
                 this.verifyPrefix();
