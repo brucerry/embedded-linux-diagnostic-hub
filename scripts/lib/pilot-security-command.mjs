@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { digest, fileIdentity } from './windows-preflight.mjs';
 import {
     diagnosticProgressProfile,
+    acquisitionFirstProgressProfile,
     decodeDiagnosticProgress,
 } from './security-diagnostic-progress.mjs';
 import { takePlainParentLaunchEvidence } from './plain-parent-launch-evidence.mjs';
@@ -52,19 +53,28 @@ export function firstCollectorSecurityQuery({
     diagnostic = false,
     clock = () => Number(process.hrtime.bigint() / 1000000n),
     command = runSecurityCommand,
+    progressProfile = diagnosticProgressProfile,
 } = {}) {
     assert.equal(typeof diagnostic, 'boolean');
     assert.equal(typeof command, 'function');
+    assert([diagnosticProgressProfile, acquisitionFirstProgressProfile].includes(progressProfile));
+    assert(diagnostic || progressProfile === diagnosticProgressProfile);
     if (diagnostic) {
         assert(typeof outputRoot === 'string' && path.isAbsolute(outputRoot));
         assert.equal(typeof clock, 'function');
     }
     const token = Object.freeze({});
-    diagnosticTokens.set(token, { outputRoot, clock, consumed: false });
+    diagnosticTokens.set(token, { outputRoot, clock, progressProfile, consumed: false });
     let first = true;
     return (sourceRoot, powershell, rawJSON, options = {}) => {
+        if (progressProfile === acquisitionFirstProgressProfile) {
+            assert(first, 'Acquisition-first command already consumed');
+            first = false; // Failed binding/launch/decode cannot fall back or retry either.
+        }
         assert.equal(options.diagnostic, undefined, 'Diagnostic capability cannot be overridden');
-        const enabled = first && diagnostic;
+        assert.equal(options.progressProfile, undefined, 'Diagnostic profile is capability-bound');
+        const enabled =
+            progressProfile === acquisitionFirstProgressProfile || (first && diagnostic);
         first = false;
         return command(sourceRoot, powershell, rawJSON, {
             ...options,
@@ -157,9 +167,12 @@ export function runSecurityCommand(
             ipcConnected: process.connected === true,
             inheritedPresence: environmentPresence(environment),
             effectivePresence: environmentPresence(launch.options.env),
+            ...(diagnosticState.progressProfile === acquisitionFirstProgressProfile
+                ? { progressProfile: diagnosticState.progressProfile }
+                : {}),
         };
         assert(Buffer.byteLength(JSON.stringify(diagnosticInput)) <= 2048);
-        launch.options.env[diagnosticVariable] = diagnosticProgressProfile;
+        launch.options.env[diagnosticVariable] = diagnosticState.progressProfile;
         // Match the diagnostic contract control and leaf helper without changing default launches.
         launch.options.cwd = sourceRoot;
     }
@@ -273,7 +286,7 @@ export function runSecurityCommand(
     assert.deepEqual(identity(launch.script, { check }), script);
     const stdout =
         diagnosticState && processState.closed
-            ? decodeDiagnosticProgress(r.stdout, r.stderr, r.pid)
+            ? decodeDiagnosticProgress(r.stdout, r.stderr, r.pid, diagnosticState.progressProfile)
             : (r.stdout ?? '');
     return {
         processState,

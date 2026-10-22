@@ -62,6 +62,7 @@ import { createQueryContractEvidence } from './query-contract-failure-evidence.m
 import { runWinpsSecurityContract } from './pilot-winps-contract.mjs';
 import { matchedOneDirectoryCommand } from './security-query-contract-profile.mjs';
 import { firstPlainParentLaunchEvidence } from './plain-parent-launch-evidence.mjs';
+import { acquisitionFirstProgressProfile } from './security-diagnostic-progress.mjs';
 const tick = () => Number(process.hrtime.bigint() / 1000000n);
 const present = (env) =>
     Object.fromEntries(
@@ -638,6 +639,7 @@ export async function queryOwner(
                     powershell,
                     environment,
                     command: contractCommand,
+                    progressProfile: acquisitionFirstProgressProfile,
                 }),
                 evidenceFactory: (directory) => {
                     try {
@@ -1092,7 +1094,11 @@ export async function queryLeaf(args, ports = {}) {
                 retain({ phase: 'leaf-unexpected-IPC' });
             }
         });
-        const factory = firstCollectorSecurityQuery({ outputRoot: b.outputRoot, diagnostic: true });
+        const factory = firstCollectorSecurityQuery({
+            outputRoot: b.outputRoot,
+            diagnostic: true,
+            progressProfile: acquisitionFirstProgressProfile,
+        });
         const query = (...values) => {
             assert.equal(queried, 0);
             check();

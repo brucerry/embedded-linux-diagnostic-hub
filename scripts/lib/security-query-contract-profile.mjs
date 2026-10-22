@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { projectCollectorEnvironment } from './product-collector-environment.mjs';
 import { firstCollectorSecurityQuery } from './pilot-security-command.mjs';
+import {
+    diagnosticProgressProfile,
+    acquisitionFirstProgressProfile,
+} from './security-diagnostic-progress.mjs';
 
 /** One existing green contract slot only. No filesystem/process/native-environment effects here.
  * Its fixture path/input stays unchanged; projected options do not attest effective environment equality. */
@@ -11,11 +15,13 @@ export function matchedOneDirectoryCommand({
     powershell,
     environment,
     command,
+    progressProfile = diagnosticProgressProfile,
 }) {
     assert.equal(typeof command, 'function');
     assert.equal(typeof sourceRoot, 'string');
     assert.equal(typeof nodeExecutable, 'string');
     assert.equal(typeof powershell, 'string');
+    assert([diagnosticProgressProfile, acquisitionFirstProgressProfile].includes(progressProfile));
     const childPATH = path.dirname(nodeExecutable) + ';' + path.dirname(powershell);
     let used = false;
     return (source, exe, raw, options) => {
@@ -36,6 +42,7 @@ export function matchedOneDirectoryCommand({
             outputRoot: plans[0].path,
             diagnostic: true,
             command,
+            progressProfile,
         });
         return query(source, exe, raw, {
             ...options,

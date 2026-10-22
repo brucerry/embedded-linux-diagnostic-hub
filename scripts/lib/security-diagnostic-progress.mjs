@@ -1,4 +1,5 @@
 export const diagnosticProgressProfile = 'first-collector-query-v2';
+export const acquisitionFirstProgressProfile = 'first-collector-query-v3';
 export const diagnosticProgressLimits = Object.freeze({
     rows: 16,
     rowBytes: 256,
@@ -21,6 +22,17 @@ const mainPhases = Object.freeze([
     'after-get-item',
     'before-get-acl',
     'after-get-acl',
+]);
+export const acquisitionFirstStdoutPhases = Object.freeze([
+    'interpreter-metadata-ready',
+    'stderr-write-returned',
+    'stderr-flush-returned',
+]);
+const acquisitionFirstMainPhases = Object.freeze([
+    'logger-batch-entry',
+    'logger-batch-probe',
+    'logger-batch-returned',
+    ...mainPhases.slice(3),
 ]);
 const terminalPhases = Object.freeze(['before-serialize', 'after-serialize']);
 const same = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
@@ -114,15 +126,25 @@ function lines(text) {
 /** Only the explicitly capability-bound diagnostic response is framed.
  * The returned report is the exact original terminal JSON text, not a reconstructed/sanitized report.
  * This is not metadata admission or physical child/pipe closure proof. */
-export function decodeDiagnosticProgress(stdout, stderr, expectedPID) {
+export function decodeDiagnosticProgress(
+    stdout,
+    stderr,
+    expectedPID,
+    progressProfile = diagnosticProgressProfile,
+) {
     try {
+        if (![diagnosticProgressProfile, acquisitionFirstProgressProfile].includes(progressProfile))
+            refuse();
+        const acquisitionFirst = progressProfile === acquisitionFirstProgressProfile,
+            stdoutPhases = acquisitionFirst ? acquisitionFirstStdoutPhases : diagnosticStdoutPhases,
+            expectedMainPhases = acquisitionFirst ? acquisitionFirstMainPhases : mainPhases;
         if (!Number.isSafeInteger(expectedPID) || expectedPID <= 0) refuse();
         const out = lines(stdout),
             err = lines(stderr);
-        if (out.length !== 5 || err.length < 6 || err.length > 12) refuse();
+        if (out.length !== stdoutPhases.length + 1 || err.length < 6 || err.length > 12) refuse();
         const allLines = [...out, ...err];
         if (!allLines.every((line) => line.eol === out[0].eol)) refuse();
-        const reportLine = out[4],
+        const reportLine = out[stdoutPhases.length],
             report = strictJSON(reportLine.text);
         if (
             reportLine.text.trim() !== reportLine.text ||
@@ -183,21 +205,25 @@ export function decodeDiagnosticProgress(stdout, stderr, expectedPID) {
             phases.set(p.phase, BigInt(p.ticks));
             return p.phase;
         };
-        if (!same(out.slice(0, 4).map(phase), diagnosticStdoutPhases)) refuse();
+        if (!same(out.slice(0, stdoutPhases.length).map(phase), stdoutPhases)) refuse();
         const names = err.map(phase);
         let expected;
-        if (report.complete) expected = [...mainPhases, ...terminalPhases];
+        if (report.complete) expected = [...expectedMainPhases, ...terminalPhases];
         else {
             const prefix = names.slice(0, -3);
-            if (prefix.length < 3 || !same(prefix, mainPhases.slice(0, prefix.length))) refuse();
+            if (prefix.length < 3 || !same(prefix, expectedMainPhases.slice(0, prefix.length)))
+                refuse();
             expected = [...prefix, 'refused', ...terminalPhases];
         }
         if (!same(names, expected)) refuse();
-        const causalOrder = [
-            ...mainPhases.slice(0, 2),
-            ...diagnosticStdoutPhases,
-            ...names.slice(2),
-        ];
+        const causalOrder = acquisitionFirst
+            ? [
+                  stdoutPhases[0],
+                  ...expectedMainPhases.slice(0, 2),
+                  ...stdoutPhases.slice(1),
+                  ...names.slice(2),
+              ]
+            : [...mainPhases.slice(0, 2), ...diagnosticStdoutPhases, ...names.slice(2)];
         for (let i = 1; i < causalOrder.length; i++)
             if (phases.get(causalOrder[i]) < phases.get(causalOrder[i - 1])) refuse();
         return reportLine.text + reportLine.eol;

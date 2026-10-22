@@ -1,7 +1,8 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Set-StrictMode -Version Latest
-$script:hubSecurityDiagnostic = $env:HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC -ceq 'first-collector-query-v2'
+$script:hubSecurityAcquisitionFirst = $env:HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC -ceq 'first-collector-query-v3'
+$script:hubSecurityDiagnostic = ($env:HUB_NATIVE_PILOT_SECURITY_DIAGNOSTIC -ceq 'first-collector-query-v2') -or $script:hubSecurityAcquisitionFirst
 $script:hubSecurityDiagnosticRows = 0
 $script:hubSecurityDiagnosticBytes = 0
 $script:hubSecurityDiagnosticStdoutBytes = 0
@@ -9,6 +10,8 @@ function Write-HubSecurityPhase {
     param([string]$Phase)
     if (-not $script:hubSecurityDiagnostic) { return }
     if ($Phase -cin @('before-stdout', 'after-stdout')) { return }
+    # v3 delays ALL explicit phase output until the original metadata assembly returns.
+    if ($script:hubSecurityAcquisitionFirst -and ($Phase -cin @('entry', 'before-interpreter', 'after-process-acquisition', 'after-process-path'))) { return }
     if ($Phase -notmatch '^[a-z-]{1,32}$') { throw 'Bounded diagnostic phase required.' }
     # Fixed tags/numbers only: no extra cmdlet/module initialization, paths or environment values.
     $ticks = [Diagnostics.Stopwatch]::GetTimestamp().ToString([Globalization.CultureInfo]::InvariantCulture)
@@ -18,7 +21,7 @@ function Write-HubSecurityPhase {
     if ($script:hubSecurityDiagnosticRows -ge 16 -or $bytes -gt 256 -or $script:hubSecurityDiagnosticBytes + $bytes -gt 4096) { throw 'Security diagnostic pre-write bound.' }
     $script:hubSecurityDiagnosticRows++
     $script:hubSecurityDiagnosticBytes += $bytes
-    if ($Phase -cin @('stderr-write-returned', 'stderr-flush-returned', 'after-process-acquisition', 'after-process-path')) {
+    if (($Phase -cin @('stderr-write-returned', 'stderr-flush-returned', 'after-process-acquisition', 'after-process-path')) -or ($script:hubSecurityAcquisitionFirst -and $Phase -ceq 'interpreter-metadata-ready')) {
         if ($script:hubSecurityDiagnosticStdoutBytes + $bytes -gt 65536) { throw 'Diagnostic stdout pre-write bound.' }
         $script:hubSecurityDiagnosticStdoutBytes += $bytes
         [Console]::Out.WriteLine($line)
@@ -26,9 +29,9 @@ function Write-HubSecurityPhase {
         return
     }
     [Console]::Error.WriteLine($line)
-    if ($Phase -ceq 'before-interpreter') { Write-HubSecurityPhase -Phase 'stderr-write-returned' }
+    if (($Phase -ceq 'before-interpreter') -or ($script:hubSecurityAcquisitionFirst -and $Phase -ceq 'logger-batch-probe')) { Write-HubSecurityPhase -Phase 'stderr-write-returned' }
     [Console]::Error.Flush()
-    if ($Phase -ceq 'before-interpreter') { Write-HubSecurityPhase -Phase 'stderr-flush-returned' }
+    if (($Phase -ceq 'before-interpreter') -or ($script:hubSecurityAcquisitionFirst -and $Phase -ceq 'logger-batch-probe')) { Write-HubSecurityPhase -Phase 'stderr-flush-returned' }
 }
 Write-HubSecurityPhase -Phase 'entry'
 function Get-HubShape {
@@ -45,7 +48,16 @@ Write-HubSecurityPhase -Phase 'after-process-acquisition'
 $interpreterPath = $interpreterProcess.Path
 Write-HubSecurityPhase -Phase 'after-process-path'
 $interpreter = [ordered]@{ path = $interpreterPath; version = $PSVersionTable.PSVersion.ToString(); edition = $PSVersionTable.PSEdition; x64 = [Environment]::Is64BitProcess; script = $PSCommandPath }
-Write-HubSecurityPhase -Phase 'after-interpreter'
+if ($script:hubSecurityAcquisitionFirst) {
+    # The first record certifies preceding metadata, never its own WriteLine/Flush.
+    Write-HubSecurityPhase -Phase 'interpreter-metadata-ready'
+    Write-HubSecurityPhase -Phase 'logger-batch-entry'
+    Write-HubSecurityPhase -Phase 'logger-batch-probe'
+    # Reached only after the complete delayed logging batch returned.
+    Write-HubSecurityPhase -Phase 'logger-batch-returned'
+} else {
+    Write-HubSecurityPhase -Phase 'after-interpreter'
+}
 $report = $null
 $exitCode = 0
 try {
