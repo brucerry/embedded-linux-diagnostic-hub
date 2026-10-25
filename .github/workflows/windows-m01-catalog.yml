@@ -1,0 +1,66 @@
+# BOUND LOCAL STAGING ONLY. Publication-shaped path,not installed in repository.
+# No publication/dispatch authority. Bound literals require independent source acceptance.
+# N1/N2 are assumptions;vendor timeout is NOT the original900s dispatch expiry.
+name: M01 catalog
+on:
+  workflow_dispatch:
+    inputs:
+      request_b64:
+        description: Canonical ASCII request Base64;8192char transport ceiling
+        required: true
+        type: string
+      request_sha256:
+        description: Lowercase SHA256 over decoded canonical ASCII request
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  acquire:
+    if: >-
+      github.repository_id == '1405501450' && github.actor_id == '88369201' &&
+      github.event_name == 'workflow_dispatch' && github.run_attempt == '1' &&
+      github.ref == 'refs/heads/main' && github.sha == github.workflow_sha
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout reviewed resolved commit under N1
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: false
+          submodules: false
+          lfs: false
+      - name: One bound collector invocation in the ordinary PowerShell host
+        id: collect
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        env:
+          ACQUIRE_REQUEST_B64: ${{ inputs.request_b64 }}
+          ACQUIRE_REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          ACQUIRE_NONCE: 91185df42bb905b514af3a4092ad8385
+          ACQUIRE_RETENTION_DAYS: 1
+        run: |
+          & './prepared/catalog/collect-catalog.ps1'
+      - name: Publish only known closed allowlisted evidence if collector completes
+        if: ${{ success() && steps.collect.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}
+          retention-days: 1
+          overwrite: false
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}/observer/admission.bin
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}/observer/command-intent.bin
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}/observer/control.bin
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}/observer/result.bin
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}/observer/bootstrap.bin
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}/observer/terminal.bin
+            ${{ runner.temp }}/m01-catalog-91185df42bb905b514af3a4092ad8385-${{ github.run_id }}-acquire-${{ github.run_attempt }}.claim
+# Provider checkout/upload/post-job code is trusted setup,not zero cost/children.
+# Full action/ref/nonce/retention literals are bound in this local source only.
+# Close source acceptance,authority,publication and dispatch gates BEFORE any run.
+# No secrets/installs/native work.
+# No always recovery,concurrency group,cancel step,cache or automatic triggers.
