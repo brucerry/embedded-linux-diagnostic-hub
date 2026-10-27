@@ -1,0 +1,65 @@
+name: Stage verified native Mac release
+
+on:
+    workflow_call:
+        inputs:
+            source-ref:
+                type: string
+                default: ''
+            source-sha:
+                type: string
+                default: ''
+            release-tag:
+                type: string
+                default: ''
+            tooling-ref:
+                type: string
+                default: ''
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        if: github.event.repository.private == false
+        permissions:
+            contents: write
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                      appDir: mac
+                    - runner: macos-15
+                      arch: arm64
+                      appDir: mac-arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 45
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ inputs.tooling-ref || inputs.source-ref || github.ref }}
+            - name: Check out immutable app source separately for recovery
+              if: inputs.tooling-ref != ''
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ inputs.source-ref }}
+                  path: release-source
+            - uses: ./.github/actions/macos-build
+              with:
+                  arch: ${{ matrix.arch }}
+                  app-dir: ${{ matrix.appDir }}
+                  source-dir: ${{ inputs.tooling-ref && 'release-source' || '.' }}
+                  source-sha: ${{ inputs.source-sha || github.sha }}
+            - name: Stage only this architecture in the guarded private draft
+              working-directory: ${{ inputs.tooling-ref && 'release-source' || '.' }}
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_MAC_SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+                  HUB_MAC_RELEASE_TAG: ${{ inputs.release-tag || github.ref_name }}
+                  HUB_STAGING_SCRIPT: ${{ github.workspace }}/scripts/release-draft.mjs
+                  HUB_TOOLING_SHA: ${{ inputs.tooling-ref || github.sha }}
+              run: |
+                  printf 'App source: %s; release tooling: %s\n' "$HUB_MAC_SOURCE_SHA" "$HUB_TOOLING_SHA"
+                  GITHUB_SHA="$HUB_MAC_SOURCE_SHA" GITHUB_REF_NAME="$HUB_MAC_RELEASE_TAG" node "$HUB_STAGING_SCRIPT" stage "${{ matrix.arch }}"

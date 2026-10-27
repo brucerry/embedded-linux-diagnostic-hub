@@ -1,0 +1,106 @@
+name: Verify published Mac commands
+run-name:
+    ${{ format('Verify public Mac commands ({0})', inputs.published_tag || 'latest stable release')
+    }}
+
+on:
+    workflow_dispatch:
+        inputs:
+            published_tag:
+                description: 'Empty selects latest stable; explicit published tag checks history'
+                type: string
+                default: ''
+    workflow_call:
+        inputs:
+            published_tag:
+                type: string
+                default: ''
+    push:
+        branches: [main]
+        paths:
+            - .github/workflows/macos-published-verification.yml
+
+permissions:
+    contents: read
+
+jobs:
+    resolve-release:
+        name: Audit already published release (read only)
+        if: github.event.repository.private == false
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: read
+        outputs:
+            tag: ${{ steps.audit.outputs.tag }}
+            commit: ${{ steps.audit.outputs.commit }}
+            release-id: ${{ steps.audit.outputs.release-id }}
+            asset-count: ${{ steps.audit.outputs.asset-count }}
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Install descriptor validation dependencies without building the app
+              run: npm ci --ignore-scripts
+            - name: Download and validate the complete public release without publication
+              id: audit
+              run: node scripts/verify-published-release.mjs
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_PUBLISHED_TAG: ${{ inputs.published_tag }}
+    verify:
+        name: Verify audited public Mac command
+        needs: resolve-release
+        if: github.event.repository.private == false && needs.resolve-release.result == 'success'
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                    - runner: macos-15
+                      arch: arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 20
+        permissions:
+            contents: read
+        env:
+            HUB_APP_SOURCE: ${{ needs.resolve-release.outputs.commit }}
+            HUB_PUBLIC_TAG: ${{ needs.resolve-release.outputs.tag }}
+            HUB_PUBLIC_RELEASE_ID: ${{ needs.resolve-release.outputs.release-id }}
+            HUB_PUBLIC_ASSET_COUNT: ${{ needs.resolve-release.outputs.asset-count }}
+            HUB_PUBLISHED_TAG: ${{ inputs.published_tag }}
+            HUB_MAC_ARCH: ${{ matrix.arch }}
+        steps:
+            - uses: actions/checkout@v6
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ needs.resolve-release.outputs.tag }}
+                  path: release-source
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Confirm native architecture and audited consumer source
+              run: |
+                  test "$(node -p process.arch)" = "$HUB_MAC_ARCH"
+                  test "$(git -C release-source rev-parse HEAD)" = "$HUB_APP_SOURCE"
+                  printf 'Read-only public command audit: %s; consumer %s; harness %s\n' "$HUB_PUBLIC_TAG" "$HUB_APP_SOURCE" "$GITHUB_SHA"
+                  sw_vers
+            - name: Install only test dependencies, without app packaging
+              run: npm ci
+            - name: Record public HTTP status and respect confirmed server quota resets
+              working-directory: release-source
+              run: node "$GITHUB_WORKSPACE/tests/macos-published-transport.mjs"
+            - name: Verify actual documented public command, source and visible native app
+              working-directory: release-source
+              run:
+                  GITHUB_SHA="$HUB_APP_SOURCE" npx --no-install tsx
+                  "$GITHUB_WORKSPACE/tests/macos-published-smoke.ts"
+            - name: Verify downloaded installed SSH, trust, clock, reset and unsupported updates
+              working-directory: release-source
+              run: npx --no-install tsx tests/desktop-smoke.ts

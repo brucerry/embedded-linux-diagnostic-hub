@@ -1,0 +1,1 @@
+{"schema":2,"id":"de9fe795-04ef-4f73-9495-dca0123a6dea","flowId":"full-export-fixture","startedAt":"2026-10-15T17:00:00.000Z","receiveTimeSource":"local-client","target":{"endpoint":"owned synthetic journal"},"ready":{"role":"shell-prompt","literals":["fixture#"]}}

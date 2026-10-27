@@ -1,0 +1,292 @@
+{
+    "schema": 1,
+    "status": "Blocked until actual product adapters, reviewed policies and primary measurement window exist.",
+    "executionAuthority": "Primary owns the shared measurement lock. This file declares commands; it executes none.",
+    "sourceBaseline": {
+        "files": 519,
+        "sha256": "6fbf7f4d4dcce9af1944a3e15e483e144653be3325740e3fd5b4c89f4e9e7e1d",
+        "packageVersion": "0.5.2",
+        "note": "Recompute after all patches/version/artifact composition; never use this baseline hash for later gates."
+    },
+    "requiredCoverage": [
+        "run-success",
+        "run-repeat-delay",
+        "cancel-start",
+        "cancel-write",
+        "cancel-append",
+        "cancel-seal",
+        "cancel-outcome",
+        "quota-before-begin",
+        "quota-append",
+        "timeout",
+        "owner-loss",
+        "same-generation-rearm",
+        "stale-generation",
+        "connect-disconnect",
+        "pending-open",
+        "blocked-write",
+        "server-loss",
+        "client-loss",
+        "manual-pty-separate",
+        "stdout-stderr",
+        "transport-switch",
+        "page-switch-active",
+        "hide-show",
+        "unmount-remount",
+        "reload",
+        "versionchange",
+        "large-slow-capture",
+        "search-page-offscreen-selection",
+        "export-json",
+        "export-csv",
+        "export-markdown",
+        "export-text",
+        "export-cancel",
+        "export-failure",
+        "clear-reopen",
+        "constant-catalog",
+        "bounded-growing-catalog"
+    ],
+    "viewerCoverage": [
+        "viewer-open-close-live",
+        "viewer-pointer-keyboard",
+        "viewer-reduced-motion",
+        "viewer-svg",
+        "viewer-png",
+        "viewer-pdf",
+        "viewer-export-cancel-failure",
+        "viewer-unmount"
+    ],
+    "requiredOwners": [
+        "producer",
+        "channel",
+        "writer",
+        "reader",
+        "pin",
+        "export",
+        "ack",
+        "rpc",
+        "httpReader",
+        "queuedInput",
+        "cleanup",
+        "listenerDelta",
+        "timerDelta",
+        "databaseConnectionDelta"
+    ],
+    "viewerOwners": [
+        "listenerDelta",
+        "timerDelta",
+        "raf",
+        "observer",
+        "pointerCapture",
+        "worker",
+        "canvas",
+        "blobUrl",
+        "pdfWindow"
+    ],
+    "commands": {
+        "inspectFast": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=identity",
+            "--identity-for=fast",
+            "--out=validation/memory/fast-runtime.json"
+        ],
+        "inspectScale": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=identity",
+            "--identity-for=scale",
+            "--out=validation/memory/scale-runtime.json"
+        ],
+        "inspectSoakHarness": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=identity",
+            "--identity-for=soak",
+            "--out=validation/memory/soak-harness.json"
+        ],
+        "stageFastPolicy": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=policy",
+            "--policy-kind=fast",
+            "--profile=fast",
+            "--out=validation/memory/fast-policy-stage.json"
+        ],
+        "fastCalibration": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=calibrate",
+            "--profile=fast",
+            "--out=validation/memory/calibration-fast"
+        ],
+        "scaleCalibration": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=calibrate",
+            "--profile=scale",
+            "--out=validation/memory/calibration-scale"
+        ],
+        "fastGate": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=fast",
+            "--profile=fast",
+            "--policy=<staged-reviewed-fast-policy>",
+            "--policy-sha256=<independent-review-sha256>",
+            "--out=validation/memory/fast-gate"
+        ],
+        "scaleGate": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=fast",
+            "--profile=scale",
+            "--policy=<separately-reviewed-scale-policy>",
+            "--policy-sha256=<independent-scale-review-sha256>",
+            "--out=validation/memory/scale-gate"
+        ],
+        "negativeControls": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=negative",
+            "--policy=<staged-reviewed-fast-policy>",
+            "--policy-sha256=<same-independent-fast-review-sha256>",
+            "--out=validation/memory/negatives"
+        ],
+        "productCalibration": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=soak",
+            "--calibration=1",
+            "--lane=<desktop|browser|gateway>",
+            "--gc=<normal|forced>",
+            "--driver=<actual-frozen-product-adapter>",
+            "--source-sha256=<fresh-combined-source-hash>",
+            "--viewer=1",
+            "--out=validation/memory/product-calibration/<lane-gc-pair-run>"
+        ],
+        "stageProductPolicy": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=policy",
+            "--policy-kind=soak",
+            "--assessment-context=<reviewed-context-file>",
+            "--driver=<same-actual-product-adapter>",
+            "--lane=<lane>",
+            "--gc=<gc>",
+            "--viewer=1",
+            "--out=validation/memory/product-policy-stage.json"
+        ],
+        "productGate": [
+            "node",
+            "scripts/memory-runtime.mjs",
+            "--entry=soak",
+            "--lane=<desktop|browser|gateway>",
+            "--gc=<normal|forced>",
+            "--driver=<actual-frozen-product-adapter>",
+            "--source-sha256=<fresh-combined-source-hash>",
+            "--memory-policy=<matching-staged-reviewed-product-policy>",
+            "--viewer=1",
+            "--out=validation/memory/product-gate/<lane-gc>"
+        ]
+    },
+    "environment": {
+        "HUB_MEMORY_POLICY_JSON": "Exact externally reviewed JSON bytes; never generate ceilings from maxima.",
+        "HUB_MEMORY_POLICY_SHA256": "Independent review SHA256 of those exact bytes.",
+        "HUB_MEMORY_ASSESSMENT_SHA256": "For product policies, review SHA256 of actual calibration assessment-context JSON bytes."
+    },
+    "lanes": [
+        {
+            "id": "fast",
+            "scope": "Node component/native Serial + synthetic SSH, 3 warmup and12 measured1MiB cycles",
+            "policy": "Separate exact-source/runtime sampled policy; actual five negative controls use the same policy.",
+            "status": "unrun"
+        },
+        {
+            "id": "scale",
+            "scope": "Same component cycle at64MiB",
+            "policy": "Own calibration/policy; fast policy cannot transfer.",
+            "status": "unrun"
+        },
+        {
+            "id": "desktop-normal",
+            "scope": "Actual product driver; 5min warmup+25min measured, >=100 cycles, all requested viewer cases.",
+            "policy": "Ten matched actual sampled receipts per reviewed scope; unsampled controls separately bound.",
+            "status": "blocked-product-adapter-and-policy"
+        },
+        {
+            "id": "desktop-forced",
+            "scope": "Actual product driver; 5min warmup+25min measured, >=100 cycles, all requested viewer cases.",
+            "policy": "Ten matched actual sampled receipts per reviewed scope; unsampled controls separately bound.",
+            "status": "blocked-product-adapter-and-policy"
+        },
+        {
+            "id": "browser-normal",
+            "scope": "Actual product driver; 5min warmup+25min measured, >=100 cycles, all requested viewer cases.",
+            "policy": "Ten matched actual sampled receipts per reviewed scope; unsampled controls separately bound.",
+            "status": "blocked-product-adapter-and-policy"
+        },
+        {
+            "id": "browser-forced",
+            "scope": "Actual product driver; 5min warmup+25min measured, >=100 cycles, all requested viewer cases.",
+            "policy": "Ten matched actual sampled receipts per reviewed scope; unsampled controls separately bound.",
+            "status": "blocked-product-adapter-and-policy"
+        },
+        {
+            "id": "gateway-normal",
+            "scope": "Actual product driver; 5min warmup+25min measured, >=100 cycles, all requested viewer cases.",
+            "policy": "Ten matched actual sampled receipts per reviewed scope; unsampled controls separately bound.",
+            "status": "blocked-product-adapter-and-policy"
+        },
+        {
+            "id": "gateway-forced",
+            "scope": "Actual product driver; 5min warmup+25min measured, >=100 cycles, all requested viewer cases.",
+            "policy": "Ten matched actual sampled receipts per reviewed scope; unsampled controls separately bound.",
+            "status": "blocked-product-adapter-and-policy"
+        }
+    ],
+    "platformMatrix": [
+        {
+            "platform": "Windows11/x64",
+            "artifacts": [
+                "actual portable exe",
+                "unpacked desktop",
+                "staged web",
+                "actual gateway archive"
+            ],
+            "required": "Desktop/browser/gateway normal and supported forced diagnostics; Chromium/Firefox/WebKit applicability documented.",
+            "status": "unrun"
+        },
+        {
+            "platform": "Linux/x64",
+            "artifacts": [
+                "AppImage consumed without install assumptions",
+                "unpacked/tar desktop",
+                "staged web",
+                "actual gateway archive"
+            ],
+            "required": "Same product/role scopes; actual session/headless/GPU/libc/runtime identity.",
+            "status": "unrun"
+        },
+        {
+            "platform": "macOS/x64 and arm64",
+            "artifacts": [
+                "actual documented Mac consumer/runtime",
+                "staged web",
+                "actual gateway archive where supported"
+            ],
+            "required": "Qualify each architecture separately; unavailable engine/GC/platform lanes remain explicit blockers or reviewed applicability decisions.",
+            "status": "unrun"
+        }
+    ],
+    "identityAndStateRules": [
+        "Source fingerprint includes tracked source and other non-excluded files; put all generated policy/evidence under validation/.",
+        "Bind source, adapter entry hash and transitive source/artifact inventory, exact executable hash/path, Node/browser/Electron versions, launch flags, GC/observer/viewer modes and hardware/session identity.",
+        "No policy transfer between fast/scale, sampled/disabled observer, normal/forced GC, product/component, engines, architectures or shipping/development artifacts.",
+        "Demonstrate >=3 warmed matching catalog-mode/diskRecords/PID+creation checkpoints before comparing measured series. New renderer identities and never-warmed growing states are unqualified.",
+        "Raw product calibration exits mean collection completed, never reviewed/calibrated leak bounds.",
+        "Handle exit is terminated/null metrics, never fabricated zero memory. Peak RSS is a sampling lower bound; ArrayBuffers overlap external.",
+        "Document caches and durable disk cardinality independently from abandoned owners."
+    ]
+}

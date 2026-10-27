@@ -1,0 +1,18 @@
+Description:
+Diagnostic Hub v0.4.0 adds complete native Intel and Apple Silicon Mac downloads and a verified one-line installer/launcher, alongside the existing Windows/Linux apps, website and gateway.
+Mac apps have ad-hoc integrity signatures; they are not Developer ID signed or notarized. Updates are manual. Hosted command-line checks do not qualify Safari quarantine, managed devices, older macOS or physical Macs/boards.
+
+Changes:
+- Ship complete x64 and arm64 Mac app ZIPs with same-release SHA-256 sidecars and source/version/architecture/minimum-OS/ASAR/signature manifests.
+- Add a Bash 3.2 installer using built-in macOS tools, native architecture selection including translated terminals, verified private staging, running-app refusal, rollback, no-launch and explicit version/directory options. Preserve Gatekeeper, quarantine and user data.
+- Reuse full native Mac qualification, browser and packaged SSH/clock/reset/trust checks and 100 window/terminal cycles; retain Windows/Linux/seven GNOME and website gates.
+- Stage native files only in a new source-bound private draft, verify anonymous denial, and publish all 24 validated files after every gate. Use existing free public native runners/job tokens without Mac Actions artifacts/caches or paid services.
+- Test the actual published command, normally launched app and downloaded packaged SSH behavior on both hosted Mac architectures; document remaining trust and physical-device limits.
+
+Commits:
+- The generator replaces this draft with the complete validated range since published v0.3.1.
+
+Links:
+Downloads and setup - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.4.0/docs/downloads.md
+Mac installation and qualification - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.4.0/docs/macos-qualification.md
+Build and release delivery - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.4.0/docs/delivery.md

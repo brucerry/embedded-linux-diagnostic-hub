@@ -1,0 +1,315 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFile, writeFile, mkdir, lstat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
+import {
+    requireNewRelease,
+    requireOwnedDraft,
+    requireAnonymousDenial,
+    selectOwnedDraft,
+    listAllReleases,
+} from './lib/release-draft.mjs';
+import { releaseAssets, releaseCatalog } from './lib/release-assets.mjs';
+import { validateFinalReleaseNotes } from './lib/release-notes.mjs';
+import {
+    EXISTING_RELEASE,
+    requireExistingSource,
+    validateExistingQualification,
+    validateExistingReceipt,
+    requireExistingInventory,
+    validateExistingFiles,
+} from './lib/existing-release-recovery.mjs';
+import { MAC_ARCHES, macAsset, macManifest } from './lib/macos-release.mjs';
+import { validateReusedMacInventory, validateReusedMacFiles } from './lib/release-recovery.mjs';
+
+const repo = process.env.GITHUB_REPOSITORY;
+assert.equal(repo, 'brucerry/embedded-linux-diagnostic-hub');
+const token = process.env.GH_TOKEN;
+assert.ok(token, 'Use the current job token.');
+const tag = process.env.GITHUB_REF_NAME;
+const commit = process.env.GITHUB_SHA;
+const { version } = JSON.parse(await readFile('package.json', 'utf8'));
+const api = 'https://api.github.com/repos/' + repo;
+const headers = {
+    Authorization: 'Bearer ' + token,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+};
+async function request(url, method = 'GET', body) {
+    assert.ok(
+        url.startsWith('https://api.github.com/') || url.startsWith('https://uploads.github.com/'),
+    );
+    const response = await fetch(url, {
+        method,
+        headers: { ...headers, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+        redirect: 'error',
+    });
+    if (!response.ok) throw Error('GitHub ' + method + ' failed: ' + response.status);
+    return response.json();
+}
+const repository = await request(api);
+const tagCommit = execFileSync('git', ['rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'], {
+    encoding: 'utf8',
+}).trim();
+const marker = requireNewRelease({ tag, version, commit, tagCommit, repository });
+const context = { tag, commit, marker };
+async function releases() {
+    return listAllReleases((page) => request(api + '/releases?per_page=100&page=' + page));
+}
+let releaseId;
+async function draft() {
+    if (!releaseId) releaseId = selectOwnedDraft(await releases(), context).id;
+    const owned = requireOwnedDraft(await request(api + '/releases/' + releaseId), context);
+    assert.equal(owned.id, releaseId, 'Draft identity changed.');
+    return owned;
+}
+async function privateDraft(release) {
+    await requireAnonymousDenial(api + '/releases/410956079', fetch, { expectedStatus: 200 });
+    await requireAnonymousDenial(api + '/releases/' + release.id);
+    for (const asset of release.assets) {
+        await requireAnonymousDenial(asset.browser_download_url);
+    }
+}
+async function upload(release, file) {
+    await draft();
+    assert.ok(
+        !release.assets.some((a) => a.name === file),
+        'Asset already exists; refuse overwrite: ' + file,
+    );
+    const body = await readFile(path.join('release', file));
+    const url = release.upload_url.split('{')[0] + '?name=' + encodeURIComponent(file);
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/octet-stream' },
+        body,
+        redirect: 'error',
+    });
+    assert.equal(response.status, 201, 'Asset upload failed: ' + file);
+    const asset = await response.json();
+    assert.equal(asset.name, file);
+    assert.equal(asset.size, body.length);
+    assert.equal(
+        asset.digest,
+        'sha256:' + createHash('sha256').update(body).digest('hex'),
+        'Uploaded asset digest mismatch.',
+    );
+    await requireAnonymousDenial(asset.browser_download_url);
+}
+const [mode, arch] = process.argv.slice(2);
+if (mode === 'create') {
+    const existing = (await releases()).filter((release) => release.tag_name === tag);
+    assert.equal(existing.length, 0, 'New release tag must have no published release or draft.');
+    const created = await request(api + '/releases', 'POST', {
+        tag_name: tag,
+        target_commitish: commit,
+        name: tag,
+        body: marker,
+        draft: true,
+        prerelease: tag.includes('-'),
+    });
+    requireOwnedDraft(created, context);
+    await privateDraft(created);
+    console.log(
+        'Created guarded unpublished draft ' +
+            tag +
+            ' at ' +
+            commit +
+            '; anonymous API access denied.',
+    );
+} else if (mode === 'resume' || mode === 'resume-reuse') {
+    const existing = await draft();
+    if (mode === 'resume-reuse') validateReusedMacInventory(existing);
+    await privateDraft(existing);
+    console.log(
+        'Resuming only owned unpublished draft ID ' +
+            existing.id +
+            ': ' +
+            tag +
+            ' at ' +
+            commit +
+            '; authenticated ID lookup succeeded and anonymous actual-ID/asset access denied.',
+    );
+} else if (mode === 'stage') {
+    assert.ok(MAC_ARCHES.includes(arch));
+    for (const file of [macAsset(arch), macAsset(arch) + '.sha256', macManifest(arch)])
+        await upload(await draft(), file);
+    await privateDraft(await draft());
+    console.log('Staged native ' + arch + ' assets; anonymous asset/API access denied.');
+} else if (mode === 'download' || mode === 'reuse') {
+    const release = await draft();
+    if (mode === 'reuse') {
+        validateReusedMacInventory(release);
+        assert.ok(arch === 'all' || MAC_ARCHES.includes(arch));
+        // Metadata privacy is checked centrally by resume-reuse and again before publication.
+        // These native readers independently verify the actual private asset URLs.
+        for (const asset of release.assets)
+            await requireAnonymousDenial(asset.browser_download_url);
+    } else await privateDraft(release);
+    await mkdir('release', { recursive: true });
+    const architectures = mode === 'reuse' && arch !== 'all' ? [arch] : MAC_ARCHES;
+    for (const architecture of architectures)
+        for (const name of [
+            macAsset(architecture),
+            macAsset(architecture) + '.sha256',
+            macManifest(architecture),
+        ]) {
+            const asset = release.assets.find((a) => a.name === name);
+            assert.ok(asset, 'Missing Mac draft asset: ' + name);
+            const response = await fetch(asset.url, {
+                headers: { ...headers, Accept: 'application/octet-stream' },
+                redirect: 'manual',
+            });
+            let downloaded = response;
+            if (response.status !== 200) {
+                assert.ok(
+                    [302, 307].includes(response.status),
+                    'Authenticated asset download failed.',
+                );
+                const location = new URL(response.headers.get('location'));
+                assert.equal(location.protocol, 'https:');
+                assert.ok(
+                    [
+                        'release-assets.githubusercontent.com',
+                        'objects.githubusercontent.com',
+                    ].includes(location.hostname),
+                    'Unexpected asset host.',
+                );
+                downloaded = await fetch(location, { redirect: 'error' });
+            }
+            assert.equal(downloaded.status, 200);
+            const bytes = Buffer.from(await downloaded.arrayBuffer());
+            assert.equal(bytes.length, asset.size);
+            assert.equal(
+                asset.digest,
+                'sha256:' + createHash('sha256').update(bytes).digest('hex'),
+                'Downloaded draft digest mismatch.',
+            );
+            await writeFile(path.join('release', name), bytes);
+        }
+    if (mode === 'reuse')
+        for (const architecture of architectures) {
+            const files = Object.fromEntries(
+                await Promise.all(
+                    [
+                        macAsset(architecture),
+                        macAsset(architecture) + '.sha256',
+                        macManifest(architecture),
+                    ].map(async (name) => [name, await readFile(path.join('release', name))]),
+                ),
+            );
+            validateReusedMacFiles(files, architecture);
+        }
+    console.log('Downloaded and verified native Mac draft bytes through authenticated API.');
+} else if (mode === 'publish' || mode === 'publish-existing') {
+    // Recovery retains its separately pinned historical gate. New releases must consume the
+    // final staged bytes on every required native platform before any publication upload/write.
+    if (mode === 'publish')
+        execFileSync(process.execPath, ['scripts/staged-artifact-gate.mjs', 'verify'], {
+            stdio: 'inherit',
+        });
+    let receipt;
+    async function qualifiedExistingSource() {
+        const p = EXISTING_RELEASE;
+        const [run, jobs, artifacts, remoteRef, remoteTag] = await Promise.all([
+            request(api + '/actions/runs/' + p.run),
+            request(api + '/actions/runs/' + p.run + '/jobs?per_page=100'),
+            request(api + '/actions/runs/' + p.run + '/artifacts?per_page=100'),
+            request(api + '/git/ref/tags/' + p.tag),
+            request(api + '/git/tags/' + p.tagObject),
+        ]);
+        assert.equal(jobs.total_count, jobs.jobs.length);
+        assert.equal(artifacts.total_count, artifacts.artifacts.length);
+        requireExistingSource(tag, commit, remoteRef, remoteTag);
+        validateExistingQualification(run, jobs.jobs, artifacts.artifacts);
+    }
+    if (mode === 'publish-existing') {
+        assert.ok(arch, 'Choose the validated existing inventory receipt.');
+        const stat = await lstat(arch);
+        assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024);
+        receipt = validateExistingReceipt(
+            JSON.parse(await readFile(arch, 'utf8')),
+            process.env.HUB_TOOLING_SHA,
+        );
+        await qualifiedExistingSource();
+    }
+    let release = await draft();
+    if (receipt) requireExistingInventory(release, receipt.inventory);
+    await privateDraft(release);
+    const expected = releaseCatalog(version);
+    if (receipt)
+        assert.deepEqual(
+            release.assets.map((a) => a.name).sort(),
+            expected,
+            'Existing-only recovery refuses missing assets.',
+        );
+    else
+        for (const name of expected)
+            if (!release.assets.some((a) => a.name === name)) {
+                await upload(await draft(), name);
+                release = await draft();
+            }
+    assert.deepEqual(release.assets.map((a) => a.name).sort(), expected);
+    for (const asset of release.assets) {
+        const bytes = await readFile(path.join('release', asset.name));
+        assert.equal(asset.size, bytes.length);
+        assert.equal(
+            asset.digest,
+            'sha256:' + createHash('sha256').update(bytes).digest('hex'),
+            'Staged asset differs from validated bytes: ' + asset.name,
+        );
+    }
+    if (receipt) {
+        const files = Object.fromEntries(
+            await Promise.all(
+                receipt.inventory.map(async (asset) => [
+                    asset.name,
+                    await readFile(path.join('release', asset.name)),
+                ]),
+            ),
+        );
+        const blob = (name) =>
+            execFileSync('git', ['show', tag + ':' + name], { maxBuffer: 32 * 1024 * 1024 });
+        validateExistingFiles(files, receipt.inventory, blob);
+    }
+    await privateDraft(release);
+    // Validation happened earlier in this job; validate again immediately before publication.
+    execFileSync(process.execPath, ['scripts/verify-release.mjs', '--assets'], {
+        stdio: 'inherit',
+    });
+    // verify-release rewrites package notes: regenerate the final four-section notes.
+    execFileSync(process.execPath, ['scripts/release-notes.mjs'], { stdio: 'inherit' });
+    const finalNotes = await readFile('release/notes.md', 'utf8');
+    validateFinalReleaseNotes(finalNotes, tag);
+    if (receipt) await qualifiedExistingSource();
+    if (mode === 'publish')
+        execFileSync(process.execPath, ['scripts/staged-artifact-gate.mjs', 'verify'], {
+            stdio: 'inherit',
+        });
+    release = await draft();
+    // This is the final read immediately before the sole recovery write.
+    if (receipt) requireExistingInventory(release, receipt.inventory);
+    const published = await request(api + '/releases/' + release.id, 'PATCH', {
+        draft: false,
+        body: finalNotes,
+        make_latest: tag.includes('-') ? 'false' : 'true',
+    });
+    assert.equal(published.draft, false);
+    assert.equal(published.tag_name, tag);
+    assert.equal(published.target_commitish, commit);
+    if (receipt)
+        assert.deepEqual(
+            published.assets
+                .map(({ id, name, size, digest }) => ({ id, name, size, digest }))
+                .sort((a, b) => a.name.localeCompare(b.name)),
+            receipt.inventory,
+            'Published inventory changed.',
+        );
+    console.log(
+        'Published ' + published.html_url + ' with ' + expected.length + ' verified assets.',
+    );
+} else
+    throw Error(
+        'Usage: release-draft.mjs create|resume|resume-reuse|stage ARCH|download|reuse ARCH|publish|publish-existing RECEIPT',
+    );

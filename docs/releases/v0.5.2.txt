@@ -1,0 +1,25 @@
+📋 Description:
+Diagnostic Hub v0.5.2 improves Serial read recovery, Automation input and ordering, and the SSH/Serial terminal presentation. It keeps the existing portable Windows, Linux AppImage/archive and verified manual Mac delivery formats.
+Basic COM11 connect/send/receive was confirmed by the user on Windows 11. Adapter power-cycle, hotplug and revised Automation acceptance remain separate; Chromium can still omit OS-valid ports. UART enablement, wiring and target operation remain the user's responsibility.
+Guided installation is a separate development milestone. This release contains no new wizard, installer, installed-mode updater or startup-performance claim. Mac ad-hoc integrity is not Developer ID signing/notarization; physical/managed-host and browser-quarantine acceptance remain separate from native CI.
+
+🔧 Changes:
+- Recover recognized Serial read interruptions only through a fresh readable stream on the same owned port, with abort/generation guards and no automatic port reopen or input replay.
+- Interrupt Automation safely when Serial capture is lost; pending writes require a bounded close and explicit manual reconnect.
+- Add an explicit optional Serial Enter-only step with CR/LF/CRLF selection, retain invalid-empty SSH checks, and separate local input annotations from receive capture and exports.
+- Share terminal cursor/selection styling and keyboard-accessible Copy/Paste controls between SSH and Serial.
+- Improve Automation card drag previews, edge scrolling and keyboard ordering while preserving execution ownership and timing safeguards.
+- Align SSH/Serial terminal frame height, refine the beach scene and add slow asynchronous stars with reduced-motion and inactive-page handling.
+- Remove duplicate COM placeholders and simplify Serial controls/documentation; preserve offered-port identity without USB metadata merging.
+- Keep exact Serial resize containment checks while waiting for settled geometry, retain Mac failure traces, and consolidate platform/operator documentation.
+- Preserve verified portable update/report recovery, host security policy, published release history and all existing delivery assets; add no dependencies.
+
+🔖 Commits:
+- The generator replaces this draft with the complete validated range since published v0.5.1.
+
+🔗 Links:
+[Full comparison](https://github.com/brucerry/embedded-linux-diagnostic-hub/compare/v0.5.1...v0.5.2)
+[Downloads and setup](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.2/docs/downloads.md)
+[Serial support and limitations](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.2/docs/serial.md)
+[Automation and QA exports](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.2/docs/automation.md)
+[Update platform coverage](https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.2/docs/usage.md#update-platform-coverage)

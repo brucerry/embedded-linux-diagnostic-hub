@@ -1,0 +1,102 @@
+{
+    "profile": {
+        "schemaVersion": 1,
+        "id": "simulation-bench",
+        "revision": "1",
+        "name": "Engineering bench example",
+        "boardRevision": "Example A",
+        "match": {
+            "model": "Simulated engineering board",
+            "compatible": "diagnostic-hub,simulation",
+            "manual": false
+        },
+        "resources": [
+            {
+                "id": "led-1",
+                "domain": "led",
+                "selector": {
+                    "ofNode": "/leds/status",
+                    "name": "green:status"
+                }
+            },
+            {
+                "id": "uart-2",
+                "domain": "uart",
+                "selector": {
+                    "ofNode": "/soc/serial@1000"
+                }
+            },
+            {
+                "id": "i2c-3",
+                "domain": "i2c",
+                "selector": {
+                    "ofNode": "/soc/i2c@2000/sensor@48",
+                    "address": 72
+                }
+            }
+        ],
+        "tests": [
+            {
+                "id": "test-led-1",
+                "name": "Status LED pattern",
+                "adapter": "led.pattern",
+                "resource": "led-1",
+                "required": true,
+                "fixture": "Observer can see the green status LED.",
+                "expected": "Three green flashes.",
+                "parameters": {
+                    "cycles": 3,
+                    "level": 255,
+                    "intervalMs": 500
+                }
+            },
+            {
+                "id": "test-uart-2",
+                "name": "Service UART loopback",
+                "adapter": "uart.loopback",
+                "resource": "uart-2",
+                "required": true,
+                "fixture": "Approved TX/RX loopback fixture on the service UART.",
+                "expected": "Receive every transmitted byte unchanged.",
+                "parameters": {
+                    "baud": 115200,
+                    "payload": "Diagnostic Hub loopback\r\n",
+                    "timeoutMs": 2000
+                }
+            },
+            {
+                "id": "test-i2c-3",
+                "name": "Sensor identity",
+                "adapter": "i2c.identity",
+                "resource": "i2c-3",
+                "required": true,
+                "fixture": "Approved identity fixture at address 0x48; register 0x00 is safe to read.",
+                "expected": "Register 0x00 returns 0x44.",
+                "parameters": {
+                    "register": 0,
+                    "expected": 68,
+                    "mask": 255
+                }
+            }
+        ],
+        "sequences": [
+            {
+                "id": "bench",
+                "name": "Bench sequence",
+                "tests": ["test-led-1", "test-uart-2", "test-i2c-3"],
+                "stopOnFailure": false
+            }
+        ]
+    },
+    "testIds": ["test-uart-2", "test-i2c-3"],
+    "fixtures": {
+        "test-uart-2": {
+            "ready": true,
+            "identity": "Simulated loopback fixture"
+        },
+        "test-i2c-3": {
+            "ready": true,
+            "identity": "Simulated identity fixture"
+        }
+    }
+}

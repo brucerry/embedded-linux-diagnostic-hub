@@ -1,0 +1,36 @@
+name: Qualify macOS desktop (free runners)
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: macos-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    qualify:
+        if: github.event.repository.private == false
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                      appDir: mac
+                    - runner: macos-15
+                      arch: arm64
+                      appDir: mac-arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 45
+        steps:
+            - uses: actions/checkout@v6
+            - uses: ./.github/actions/macos-build
+              with:
+                  arch: ${{ matrix.arch }}
+                  app-dir: ${{ matrix.appDir }}

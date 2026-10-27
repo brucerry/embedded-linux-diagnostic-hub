@@ -1,0 +1,127 @@
+name: Build and qualify native Mac distribution
+description:
+    Shared native build, installer, SSH and window qualification; retain failed browser diagnostics
+    without storing app artifacts or caches.
+inputs:
+    arch:
+        required: true
+        description: Native Node architecture
+    app-dir:
+        required: true
+        description: electron-builder architecture directory
+    source-dir:
+        default: '.'
+        description: Checked-out app source directory
+    source-sha:
+        default: ''
+        description: Pinned app source; defaults to the current workflow source
+runs:
+    using: composite
+    steps:
+        - uses: actions/setup-node@v7
+          with:
+              node-version: '24'
+              package-manager-cache: false
+        - name: Confirm native runner architecture and actual app source
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          env:
+              HUB_MAC_SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+              HUB_MAC_ARCH: ${{ inputs.arch }}
+          run: |
+              test "$(node -p process.arch)" = "$HUB_MAC_ARCH"
+              test "$(git rev-parse HEAD)" = "$HUB_MAC_SOURCE_SHA"
+              sw_vers
+              node --version
+              printf 'Qualification source: %s\n' "$HUB_MAC_SOURCE_SHA"
+        - shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npm ci
+        - shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npm run verify
+        - shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npm run build
+        - shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npm run build:web
+        - shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npm run build:gateway
+        - shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npx playwright install chromium
+        - name: Run the full browser suite with one worker
+          id: browser-suite
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npm run test:e2e -- --workers=1
+        - name: Retain failed browser traces and geometry
+          if: ${{ failure() && steps.browser-suite.outcome == 'failure' }}
+          uses: actions/upload-artifact@v4
+          with:
+              name:
+                  macos-browser-failure-${{ inputs.arch }}-${{ github.run_id }}-${{
+                  github.run_attempt }}
+              path: ${{ inputs.source-dir }}/test-results/
+              if-no-files-found: warn
+              retention-days: 3
+        - name: Verify development SSH, trust, clock, reset and unsupported updates
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npx tsx tests/desktop-smoke.ts
+        - name: Generate full-resolution Mac icon from the shared SVG
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: node scripts/generate-macos-icon.mjs
+        - name: Build complete ad-hoc app directory
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run:
+              npx electron-builder --mac dir --${{ inputs.arch }} --publish never
+              --config.mac.identity=- --config.mac.hardenedRuntime=false
+              --config.mac.icon=release/macos-icon.png
+          env:
+              CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        - name: Verify native ZIP roundtrip, bundle integrity and packaged source
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          env:
+              HUB_MAC_SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+          run:
+              GITHUB_SHA="$HUB_MAC_SOURCE_SHA" node scripts/package-macos.mjs "release/${{
+              inputs.app-dir }}/Diagnostic Hub.app" "${{ inputs.arch }}"
+        - name: Exercise installer rejection, rollback, spaces and native installed app
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          env:
+              HUB_MAC_SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+          run: GITHUB_SHA="$HUB_MAC_SOURCE_SHA" node tests/macos-installer-smoke.mjs
+        - name: Verify installed SSH, trust, clock, reset and unsupported updates
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npx tsx tests/desktop-smoke.ts
+        - name: Verify native manual-update guidance and launchable bundle paths
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: |
+              if [ -f tests/macos-manual-update-smoke.ts ]; then
+                  npx tsx tests/macos-manual-update-smoke.ts
+              else
+                  # Immutable older source cannot qualify a later UI/API.
+                  node -e "if(require('semver').gt(require('./package.json').version,'0.5.0'))throw Error('Required Mac manual-flow test is missing')"
+                  printf '%s\n' 'Legacy source: later Mac manual-guidance test unavailable; existing unsupported-update and installer checks retained.'
+              fi
+        - name: Stress installed native windows and in-place terminal
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run: npx tsx tests/native-window-smoke.ts
+          env:
+              HUB_NATIVE_CYCLES: '100'
+        - name: State qualification limits
+          shell: bash
+          working-directory: ${{ inputs.source-dir }}
+          run:
+              printf '%s\n' 'Native CI installation and launch; no Safari quarantine, notarization,
+              older macOS or physical-device acceptance.'

@@ -1,0 +1,21 @@
+Description:
+Diagnostic Hub v0.5.0 adds a local Serial terminal, readable WLAN/LAN summaries and ordered SSH/Serial Automation with scheduling and QA exports. Ordinary network diagnostics remain bounded and read-only; operator scripts execute only after explicit arming.
+Physical UART/adapter, hotplug/control-line, actual Linux iw/ip driver evidence and managed-device/physical Mac acceptance have not been qualified. The user will test Serial on Windows 11 at work. Target UART enablement, wiring and target operation remain the user's responsibility. No host permissions or security controls are changed.
+
+Changes:
+- Add independent local COM/tty selection, explicit Connect/Disconnect/Deselect, configurable framing, bounded terminal bytes and safe cleanup without automatic reconnect/replay. Include the sun-only animated pig/duck beach with reduced-motion support.
+- Scope Electron Serial access to the trusted main document, fence ownership across replacement/disconnect/update and expose missing, unsupported, denied and busy states honestly.
+- Add WLAN/LAN summary layouts with separate current state, peer observations, PHY/channel/regulatory capabilities, addresses/routes/neighbors and exact counters. Preserve raw/advanced evidence and legacy report imports; do not start RF scans or change network configuration.
+- Add ordered named multiline SSH/Serial flows with immutable execution snapshots, validated wall-clock starts, elapsed delays, off-by-default repetition, exclusive input and explicit rearming after interruption. Preserve genuine exits and signal metadata; pause uncertain completion.
+- Add bounded result review and local JSON/CSV/Markdown/text exports with timestamps/provenance, exact JSON bytes and safe human-readable/control/formula handling.
+- Retire only the obsolete manual v0.4.0 recovery workflow; preserve reusable recovery validators, historical evidence, published assets and Git history.
+
+Commits:
+- The generator replaces this draft with the complete validated range since published v0.4.0.
+
+Links:
+Downloads and setup - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/downloads.md
+Local Serial terminal - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/serial.md
+Network insights - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/network-insights.md
+Automation and QA exports - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/automation.md
+Work-environment acceptance checklist - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.5.0/docs/hardware.md#v050-work-environment-acceptance-checklist

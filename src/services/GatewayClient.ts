@@ -1,0 +1,514 @@
+import { coalesceTerminalEvents } from './gateway-terminal-events';
+import { validateCapture } from '../../shared/automation';
+import { streamRequest, type SshStreamRequest } from '../../shared/ssh-stream-rpc';
+import { consoleRpcRequest, type ConsoleRpcRequest } from '../../shared/console-rpc';
+import { validateSnapshot } from '../../shared/report';
+import {
+    ConnectionFailure,
+    CONNECTION_FAILURE_MESSAGES,
+    connectionAttemptId,
+    type ConnectionFailureCode,
+} from '../../shared/connection';
+import {
+    validateDeviceClock,
+    type DeviceClockResponse,
+} from '../../shared/diagnostics/device-clock';
+import type { ConnectOptions, Snapshot } from '../../shared/types';
+import {
+    terminalEvent,
+    terminalId,
+    terminalSize,
+    terminalData,
+    type TerminalEvent,
+    type TerminalOpen,
+    type TerminalSize,
+    type TerminalTransport,
+} from '../../shared/terminal';
+
+export interface GatewaySettings {
+    url: string;
+    token: string;
+}
+
+export class GatewayClient implements TerminalTransport {
+    readonly url: string;
+    private sessionId = '';
+    private connectionAttempt?: { id: string; controller: AbortController; posted: boolean };
+    private listeners = new Set<() => void>();
+    private readonly token: string;
+    private heartbeat: ReturnType<typeof setInterval> | null = null;
+    private readonly onPageHide = () => this.releaseOnPageExit();
+    private terminalAbort?: AbortController;
+    private clockAbort?: AbortController;
+    private terminalListeners = new Set<(event: TerminalEvent) => void | Promise<void>>();
+
+    private stopLifecycle(): void {
+        this.clockAbort?.abort();
+        this.clockAbort = undefined;
+        this.terminalAbort?.abort();
+        this.terminalAbort = undefined;
+        if (this.heartbeat) clearInterval(this.heartbeat);
+        this.heartbeat = null;
+        window.removeEventListener('pagehide', this.onPageHide);
+    }
+
+    private releaseOnPageExit(): void {
+        const attempt = this.connectionAttempt;
+        this.connectionAttempt = undefined;
+        attempt?.controller.abort();
+        if (attempt?.posted)
+            void fetch(`${this.url}/api/connection-attempts/cancel`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ attemptId: attempt.id }),
+                credentials: 'omit',
+                cache: 'no-store',
+                keepalive: true,
+            }).catch(() => {});
+        const id = this.sessionId;
+        this.sessionId = '';
+        this.stopLifecycle();
+        if (!id) return;
+        // Page exit delivery is best-effort; gateway idle expiry handles crashes/offline exits.
+        void fetch(`${this.url}/api/sessions/${id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${this.token}` },
+            credentials: 'omit',
+            cache: 'no-store',
+            keepalive: true,
+        }).catch(() => {});
+        for (const listener of this.listeners) listener();
+    }
+
+    constructor(settings: GatewaySettings) {
+        const url = new URL(settings.url);
+        const localDevelopment =
+            location.protocol === 'http:' &&
+            ['localhost', '127.0.0.1'].includes(url.hostname) &&
+            url.protocol === 'http:';
+        if (url.protocol !== 'https:' && !localDevelopment)
+            throw new Error(
+                'Use an HTTPS gateway address. HTTP loopback is allowed only in local development.',
+            );
+        if (url.username || url.password || url.search || url.hash)
+            throw new Error(
+                'Enter the gateway URL without embedded credentials, query strings or fragments.',
+            );
+        this.url = url.toString().replace(/\/$/, '');
+        if (settings.token.length < 32)
+            throw new Error('Enter the gateway access token supplied by your administrator.');
+        this.token = settings.token;
+    }
+
+    private async request(
+        route: string,
+        method = 'GET',
+        data?: unknown,
+        options?: { signal?: AbortSignal; clock?: boolean; stream?: boolean },
+    ): Promise<Record<string, unknown>> {
+        const sessionAtStart = this.sessionId;
+        let response: Response;
+        try {
+            response = await fetch(`${this.url}${route}`, {
+                method,
+                headers: {
+                    Authorization: `Bearer ${this.token}`,
+                    ...(data === undefined ? {} : { 'Content-Type': 'application/json' }),
+                },
+                body: data === undefined ? undefined : JSON.stringify(data),
+                credentials: 'omit',
+                cache: 'no-store',
+                signal: options?.signal ?? AbortSignal.timeout(180_000),
+            });
+        } catch {
+            if (options?.signal?.aborted && options.signal.reason?.name !== 'TimeoutError')
+                throw new ConnectionFailure('cancelled', 'Connection cancelled.');
+            throw new ConnectionFailure(
+                'network',
+                'Cannot reach the gateway. Check its HTTPS address, allowed website origin and network access.',
+            );
+        }
+        let payload: Record<string, unknown>;
+        try {
+            payload = await response.json();
+        } catch {
+            throw new Error('The gateway returned an invalid response.');
+        }
+        if (!response.ok) {
+            if (
+                this.sessionId &&
+                this.sessionId === sessionAtStart &&
+                [401, 404].includes(response.status) &&
+                !route.includes('/terminal') &&
+                !(options?.stream && response.status === 404) &&
+                !(options?.clock && response.status === 404)
+            ) {
+                this.sessionId = '';
+                this.stopLifecycle();
+                for (const listener of this.listeners) listener();
+            }
+            if (options?.clock && response.status === 404)
+                return { status: 'unavailable', reason: 'unsupported' };
+            const code: ConnectionFailureCode =
+                typeof payload.code === 'string' &&
+                Object.hasOwn(CONNECTION_FAILURE_MESSAGES, payload.code)
+                    ? (payload.code as ConnectionFailureCode)
+                    : [400, 401, 403, 404, 409, 415].includes(response.status)
+                      ? 'policy'
+                      : 'network';
+            throw new ConnectionFailure(code, CONNECTION_FAILURE_MESSAGES[code]);
+        }
+        return payload;
+    }
+
+    async discover(options: ConnectOptions): Promise<string> {
+        const data = await this.request('/api/fingerprint', 'POST', {
+            host: options.host,
+            port: options.port,
+            username: options.username,
+            auth: 'password',
+        });
+        if (typeof data.fingerprint !== 'string')
+            throw new Error('Gateway did not return a host fingerprint.');
+        return data.fingerprint;
+    }
+
+    async connect(options: ConnectOptions, requestedId?: string): Promise<void> {
+        if (this.sessionId) await this.disconnect();
+        const id = connectionAttemptId(requestedId ?? crypto.randomUUID().replaceAll('-', ''));
+        const attempt = { id, controller: new AbortController(), posted: false };
+        this.connectionAttempt = attempt;
+        window.addEventListener('pagehide', this.onPageHide);
+        const health = await this.request('/api/health', 'GET', undefined, {
+            signal: AbortSignal.any([attempt.controller.signal, AbortSignal.timeout(10_000)]),
+        });
+        if (health.connectionCancellation !== true)
+            throw new ConnectionFailure(
+                'policy',
+                'Update the gateway to enable reliable connection cancellation.',
+            );
+        if (attempt.controller.signal.aborted)
+            throw new ConnectionFailure('cancelled', 'Connection cancelled.');
+        attempt.posted = true;
+        const data = await this.request(
+            '/api/sessions',
+            'POST',
+            { ...options, attemptId: id },
+            { signal: AbortSignal.any([attempt.controller.signal, AbortSignal.timeout(180_000)]) },
+        );
+        if (typeof data.sessionId !== 'string' || !/^[A-Za-z0-9_-]{32}$/.test(data.sessionId))
+            throw new ConnectionFailure('policy', 'The gateway returned an invalid session.');
+        if (this.connectionAttempt !== attempt || attempt.controller.signal.aborted)
+            throw new ConnectionFailure('cancelled', 'Connection cancelled.');
+        this.sessionId = data.sessionId;
+        window.addEventListener('pagehide', this.onPageHide);
+        this.heartbeat = setInterval(() => {
+            if (this.sessionId)
+                void this.request(`/api/sessions/${this.sessionId}/heartbeat`, 'POST').catch(
+                    () => {},
+                );
+        }, 60_000);
+    }
+
+    async cancelConnect(id: string): Promise<void> {
+        const attempt = this.connectionAttempt;
+        if (!attempt || attempt.id !== connectionAttemptId(id)) return;
+        attempt.controller.abort();
+        if (attempt.posted) {
+            const result = await this.request(
+                '/api/connection-attempts/cancel',
+                'POST',
+                { attemptId: id },
+                { signal: AbortSignal.timeout(10_000) },
+            );
+            if (result.cancelled !== true)
+                throw new ConnectionFailure('cleanup', CONNECTION_FAILURE_MESSAGES.cleanup);
+        }
+        if (this.connectionAttempt === attempt) {
+            this.connectionAttempt = undefined;
+            this.sessionId = '';
+            this.stopLifecycle();
+        }
+    }
+
+    async clearSessionData(): Promise<void> {
+        if (this.sessionId)
+            await this.request('/api/sessions/' + this.sessionId + '/network-cache', 'POST');
+    }
+
+    async collect(
+        options?: import('../../shared/diagnostics/network/evidence').CollectOptions,
+    ): Promise<Snapshot> {
+        if (!this.sessionId) throw new Error('Connect through a gateway first.');
+        return validateSnapshot(
+            await this.request(`/api/sessions/${this.sessionId}/snapshot`, 'POST', options),
+            true,
+        );
+    }
+
+    automationConnection() {
+        return this.sessionId;
+    }
+    async automationConsole(input: ConsoleRpcRequest, options?: { signal?: AbortSignal }) {
+        const request = consoleRpcRequest(input),
+            connection = this.sessionId;
+        if (!connection) throw Error('Connect through a gateway first.');
+        if (request.action !== 'capabilities' && request.connection !== connection)
+            throw Error('Console connection changed.');
+        const result = await this.request(
+            '/api/sessions/' + connection + '/automation/console/' + request.action,
+            'POST',
+            request,
+            {
+                stream: true,
+                signal: AbortSignal.any([
+                    AbortSignal.timeout(
+                        ['read', 'step', 'finish'].includes(request.action) ? 310000 : 15000,
+                    ),
+                    ...(options?.signal ? [options.signal] : []),
+                ]),
+            },
+        );
+        if (connection !== this.sessionId) throw Error('Console connection changed.');
+        return result;
+    }
+    async automationStream(input: SshStreamRequest) {
+        const request = streamRequest(input),
+            connection = this.sessionId;
+        if (!connection) throw Error('Connect through a gateway first.');
+        if (
+            request.action !== 'capabilities' &&
+            (request.action === 'start' ? request.request.connection : request.connection) !==
+                connection
+        )
+            throw Error('SSH capture connection changed.');
+        const result = await this.request(
+            '/api/sessions/' + connection + '/automation/stream/' + request.action,
+            'POST',
+            request,
+            {
+                stream: true,
+                signal: AbortSignal.timeout(request.action === 'read' ? 310000 : 15000),
+            },
+        );
+        if (connection !== this.sessionId) throw Error('SSH capture connection changed.');
+        return result;
+    }
+    async runAutomation(request: import('../../shared/automation').AutomationRequest) {
+        if (!request.connection || request.connection !== this.sessionId)
+            throw Error('Automation connection changed.');
+        const result = await this.request(
+            '/api/sessions/' + request.connection + '/automation',
+            'POST',
+            request,
+            { signal: AbortSignal.timeout(request.timeoutMs + 10000) },
+        );
+        if (request.connection !== this.sessionId) throw Error('Automation connection changed.');
+        return validateCapture(result);
+    }
+    async cancelAutomation(id: string, connection: string) {
+        if (connection !== this.sessionId) return;
+        await this.request('/api/sessions/' + connection + '/automation/cancel', 'POST', {
+            id,
+            connection,
+        });
+    }
+    async readDeviceClock(connection?: string): Promise<DeviceClockResponse> {
+        if (connection !== undefined && connection !== this.sessionId)
+            throw Error('Device clock connection changed.');
+        if (!this.sessionId) throw Error('Connect through a gateway first.');
+        if (this.clockAbort) throw Error('A device clock read is already running.');
+        const session = this.sessionId;
+        const controller = new AbortController();
+        this.clockAbort = controller;
+        const timer = setTimeout(() => controller.abort(), 10_000);
+        try {
+            const result = await this.request(`/api/sessions/${session}/clock`, 'POST', undefined, {
+                clock: true,
+                signal: controller.signal,
+            });
+            if (this.sessionId !== session) throw Error('The device connection changed.');
+            return validateDeviceClock(result);
+        } finally {
+            clearTimeout(timer);
+            if (this.clockAbort === controller) this.clockAbort = undefined;
+        }
+    }
+
+    async disconnect(): Promise<void> {
+        const id = this.sessionId;
+        this.sessionId = '';
+        this.stopLifecycle();
+        if (!id) return;
+        await this.request(`/api/sessions/${id}`, 'DELETE');
+    }
+
+    onDisconnected(callback: () => void): () => void {
+        this.listeners.add(callback);
+        return () => {
+            this.listeners.delete(callback);
+        };
+    }
+
+    onTerminalEvent(callback: (event: TerminalEvent) => void | Promise<void>): () => void {
+        this.terminalListeners.add(callback);
+        return () => {
+            this.terminalListeners.delete(callback);
+        };
+    }
+
+    async openTerminal(request: TerminalOpen): Promise<void> {
+        terminalId(request.id);
+        terminalSize(request);
+        if (!this.sessionId) throw Error('Connect through a gateway first.');
+        if (this.terminalAbort) throw Error('A terminal is already active.');
+        const controller = new AbortController();
+        this.terminalAbort = controller;
+        const session = this.sessionId;
+        let opened = false;
+        let settle!: () => void;
+        let fail!: (error: Error) => void;
+        const ready = new Promise<void>((resolve, reject) => {
+            settle = resolve;
+            fail = reject;
+        });
+        const timeout = setTimeout(() => {
+            controller.abort();
+            fail(Error('Gateway terminal opening timed out.'));
+        }, 30_000);
+        void (async () => {
+            try {
+                const response = await fetch(`${this.url}/api/sessions/${session}/terminal`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${this.token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(request),
+                    credentials: 'omit',
+                    cache: 'no-store',
+                    signal: controller.signal,
+                });
+                if (
+                    !response.ok ||
+                    !response.body ||
+                    !response.headers.get('content-type')?.startsWith('application/x-ndjson')
+                )
+                    throw Error(
+                        response.status === 404
+                            ? 'This gateway does not support Terminal, or the session expired. Update the gateway or reconnect.'
+                            : 'Gateway could not open the terminal. Check access and the gateway version.',
+                    );
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                try {
+                    while (!controller.signal.aborted) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        // Cap the frame parser even if a server sends an unterminated frame.
+                        if (buffer.length > 256 * 1024)
+                            throw Error('Gateway terminal output exceeded the frame limit.');
+                        const events: TerminalEvent[] = [];
+                        let newline: number;
+                        while ((newline = buffer.indexOf('\n')) !== -1) {
+                            const line = buffer.slice(0, newline);
+                            buffer = buffer.slice(newline + 1);
+                            if (!line || line === '{}') continue;
+                            const event = terminalEvent(JSON.parse(line));
+                            if (event.id !== request.id || this.sessionId !== session)
+                                throw Error('Gateway returned an event for an earlier terminal.');
+                            events.push(event);
+                        }
+                        for (const event of coalesceTerminalEvents(events)) {
+                            if (controller.signal.aborted || this.sessionId !== session)
+                                throw Error('Gateway terminal ownership changed during output.');
+                            // Release ownership before notifying consumers that may replace the shell.
+                            // The old reader's finally block must not clear a replacement controller.
+                            if (
+                                event.type === 'state' &&
+                                event.state === 'closed' &&
+                                this.terminalAbort === controller
+                            )
+                                this.terminalAbort = undefined;
+                            for (const listener of this.terminalListeners) await listener(event);
+                            if (event.type === 'state') {
+                                if (event.state === 'open') {
+                                    opened = true;
+                                    clearTimeout(timeout);
+                                    settle();
+                                }
+                                if (event.state === 'error')
+                                    throw Error(event.message ?? 'Remote terminal failed.');
+                                if (event.state === 'closed') {
+                                    if (!opened) fail(Error('Terminal closed before opening.'));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    if (!controller.signal.aborted)
+                        throw Error('Terminal stream ended. Reconnect the device to continue.');
+                } finally {
+                    await reader.cancel().catch(() => {});
+                    reader.releaseLock();
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Terminal stream failed.';
+                fail(Error(message));
+                if (!controller.signal.aborted)
+                    for (const listener of this.terminalListeners)
+                        await listener({
+                            id: request.id,
+                            type: 'state',
+                            state: 'error',
+                            message: message.slice(0, 512),
+                        });
+            } finally {
+                clearTimeout(timeout);
+                controller.abort();
+                if (this.terminalAbort === controller) this.terminalAbort = undefined;
+                if (!opened) fail(Error('Terminal opening was cancelled.'));
+            }
+        })();
+        return ready;
+    }
+
+    async writeTerminal(id: string, data: string): Promise<void> {
+        terminalData(data);
+        await this.request(
+            `/api/sessions/${this.sessionId}/terminal/${terminalId(id)}/input`,
+            'POST',
+            { data },
+        );
+    }
+
+    async resizeTerminal(id: string, size: TerminalSize): Promise<void> {
+        await this.request(
+            `/api/sessions/${this.sessionId}/terminal/${terminalId(id)}/resize`,
+            'POST',
+            terminalSize(size),
+        );
+    }
+
+    async closeTerminal(id: string): Promise<void> {
+        const controller = this.terminalAbort;
+        try {
+            await this.request(
+                `/api/sessions/${this.sessionId}/terminal/${terminalId(id)}`,
+                'DELETE',
+            );
+        } finally {
+            controller?.abort();
+            if (this.terminalAbort === controller) this.terminalAbort = undefined;
+        }
+    }
+
+    async acknowledgeTerminal(): Promise<void> {
+        // HTTP write backpressure controls server credit; listeners await xterm consumption.
+    }
+}

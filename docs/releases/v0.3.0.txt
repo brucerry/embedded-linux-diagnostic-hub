@@ -1,0 +1,20 @@
+Description:
+Diagnostic Hub v0.3.0 adds cancellable retries for temporary SSH connection failures to the portable Windows/Linux apps, website and matching SSH gateway.
+Windows builds remain unsigned. Hosted software checks do not qualify physical boards or every client desktop. No public Mac download is included.
+
+Changes:
+- Retry temporary SSH/network failures 3000 ms after failure and cleanup, with one owned attempt and no overlapping retries. Cancel stops the attempt, retry timer and pending host-key approval.
+- Pause authentication, host-key rejection and permanent gateway-policy failures for correction and an explicit Connect. Keep an authenticated SSH session when the initial diagnostic collection fails; do not automatically reconnect established-session losses.
+- Add gateway cancellation and lost-response cleanup while retaining origin, token, allowlist, host-key and session-limit protections. Website users must deploy the matching v0.3.0 gateway; older gateways without cancellation support are rejected before SSH starts.
+- Preserve device-clock refresh when visibility events are batched, and stop a due poll immediately when the document becomes hidden, before React effect cleanup.
+- Qualify both Mac architectures in free hosted CI with ad-hoc bundle integrity checks and 100 native-window/terminal cycles; automatic Mac installation remains unavailable, and downloaded-app Gatekeeper/notarization is not qualified.
+- Retain Windows, Linux base and all seven GNOME compositor checks; run the full Windows browser suite with one worker to reduce concurrent runner resource pressure. Strengthen test synchronization for native geometry, shell working-directory continuity, accessibility media preferences and retained history. Bind Windows fixture data after document commit and settle page-entry geometry before comparing exact scroll positions. Recover one specific screenshot-capture protocol failure only after native readiness checks, within the original deadline; keep every required screenshot and native assertion.
+
+Commits:
+- The generator replaces this draft with the complete validated range since the prior published release.
+
+Links:
+Downloads and setup - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.3.0/docs/downloads.md
+Connection retry behavior - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.3.0/docs/connection-retries.md
+Gateway deployment - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.3.0/docs/website.md
+Mac qualification and distribution prerequisites - https://github.com/brucerry/embedded-linux-diagnostic-hub/blob/v0.3.0/docs/macos-qualification.md
