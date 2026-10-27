@@ -3,6 +3,19 @@ name: Verify and build Linux application
 on:
     workflow_call:
     workflow_dispatch:
+        inputs:
+            artifact_only:
+                description: 'Private build artifacts only; no app/native qualification or publication'
+                type: boolean
+                default: false
+            app_source_sha:
+                description: 'Reviewed exact application commit (different from workflow commit)'
+                type: string
+                default: ''
+            build_id:
+                description: 'Fresh independently chosen lowercase 32-hex private build identity'
+                type: string
+                default: ''
     push:
         branches: [main]
     pull_request:
@@ -11,11 +24,12 @@ permissions:
     contents: read
 
 concurrency:
-    group: linux-${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+    group: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_only == true && format('linux-private-artifact-{0}', github.run_id) || format('linux-{0}-{1}', github.workflow, github.ref) }}
+    cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.artifact_only == true) }}
 
 jobs:
     build:
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.artifact_only == true) }}
         runs-on: ubuntu-22.04
         timeout-minutes: 30
         steps:
@@ -96,7 +110,117 @@ jobs:
                   name: linux-update-handoff-evidence
                   path: validation/update-handoff/
                   if-no-files-found: error
+    private-artifacts:
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_only == true }}
+        runs-on: ubuntu-22.04
+        timeout-minutes: 30
+        env:
+            DH_ARTIFACT_ONLY: 'true'
+            DH_APP_SOURCE_SHA: ${{ inputs.app_source_sha }}
+            DH_BUILD_ID: ${{ inputs.build_id }}
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Admit manual first attempt and fresh checkout slots
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+                  [[ "$GITHUB_REPOSITORY" == brucerry/embedded-linux-diagnostic-hub ]]
+                  [[ "$DH_APP_SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+                  [[ "$DH_APP_SOURCE_SHA" != "$GITHUB_SHA" && "$DH_BUILD_ID" =~ ^[a-f0-9]{32}$ ]]
+                  for slot in application tooling private-artifacts; do
+                      [[ ! -e "$GITHUB_WORKSPACE/$slot" && ! -L "$GITHUB_WORKSPACE/$slot" ]]
+                  done
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ inputs.app_source_sha }}
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+            - name: Admit exact source and 16 GiB dependency headroom
+              timeout-minutes: 2
+              run: node tooling/scripts/linux-artifact-ci.mjs admit
+            - name: Install locked build dependencies in the new checkout
+              timeout-minutes: 8
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node="$(command -v node)"
+                  npm_cli="$(dirname "$node")/../lib/node_modules/npm/bin/npm-cli.js"
+                  root="$GITHUB_WORKSPACE/private-artifacts/$DH_BUILD_ID"
+                  env -i PATH="$(dirname "$node"):/usr/local/bin:/usr/bin:/bin" LC_ALL=C CI=true \
+                      HOME="$root/home" NODE_DISABLE_COMPILE_CACHE=1 NO_UPDATE_NOTIFIER=1 \
+                      NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null \
+                      npm_config_cache="$root/npm-cache" ELECTRON_CACHE="$root/electron-cache" \
+                      ELECTRON_BUILDER_CACHE="$root/builder-cache" \
+                      "$node" "$npm_cli" ci --no-audit --no-fund
+            - name: Record tool manifests and require 12 GiB packaging headroom
+              timeout-minutes: 2
+              run: node tooling/scripts/linux-artifact-ci.mjs pre-package
+            - name: Build only the existing AppImage and tar targets
+              timeout-minutes: 12
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node="$(command -v node)"
+                  npm_cli="$(dirname "$node")/../lib/node_modules/npm/bin/npm-cli.js"
+                  root="$GITHUB_WORKSPACE/private-artifacts/$DH_BUILD_ID"
+                  env -i PATH="$(dirname "$node"):/usr/local/bin:/usr/bin:/bin" LC_ALL=C CI=true \
+                      HOME="$root/home" NODE_DISABLE_COMPILE_CACHE=1 NO_UPDATE_NOTIFIER=1 \
+                      NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null \
+                      npm_config_cache="$root/npm-cache" ELECTRON_CACHE="$root/electron-cache" \
+                      ELECTRON_BUILDER_CACHE="$root/builder-cache" \
+                      "$node" "$npm_cli" run package:linux
+            - name: Bind private records and account every upload byte
+              timeout-minutes: 5
+              run: node tooling/scripts/linux-artifact-ci.mjs finalize
+            - name: Retain only the checked private artifact cohort
+              if: ${{ success() }}
+              timeout-minutes: 5
+              uses: actions/upload-artifact@v4
+              with:
+                  name: linux-private-${{ inputs.build_id }}
+                  path: |
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.AppImage
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.tar.gz
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.AppImage.sha256
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.tar.gz.sha256
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/source-manifest.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/private-source.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/tooling-identity.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/admission.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/pre-package.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/flat-inventory.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/diagnostic-hub-setup-payload.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/linux-build-info.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/build-result.json
+                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/upload-accounting.json
+                  retention-days: 7
+                  compression-level: 0
+                  overwrite: false
+                  include-hidden-files: false
+                  if-no-files-found: error
     gnome:
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.artifact_only == true) }}
         needs: build
         runs-on: ubuntu-24.04
         timeout-minutes: 20
