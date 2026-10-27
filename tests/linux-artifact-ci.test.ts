@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LINUX_CI_SOURCE, LINUX_CI_LIMITS, LINUX_CI_ASSETS, LINUX_CI_METADATA,
     validateLinuxCIInput, artifactOnlyDispatch, requireLinuxCISpace,
-    accountLinuxCIUpload, verifyLinuxCIUploadReadback, inventoryLinuxCIFlat, privateLinuxCIRecord, ciJSON, ciHash } from '../scripts/lib/linux-artifact-ci.mjs';
+    accountLinuxCIUpload, verifyLinuxCIUploadReadback, inventoryLinuxCIFlat, privateLinuxCIRecord, ciJSON, ciHash,
+    linuxCINpmConfigPaths, createLinuxCINpmConfigs, verifyLinuxCINpmConfigs } from '../scripts/lib/linux-artifact-ci.mjs';
 import { linuxCIPhase } from '../scripts/linux-artifact-ci.mjs';
 const input = () => ({ event: 'workflow_dispatch', artifactOnly: true,
     repository: 'brucerry/embedded-linux-diagnostic-hub', appSHA: 'a'.repeat(40),
@@ -145,4 +146,97 @@ test('AC16 accounting-file content or length drift refuses against the prepublic
         assert.doesNotThrow(() => accountLinuxCIUpload(files));
         assert.throws(() => verifyLinuxCIUploadReadback(f.retained, f.accounting, files), /CI_CHANGED/);
     }
+});
+function npmFixture() {
+    const root = '/inert/private-artifacts/npm-config', uid = 501, paths = linuxCINpmConfigPaths(root),
+        calls: string[] = [], files = new Map<string, { path: string, bytes: number, sha256: string,
+            mode: number, uid: number, nlink: number, dev: number, ino: number }>();
+    const io = {
+        async createEmpty(name: string) {
+            calls.push('create-exclusive:' + name);
+            if (files.has(name)) throw Error('EEXIST');
+            files.set(name, { path: name, bytes: 0, sha256: ciHash(Buffer.alloc(0)),
+                mode: 0o600, uid, nlink: 1, dev: 1, ino: files.size + 1 });
+            return true;
+        },
+        async inspectEmpty(name: string) {
+            calls.push('inspect:' + name);
+            return files.get(name);
+        }
+    };
+    return { root, uid, paths, calls, files, io };
+}
+test('AC17 npm user and global paths are distinct under a normalized nonroot private directory', () => {
+    const f = npmFixture();
+    assert.equal(f.paths.user, f.root + '/npm-user.npmrc');
+    assert.equal(f.paths.global, f.root + '/npm-global.npmrc');
+    assert.notEqual(f.paths.user, f.paths.global); assert.ok(Object.isFrozen(f.paths));
+    for (const root of ['/', 'relative', '/x/../y', '/x/', '/x//y', '/x\\y', '/x\nsecret'])
+        assert.throws(() => linuxCINpmConfigPaths(root), /CI_NPM_CONFIG/);
+});
+test('AC18 npm config creation requires two exact true acknowledgements and independent empty private readbacks', async () => {
+    const f = npmFixture(), value = await createLinuxCINpmConfigs(f.root, f.uid, f.io);
+    assert.deepEqual(f.calls, ['create-exclusive:' + f.paths.user, 'create-exclusive:' + f.paths.global,
+        'inspect:' + f.paths.user, 'inspect:' + f.paths.global]);
+    assert.equal(value.user.bytes, 0); assert.equal(value.global.bytes, 0);
+    assert.equal(value.user.mode, 0o600); assert.notEqual(value.user.ino, value.global.ino);
+    assert.ok(Object.isFrozen(value) && Object.isFrozen(value.user) && Object.isFrozen(value.global));
+    for (const ack of [false, null, undefined, 1, 'true']) {
+        const g = npmFixture();
+        await assert.rejects(createLinuxCINpmConfigs(g.root, g.uid, { ...g.io,
+            createEmpty: async (name: string) => { g.calls.push(name); return ack; } }), /CI_NPM_CONFIG/);
+        assert.deepEqual(g.calls, [g.paths.user]); assert.equal(g.files.size, 0);
+    }
+});
+test('AC19 occupied config refuses without overwrite and a partial pair remains retained without cleanup', async () => {
+    for (const occupied of ['user', 'global'] as const) {
+        const f = npmFixture(), original = { path: f.paths[occupied], bytes: 9, sha256: 'd'.repeat(64),
+            mode: 0o600, uid: f.uid, nlink: 1, dev: 1, ino: 99 };
+        f.files.set(f.paths[occupied], original);
+        await assert.rejects(createLinuxCINpmConfigs(f.root, f.uid, f.io), /EEXIST/);
+        assert.equal(f.files.get(f.paths[occupied]), original);
+        assert.equal(f.calls.some(v => v.startsWith('inspect:')), false);
+        assert.equal(f.files.size, occupied === 'global' ? 2 : 1);
+    }
+});
+test('AC20 nonempty wrong hash unsafe ownership mode link or rounded config identities refuse', async () => {
+    for (const delta of [{ bytes: 1 }, { sha256: 'a'.repeat(64) }, { mode: 0o644 }, { mode: 0o400 },
+        { uid: 502 }, { nlink: 2 }, { dev: -1 }, { dev: Number.MAX_SAFE_INTEGER + 1 },
+        { ino: 0 }, { ino: 1.5 }, { path: '/foreign/npmrc' }]) {
+        const f = npmFixture();
+        await assert.rejects(createLinuxCINpmConfigs(f.root, f.uid, { ...f.io,
+            inspectEmpty: async (name: string) => ({ ...f.files.get(name), ...delta }) }), /CI_NPM_CONFIG/);
+        assert.equal(f.files.size, 2);
+    }
+    const f = npmFixture();
+    await assert.rejects(createLinuxCINpmConfigs(f.root, f.uid, { ...f.io,
+        inspectEmpty: async (name: string) => ({ ...f.files.get(name), ino: 1 }) }), /CI_NPM_CONFIG/);
+});
+test('AC21 later phases recheck exact retained config identities and reject malformed or modified admission', async () => {
+    const f = npmFixture(), retained = await createLinuxCINpmConfigs(f.root, f.uid, f.io);
+    assert.deepEqual(await verifyLinuxCINpmConfigs(f.root, f.uid, f.io, retained), retained);
+    const original = { ...f.files.get(f.paths.user)! };
+    for (const delta of [{ bytes: 1 }, { sha256: 'e'.repeat(64) }, { ino: original.ino + 10 }]) {
+        f.files.set(f.paths.user, { ...original, ...delta });
+        await assert.rejects(verifyLinuxCINpmConfigs(f.root, f.uid, f.io, retained), /CI_NPM_CONFIG/);
+    }
+    f.files.set(f.paths.user, original);
+    for (const malformed of [null, false, 0, undefined, {}, [], { user: retained.user },
+        { ...retained, extra: true }]) {
+        const before = f.calls.length;
+        await assert.rejects(verifyLinuxCINpmConfigs(f.root, f.uid, f.io, malformed), /CI_NPM_CONFIG/);
+        assert.equal(f.calls.length, before);
+    }
+});
+test('AC22 config comparison snapshots resist shared reference mutation across async effects', async () => {
+    const f = npmFixture(), initial = await createLinuxCINpmConfigs(f.root, f.uid, f.io),
+        retained = { user: { ...initial.user }, global: { ...initial.global } };
+    const original = retained.user.ino;
+    f.files.get(f.paths.user)!.ino += 10;
+    await assert.rejects(verifyLinuxCINpmConfigs(f.root, f.uid, { ...f.io,
+        inspectEmpty: async (name: string) => {
+            retained.user.ino = f.files.get(f.paths.user)!.ino;
+            return f.files.get(name);
+        } }, retained), /CI_NPM_CONFIG/);
+    assert.notEqual(retained.user.ino, original);
 });

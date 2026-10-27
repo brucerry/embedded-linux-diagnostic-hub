@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { createLinuxBuildRecord } from './linux-build-record.mjs';
 
 export const LINUX_CI_SOURCE = Object.freeze({ files: 709, bytes: 7203931,
@@ -16,6 +17,47 @@ export const LINUX_CI_METADATA = Object.freeze({ 'source-manifest.json': 1048576
     'build-result.json': 8192, 'upload-accounting.json': 8192 });
 export const ciHash = bytes => createHash('sha256').update(bytes).digest('hex');
 export const ciJSON = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
+export function linuxCINpmConfigPaths(root) {
+    if (typeof root !== 'string' || root === '/' || !root.startsWith('/') ||
+        path.posix.normalize(root) !== root || root.endsWith('/') || /[\\\x00-\x1f\x7f]/.test(root))
+        throw Error('CI_NPM_CONFIG');
+    return Object.freeze({ user: root + '/npm-user.npmrc', global: root + '/npm-global.npmrc' });
+}
+function npmConfigSnapshot(value, expectedPath, uid) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        value.path !== expectedPath || value.bytes !== 0 || value.sha256 !== ciHash(Buffer.alloc(0)) ||
+        value.mode !== 0o600 || value.uid !== uid || value.nlink !== 1 ||
+        !Number.isSafeInteger(value.dev) || value.dev < 0 || !Number.isSafeInteger(value.ino) || value.ino <= 0)
+        throw Error('CI_NPM_CONFIG');
+    return Object.freeze({ path: value.path, bytes: value.bytes, sha256: value.sha256,
+        mode: value.mode, uid: value.uid, nlink: value.nlink, dev: value.dev, ino: value.ino });
+}
+async function inspectNpmConfigs(root, uid, io) {
+    if (!Number.isSafeInteger(uid) || uid <= 0) throw Error('CI_NPM_CONFIG');
+    const paths = linuxCINpmConfigPaths(root), user = npmConfigSnapshot(await io.inspectEmpty(paths.user), paths.user, uid),
+        global = npmConfigSnapshot(await io.inspectEmpty(paths.global), paths.global, uid);
+    if (user.dev === global.dev && user.ino === global.ino) throw Error('CI_NPM_CONFIG');
+    return Object.freeze({ user, global });
+}
+/** Real exclusive creation is injected only by the already guarded admission phase. */
+export async function createLinuxCINpmConfigs(root, uid, io) {
+    if (!Number.isSafeInteger(uid) || uid <= 0) throw Error('CI_NPM_CONFIG');
+    const paths = linuxCINpmConfigPaths(root);
+    for (const name of [paths.user, paths.global])
+        if (await io.createEmpty(name) !== true) throw Error('CI_NPM_CONFIG');
+    return inspectNpmConfigs(root, uid, io);
+}
+/** Revalidate empty private files and original independent identities before later npm work. */
+export async function verifyLinuxCINpmConfigs(root, uid, io, retained) {
+    if (!Number.isSafeInteger(uid) || uid <= 0 || !retained || typeof retained !== 'object' ||
+        Array.isArray(retained) || Object.keys(retained).sort().join(',') !== 'global,user') throw Error('CI_NPM_CONFIG');
+    const paths = linuxCINpmConfigPaths(root), expected = Object.freeze({
+        user: npmConfigSnapshot(retained.user, paths.user, uid), global: npmConfigSnapshot(retained.global, paths.global, uid) });
+    if (expected.user.dev === expected.global.dev && expected.user.ino === expected.global.ino) throw Error('CI_NPM_CONFIG');
+    const observed = await inspectNpmConfigs(root, uid, io);
+    if (JSON.stringify(observed) !== JSON.stringify(expected)) throw Error('CI_NPM_CONFIG');
+    return observed;
+}
 export function artifactOnlyDispatch(event, flag) { return event === 'workflow_dispatch' && flag === true; }
 export function validateLinuxCIInput(input) {
     const v = structuredClone(input);

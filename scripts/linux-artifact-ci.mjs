@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { LINUX_CI_SOURCE, LINUX_CI_LIMITS, LINUX_CI_ASSETS, LINUX_CI_METADATA,
     ciHash, ciJSON, validateLinuxCIInput, requireLinuxCISpace, accountLinuxCIUpload, verifyLinuxCIUploadReadback,
-    privateLinuxCIRecord, inventoryLinuxCIFlat } from './lib/linux-artifact-ci.mjs';
+    privateLinuxCIRecord, inventoryLinuxCIFlat, createLinuxCINpmConfigs, verifyLinuxCINpmConfigs } from './lib/linux-artifact-ci.mjs';
 
 // Import/help is inert. Real IO/Git queries are selected only by one of the explicit CI phases.
 export function linuxCIPhase(args) {
@@ -95,6 +95,20 @@ async function main(args) {
         const observed = await read(p, cap);
         if (observed.bytes !== bytes.length || observed.sha256 !== ciHash(bytes)) throw Error('CI_WRITE');
     }
+    const npmConfigIO = {
+        async createEmpty(p) {
+            await directory(root);
+            const fd = await fs.open(p, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL |
+                constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+            try { await fd.sync(); } finally { await fd.close(); }
+            return true;
+        },
+        async inspectEmpty(p) {
+            const observed = await read(p, 0), s = observed.identity;
+            return { path: p, bytes: observed.bytes, sha256: observed.sha256,
+                mode: s.mode & 0o777, uid: s.uid, nlink: s.nlink, dev: s.dev, ino: s.ino };
+        }
+    };
     async function space(which, bytes = 0) {
         const s = await fs.statfs(workspace, { bigint: true }); return requireLinuxCISpace(s.bavail * s.bsize, which, bytes);
     }
@@ -128,6 +142,7 @@ async function main(args) {
         const available = await space('dependencies'); await absent(parent);
         await fs.mkdir(parent, { mode: 0o700 }); await fs.mkdir(root, { mode: 0o700 }); await fs.mkdir(upload, { mode: 0o700 });
         for (const n of ['home', 'npm-cache', 'electron-cache', 'builder-cache']) await fs.mkdir(path.join(root, n), { mode: 0o700 });
+        const npmConfigs = await createLinuxCINpmConfigs(root, uid, npmConfigIO);
         for (const n of ['release', 'dist', 'dist-electron', 'node_modules']) await absent(path.join(app, n));
         const observed = await source(), manifestBytes = ciJSON(observed);
         const sourceRecord = { schema: 1, kind: 'private-linux-build-source', repository: input.repository,
@@ -138,12 +153,13 @@ async function main(args) {
             workflowTree: observed.workflowTree, applicationCommit: observed.commit, node: process.versions,
             scriptSHA256: (await read(path.join(tooling, 'scripts/linux-artifact-ci.mjs'), 1048576)).sha256 }));
         await publish('admission.json', ciJSON({ schema: 1, input, space: available, utc: new Date().toISOString(),
-            appRoot: app, outputRoot: root, sourceSHA256: observed.sourceSHA256, sourceRecordSHA256: ciHash(ciJSON(sourceRecord)) }));
+            appRoot: app, outputRoot: root, sourceSHA256: observed.sourceSHA256, sourceRecordSHA256: ciHash(ciJSON(sourceRecord)), npmConfigs }));
     } else {
         await directory(parent); await directory(root); await directory(upload);
         const admitted = JSON.parse((await read(path.join(upload, 'admission.json'), 8192)).body.toString());
         if (JSON.stringify(admitted.input) !== JSON.stringify(input) || admitted.appRoot !== app || admitted.outputRoot !== root ||
             admitted.sourceSHA256 !== LINUX_CI_SOURCE.sha256) throw Error('CI_ADMISSION');
+        await verifyLinuxCINpmConfigs(root, uid, npmConfigIO, admitted.npmConfigs);
         const observed = await source(), manifestBytes = ciJSON(observed);
         if ((await read(path.join(upload, 'source-manifest.json'), 1048576)).sha256 !== ciHash(manifestBytes)) throw Error('CI_SOURCE');
         if (phase === 'pre-package') {
@@ -233,7 +249,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     void main(process.argv.slice(2)).catch(error => {
         const reasons = new Set(['CI_PHASE', 'CI_INPUT', 'CI_RUNTIME', 'CI_ROOT', 'CI_FILE', 'CI_DIRECTORY',
             'CI_NOT_FRESH', 'CI_COUNT', 'CI_CHANGED', 'CI_WRITE', 'CI_METADATA_CAP', 'CI_SOURCE',
-            'CI_ADMISSION', 'CI_PAYLOAD', 'CI_PAYLOAD_CAP', 'CI_ASSET_CAP', 'CI_UPLOAD', 'CI_SPACE']);
+            'CI_ADMISSION', 'CI_PAYLOAD', 'CI_PAYLOAD_CAP', 'CI_ASSET_CAP', 'CI_UPLOAD', 'CI_SPACE', 'CI_NPM_CONFIG']);
         const code = reasons.has(error?.message) ? error.message : 'CI_UNKNOWN';
         process.stderr.write(JSON.stringify({ status: 'failed-unqualified', code, handoffAllowed: false }) + '\n');
         process.exitCode = 1;

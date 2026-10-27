@@ -134,3 +134,21 @@ action, timer/listener or cleanup occurs. Exact proposed native-TS command and a
 separate no-emit typecheck need independent review before execution. Static diff
 and normal-path preservation checks are not YAML-service/shell/native validation.
 No command, commit, push, dispatch, package or upload ran during this preparation.
+
+## Npm config collision correction — later source-only successor
+
+The preceding preparation statements describe the earlier snapshot. Its actual
+private run40442668169 subsequently refused npm's duplicate `/dev/null` config
+identity before installation; it did not build an artifact. Application commit
+`dfbf2753d035bb48b0eb4d37a0399e104166ba0c` remains the same709-file cohort.
+This successor proposes two new empty0600 regular single-link config files,
+`npm-user.npmrc` and `npm-global.npmrc`, under the already fresh job output root.
+Admission exclusively creates/syncs/closes and stably reads them, rejects shared
+dev/ino, and records independent identities. Both npm commands select those
+distinct paths; later phases recheck emptiness/private metadata and original
+identities before proceeding. No ambient user/global npm configuration is read
+by this change. A partial pair is retained; no overwrite/delete/retry is added.
+There are still14 upload files: configs remain job-local, with zero content bytes
+and a bounded identity addition within the existing8KiB admission receipt.
+Native/release/actual second-run qualification remains unperformed. AC17–22 are
+new fake definitions only; all successor validation requires independent review.

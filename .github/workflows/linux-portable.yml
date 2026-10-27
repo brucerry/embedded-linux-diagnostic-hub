@@ -168,7 +168,7 @@ jobs:
                   root="$GITHUB_WORKSPACE/private-artifacts/$DH_BUILD_ID"
                   env -i PATH="$(dirname "$node"):/usr/local/bin:/usr/bin:/bin" LC_ALL=C CI=true \
                       HOME="$root/home" NODE_DISABLE_COMPILE_CACHE=1 NO_UPDATE_NOTIFIER=1 \
-                      NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null \
+                      NPM_CONFIG_USERCONFIG="$root/npm-user.npmrc" NPM_CONFIG_GLOBALCONFIG="$root/npm-global.npmrc" \
                       npm_config_cache="$root/npm-cache" ELECTRON_CACHE="$root/electron-cache" \
                       ELECTRON_BUILDER_CACHE="$root/builder-cache" \
                       "$node" "$npm_cli" ci --no-audit --no-fund
@@ -186,7 +186,7 @@ jobs:
                   root="$GITHUB_WORKSPACE/private-artifacts/$DH_BUILD_ID"
                   env -i PATH="$(dirname "$node"):/usr/local/bin:/usr/bin:/bin" LC_ALL=C CI=true \
                       HOME="$root/home" NODE_DISABLE_COMPILE_CACHE=1 NO_UPDATE_NOTIFIER=1 \
-                      NPM_CONFIG_USERCONFIG=/dev/null NPM_CONFIG_GLOBALCONFIG=/dev/null \
+                      NPM_CONFIG_USERCONFIG="$root/npm-user.npmrc" NPM_CONFIG_GLOBALCONFIG="$root/npm-global.npmrc" \
                       npm_config_cache="$root/npm-cache" ELECTRON_CACHE="$root/electron-cache" \
                       ELECTRON_BUILDER_CACHE="$root/builder-cache" \
                       "$node" "$npm_cli" run package:linux
