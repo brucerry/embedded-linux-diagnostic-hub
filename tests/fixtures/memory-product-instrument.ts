@@ -65,12 +65,12 @@ export function instrumentProductSource(source: string, id: string) {
     if (normalized.endsWith('/src/features/automation/capture/browser-export.ts')) {
         if (
             createHash('sha256').update(source).digest('hex') !==
-            'b5809fbfc213feea85eb989796333bec93395b4ed394e83112c7312f862dbf7a'
+            '79de398abcccca1b18d274ff5302b01b7eb7220e8c64a87d30ef2de4083b9996'
         )
             throw Error('Browser export ownership preimage changed.');
         const newline = source.includes('\r\n') ? '\r\n' : '\n';
         const begin = '    return new Promise((resolve, reject) => {',
-            end = `    });${newline}}${newline}/** Called from an explicit browser export action; requires the web build's narrowly scoped helper. */`;
+            end = `    });${newline}}${newline}export interface BrowserExportDiagnostic {`;
         if (source.split(begin).length !== 2 || source.split(end).length !== 2)
             throw Error('Actual page export RPC boundary changed.');
         return {
@@ -82,7 +82,7 @@ export function instrumentProductSource(source: string, id: string) {
                     )
                     .replace(
                         end,
-                        `    }));${newline}}${newline}/** Called from an explicit browser export action; requires the web build's narrowly scoped helper. */`,
+                        `    }));${newline}}${newline}export interface BrowserExportDiagnostic {`,
                     ) +
                 String.raw`
 let __memoryExportRpcs=0;

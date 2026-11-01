@@ -46,9 +46,18 @@ Windows packages include Electron and the application dependencies. Windows 10/1
 PowerShell, TLS and system facilities used by the helper; a separate JavaScript runtime is not
 required.
 
-The portable app is one `Diagnostic-Hub.exe`; no application installer or administrator launch is
-required. Unsigned builds may show an unknown-publisher warning. The helper retains the verified
-download under the current user's application data directory.
+In the v0.6.0 development candidate, this command defaults to a current-user setup wizard when
+verified setup, descriptor and checksum assets exist for the selected release. Installation still
+requires confirmation on the wizard's Review page. This source contract does not mean the candidate
+has been published or its installer qualified on Windows; historical releases retain their original
+helper and portable contracts. See the [Windows setup guide](windows-setup.md) for status and options.
+
+For the original single-file `Diagnostic-Hub.exe`, save the helper and pass `-Portable`, or
+`-DownloadOnly` to save without running it. The portable route needs no application installer or
+administrator launch. Missing setup assets stop with an explicit same-version portable/download-only
+option; the helper does not silently switch delivery or release. Unsigned builds may show an
+unknown-publisher warning. Verified downloads remain under the current user's application data
+directory.
 
 ### Linux installation and launch
 

@@ -4,11 +4,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { NativeCaptureStore } from '../electron/capture-store';
+import { CaptureStorageError } from '../shared/capture-store';
 import {
     CaptureExportBroker,
     type ExportClient,
 } from '../src/features/automation/capture/export-broker';
 const scope = 'https://fixture.test/nested/hub/';
+const unavailableReceipt = (error: unknown) =>
+    error instanceof CaptureStorageError && error.code === 'invalid' &&
+    error.message === 'Export receipt is unavailable; cleanup is not acknowledged.';
 async function fixture(t: TestContext) {
     const temp = path.resolve(os.tmpdir()),
         profile = await fs.mkdtemp(path.join(temp, 'hub-export-broker-'));
@@ -121,8 +125,11 @@ test('export tokens reject other clients, non-navigation requests and forged/dup
     await download.done;
     assert.equal(JSON.parse(output).captures[0].captureComplete, true);
     assert.equal(download.filename, 'automation-results.json');
-    assert.equal((await f.broker.status(job.id, 'owner')).state, 'stream-sent');
-    await assert.rejects(f.broker.status(job.id, 'other'), /another|expired/);
+    assert.deepEqual(await f.broker.status(job.id, 'owner'), {
+        id: job.id, retirement: 'acknowledged', state: 'stream-sent',
+        bytes: new TextEncoder().encode(output).length,
+    });
+    await assert.rejects(f.broker.status(job.id, 'other'), unavailableReceipt);
     await f.store.delete(f.capture.id);
 });
 
@@ -131,9 +138,24 @@ test('prepared jobs pin membership, expire without deleting captures and fail ex
         job = await f.prepare();
     await assert.rejects(f.store.delete(f.capture.id), /owns this record/);
     const restarted = new CaptureExportBroker(f.store, f.env);
-    await assert.rejects(restarted.status(job.id, 'owner'), /worker restarted/);
+    await assert.rejects(restarted.status(job.id, 'owner'), unavailableReceipt);
     f.advance(60001);
-    assert.equal((await f.broker.status(job.id, 'owner')).state, 'failed');
+    const expiring = await f.broker.status(job.id, 'owner');
+    assert.equal(expiring.id, job.id);
+    if (expiring.retirement === 'acknowledged') assert.equal(expiring.state, 'failed');
+    else {
+        assert.equal(expiring.state, 'closing');
+        assert.equal(expiring.retirement, 'pending');
+        assert.ok('cleanupPending' in expiring && expiring.cleanupPending === true);
+    }
+    // Status initiates expiry but is not a closure acknowledgement. Join the same attempt;
+    // a later Cancel must not replace the original expiry outcome or retry release.
+    const retired = await f.broker.cancel(job.id, 'owner');
+    assert.deepEqual(retired, {
+        id: job.id, retirement: 'acknowledged', state: 'failed', bytes: 0,
+        error: 'Export expired or download stopped consuming data.',
+    });
+    assert.deepEqual(await f.broker.status(job.id, 'owner'), retired);
     assert.equal((await f.store.page()).records.length, 1);
     await f.store.delete(f.capture.id);
 });
@@ -150,7 +172,10 @@ test('bounded export job reservations hold under concurrent preparation', async 
     assert.equal(granted.length, 8);
     for (const result of granted) {
         f.jobs.push(result.value);
-        await f.broker.cancel(result.value.id, 'owner');
+        const retired = await f.broker.cancel(result.value.id, 'owner');
+        assert.equal(retired.id, result.value.id);
+        assert.equal(retired.retirement, 'acknowledged');
+        assert.equal(retired.state, 'failed');
     }
     await f.store.delete(f.capture.id);
 });
@@ -180,7 +205,10 @@ test('an export uses its prepared high-water mark and cancellation releases owne
     await assert.rejects(f.store.delete(f.capture.id), /owns this record/);
     await pending.stream.cancel('user cancelled');
     await pending.done;
-    assert.equal((await f.broker.status(cancelled.id, 'owner')).state, 'failed');
+    const retired = await f.broker.status(cancelled.id, 'owner');
+    assert.equal(retired.id, cancelled.id);
+    assert.equal(retired.retirement, 'acknowledged');
+    assert.equal(retired.state, 'failed');
     await f.store.delete(f.capture.id);
 });
 
@@ -218,13 +246,18 @@ test('cancelling slow verification fences later attachment creation and retains 
     void pending.catch(() => {});
     await started;
     let cleaned = false;
-    const cancel = broker.cancel(job.id, 'owner').then(() => {
+    const cancel = broker.cancel(job.id, 'owner').then((receipt) => {
+        assert.equal(receipt.id, job.id);
+        assert.equal(receipt.retirement, 'acknowledged');
+        assert.equal(receipt.state, 'failed');
         cleaned = true;
+        return receipt;
     });
     assert.equal(cleaned, false);
     await assert.rejects(f.store.delete(f.capture.id), /owns this record/);
     release();
-    await cancel;
+    const receipt = await cancel;
+    assert.deepEqual(await broker.status(job.id, 'owner'), receipt);
     await assert.rejects(pending, /cancel/);
     assert.equal(cleaned, true);
     await f.store.delete(f.capture.id);

@@ -8,6 +8,7 @@ import { GatewayConsoleRepository } from './gateway-console-repository';
 
 type Source = 'local-client' | 'gateway';
 type Phase = 'opening' | 'ready' | 'executing' | 'stopping' | 'closed' | 'cleanup-pending';
+type CleanupAttempt = { task: Promise<unknown>; readonly failedWhileOwned: boolean };
 type State = {
     id: string;
     connection: string;
@@ -27,7 +28,8 @@ type State = {
     openingSettled: boolean;
     lastOwnerContact: number;
     opening: Promise<void>;
-    closing?: Promise<unknown>;
+    closing?: CleanupAttempt;
+    invalidation?: CleanupAttempt;
     timer?: ReturnType<typeof setInterval>;
 };
 /** Private session capability; retained cleanup ownership is never replaced by an HTTP response. */
@@ -109,7 +111,10 @@ export class SshConsoleHost {
         s.loss ??= error;
         if (s.store instanceof GatewayConsoleRepository) s.store.transportLost(s.loss);
         s.controller.abort();
-        void this.finish(s, 'cancelled')
+        const task = s.invalidation?.task ?? this.finish(s, 'cancelled');
+        // finish records admitted attempts; an already closed state only needs its status.
+        s.invalidation ??= { task, failedWhileOwned: false };
+        void task
             .catch(() => {})
             .then(() => this.retireLost(s))
             .catch(() => {});
@@ -121,7 +126,7 @@ export class SshConsoleHost {
         const task = (async () => {
             await s.opening;
             await s.stepTask?.catch(() => {});
-            await s.closing?.catch(() => {});
+            await s.closing?.task.catch(() => {});
             if (
                 s.bound.actor.owned ||
                 (!store.resourceClosed &&
@@ -148,10 +153,11 @@ export class SshConsoleHost {
         this.invalidate();
         const s = this.state;
         if (s) {
+            const attempt = s.invalidation!;
             try {
-                await this.finish(s, 'cancelled');
+                await attempt.task;
             } catch (error) {
-                if (s.bound.actor.owned) throw error;
+                if (attempt.failedWhileOwned || s.bound.actor.owned) throw error;
             }
             await s.opening;
             await s.stepTask?.catch(() => {});
@@ -165,31 +171,38 @@ export class SshConsoleHost {
     private async finish(s: State, reason: 'complete' | 'cancelled') {
         if (s.phase === 'closed') return this.status(s);
         if (s.closing) {
-            await s.closing;
+            if (s.loss) s.invalidation = s.closing;
+            await s.closing.task;
             return this.status(s);
         }
         if (reason === 'complete' && s.phase !== 'ready')
             throw Error('Await console readiness and the active step before finishing.');
         if (reason === 'cancelled') s.controller.abort();
         this.change(s, 'stopping');
+        let failedWhileOwned = false;
         const task = (async () => {
             try {
                 if (reason === 'complete') await s.bound.actor.finish();
                 else await s.bound.actor.cancel();
                 this.change(s, 'closed');
             } catch (error) {
-                this.change(s, s.bound.actor.owned ? 'cleanup-pending' : 'closed', error);
+                failedWhileOwned = s.bound.actor.owned;
+                this.change(s, failedWhileOwned ? 'cleanup-pending' : 'closed', error);
                 throw error;
             } finally {
                 clearInterval(s.timer);
                 s.timer = undefined;
             }
         })();
-        s.closing = task;
+        const attempt: CleanupAttempt = { task, get failedWhileOwned() { return failedWhileOwned; } };
+        s.closing = attempt;
+        // A newly admitted explicit recovery supersedes this state's previous failed attempt.
+        // New runs have a fresh State, so no earlier outcome can acknowledge their resources.
+        if (s.loss) s.invalidation = attempt;
         try {
             await task;
         } finally {
-            if (s.closing === task) s.closing = undefined;
+            if (s.closing === attempt) s.closing = undefined;
         }
         return this.status(s);
     }

@@ -7,6 +7,10 @@ import { streamRequest } from '../shared/ssh-stream-rpc';
 import { consoleRpcRequest } from '../shared/console-rpc';
 import { consoleArchiveRequest } from '../shared/console-archive-rpc';
 
+// Diagnostic opt-in only; no IPC, process data or privileged methods are exposed.
+if (process.argv.includes('--hub-launch-timing'))
+    contextBridge.exposeInMainWorld('__hubLaunchTimingEnabled', true);
+
 let automationConnection = '';
 const bridge: DesktopBridge = {
     consoleStorage: (request) =>

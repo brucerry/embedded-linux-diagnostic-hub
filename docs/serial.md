@@ -54,6 +54,11 @@ is applied. USB IDs and friendly-name text are optional to the app, and built-in
 virtual-driver offers are accepted without them. No automatic control-line setter is used. Opening
 itself may have driver-defined electrical effects, which remain a physical acceptance case.
 
+Authorized-list refreshes publish only the newest requested result within the current page lifetime.
+An older result cannot replace a newer request's list, including after hotplug or Choose port.
+Failed refreshes keep the last accepted list, and page teardown discards pending replies. This does
+not change selection, connection ownership, or the requirement to Connect explicitly.
+
 The packaged runtime is Electron44.5.1 / Chromium152.0.7977.130. Runtime coverage is not identical
 to every serial-capable OS device node:
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { NtExecutable, NtExecutableResource } from 'pe-library';
 import { Resource, Data } from 'resedit';
 import { listPackage, extractFile } from '@electron/asar';
+import { verifyDesktopPackageBundles } from './lib/desktop-package-bundles.mjs';
 const directory = process.argv[2];
 if (!directory) throw Error('Usage: node scripts/verify-package.mjs /path/to/packaging-output');
 const expected = Data.IconFile.from(fs.readFileSync('public/app-icon.ico')).icons.map((item) =>
@@ -24,16 +25,17 @@ for (const file of ['Diagnostic-Hub.exe', 'win-unpacked/Diagnostic Hub.exe']) {
 const archive = path.join(directory, 'win-unpacked/resources/app.asar');
 if (listPackage(archive).some((file) => /(?:genie|native-window|taskbar-query|koffi)/i.test(file)))
     throw Error('Retired motion asset is packaged.');
-for (const folder of ['dist/assets', 'dist-electron'])
-    for (const file of fs.readdirSync(folder)) {
-        if (folder === 'dist-electron' && !['main.cjs', 'preload.cjs'].includes(file)) continue;
-        if (
-            !fs
-                .readFileSync(path.join(folder, file))
-                .equals(extractFile(archive, path.join(folder, file)))
-        )
-            throw Error('Packaged bundle mismatch: ' + file);
-    }
+await verifyDesktopPackageBundles({
+    readBuild: (file) => fs.readFileSync(file),
+    readPackaged: (file) => extractFile(archive, file),
+});
+for (const file of fs.readdirSync('dist/assets'))
+    if (
+        !fs
+            .readFileSync(path.join('dist/assets', file))
+            .equals(extractFile(archive, path.join('dist/assets', file)))
+    )
+        throw Error('Packaged bundle mismatch: ' + file);
 for (const file of ['app-icon.svg', 'app-icon.png', 'app-icon.ico'])
     if (
         !fs

@@ -39,6 +39,7 @@ import { EmptyOverview } from '../pages/EmptyOverview';
 import { OverviewPage } from '../pages/OverviewPage';
 import { message } from '../services/errors';
 import type { View } from './view';
+import { markRendererAppLayoutEffect } from '../launch-timing';
 const AutomationPage = lazy(() => import('../features/automation/AutomationPage'));
 const SerialPage = lazy(() => import('../features/serial/SerialPage'));
 const TerminalPage = lazy(() => import('../features/terminal/TerminalPage'));
@@ -51,7 +52,13 @@ function App() {
     const [showUpdates, setShowUpdates] = useState(false);
     const [view, setView] = useState<View>('overview');
     const workspaceMain = useRef<HTMLElement>(null);
+    const lastTransitionView = useRef<View>(view);
     useLayoutEffect(() => {
+        // First App layout effect only; not paint, visible-window or interactive proof.
+        markRendererAppLayoutEffect();
+        // CSS supplies the initial animation; replay only after a committed view change.
+        if (lastTransitionView.current === view) return;
+        lastTransitionView.current = view;
         // Replay the page transition without remounting a live terminal channel.
         const main = workspaceMain.current;
         if (!main) return;
@@ -379,7 +386,7 @@ function App() {
                                                 : 'Connect your target device to collect diagnostics, or import a saved report.'
                                             : imported
                                               ? `Historical ${snapshot.mode === 'demo' ? 'sample' : 'SSH'} evidence opened locally. No device connection or upload.`
-                                              : `${snapshot.username}@${snapshot.endpoint} · ${connected ? `${bridge ? 'Direct SSH connected.' : 'Gateway SSH connected.'} ${live ? `Live updates every ${interval}s after collection.` : 'Live updates paused.'}` : 'Disconnected. Displaying the last collected evidence.'}`}
+                                              : `Retained snapshot: ${snapshot.username}@${snapshot.endpoint} · ${connected ? `${bridge ? 'Direct' : 'Gateway'} SSH connected to ${activeDevice ? `${activeDevice.username}@${activeDevice.endpoint}` : 'the current target'}. ${live ? `Live updates every ${interval}s after collection.` : 'Live updates paused.'}` : 'SSH disconnected. Showing the last accepted snapshot.'}`}
                                     </span>
                                 </div>
                             </div>
@@ -502,6 +509,7 @@ function App() {
                             fallback={view === 'automation' ? <p>Loading automation…</p> : null}
                         >
                             <AutomationPage
+                                clockAdmission={clock}
                                 visible={view === 'automation'}
                                 serial={serial}
                                 transport={transport}

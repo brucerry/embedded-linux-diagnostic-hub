@@ -28,6 +28,7 @@ export default function StoredSerialResults(props: Props) {
         label = transport === 'ssh' ? 'SSH' : 'Serial';
     const [store, setStore] = useState<CaptureRepository | null>(null),
         [failure, setFailure] = useState(''),
+        [catalogFailure, setCatalogFailure] = useState(''),
         [notice, setNotice] = useState(''),
         [rows, setRows] = useState<CatalogRow[]>([]),
         [loading, setLoading] = useState(false),
@@ -65,11 +66,11 @@ export default function StoredSerialResults(props: Props) {
             .then((value) => {
                 if (current) {
                     setStore(value);
-                    setFailure('');
+                    setCatalogFailure('');
                 }
             })
             .catch((error) => {
-                if (current) setFailure(message(error));
+                if (current) setCatalogFailure(message(error));
             });
         return () => {
             current = false;
@@ -88,11 +89,12 @@ export default function StoredSerialResults(props: Props) {
                 if (!controller.signal.aborted) {
                     setRows(page.records);
                     setNext(page.next);
-                    setFailure('');
+                    // Refreshing rows does not recover an export or partial-clear failure.
+                    setCatalogFailure('');
                 }
             })
             .catch((error) => {
-                if (!controller.signal.aborted) setFailure(message(error));
+                if (!controller.signal.aborted) setCatalogFailure(message(error));
             })
             .finally(() => {
                 if (!controller.signal.aborted) setLoading(false);
@@ -154,10 +156,16 @@ export default function StoredSerialResults(props: Props) {
                     );
                 setNotice(result.value ? 'Export saved.' : 'Export cancelled.');
             } else {
-                const download = await startBrowserCaptureExport(format, chosen);
+                const download = await startBrowserCaptureExport(format, chosen, 'capture', (diagnostic) => {
+                    setFailure(diagnostic.message);
+                    setNotice(diagnostic.retirement === 'blocked'
+                        ? 'Export cleanup is not acknowledged; results operations remain blocked.'
+                        : 'Waiting for export cleanup acknowledgement.');
+                });
                 job.current = download;
                 setNotice('Exporting complete stored captures…');
                 await download.completed;
+                setFailure('');
                 setNotice(
                     'Complete export sent to the browser. Check Downloads for final save status.',
                 );
@@ -263,9 +271,9 @@ export default function StoredSerialResults(props: Props) {
                     Storage recovery: {store.recoveryFailure.message}
                 </p>
             )}
-            {failure && (
+            {(failure || catalogFailure) && (
                 <p role="alert" className="automation-warning">
-                    {failure}
+                    {[failure, catalogFailure].filter(Boolean).join(' · ')}
                 </p>
             )}
             {notice && <p role="status">{notice}</p>}
@@ -523,7 +531,7 @@ export default function StoredSerialResults(props: Props) {
                     Download QA results
                 </button>
                 {busy && job.current && (
-                    <button className="button danger" onClick={() => void job.current?.cancel()}>
+                    <button className="button danger" onClick={() => void job.current?.cancel().catch((error) => setFailure(message(error)))}>
                         Cancel export
                     </button>
                 )}

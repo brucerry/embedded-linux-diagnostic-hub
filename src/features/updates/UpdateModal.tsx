@@ -30,6 +30,7 @@ export function UpdateModal({
     const [includePrereleases, setIncludePrereleases] = useState(true);
     const [status, setStatus] = useState<UpdateStatus | null>(null);
     const [busy, setBusy] = useState(false);
+    const checking = useRef(false);
     useEffect(() => {
         if (busy) progressRef.current?.closest<HTMLElement>('.modal')?.scrollTo({ top: 0 });
     }, [busy]);
@@ -39,13 +40,16 @@ export function UpdateModal({
     const [progress, setProgress] = useState<UpdateProgress>({ stage: 'preparing', message: '' });
     const [info, setInfo] = useState<UpdateInfo | null>(null);
     const [infoError, setInfoError] = useState('');
+    const infoRead = useRef(0);
     const readInfo = async () => {
+        const request = ++infoRead.current;
         try {
             const value = await bridge.readUpdateInfo?.();
+            if (request !== infoRead.current) return;
             if (value) setInfo(value);
             setInfoError('');
         } catch (e) {
-            setInfoError(message(e));
+            if (request === infoRead.current) setInfoError(message(e));
         }
     };
     const determinate =
@@ -56,6 +60,8 @@ export function UpdateModal({
         progress.receivedBytes! >= 0 &&
         progress.receivedBytes! <= progress.totalBytes!;
     async function check(include: boolean) {
+        if (checking.current) return;
+        checking.current = true;
         setBusy(true);
         setError('');
         setStatus(null);
@@ -63,13 +69,14 @@ export function UpdateModal({
             stage: 'preparing',
             message: 'Checking update support and release availability…',
         });
-        await readInfo();
         try {
+            await readInfo();
             const result = await bridge.checkUpdates(include);
             setStatus(result);
         } catch (err) {
             setError(message(err));
         } finally {
+            checking.current = false;
             setBusy(false);
         }
     }

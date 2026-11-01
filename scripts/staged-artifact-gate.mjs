@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { includesWindowsSetup } from './lib/release-assets.mjs';
 import { WINDOWS_SETUP_ASSET } from './lib/windows-setup-release.mjs';
+import { createCaseLogLifecycle } from './lib/case-log-lifecycle.mjs';
 import {
     PLATFORM_LANES,
     laneDefinition,
@@ -78,53 +79,102 @@ async function artifacts(id) {
 async function runCase(id, command, env, directory, evidence, cases) {
     const log = path.join(directory, id + '.log');
     const stream = createWriteStream(log, { flags: 'wx' });
-    stream.write(JSON.stringify({ command, startedAt: new Date().toISOString() }) + '\n');
-    let error;
+    const logLifecycle = createCaseLogLifecycle(stream);
+    const failures = [];
+    const retainFailure = (failure) => {
+        if (!failures.includes(failure)) failures.push(failure);
+    };
     let logBytes = 0;
-    stream.on('error', (failure) => {
-        error ??= failure;
-    });
+    let outputExceeded = false;
+    let spawnInvoked = false;
+    let childHandleReturned = false;
+    let childCloseObserved = false;
+    let child;
+    let result;
+    let acknowledgeChildClose;
+    const childClosure = new Promise((resolve) => { acknowledgeChildClose = resolve; });
     const logChunk = (chunk) => {
         logBytes += chunk.length;
-        if (logBytes <= 16 * 1024 ** 2) stream.write(chunk);
-        else error ??= Error('Native case output exceeded its16MiB evidence bound.');
+        if (logBytes <= 16 * 1024 ** 2) logLifecycle.write(chunk);
+        else if (!outputExceeded) {
+            outputExceeded = true;
+            retainFailure(Error('Native case output exceeded its16MiB evidence bound.'));
+        }
     };
-    const result = await new Promise((resolve) => {
-        const child = spawn(command[0], command.slice(1), {
-            cwd: repository,
-            env: { ...process.env, ...env },
-            windowsHide: true,
-            shell: false,
-            stdio: ['ignore', 'pipe', 'pipe'],
+    try {
+        logLifecycle.write(JSON.stringify({ command, startedAt: new Date().toISOString() }) + '\n');
+        if (!logLifecycle.snapshot().failed) {
+            spawnInvoked = true;
+            child = spawn(command[0], command.slice(1), {
+                cwd: repository,
+                env: { ...process.env, ...env },
+                windowsHide: true,
+                shell: false,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            childHandleReturned = true;
+            // Retain the returned owner and observe close before further listener setup.
+            child.once('close', (code, signal) => {
+                childCloseObserved = true;
+                acknowledgeChildClose({ code, signal });
+            });
+            child.on('error', (failure) => {
+                retainFailure(failure);
+                logLifecycle.write(String(failure) + '\n');
+            });
+            child.stdout.on('data', logChunk);
+            child.stderr.on('data', logChunk);
+        }
+    } catch (failure) {
+        retainFailure(failure);
+    } finally {
+        // No returned handle is not proof of process absence. A returned owner must join.
+        if (childHandleReturned) result = await childClosure;
+        let finalRecord;
+        try {
+            finalRecord = JSON.stringify({
+                spawnInvoked,
+                childHandleReturned,
+                childCloseObserved,
+                ...(childCloseObserved ? result : {}),
+                failureCount: failures.length,
+                logEndRequestedAt: new Date().toISOString(),
+            }) + '\n';
+        } catch (failure) {
+            retainFailure(failure);
+        }
+        try {
+            await logLifecycle.end(finalRecord);
+        } catch (failure) {
+            retainFailure(failure);
+        }
+    }
+    if (failures.length || !childCloseObserved || result.code !== 0 || result.signal !== null) {
+        // Only actually observed child closure supplies exit/signal; never invent those fields.
+        if (childCloseObserved) cases.push({
+            id, command, status: 'failed', exitCode: result.code, signal: result.signal, evidence: [],
         });
-        child.stdout.on('data', logChunk);
-        child.stderr.on('data', logChunk);
-        child.on('error', (failure) => {
-            error = failure;
-            stream.write(String(failure) + '\n');
-        });
-        child.once('close', (code, signal) => resolve({ code, signal }));
-    });
-    await new Promise((resolve, reject) => {
-        stream.once('error', reject);
-        stream.end(
-            JSON.stringify({ ...result, endedAt: new Date().toISOString() }) + '\n',
-            resolve,
-        );
-    });
+        if (failures.length > 1) {
+            const primary = failures[0];
+            throw new AggregateError(
+                failures,
+                'Native case failed: ' + (primary instanceof Error ? primary.message : 'non-Error primary failure') +
+                    '; additional failures retained.',
+                { cause: primary },
+            );
+        }
+        if (failures.length === 1) throw failures[0];
+        assert.ok(false, 'Native artifact case failed: ' + id);
+    }
     const record = await hashFile(log, path.relative(evidence, log).split(path.sep).join('/'));
     cases.push({
         id,
         command,
-        status: !error && result.code === 0 && result.signal === null ? 'passed' : 'failed',
+        status: 'passed',
         exitCode: result.code,
         signal: result.signal,
         evidence: [{ path: record.name, bytes: record.bytes, sha256: record.sha256 }],
     });
-    assert.ok(
-        !error && result.code === 0 && result.signal === null,
-        'Native artifact case failed: ' + id,
-    );
 }
 async function verifyProducers(selected) {
     for (const scope of ['web', 'gateway']) {

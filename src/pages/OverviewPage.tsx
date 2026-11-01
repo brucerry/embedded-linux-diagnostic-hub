@@ -89,7 +89,7 @@ export function OverviewPage({
                     </p>
                     <div className="device-address">
                         <Cable size={15} />
-                        <span>{snapshot?.endpoint ?? '—'}</span>
+                        <span>Snapshot: {snapshot?.endpoint ?? '—'}</span>
                         <span className="address-separator" />
                         <span>SSH</span>
                         <span className="address-separator" />

@@ -1,3 +1,4 @@
+import { settleCleanup, throwCleanupFailures } from '../../shared/quit-cleanup';
 import { StringDecoder } from 'node:string_decoder';
 import { ExecSlots } from './exec-budget';
 import { NetworkCollector } from './network';
@@ -132,19 +133,30 @@ export class SshSession {
         if (this.consoleHost === host) this.consoleHost = undefined;
     }
     async joinAutomationCleanup() {
-        await this.streams.shutdown();
-        await this.shutdownConsole();
-        await Promise.all(
-            [...this.terminals]
+        const failures = await settleCleanup([
+            { stage: 'ssh-streams', run: () => this.streams.shutdown() },
+            { stage: 'ssh-console', run: () => this.shutdownConsole() },
+            ...[...this.terminals]
                 .filter((terminal) => terminal.ownershipSnapshot.closing)
-                .map((terminal) => terminal.join()),
-        );
-        await Promise.all(
-            [...this.connections]
+                .map((terminal, index) => ({
+                    stage: 'ssh-terminal-' + index,
+                    run: () => terminal.join(),
+                })),
+            ...[...this.connections]
                 .filter((client) => client !== this.client)
-                .map((client) => client.owners.join()),
-        );
-        while (this.pendingOperations.size) await Promise.allSettled([...this.pendingOperations]);
+                .map((client, index) => ({
+                    stage: 'ssh-connection-' + index,
+                    run: () => client.owners.join(),
+                })),
+            {
+                stage: 'ssh-operations',
+                run: async () => {
+                    while (this.pendingOperations.size)
+                        await Promise.allSettled([...this.pendingOperations]);
+                },
+            },
+        ]);
+        throwCleanupFailures(failures);
     }
     /** Test adapter reads this local module object, never a renderer bridge or HTTP route. */
     get ownershipSnapshot() {

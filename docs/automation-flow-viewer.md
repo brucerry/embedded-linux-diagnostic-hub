@@ -19,6 +19,12 @@ order. Arrow keys nudge a focused card, with Shift for larger steps; on the canv
 and minus zoom, F fits the graph, R resets the layout, and Escape closes. Ctrl + wheel zooms at the
 pointer. Reduced-motion preferences disable optional visual transitions.
 
+The viewer keeps separate limits for raw commands and their serialized snapshot. Commands remain
+limited to 8192 UTF-8 bytes each and 64 KiB total across 1–20 steps. The serialized plan is capped at
+1 MiB so JSON escaping and bounded names, scheduling fields and console completion criteria do not
+incorrectly consume the raw command budget. Existing image/page/download limits still apply;
+admission to the viewer does not establish that a draft is executable or that every export will fit.
+
 ## Local exports
 
 SVG, PNG and PDF capture every command, edge, layout position and available status at the moment of

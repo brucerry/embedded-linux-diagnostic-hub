@@ -40,6 +40,7 @@ import {
     type FlowInspection,
 } from './flow/inspection';
 interface Props {
+    clockAdmission: { quiesce(): Promise<() => void> };
     visible: boolean;
     serial: SerialSession;
     transport:
@@ -54,6 +55,14 @@ interface Props {
     onBusy(value: boolean): void;
     onConnect(): void;
     onSerial(): void;
+}
+interface ManualClockSample {
+    valid: boolean;
+    active: Props['transport'];
+    connection: string | undefined;
+    endpoint: string | undefined;
+    username: string | undefined;
+    connected: boolean;
 }
 const GUIDE_STEPS = ['Connection', 'Commands', 'Timing', 'Review & Run'];
 const step = (): CommandStep => ({
@@ -101,6 +110,9 @@ export default function AutomationPage(props: Props) {
     const [sshMode, setSshMode] = useState<SshExecutionMode>('independent-script'),
         [consolePrompts, setConsolePrompts] = useState('');
     const cleanupActivity = useRef<string | undefined>(undefined);
+    const cleanupClock = useRef<(() => void) | undefined>(undefined);
+    const manualClockSample = useRef<ManualClockSample | null>(null);
+    const pendingClockSamples = useRef(0);
     const [timeout, setTimeoutValue] = useState('60'),
         [repeat, setRepeat] = useState(false),
         [repeatSeconds, setRepeatSeconds] = useState('10'),
@@ -230,6 +242,34 @@ export default function AutomationPage(props: Props) {
     useEffect(() => {
         if (props.blocked && runner.current?.busy) runner.current.cancel();
     }, [props.blocked]);
+    useEffect(
+        () => {
+            const active = props.transport,
+                connection = active?.automationConnection?.(),
+                endpoint = props.target?.endpoint,
+                username = props.target?.username,
+                connected = props.connected;
+            return () => {
+                const attempt = manualClockSample.current;
+                if (
+                    attempt &&
+                    attempt.active === active &&
+                    attempt.connection === connection &&
+                    attempt.endpoint === endpoint &&
+                    attempt.username === username &&
+                    attempt.connected === connected
+                )
+                    attempt.valid = false;
+            };
+        },
+        [
+            props.transport,
+            props.connected,
+            props.target?.endpoint,
+            props.target?.username,
+            props.transport?.automationConnection?.(),
+        ],
+    );
     const connected =
         transport === 'serial'
             ? serialStatus.state === 'connected'
@@ -426,13 +466,57 @@ export default function AutomationPage(props: Props) {
                 ' minutes',
         };
     };
+    const invalidateManualClockSample = () => {
+        if (manualClockSample.current) manualClockSample.current.valid = false;
+    };
+    const changeTransport = (value: 'ssh' | 'serial') => {
+        invalidateManualClockSample();
+        setTransport(value);
+        setCalibration(undefined);
+    };
+    const changeClockKind = (value: 'local' | 'device') => {
+        invalidateManualClockSample();
+        setClockKind(value);
+    };
+    const changeScheduled = (value: boolean) => {
+        invalidateManualClockSample();
+        setScheduled(value);
+    };
     const sampleClicked = () => {
+        const attempt: ManualClockSample = {
+            valid: true,
+            active: props.transport,
+            connection: props.transport?.automationConnection?.(),
+            endpoint: props.target?.endpoint,
+            username: props.target?.username,
+            connected: props.connected,
+        };
+        manualClockSample.current = attempt;
+        const epoch = activityEpoch.current;
+        const current = () =>
+            manualClockSample.current === attempt &&
+            attempt.valid &&
+            activityEpoch.current === epoch &&
+            latest.current.transport === attempt.active &&
+            latest.current.connected &&
+            latest.current.target?.endpoint === attempt.endpoint &&
+            latest.current.target?.username === attempt.username &&
+            attempt.active?.automationConnection?.() === attempt.connection;
+        pendingClockSamples.current++;
         setSampling(true);
         setError('');
         void sample()
-            .then(setCalibration)
-            .catch((e) => setError(e.message))
-            .finally(() => setSampling(false));
+            .then((value) => {
+                if (current()) setCalibration(value);
+            })
+            .catch((e) => {
+                if (current()) setError(e.message);
+            })
+            .finally(() => {
+                pendingClockSamples.current--;
+                if (manualClockSample.current === attempt) manualClockSample.current = null;
+                setSampling(pendingClockSamples.current > 0);
+            });
     };
     const cancel = () => {
         if (runner.current?.cleanupPending) {
@@ -440,13 +524,18 @@ export default function AutomationPage(props: Props) {
                 .retryCleanup()
                 .then(async () => {
                     const held = cleanupActivity.current;
+                    const resume = cleanupConsoleResults.current;
+                    const resumeClock = cleanupClock.current;
                     cleanupActivity.current = undefined;
                     if (held) await window.diagnosticHub?.releaseAutomationActivity?.(held);
-                    const resume = cleanupConsoleResults.current;
-                    cleanupConsoleResults.current = undefined;
+                    if (cleanupConsoleResults.current === resume)
+                        cleanupConsoleResults.current = undefined;
                     resume?.();
-                    setRunning(false);
-                    latest.current.onBusy(false);
+                    if (cleanupClock.current === resumeClock) cleanupClock.current = undefined;
+                    resumeClock?.();
+                    const active = arming.current || Boolean(runner.current?.busy);
+                    setRunning(active);
+                    latest.current.onBusy(active);
                 })
                 .catch((error) => setError(error instanceof Error ? error.message : String(error)));
             return;
@@ -481,8 +570,9 @@ export default function AutomationPage(props: Props) {
             flowStarted = false;
         let lease: string | undefined;
         let resumeConsoleResults: (() => void) | undefined;
+        let resumeClock: (() => void) | undefined;
         const desktop = window.diagnosticHub;
-        const epoch = activityEpoch.current;
+        const epoch = ++activityEpoch.current;
         setError('');
         try {
             const snapshot = build();
@@ -507,6 +597,8 @@ export default function AutomationPage(props: Props) {
                         : { endpoint: serial.current.label, serialSettings: serial.framing };
             latest.current.onBusy(true);
             setRunning(true);
+            resumeClock = await props.clockAdmission.quiesce();
+            if (armAttempt.current !== attempt) return;
             const repository =
                 snapshot.transport === 'ssh' && snapshot.ssh?.mode === 'console'
                     ? undefined
@@ -571,13 +663,16 @@ export default function AutomationPage(props: Props) {
                 flowInspectionId.current = null;
                 setFlowInspection(null);
             }
-            const pending = Boolean(runner.current?.cleanupPending);
+            // A cancelled pre-arm continuation must not adopt another run's cleanup.
+            const pending = flowStarted && Boolean(runner.current?.cleanupPending);
             if (lease) {
                 if (pending) cleanupActivity.current = lease;
                 else await desktop?.releaseAutomationActivity?.(lease).catch(() => {});
             }
             if (pending) cleanupConsoleResults.current = resumeConsoleResults;
             else resumeConsoleResults?.();
+            if (pending) cleanupClock.current = resumeClock;
+            else resumeClock?.();
             if (armAttempt.current === attempt) {
                 armAttempt.current = null;
                 arming.current = false;
@@ -793,7 +888,7 @@ export default function AutomationPage(props: Props) {
                 >
                     <p className="automation-state" role="status">
                         {state.message}
-                        {running ? ' · Draft frozen' : ''}
+                        {running ? ' · Armed snapshot frozen; edits apply next run' : ''}
                     </p>
                     {running && (
                         <div className="automation-run-actions">
@@ -838,10 +933,9 @@ export default function AutomationPage(props: Props) {
                             <select
                                 aria-label="Automation transport"
                                 value={transport}
-                                onChange={(e) => {
-                                    setTransport(e.target.value as 'ssh' | 'serial');
-                                    setCalibration(undefined);
-                                }}
+                                onChange={(e) =>
+                                    changeTransport(e.target.value as 'ssh' | 'serial')
+                                }
                             >
                                 <option value="ssh">SSH</option>
                                 <option value="serial">Serial</option>
@@ -1303,7 +1397,7 @@ export default function AutomationPage(props: Props) {
                                     aria-label="Run mode"
                                     value={scheduled ? 'scheduled' : 'immediate'}
                                     disabled={running}
-                                    onChange={(e) => setScheduled(e.target.value === 'scheduled')}
+                                    onChange={(e) => changeScheduled(e.target.value === 'scheduled')}
                                 >
                                     <option value="immediate">Start immediately</option>
                                     <option value="scheduled">Start at chosen date and time</option>
@@ -1403,7 +1497,7 @@ export default function AutomationPage(props: Props) {
                                         {...fieldProps('clock', scheduled)}
                                         value={clockKind}
                                         onChange={(e) =>
-                                            setClockKind(e.target.value as 'local' | 'device')
+                                            changeClockKind(e.target.value as 'local' | 'device')
                                         }
                                     >
                                         <option value="local">Local host clock</option>
@@ -1531,7 +1625,7 @@ export default function AutomationPage(props: Props) {
                 >
                     {' '}
                     <details className="automation-preview" open>
-                        <summary>Exact flow preview</summary>
+                        <summary>Next-run draft preview</summary>
                         <p>
                             {transport === 'ssh'
                                 ? sshMode === 'console'

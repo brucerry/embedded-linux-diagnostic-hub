@@ -20,6 +20,37 @@ const draft = (): DraftFields => ({
     connection: 'fixture',
 });
 const keys = (d: DraftFields) => draftIssues(d).map((i) => i.key);
+test('SSH Send Enter survives a Serial Enter-only round-trip without accepting invalid scripts or erasing the Serial setting', () => {
+    for (const role of ['shell-prompt', 'intermediate-input-prompt'] as const) {
+        const d = draft();
+        d.sshMode = 'console';
+        d.consolePrompts = '# ';
+        d.steps[0].command = '';
+        d.steps[0].enterOnly = false;
+        d.steps[0].ssh = { intent: 'send-enter', completion: { role, literals: ['# '] } };
+        assert.deepEqual(keys(d), []);
+        d.transport = 'serial'; d.prompt = '# '; d.steps[0].enterOnly = true;
+        assert.deepEqual(keys(d), []);
+        d.transport = 'ssh';
+        const before = structuredClone(d);
+        assert.deepEqual(keys(d), []);
+        assert.deepEqual(d, before);
+        assert.equal(d.steps[0].enterOnly, true);
+        d.steps[0].ssh.intent = 'script';
+        assert.deepEqual(keys(d), ['one.command'], 'A retained Serial flag cannot authorize a blank SSH Script.');
+        d.steps[0].command = 'echo fixture';
+        assert.deepEqual(keys(d), []);
+        d.steps[0].ssh.intent = 'send-enter';
+        assert.deepEqual(keys(d), ['one.command'], 'Send Enter cannot carry script text.');
+        d.steps[0].command = '';
+        assert.deepEqual(keys(d), []);
+        d.sshMode = 'independent-script';
+        assert.deepEqual(keys(d), ['one.command']);
+        d.transport = 'serial';
+        assert.deepEqual(keys(d), []);
+        assert.equal(d.steps[0].enterOnly, true);
+    }
+});
 test('optional blank names/prefix/inactive timing stay valid; missing required fields get actionable stable keys', () => {
     const d = draft();
     assert.deepEqual(draftIssues(d), []);
@@ -152,4 +183,29 @@ test('combined errors follow displayed controls within a stage, including timeou
     d.steps[0].command = '';
     d.steps[0].enterOnly = true;
     assert.deepEqual(keys(d), ['ending', 'prompt', 'prefix']);
+});
+
+test('console completion guidance stays after its own command and before the next step for both roles', () => {
+    for (const role of ['shell-prompt', 'intermediate-input-prompt'] as const) {
+        for (const literals of [[], [''], ['# ', '# '], ['bad\n']]) {
+            const d = draft();
+            d.sshMode = 'console';
+            d.consolePrompts = '# ';
+            d.steps[0].ssh = { intent: 'script', completion: { role, literals } };
+            d.steps.push({ id: 'two', name: '', enabled: true, command: '', delaySeconds: 0,
+                ssh: { intent: 'script' } });
+            const before = structuredClone(d);
+            assert.deepEqual(keys(d), ['one.completion', 'two.command']);
+            assert.deepEqual(d, before, 'Guidance must not change the submitted draft.');
+            d.steps[0].command = '';
+            assert.deepEqual(keys(d), ['one.command', 'one.completion', 'two.command']);
+            d.steps[0].command = 'echo fixture';
+            d.steps[0].ssh.completion = { role, literals: ['# '] };
+            assert.deepEqual(keys(d), ['two.command']);
+            d.steps[1].command = 'echo second';
+            assert.deepEqual(keys(d), []);
+            delete d.steps[0].ssh.completion;
+            assert.deepEqual(keys(d), [], 'An absent override uses the valid global criterion.');
+        }
+    }
 });

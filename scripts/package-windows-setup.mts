@@ -5,6 +5,7 @@ import {
     revalidateWindowsSetupInput,
 } from './lib/windows-setup-input.mjs';
 import { extractFile } from '@electron/asar';
+import { verifyDesktopPackageBundles } from './lib/desktop-package-bundles.mjs';
 import {
     writeWindowsSetupInfo,
     windowsSetupInfoName,
@@ -70,6 +71,10 @@ validateWindowsPayloadPackage(
     extractFile(path.join(root, 'resources', 'app.asar'), 'package.json'),
     version,
 );
+await verifyDesktopPackageBundles({
+    readBuild: (file) => readFile(file),
+    readPackaged: (file) => extractFile(path.join(root, 'resources', 'app.asar'), file),
+});
 
 const manifest = validateInstallationManifest({
     schemaVersion: 1,

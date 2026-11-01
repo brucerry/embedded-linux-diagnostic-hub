@@ -1,6 +1,6 @@
 import { validateSnapshot } from '../shared/report';
 import type { Snapshot, UpdateMode, UpdateProgress } from '../shared/types';
-import { UpdateReports } from './update-reports';
+import type { UpdateReports } from './update-reports';
 import type { ReleaseUpdater } from './updates';
 
 interface Lifecycle {
@@ -21,7 +21,7 @@ export class UpdateCoordinator {
 
     constructor(
         private updater: Pick<ReleaseUpdater, 'assertCanDownload' | 'download' | 'executable'>,
-        private reports: UpdateReports,
+        private reports: Pick<UpdateReports, 'save' | 'arm' | 'acknowledge'>,
         private lifecycle: Lifecycle,
     ) {}
 
@@ -76,12 +76,34 @@ export class UpdateCoordinator {
             });
             await this.lifecycle.restart(executable);
         } catch (error) {
-            this.lifecycle.progress({
-                stage: 'failed',
-                message: error instanceof Error ? error.message : String(error),
-            });
-            this.active = false;
-            if (armed && saved) await this.reports.acknowledge(saved.id);
+            try {
+                try {
+                    this.lifecycle.progress({
+                        stage: 'failed',
+                        message: error instanceof Error ? error.message : String(error),
+                    });
+                } catch {
+                    // A lost renderer must not interrupt native transaction unwind.
+                }
+                if (armed && saved) {
+                    try {
+                        await this.reports.acknowledge(saved.id);
+                    } catch (disarmError) {
+                        throw new AggregateError(
+                            [error, disarmError],
+                            (error instanceof Error ? error.message : String(error)) +
+                                '; recovery marker disarm failed: ' +
+                                (disarmError instanceof Error
+                                    ? disarmError.message
+                                    : String(disarmError)),
+                            { cause: error },
+                        );
+                    }
+                }
+            } finally {
+                // Keep reentrant updates locked out until marker disarm settles.
+                this.active = false;
+            }
             throw error;
         }
     }

@@ -7,7 +7,7 @@ import {
 import { consoleReportScope, type ConsoleReportScope } from '../../../../shared/console-report';
 import type { CaptureReportFormat } from '../../../../shared/capture-report';
 import { streamObject } from '../../../../shared/ssh-stream-rpc';
-import { startBrowserCaptureExport } from './browser-export';
+import { startBrowserCaptureExport, type BrowserExportDiagnostic } from './browser-export';
 
 export interface ConsoleExportJob {
     completed: Promise<{ state: 'saved' | 'stream-sent' | 'cancelled'; bytes?: number }>;
@@ -16,9 +16,10 @@ export interface ConsoleExportJob {
 export async function startConsoleExport(
     format: CaptureReportFormat,
     input: ConsoleReportScope,
+    onDiagnostic?: (value: BrowserExportDiagnostic) => void,
 ): Promise<ConsoleExportJob> {
     const scope = consoleReportScope(input);
-    if (!window.diagnosticHub) return startBrowserCaptureExport(format, scope, 'console');
+    if (!window.diagnosticHub) return startBrowserCaptureExport(format, scope, 'console', onDiagnostic);
     const rpc = window.diagnosticHub.consoleStorage;
     if (!rpc)
         throw new CaptureStorageError(

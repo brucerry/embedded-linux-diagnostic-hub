@@ -1,3 +1,10 @@
+import { DesktopConnectionAttempts } from './connection-attempts';
+import {
+    createQuitController,
+    quitAllowsIpc,
+    runQuitCleanup,
+    settleConnectionAttempt,
+} from '../shared/quit-cleanup';
 import { trustedFrameHandler, trustedFrameReadyHandler } from './trusted-ipc';
 import { NativeCaptureHost } from './capture-host';
 import { NativeConsoleService } from './console-service';
@@ -43,6 +50,23 @@ import {
     withInstalledLinuxWindow,
 } from './linux-window-identity';
 
+import { createLaunchTimingRecorder, type LaunchTimingSnapshot } from '../shared/launch-timing';
+
+// This origin is AFTER all static imports, not process creation or launcher start.
+const launchTiming =
+    process.env.HUB_LAUNCH_TIMING === '1' &&
+    !process.argv.includes('--diagnostic-hub-setup-worker')
+        ? createLaunchTimingRecorder('main-module-body', () => performance.now())
+        : undefined;
+if (launchTiming) {
+    (
+        globalThis as typeof globalThis & {
+            __hubLaunchTiming?: () => LaunchTimingSnapshot;
+        }
+    ).__hubLaunchTiming = launchTiming.snapshot;
+    launchTiming.mark('main-module-body');
+}
+
 if (process.argv.includes('--diagnostic-hub-setup-worker')) {
     void setupWorkerMain(app, shell, dialog)
         .then((code) => app.exit(code))
@@ -57,6 +81,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
     let startup: ReturnType<typeof selectDesktopStartup>;
     let ownsProfile = true;
     try {
+        launchTiming?.mark('main-startup-selection-start');
         startup = selectDesktopStartup({
             platform: process.platform,
             arch: process.arch,
@@ -67,10 +92,12 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             appData: app.getPath('appData'),
             profileOverride: app.commandLine.getSwitchValue('user-data-dir') || undefined,
         });
+        launchTiming?.mark('main-startup-selection-returned');
         const profile = canonicalProfilePath(startup.profilePath || app.getPath('userData'));
         app.setPath('userData', profile);
         app.setPath('sessionData', profile);
         ownsProfile = app.requestSingleInstanceLock();
+        launchTiming?.mark('main-profile-lock-returned');
         if (!ownsProfile) app.quit();
     } catch (error) {
         ownsProfile = false;
@@ -92,10 +119,6 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
     if (process.platform === 'win32') app.setAppUserModelId('dev.diagnostichub.desktop');
     if (process.platform === 'linux') app.setDesktopName(LINUX_DESKTOP_NAME);
     let keyPath: string | null = null;
-    let connecting = false;
-    let currentConnectionAttempt = '';
-    let pendingConnection:
-        { id: string; controller: AbortController; done: Promise<void> } | undefined;
     let lastSnapshot: Snapshot | null = null;
     let collectionTask: Promise<Snapshot> | null = null;
     const hostVerification = new HostVerification((request) => {
@@ -105,6 +128,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
     const ssh = new DeviceMonitor(() => {
         if (window && !window.isDestroyed()) window.webContents.send('hub:disconnected');
     });
+    const connectionAttempts = new DesktopConnectionAttempts(ssh);
 
     protocol.registerSchemesAsPrivileged([
         { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -121,11 +145,48 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         });
         return result.canceled ? null : (result.filePath ?? null);
     });
-    let captureShutdown: Promise<void> | undefined;
-    let captureShutdownComplete = false;
+    let quitConnectionFailure: ConnectionFailure | null = null;
+    const quit = createQuitController(
+        (snapshot: {
+            connection: typeof connectionAttempts.snapshot;
+            capture: typeof captureHostPromise;
+        }) =>
+            runQuitCleanup({
+                cancelConnection: () => snapshot.connection?.controller.abort(),
+                clearHostVerification: () => hostVerification.clear(),
+                disconnect: () => ssh.clear(),
+                prepareConsole: () => consoleService.prepareShutdown(),
+                joinConnection: async () => {
+                    quitConnectionFailure = await settleConnectionAttempt(snapshot.connection?.done);
+                },
+                joinSsh: () => ssh.joinCleanup(),
+                finishConsole: () => consoleService.finishShutdown(),
+                shutdownCapture: async () => {
+                    const host = await snapshot.capture;
+                    await host?.shutdown();
+                },
+            }),
+    );
+    const assertNotQuitting = () => {
+        if (quit.phase !== 'idle') throw Error('Diagnostic Hub is shutting down.');
+    };
+    const reportBlockedQuit = (error: unknown) => {
+        // Reporting cannot authorize quit or replace the retained controller outcome.
+        try {
+            console.error('Quit cleanup blocked:', error);
+        } catch {}
+        try {
+            dialog.showErrorBox(
+                'Diagnostic Hub could not finish quitting',
+                'Cleanup did not complete successfully. The application remains running ' +
+                    'to preserve resources whose closure was not confirmed.',
+            );
+        } catch {}
+    };
     let captureRendererEpoch = 0;
-    const captureHost = () =>
-        (captureHostPromise ??= NativeCaptureHost.open(
+    const captureHost = () => {
+        assertNotQuitting();
+        return (captureHostPromise ??= NativeCaptureHost.open(
             app.getPath('userData'),
             { profileOwned: true },
             async (format) => {
@@ -142,7 +203,9 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             captureHostPromise = undefined;
             throw error;
         }));
+    };
     const resetCaptureRenderer = () => {
+        if (quit.phase !== 'idle') return;
         captureRendererEpoch++;
         void consoleService
             .reset()
@@ -152,10 +215,18 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             .catch((error) => console.error('Capture cleanup:', String(error)));
     };
 
-    function registerHandler(name: string, handler: (...args: unknown[]) => unknown) {
+    function registerHandler(
+        name: string,
+        handler: (...args: unknown[]) => unknown,
+        operation?: (input: unknown) => string,
+    ) {
         ipcMain.handle(
             name,
-            trustedFrameHandler(() => window, appUrl, handler),
+            trustedFrameHandler(() => window, appUrl, (...args) => {
+                if (quit.phase !== 'idle' && !quitAllowsIpc(name, operation?.(args[0])))
+                    assertNotQuitting();
+                return handler(...args);
+            }),
         );
     }
 
@@ -205,8 +276,10 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         return true;
     }
 
+    launchTiming?.mark('main-ready-handler-registration');
     app.whenReady().then(async () => {
-        if (!ownsProfile) return;
+        launchTiming?.mark('main-ready-callback');
+        if (!ownsProfile || quit.phase !== 'idle') return;
         const updater = new ReleaseUpdater(
             app.getVersion(),
             path.join(app.getPath('userData'), 'updates'),
@@ -225,7 +298,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         let serial: ReturnType<typeof configureSerial>;
         let activity: AutomationActivity | undefined;
         const update = new UpdateCoordinator(updater, reports, {
-            isConnecting: () => connecting,
+            isConnecting: () => connectionAttempts.busy,
             quiesceSerial: async () => {
                 activity?.interrupt('Update started. Arm explicitly after reconnecting.');
                 ssh.clearAutomationStream();
@@ -273,6 +346,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 return new Response('Not found', { status: 404 });
             return net.fetch(pathToFileURL(file).toString());
         });
+        launchTiming?.mark('main-window-construction-start');
         const createWindow = () =>
             new BrowserWindow({
                 icon: path.join(app.getAppPath(), 'dist', 'app-icon.png'),
@@ -285,6 +359,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 autoHideMenuBar: true,
                 webPreferences: {
                     preload: path.join(__dirname, 'preload.cjs'),
+                    ...(launchTiming ? { additionalArguments: ['--hub-launch-timing'] } : {}),
                     nodeIntegration: false,
                     contextIsolation: true,
                     sandbox: true,
@@ -301,6 +376,14 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                       )
                     : withNativeLinuxWindow((name) => app.setDesktopName(name), createWindow)
                 : createWindow();
+        launchTiming?.mark('main-window-construction-returned');
+        if (launchTiming) {
+            // show defaults to true; the initial show may precede this listener.
+            // This is a main-process visibility observation, not compositor proof.
+            if (window.isVisible()) launchTiming.mark('main-window-visible-observed');
+            else window.once('show', () => launchTiming.mark('main-window-visible-observed'));
+            window.once('ready-to-show', () => launchTiming.mark('main-ready-to-show'));
+        }
         activity = new AutomationActivity(
             (enabled) => {
                 if (!window.isDestroyed()) window.webContents.setBackgroundThrottling(enabled);
@@ -318,23 +401,26 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 appUrl,
                 () => captureRendererEpoch,
                 captureHost,
-                (host, request) => host.dispatch(request),
+                (host, request) => {
+                    assertNotQuitting();
+                    return host.dispatch(request);
+                },
             ),
         );
         registerHandler('hub:automation-activity-acquire', () => activity!.acquire());
         registerHandler('hub:automation-activity-release', (id) => activity!.release(id));
         powerMonitor.on('suspend', () => {
             activity!.suspend();
-            ssh.clearAutomationStream();
+            if (quit.phase === 'idle') ssh.clearAutomationStream();
         });
         powerMonitor.on('resume', () => activity!.resume());
         window.webContents.on('render-process-gone', () => {
             resetCaptureRenderer();
             activity!.clear();
-            ssh.clear();
+            if (quit.phase === 'idle') ssh.clear();
         });
         window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
-            if (isMainFrame) {
+            if (isMainFrame && quit.phase === 'idle') {
                 ssh.clearAutomationStream();
                 activity!.clear();
                 resetCaptureRenderer();
@@ -342,8 +428,10 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         });
         window.on('closed', () => {
             activity!.clear();
-            ssh.clearAutomationStream();
-            resetCaptureRenderer();
+            if (quit.phase === 'idle') {
+                ssh.clearAutomationStream();
+                resetCaptureRenderer();
+            }
         });
         serial = configureSerial(window, appUrl, () => update.active);
         registerHandler('hub:serial-select', (id, portId) => serial.select(id, portId));
@@ -354,22 +442,23 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         });
         window.on('restore', () => window.webContents.send('hub:window-restored'));
         window.on('closed', () => {
-            hostVerification.clear();
-            ssh.clear();
+            if (quit.phase === 'idle') {
+                hostVerification.clear();
+                ssh.clear();
+            }
         });
         registerHandler('hub:confirm-host-key', (id, accepted) =>
             hostVerification.confirm(id, accepted),
         );
         registerHandler('hub:connect', async (input, requestedId) => {
             let id = '';
+            let credentials: ReturnType<typeof validateConnection> | undefined;
             try {
                 if (update.active)
                     throw new ConnectionFailure(
                         'policy',
                         'An update is in progress. SSH remains disconnected.',
                     );
-                if (connecting)
-                    throw new ConnectionFailure('policy', 'A connection is already in progress.');
                 id =
                     requestedId === undefined
                         ? randomUUID().replaceAll('-', '')
@@ -383,10 +472,8 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                         'Invalid connection settings. Correct them and connect again.',
                     );
                 }
-                const controller = new AbortController();
-                connecting = true;
-                currentConnectionAttempt = id;
-                const done = (async () => {
+                credentials = options;
+                await connectionAttempts.connect(id, async (signal) => {
                     let privateKey: Buffer | undefined;
                     try {
                         if (options.auth === 'key') {
@@ -404,7 +491,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                                 );
                             }
                         }
-                        if (controller.signal.aborted)
+                        if (signal.aborted)
                             throw new ConnectionFailure('cancelled', 'Connection cancelled.');
                         await ssh.configure(
                             options,
@@ -412,60 +499,48 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                                 verifyHost(
                                     `${options.host}:${options.port}`,
                                     key,
-                                    controller.signal,
+                                    signal,
                                 ),
                             privateKey,
-                            controller.signal,
+                            signal,
                         );
                     } finally {
                         privateKey?.fill(0);
                         options.password = undefined;
                         options.passphrase = undefined;
+                        hostVerification.clear();
                     }
-                })();
-                const pending = { id, controller, done };
-                pendingConnection = pending;
-                try {
-                    await done;
-                } finally {
-                    if (pendingConnection === pending) pendingConnection = undefined;
-                    hostVerification.clear();
-                    connecting = false;
-                }
+                });
                 return { ok: true, connection: ssh.automationConnection };
             } catch (error) {
-                if (currentConnectionAttempt === id) currentConnectionAttempt = '';
                 const failure = connectionFailure(error);
                 return { ok: false, code: failure.code, message: failure.message };
+            } finally {
+                if (credentials) {
+                    credentials.password = undefined;
+                    credentials.passphrase = undefined;
+                }
             }
         });
         registerHandler('hub:cancel-connect', async (input) => {
             const id = connectionAttemptId(input);
-            const pending = pendingConnection?.id === id ? pendingConnection : undefined;
-            if (pending) {
-                pending.controller.abort();
-                hostVerification.clear();
-            }
-            if (currentConnectionAttempt === id) {
-                currentConnectionAttempt = '';
-                ssh.clear();
-            }
-            await pending?.done.catch(() => {});
+            if (connectionAttempts.snapshot?.id === id) hostVerification.clear();
+            await connectionAttempts.cancel(id);
         });
         registerHandler('hub:disconnect', async () => {
-            if (connecting || ssh.isCollecting)
+            if (connectionAttempts.busy || ssh.isCollecting)
                 throw new Error('Wait for the current connection or collection to finish.');
             ssh.clear();
         });
         registerHandler('hub:terminal-open', (request) => {
-            if (update.active || connecting)
+            if (update.active || connectionAttempts.busy)
                 throw Error('Wait for the current connection or update to finish.');
             return ssh.openTerminal(request as TerminalOpen, (event) => {
                 if (!window.isDestroyed()) window.webContents.send('hub:terminal-event', event);
             });
         });
         registerHandler('hub:terminal-input', (id, data) => {
-            if (update.active || connecting)
+            if (update.active || connectionAttempts.busy)
                 throw Error('Terminal input is paused for the connection or update.');
             return ssh.getTerminal(id).write(data);
         });
@@ -475,22 +550,33 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         );
         registerHandler('hub:terminal-close', (id) => ssh.getTerminal(id).close());
         registerHandler('hub:automation-run', (request) => {
-            if (update.active || connecting)
+            if (update.active || connectionAttempts.busy)
                 throw Error('Automation is paused for the connection or update.');
             return ssh.runAutomation(request as import('../shared/automation').AutomationRequest);
         });
-        registerHandler('hub:automation-stream', (request) => {
-            const checked = streamRequest(request);
-            if (checked.action === 'start' && (connecting || update.active))
-                throw Error('Automation is paused for the connection or update.');
-            return ssh.automationStream(checked);
-        });
-        registerHandler('hub:automation-console', (request) => {
-            const checked = consoleRpcRequest(request);
-            if (['open', 'step'].includes(checked.action) && (connecting || update.active))
-                throw Error('Automation is paused for the connection or update.');
-            return ssh.automationConsole(checked, consoleService.createWriter);
-        });
+        registerHandler(
+            'hub:automation-stream',
+            (request) => {
+                const checked = streamRequest(request);
+                if (checked.action === 'start' && (connectionAttempts.busy || update.active))
+                    throw Error('Automation is paused for the connection or update.');
+                return ssh.automationStream(checked);
+            },
+            (input) => streamRequest(input).action,
+        );
+        registerHandler(
+            'hub:automation-console',
+            (request) => {
+                const checked = consoleRpcRequest(request);
+                if (
+                    ['open', 'step'].includes(checked.action) &&
+                    (connectionAttempts.busy || update.active)
+                )
+                    throw Error('Automation is paused for the connection or update.');
+                return ssh.automationConsole(checked, consoleService.createWriter);
+            },
+            (input) => consoleRpcRequest(input).action,
+        );
         registerHandler('hub:console-storage', async (request) => {
             try {
                 return { ok: true, value: await consoleService.dispatch(request) };
@@ -508,7 +594,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         registerHandler('hub:device-clock', (connection) => {
             if (connection !== undefined && connection !== ssh.automationConnection)
                 throw Error('Device clock connection changed.');
-            if (update.active || connecting)
+            if (update.active || connectionAttempts.busy)
                 throw Error('Wait for the current connection or update to finish.');
             return ssh.readClock();
         });
@@ -615,7 +701,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         registerHandler('hub:clear-session-data', () => {
             if (update.active)
                 throw new Error('Wait for the update to finish before resetting data.');
-            if (connecting || collectionTask || ssh.isCollecting)
+            if (connectionAttempts.busy || collectionTask || ssh.isCollecting)
                 throw new Error('Wait for the current connection or collection to finish.');
             lastSnapshot = null;
             ssh.clearNetworkCache();
@@ -654,32 +740,28 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             );
             return true;
         });
+        launchTiming?.mark('main-load-url-start');
         await window.loadURL(appUrl);
+        launchTiming?.mark('main-load-url-resolved');
     });
 
     app.on('window-all-closed', () => app.quit());
     app.on('before-quit', (event) => {
-        hostVerification.clear();
-        ssh.clear();
-        if (
-            (captureHostPromise || ssh.hasResources || consoleService.hasResources) &&
-            !captureShutdownComplete
-        ) {
-            event.preventDefault();
-            captureShutdown ??= Promise.all([
-                consoleService
-                    .reset()
-                    .then(() => ssh.shutdownConsole())
-                    .then(() => ssh.joinCleanup())
-                    .then(() => consoleService.shutdown()),
-                captureHostPromise?.then((host) => host.shutdown()),
-            ])
-                .then(() => {})
-                .catch((error) => console.error('Capture shutdown:', String(error)))
-                .finally(() => {
-                    captureShutdownComplete = true;
-                    app.quit();
-                });
-        }
+        if (quit.phase === 'ready') return;
+        event.preventDefault();
+        if (quit.phase !== 'idle') return;
+        const snapshot = { connection: connectionAttempts.snapshot, capture: captureHostPromise };
+        // Invalidate privileged capture calls already waiting for initialization.
+        captureRendererEpoch++;
+        void quit.begin(snapshot).then((outcome) => {
+            if (quitConnectionFailure) {
+                // Keep the original operation error; only ownership joins establish closure.
+                try {
+                    console.warn('Connection attempt ended before quit:', quitConnectionFailure);
+                } catch {}
+            }
+            if (outcome.status === 'ready') app.quit();
+            else reportBlockedQuit(outcome.error);
+        });
     });
 }

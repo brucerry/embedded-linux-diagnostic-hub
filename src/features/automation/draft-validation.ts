@@ -71,6 +71,8 @@ export function draftIssues(d: DraftFields): FieldIssue[] {
     }
     let total = 0;
     for (const s of d.steps) {
+        // Console plan construction ignores the retained Serial-only draft flag.
+        const serialEnterOnly = d.transport === 'serial' && Boolean(s.enterOnly);
         if (s.name.length > 120)
             add(s.id + '.name', 1, 'Use up to 120 characters, or leave blank.');
         const size = new TextEncoder().encode(s.command).length;
@@ -79,11 +81,15 @@ export function draftIssues(d: DraftFields): FieldIssue[] {
             add(s.id + '.command', 1, 'Remove NUL characters from the command.');
         else if (size > AUTOMATION_LIMITS.commandBytes)
             add(s.id + '.command', 1, 'Use no more than 8192 UTF-8 bytes.');
-        else if (s.enterOnly && d.transport !== 'serial')
+        else if (
+            s.enterOnly &&
+            d.transport !== 'serial' &&
+            !(d.transport === 'ssh' && d.sshMode === 'console')
+        )
             add(s.id + '.command', 1, 'Enter a script; Enter-only requires Serial.');
         else if (
             s.enabled &&
-            !s.enterOnly &&
+            !serialEnterOnly &&
             !s.command.trim() &&
             !(d.transport === 'ssh' && d.sshMode === 'console' && s.ssh?.intent === 'send-enter')
         )
@@ -181,7 +187,12 @@ export function draftIssues(d: DraftFields): FieldIssue[] {
         'ending',
         'prompt',
         'prefix',
-        ...d.steps.flatMap((s) => [s.id + '.enabled', s.id + '.name', s.id + '.command']),
+        ...d.steps.flatMap((s) => [
+            s.id + '.enabled',
+            s.id + '.name',
+            s.id + '.command',
+            s.id + '.completion',
+        ]),
         'timeout',
         'repeat',
         'date',

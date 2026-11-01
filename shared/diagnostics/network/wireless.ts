@@ -149,13 +149,19 @@ export function wirelessSummary(snapshot: Snapshot): NetworkSummary {
     const groups = [];
     const links = lanSummary(snapshot).interfaces;
     for (const iface of interfaces) {
-        const link = links.find(
-            (i) =>
-                i.name === iface.name &&
-                (i.ifindex === undefined ||
-                    iface.ifindex === undefined ||
-                    i.ifindex === iface.ifindex),
-        );
+        const named = links.filter((i) => i.name === iface.name);
+        const exact = iface.ifindex === undefined
+            ? []
+            : named.filter((i) => i.ifindex === iface.ifindex);
+        const candidates = exact.length
+            ? exact
+            : named.filter((i) => i.ifindex === undefined || iface.ifindex === undefined);
+        const link = candidates.length === 1 ? candidates[0] : undefined;
+        if (candidates.length > 1)
+            warnings.push(
+                iface.name.slice(0, 128) +
+                    ': multiple link identities match this wireless interface; administrative/carrier/operating state not merged.',
+            );
         if (link) {
             iface.admin = link.admin;
             iface.carrier = link.carrier;

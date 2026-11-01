@@ -195,7 +195,7 @@ test('timeout does not claim closed ownership and close recovery cannot open ano
     session.subscribe(() => ownership.push(session.isOwned));
     session.select(f.port, 'port');
     const opening = session.connect(DEFAULT_SERIAL_SETTINGS);
-    await assert.rejects(session.close(), /cleanup is still pending/);
+    await assert.rejects(session.close(), /Timed out waiting for Serial cleanup/);
     assert.equal(session.isOwned, true);
     assert.equal(ownership.at(-1), true);
     assert.throws(() => session.select(fake().port, 'replacement'), /Disconnect/);

@@ -324,6 +324,18 @@ export class ReleaseUpdater {
     async executable(): Promise<string> {
         this.assertAutomaticDelivery();
         if (this.busy || !this.ready) throw new Error('Download and verify an update first.');
-        return this.verify(this.ready);
+        const ready = this.ready;
+        const candidate = this.candidate;
+        this.busy = true;
+        try {
+            return await this.verify(ready);
+        } catch (error) {
+            if (this.ready === ready) this.ready = null;
+            if (candidate && this.verified.get(candidate.version) === ready)
+                this.verified.delete(candidate.version);
+            throw error;
+        } finally {
+            this.busy = false;
+        }
     }
 }

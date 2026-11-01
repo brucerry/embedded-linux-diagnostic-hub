@@ -10,6 +10,9 @@ export interface DeviceClockState {
     status: 'disconnected' | 'loading' | 'unavailable' | 'current' | 'stale';
     sample: DeviceClockSample | null;
 }
+export interface DeviceClockAdmission {
+    quiesce(): Promise<() => void>;
+}
 
 interface ClockInputs {
     transport: { readDeviceClock?(): Promise<DeviceClockResponse> } | null | undefined;
@@ -25,24 +28,50 @@ export function useDeviceClock({
     reset,
     blocked,
     uptime,
-}: ClockInputs): DeviceClockState {
+}: ClockInputs): DeviceClockState & DeviceClockAdmission {
     const [{ visible, resumeRevision }, setVisibility] = useState(() => ({
         visible: document.visibilityState !== 'hidden',
         resumeRevision: 0,
     }));
-    const [state, setState] = useState<DeviceClockState & { generation?: number; reset?: number }>({
+    const [state, setState] = useState<DeviceClockState & {
+        generation?: number;
+        reset?: number;
+        transport?: ClockInputs['transport'];
+    }>({
         status: 'disconnected',
         sample: null,
     });
     const flight = useRef<Promise<void> | null>(null);
     const queued = useRef<(() => void) | null>(null);
     const refresh = useRef<(() => void) | null>(null);
+    const reservation = useRef<symbol | null>(null);
+    const freshness = useRef(0);
     const observed = useRef<{ generation?: number; uptime: number | null }>({ uptime: null });
     const retained = useRef<{
         generation?: number;
         reset?: number;
+        transport?: ClockInputs['transport'];
         sample: DeviceClockSample | null;
     }>({ sample: null });
+    const quiesce = async () => {
+        if (reservation.current) throw Error('Wait for the current clock reader admission.');
+        const token = Symbol('header clock admission');
+        reservation.current = token;
+        // A read begun before this admission cannot make the retained sample current.
+        freshness.current++;
+        setState((current) => ({ ...current, status: current.sample ? 'stale' : current.status }));
+        try {
+            await flight.current;
+        } catch (error) {
+            if (reservation.current === token) reservation.current = null;
+            throw error;
+        }
+        return () => {
+            if (reservation.current !== token) return;
+            reservation.current = null;
+            refresh.current?.();
+        };
+    };
 
     useEffect(() => {
         const visibility = () => {
@@ -82,22 +111,26 @@ export function useDeviceClock({
         let disposed = false;
         let unsupported = !transport.readDeviceClock;
         let sample =
-            retained.current.generation === generation && retained.current.reset === reset
+            retained.current.transport === transport &&
+            retained.current.generation === generation &&
+            retained.current.reset === reset
                 ? retained.current.sample
                 : null;
         const publish = (status: DeviceClockState['status']) => {
             if (!disposed) {
-                retained.current = { sample, generation, reset };
-                setState({ status, sample, generation, reset });
+                retained.current = { sample, generation, reset, transport };
+                setState({ status, sample, generation, reset, transport });
             }
         };
         const run = () => {
             // Visibility events can precede React's effect cleanup and a due timer callback.
-            if (disposed || unsupported || document.visibilityState === 'hidden') return;
+            if (disposed || unsupported || reservation.current || document.visibilityState === 'hidden') return;
             if (flight.current) {
                 queued.current = run;
                 return;
             }
+            const requestedFreshness = freshness.current;
+            publish(sample ? 'stale' : 'loading');
             const pending = (async () => {
                 try {
                     const result = validateDeviceClock(await transport.readDeviceClock!());
@@ -107,7 +140,11 @@ export function useDeviceClock({
                         if (sample && deviceRebooted(sample, result.sample))
                             observed.current = { generation, uptime: null };
                         sample = result.sample;
-                        publish('current');
+                        publish(
+                            requestedFreshness === freshness.current && !reservation.current
+                                ? 'current'
+                                : 'stale',
+                        );
                     } else {
                         unsupported = result.reason === 'unsupported';
                         publish(sample ? 'stale' : 'unavailable');
@@ -125,7 +162,7 @@ export function useDeviceClock({
             });
         };
         refresh.current = run;
-        publish(unsupported ? (sample ? 'stale' : 'unavailable') : sample ? 'current' : 'loading');
+        publish(unsupported ? (sample ? 'stale' : 'unavailable') : sample ? 'stale' : 'loading');
         run();
         const timer = setInterval(run, 60_000);
         return () => {
@@ -149,8 +186,12 @@ export function useDeviceClock({
         observed.current = { generation, uptime };
     }, [generation, uptime]);
 
-    if (generation === undefined) return { status: 'disconnected', sample: null };
-    if (blocked || state.generation !== generation || state.reset !== reset)
-        return { status: 'loading', sample: null };
-    return state;
+    if (generation === undefined || !transport) return { status: 'disconnected', sample: null, quiesce };
+    if (blocked || state.transport !== transport || state.generation !== generation || state.reset !== reset)
+        return { status: 'loading', sample: null, quiesce };
+    return {
+        ...state,
+        status: reservation.current ? (state.sample ? 'stale' : 'loading') : state.status,
+        quiesce,
+    };
 }

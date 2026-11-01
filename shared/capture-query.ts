@@ -88,9 +88,14 @@ export function captureScope(input: unknown = {}): CaptureScope {
 /** Safe readable projection: strips controls/OSC rather than interpreting output-supplied actions. */
 export class PlainCaptureText {
     private state: 'text' | 'escape' | 'csi' | 'string' | 'string-escape' = 'text';
+    private previousCR = false;
     append(text: string) {
         let result = '';
         for (const c of text) {
+            const followsCR = this.previousCR;
+            this.previousCR = false;
+            // Only adjacent raw CRLF coalesces, including across append boundaries.
+            if (c === '\n' && followsCR) continue;
             if (this.state === 'string') {
                 if (c === '\x07' || c === '\x9c') this.state = 'text';
                 else if (c === '\x1b') this.state = 'string-escape';
@@ -122,8 +127,10 @@ export class PlainCaptureText {
                 this.state = 'string';
                 continue;
             }
-            if (c === '\r') result += '\n';
-            else if (
+            if (c === '\r') {
+                result += '\n';
+                this.previousCR = true;
+            } else if (
                 c === '\n' ||
                 c === '\t' ||
                 (c >= ' ' && c !== '\x7f' && !(c >= '\x80' && c <= '\x9f'))

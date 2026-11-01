@@ -53,7 +53,10 @@ export class SerialSession {
     private opening?: Promise<void>;
     private reading?: Promise<void>;
     private writing?: Promise<void>;
-    private closing?: Promise<void>;
+    private closing?: {
+        task: Promise<void>;
+        intent: { deselect: boolean; selected?: LocalSerialPort; generation: number };
+    };
     private aborted?: AbortController;
     private queue: Uint8Array[] = [];
     private queuedBytes = 0;
@@ -140,6 +143,8 @@ export class SerialSession {
     }
     async connect(settings: SerialSettings) {
         const options = serialSettings(settings);
+        if (!this.selected) throw Error('Choose a local port first.');
+        if (this.port || this.closing) throw Error('The current port is still open or closing.');
         this.framingValue =
             options.baudRate +
             ' baud · ' +
@@ -150,8 +155,6 @@ export class SerialSession {
             options.stopBits +
             ' · ' +
             options.flowControl;
-        if (!this.selected) throw Error('Choose a local port first.');
-        if (this.port || this.closing) throw Error('The current port is still open or closing.');
         const port = this.selected;
         const generation = this.next();
         this.port = port;
@@ -610,6 +613,11 @@ export class SerialSession {
             this.capture?.cancel();
             this.automationOwner = undefined;
             this.next();
+            const intent = {
+                deselect,
+                selected: this.selected,
+                generation: this.status.generation,
+            };
             this.clearInput();
             this.aborted?.abort();
             this.publish('closing');
@@ -642,25 +650,33 @@ export class SerialSession {
                     if (this.opened === port) this.opened = undefined;
                 }
                 if (this.port === port) this.port = undefined;
-                if (deselect) {
-                    this.selected = undefined;
-                    this.status = { ...this.status, label: '' };
-                }
             })();
-            this.closing = task;
+            const transaction = { task, intent };
+            this.closing = transaction;
             void task.then(
                 () => {
-                    if (this.closing === task) {
+                    if (this.closing === transaction) {
+                        if (
+                            intent.deselect &&
+                            this.selected === intent.selected &&
+                            this.status.generation === intent.generation
+                        ) {
+                            this.selected = undefined;
+                            this.status = { ...this.status, label: '' };
+                        }
                         this.closing = undefined;
                         this.publish(this.selected ? 'selected' : 'idle');
                     }
                 },
                 () => {
-                    if (this.closing === task) this.closing = undefined;
+                    if (this.closing === transaction) this.closing = undefined;
                 },
             );
+        } else if (deselect) {
+            // A waiter's watchdog does not cancel the owned close or its Deselect intent.
+            this.closing.intent.deselect = true;
         }
-        const task = this.closing;
+        const task = this.closing.task;
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
             await Promise.race([
@@ -669,17 +685,12 @@ export class SerialSession {
                     timer = setTimeout(
                         () =>
                             reject(
-                                Error('Serial cleanup is still pending. New opens remain blocked.'),
+                                Error('Timed out waiting for Serial cleanup; completion was not observed before this wait expired.'),
                             ),
                         this.closeTimeout,
                     );
                 }),
             ]);
-            if (deselect && this.selected && !this.port) {
-                this.selected = undefined;
-                this.status = { ...this.status, label: '' };
-                this.publish('idle', '');
-            }
         } catch (error) {
             this.publish('error', serialFailure(error));
             throw error;

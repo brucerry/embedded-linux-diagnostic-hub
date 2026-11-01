@@ -37,7 +37,7 @@ test('website uses authenticated gateway, verifies fingerprint and collects real
         await modal.getByRole('button', { name: 'Connect via SSH' }).click();
         await expect(modal).not.toBeVisible({ timeout: 20_000 });
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
-        await expect(page.getByText('Gateway SSH connected.', { exact: false })).toBeVisible();
+        await expect(page.getByText(`Gateway SSH connected to ${gateway.options.username}@${gateway.options.host}:${gateway.options.port}.`, { exact: false })).toBeVisible();
         expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
             gateway.token,
         );

@@ -69,16 +69,17 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                 group('sysfs', 'Kernel link attributes / cumulative counters', fields, lan),
             );
     }
-    const readRecords = (r: ProbeResult): Record<string, unknown>[] => {
+    const decodeRecords = (r: ProbeResult): Record<string, unknown>[] | undefined => {
         try {
             return records(r.stdout);
         } catch {
             warnings.push(
                 'Some ' + r.id + ' JSON could not be interpreted; raw evidence is retained.',
             );
-            return [];
+            return undefined;
         }
     };
+    const readRecords = (r: ProbeResult) => decodeRecords(r) ?? [];
     const links = section(snapshot, 'ethernet', 'ip-link-json').filter(
         (r) => r.status === 'collected',
     );
@@ -151,12 +152,15 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                 iface.groups.push(group('counters', 'Cumulative kernel counters', counters, r));
         }
     const legacy = result(snapshot, 'interfaces');
-    const addressSections = section(snapshot, 'interfaces', 'ip-address-json').filter(
-        (r) => r.status === 'collected',
-    );
-    if (addressSections.length) {
-        for (const r of addressSections)
-            for (const record of readRecords(r)) {
+    const addressSections = section(snapshot, 'interfaces', 'ip-address-json')
+        .filter((r) => r.status === 'collected');
+    let decodedAddresses = false;
+    // Preserve warning order while distinguishing a decoded empty array from failure.
+    for (const r of addressSections) {
+        const values = decodeRecords(r);
+        if (values !== undefined) {
+            decodedAddresses = true;
+            for (const record of values) {
                 if (typeof record.ifname !== 'string') continue;
                 const iface = ensure(record.ifname, safeNumber(record.ifindex));
                 if (!iface.mac) iface.mac = text(record.address);
@@ -203,7 +207,9 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                     );
                 }
             }
-    } else if (legacy) {
+        }
+    }
+    if (!decodedAddresses && legacy && (!addressSections.length || legacy.status === 'collected')) {
         let iface: InterfaceSummary | undefined;
         for (const line of legacy.stdout.split('\n')) {
             const header = line.match(

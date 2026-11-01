@@ -265,6 +265,11 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
             knownFields(s.ssh, ['intent', 'completion'], field + ' SSH input');
             if (p.transport !== 'ssh')
                 throw Error(field + ': SSH input metadata requires SSH transport.');
+            if (
+                typeof s.ssh.intent !== 'string' ||
+                !['script', 'send-enter'].includes(s.ssh.intent)
+            )
+                throw Error(field + ': SSH input intent must be Script or Send Enter.');
         }
         if (p.transport === 'ssh') {
             if (sshMode === 'console' && !s.ssh)
@@ -320,8 +325,13 @@ export function validatePlan(input: AutomationPlan): AutomationPlan {
         if (!Number.isSafeInteger(p.start.epochMs))
             throw Error('Start instant: require an integer millisecond instant.');
         validateScheduleMetadata(p.start);
-        if (p.start.clock === 'device') validateCalibration(p.start.calibration);
-        else if (p.start.calibration !== undefined)
+        if (p.start.clock === 'device') {
+            if (p.transport !== 'ssh')
+                throw Error(
+                    'Device clock start requires SSH; choose local time for Serial scheduling.',
+                );
+            validateCalibration(p.start.calibration);
+        } else if (p.start.calibration !== undefined)
             throw Error('Local start: device calibration is not applicable. Remove it.');
     }
     knownFields(p.serial, ['lineEnding', 'prompt', 'timestampPrefix'], 'Serial settings');

@@ -169,7 +169,9 @@ export class FlowRunner {
                         message: 'Finishing flow and saving retained evidence…',
                     });
                 try {
-                    const result = await backend.finishFlow?.(completed ? 'complete' : 'cancelled');
+                    const result = await backend.finishFlow?.(
+                        completed && !controller.signal.aborted ? 'complete' : 'cancelled',
+                    );
                     if (result?.failure)
                         terminal = {
                             state: 'paused',
@@ -186,6 +188,14 @@ export class FlowRunner {
                             '. Later input is disarmed.',
                     };
                 }
+                // Cancellation can arrive while the final cleanup acknowledgement is pending.
+                if (!terminal && controller.signal.aborted)
+                    terminal = {
+                        state: 'paused',
+                        message:
+                            this.failureNotice ||
+                            'Flow cancelled. Commands already sent may continue on the device.',
+                    };
                 if (!this.cleanup) release();
                 this.executing = false;
                 if (this.active === task) this.active = undefined;
@@ -409,6 +419,8 @@ export class FlowRunner {
                         this.executing = false;
                     }
                 }
+                // A successful finalize acknowledgement must not turn cancellation into completion.
+                if (signal.aborted) throw Error('Cancelled.');
                 if (capture.stored && capture.stored.state !== 'complete') {
                     const failure = capture.stored.failure;
                     throw Error(

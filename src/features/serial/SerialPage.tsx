@@ -1,5 +1,6 @@
 import { SerialBeach } from './SerialBeach';
 import { serialTerminalOptions } from './theme';
+import { createSerialPortRefresh } from './port-refresh';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -92,13 +93,7 @@ export default function SerialPage(props: Props) {
         }
         return labels.current.get(port)!;
     };
-    const refreshPorts = () => {
-        if (api)
-            void api
-                .getPorts()
-                .then(setPorts)
-                .catch(() => {});
-    };
+    const refreshPorts = useRef<(() => void) | null>(null);
     const action = (work: () => Promise<unknown>) => {
         setError('');
         void work().catch((error) => setError(serialFailure(error)));
@@ -140,12 +135,18 @@ export default function SerialPage(props: Props) {
 
     useEffect(() => session.subscribe(setStatus), [session]);
     useEffect(() => {
-        refreshPorts();
-        const refresh = () => refreshPorts();
+        const portRefresh = api ? createSerialPortRefresh(() => api.getPorts(), setPorts) : null;
+        const refresh = () => {
+            void portRefresh?.refresh();
+        };
+        refreshPorts.current = refresh;
+        refresh();
         api?.addEventListener('connect', refresh);
         api?.addEventListener('disconnect', refresh);
         const unsubscribe = bridge?.onSerialChooser?.(setChooser);
         return () => {
+            portRefresh?.dispose();
+            refreshPorts.current = null;
             unsubscribe?.();
             api?.removeEventListener('connect', refresh);
             api?.removeEventListener('disconnect', refresh);
@@ -333,7 +334,7 @@ export default function SerialPage(props: Props) {
                                         return label(port);
                                     },
                                 );
-                                refreshPorts();
+                                refreshPorts.current?.();
                             });
                         }}
                     >
@@ -382,7 +383,7 @@ export default function SerialPage(props: Props) {
                 </div>
                 <p className="terminal-description">
                     Choose port discovers ports reported by this computer. The dropdown lists only
-                    previously authorized ports. Selection never opens a port.
+                    previously authorized ports.
                 </p>
                 <fieldset className="serial-settings" disabled={locked}>
                     <legend>UART settings</legend>

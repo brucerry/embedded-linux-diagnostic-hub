@@ -3,7 +3,13 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { includesWindowsSetup, releaseAssets, releaseMetadata } from './release-assets.mjs';
+import {
+    includesWindowsSetup,
+    releaseAssets,
+    releaseMetadata,
+    LINUX_ASSET,
+    LINUX_ARCHIVE,
+} from './release-assets.mjs';
 import { WINDOWS_SETUP_ASSET, windowsSetupInfoName } from './windows-setup-release.mjs';
 
 export const PLATFORM_LANES = Object.freeze([
@@ -29,7 +35,7 @@ export function laneFiles(version, id) {
             return (
                 name === `Diagnostic-Hub-macos-${lane.arch}.zip` || name === 'download-run-macos.sh'
             );
-        return name.includes('linux-') || name === 'download-run.sh';
+        return name === LINUX_ASSET || name === LINUX_ARCHIVE || name === 'download-run.sh';
     });
     const metadata = releaseMetadata(version).filter((name) => {
         if (lane.platform === 'win32')

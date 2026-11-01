@@ -1,3 +1,4 @@
+import { settleCleanup, throwCleanupFailures } from '../shared/quit-cleanup';
 import { randomUUID } from 'node:crypto';
 import { CaptureStorageError, storageError } from '../shared/capture-store';
 import { consoleArchiveRequest } from '../shared/console-archive-rpc';
@@ -25,6 +26,9 @@ export class NativeConsoleService {
     private pendingPins = 0;
     private epoch = 0;
     private closing = false;
+    private preparing?: Promise<void>;
+    private prepared = false;
+    private finishing?: Promise<void>;
     private requests = new Set<Promise<unknown>>();
     private exports = new Map<string, { controller: AbortController; done: Promise<boolean> }>();
     constructor(
@@ -259,26 +263,63 @@ export class NativeConsoleService {
     }
     async reset() {
         this.epoch++;
-        for (const job of this.exports.values()) job.controller.abort();
-        await Promise.all(
-            [...this.pins].map(async ([handle, pin]) => {
-                await pin.release();
-                if (this.pins.get(handle) === pin) {
-                    this.pins.delete(handle);
-                    this.references--;
-                }
-            }),
-        );
-        await Promise.all([...this.readers.keys()].map((handle) => this.closeReader(handle)));
-        await Promise.allSettled([...this.requests]);
+        const failures = await settleCleanup([
+            ...[...this.exports.values()].map((job, index) => ({
+                stage: 'console-export-cancel-' + index,
+                run: () => job.controller.abort(),
+            })),
+            ...[...this.pins].map(([handle, pin], index) => ({
+                stage: 'console-pin-' + index,
+                run: async () => {
+                    await pin.release();
+                    if (this.pins.get(handle) === pin) {
+                        this.pins.delete(handle);
+                        this.references--;
+                    }
+                },
+            })),
+            ...[...this.readers.keys()].map((handle, index) => ({
+                stage: 'console-reader-' + index,
+                run: () => this.closeReader(handle),
+            })),
+            {
+                stage: 'console-requests',
+                // Cancellation/command errors are operation outcomes, not closure failures.
+                run: () => Promise.allSettled([...this.requests]),
+            },
+        ]);
+        throwCleanupFailures(failures);
     }
-    async shutdown() {
+    prepareShutdown(): Promise<void> {
+        if (this.preparing) return this.preparing;
         this.closing = true;
-        await this.reset();
-        await this.transition?.catch(() => {});
-        if (this.references)
-            throw new CaptureStorageError('busy', 'Console operations remain pending.');
-        await this.current?.close();
+        const transition = this.transition;
+        this.preparing = Promise.resolve().then(async () => {
+            const failures = await settleCleanup([
+                { stage: 'console-reset', run: () => this.reset() },
+                { stage: 'console-transition', run: () => transition },
+            ]);
+            throwCleanupFailures(failures);
+            this.prepared = true;
+        });
+        return this.preparing;
+    }
+    /** The caller must first join the producer that owns this journal (SSH in main). */
+    finishShutdown(): Promise<void> {
+        if (!this.prepared)
+            return Promise.reject(
+                new CaptureStorageError('busy', 'Console shutdown preparation did not complete.'),
+            );
+        return (this.finishing ??= Promise.resolve().then(async () => {
+            if (this.references)
+                throw new CaptureStorageError('busy', 'Console operations remain pending.');
+            if (this.current && !this.current.resourceClosed) await this.current.close();
+        }));
+    }
+    /** Existing callers must have already stopped their producer. */
+    async shutdown() {
+        await this.prepareShutdown();
+        await this.finishShutdown();
     }
     get hasResources() {
         return (

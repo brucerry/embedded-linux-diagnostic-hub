@@ -7,6 +7,7 @@ import {
 } from '../../../../shared/console-query';
 import { openConsoleArchive } from './console-archive';
 import { startConsoleExport } from './console-export';
+import { ConsoleExportDiagnostic } from './console-export-diagnostic';
 import { ConsoleResultsOwner, readConsolePreview } from './console-results-owner';
 import type {
     ConsoleResultsViewProps,
@@ -33,6 +34,8 @@ export function useConsoleResults(
     const current = useRef<ConsoleResultsOwner | null>(null),
         disposal = useRef(Promise.resolve()),
         busyOwners = useRef(new Set<symbol>());
+    const exportDiagnosticOwner = useRef(new ConsoleExportDiagnostic());
+    const [cleanupDiagnostic, setCleanupDiagnostic] = useState<ConsoleExportDiagnostic['snapshot']>(null);
     const closingOwners = useRef(new Set<ConsoleResultsOwner>());
     const retiredOwners = useRef(new WeakSet<ConsoleResultsOwner>());
     const armReservation = useRef<symbol | null>(null);
@@ -41,6 +44,7 @@ export function useConsoleResults(
         [reopen, setReopen] = useState(0);
     const [status, setStatus] = useState<ConsoleResultsViewProps['status']>('loading'),
         [failure, setFailure] = useState<string | null>(null),
+        [catalogFailure, setCatalogFailure] = useState<string | null>(null),
         [notice, setNotice] = useState<string | null>(null);
     const [rows, setRows] = useState<ConsoleResultsViewProps['rows']>([]),
         [mode, setMode] = useState<'scan' | 'indexed'>('scan');
@@ -107,7 +111,7 @@ export function useConsoleResults(
         setOwner(value);
         setReady(false);
         setStatus('loading');
-        setFailure(null);
+        // Pending export diagnostics outlive visibility and disposal waiting.
         void value.ready
             .then(() => {
                 if (alive) {
@@ -123,7 +127,7 @@ export function useConsoleResults(
                             ? 'unsupported'
                             : 'error',
                     );
-                    setFailure(message(error));
+                    setCatalogFailure(message(error));
                 }
             });
         return () => {
@@ -159,13 +163,18 @@ export function useConsoleResults(
                     setNext(page.next);
                     setMode(page.mode);
                     setStatus('ready');
-                    setFailure(null);
+                    // A successful read only recovers catalog errors, not a failed action.
+                    setCatalogFailure(null);
                 }
             })
             .catch((error) => {
                 if (isCurrent(owner) && !controller.signal.aborted) {
-                    setStatus('error');
-                    reportFailure(error);
+                    setStatus(
+                        error instanceof CaptureStorageError && error.code === 'unsupported'
+                            ? 'unsupported'
+                            : 'error',
+                    );
+                    setCatalogFailure(message(error));
                 }
             });
         return () => controller.abort();
@@ -202,6 +211,11 @@ export function useConsoleResults(
     const exportClicked = async () => {
         const value = begin('export');
         if (!value) return;
+        const generation = exportDiagnosticOwner.current.begin(value);
+        if (!generation) {
+            reportFailure(new CaptureStorageError('busy', 'Previous export cleanup is still pending.'));
+            return;
+        }
         const scope =
             selection === 'selected'
                 ? { ids: [...selected], title: 'Selected console flows' }
@@ -210,8 +224,16 @@ export function useConsoleResults(
                   : { title: 'All retained console flows' };
         setExportStatus('Preparing complete retained console evidence…');
         try {
-            const result = await value.export(() => startConsoleExport(format, scope));
-            if (isCurrent(value))
+            const result = await value.export(() => startConsoleExport(format, scope, (diagnostic) => {
+                if (exportDiagnosticOwner.current.update(value, generation, diagnostic)) {
+                    setCleanupDiagnostic(exportDiagnosticOwner.current.snapshot);
+                    setExportStatus(diagnostic.retirement === 'blocked'
+                        ? 'Export cleanup is not acknowledged; results operations remain blocked.'
+                        : 'Waiting for export cleanup acknowledgement.');
+                }
+            }));
+            if (exportDiagnosticOwner.current.owns(value, generation)) {
+                if (isCurrent(value)) setFailure(null);
                 setExportStatus(
                     result.state === 'saved'
                         ? 'Export saved.'
@@ -219,12 +241,14 @@ export function useConsoleResults(
                           ? 'Export cancelled.'
                           : 'Complete export sent to the browser. Check Downloads for final save status.',
                 );
+            }
         } catch (error) {
-            if (isCurrent(value)) {
-                reportFailure(error);
+            if (exportDiagnosticOwner.current.owns(value, generation)) {
+                if (isCurrent(value)) reportFailure(error);
                 setExportStatus('Export did not complete. Retained evidence is unchanged.');
             }
         } finally {
+            if (exportDiagnosticOwner.current.finish(value, generation)) setCleanupDiagnostic(null);
             finish(value);
         }
     };
@@ -320,7 +344,7 @@ export function useConsoleResults(
             };
         },
         status,
-        message: failure,
+        message: [failure, catalogFailure, cleanupDiagnostic?.message].filter(Boolean).join(' · ') || null,
         notice,
         rows,
         selectedIds: selected,

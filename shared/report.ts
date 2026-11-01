@@ -3,6 +3,7 @@ import { summarize } from './diagnostics/metrics';
 import { probes } from './diagnostics/probes';
 import type { Snapshot } from './types';
 import { APP_VERSION } from './project';
+import { isReportInstant } from './report-time';
 
 export function createReport(snapshot: Snapshot) {
     return {
@@ -28,8 +29,7 @@ export function validateSnapshot(input: unknown, requireComplete = false): Snaps
     };
     const text = (value: unknown, limit: number): value is string =>
         typeof value === 'string' && value.length <= limit;
-    const date = (value: unknown): value is string =>
-        text(value, 40) && Number.isFinite(Date.parse(value));
+    const date = isReportInstant;
     if (!input || typeof input !== 'object') return invalid();
     const value = input as Record<string, unknown>;
     if (

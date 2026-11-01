@@ -63,6 +63,111 @@ const markdown = (value: string) =>
         .replace(/>/g, '&gt;')
         .replace(/[\\`*_{}\[\]()#+.!|~\-]/g, '\\$&');
 
+// Only bounded metadata belongs in a heading/table. PTY text stays streamed and blockquoted.
+const markdownInline = (value: string) =>
+    markdown(
+        value.replace(/[\x00-\x1f\x7f-\x9f]/g, (c) =>
+            c === '\n'
+                ? '\\n'
+                : c === '\r'
+                  ? '\\r'
+                  : c === '\t'
+                    ? '\\t'
+                    : '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0'),
+        ),
+    );
+function markdownTable(rows: readonly (readonly [string, string])[]) {
+    return (
+        '| Field | Recorded value |\n| --- | --- |\n' +
+        rows.map(([key, value]) => '| ' + key + ' | ' + markdownInline(value) + ' |\n').join('') +
+        '\n'
+    );
+}
+function markdownInput(command: string) {
+    // consoleSegment already bounds script text to8192 UTF-8 bytes; never scan retained PTY output.
+    const runs = command.match(/~+/g) ?? [],
+        delimiter = '~'.repeat(Math.max(3, ...runs.map((run) => run.length + 1)));
+    return delimiter + 'text\n' + command + '\n' + delimiter + '\n\n';
+}
+function markdownCapture(meta: ConsoleSnapshot) {
+    return (
+        '\n---\n\n## ' +
+        (meta.state === 'complete' ? '✅' : '⚠️') +
+        ' Console flow · ' +
+        meta.header.id +
+        '\n\n' +
+        markdownTable([
+            ['Capture state', meta.state],
+            ['Shell closure', meta.shellClosed ? 'Confirmed' : 'Unconfirmed'],
+            ['Target', meta.header.target.endpoint],
+            ['User', meta.header.target.username ?? 'Unrecorded'],
+            ['Flow ID', meta.header.flowId],
+            ['Record started', meta.header.startedAt],
+            ['Finalized / recovered', meta.finalizedAt ?? 'Unknown'],
+            ['Receive clock', meta.header.receiveTimeSource],
+            ['Retained bytes', String(meta.bytes)],
+            ['Observed bytes', String(meta.observedBytes ?? 'Unknown')],
+            ['Completion / recovery reason', meta.reason ?? 'Unknown'],
+        ])
+    );
+}
+const observationIcon = (reason: string) =>
+    reason === 'prompt-observed'
+        ? '👁️'
+        : reason === 'cancelled'
+          ? '⏹️'
+          : reason === 'timeout'
+            ? '⌛'
+            : reason === 'transport-error' || reason === 'storage-error'
+              ? '⚠️'
+              : '🔹';
+function markdownRecord(record: ConsoleRecord, label: string) {
+    if (record.kind === 'segment-start' || record.kind === 'preparation') {
+        const segment = record.segment;
+        if (segment.kind === 'context')
+            return (
+                '### 🧩 Context · ' +
+                segment.phase +
+                '\n\n**Context is not a command.** Recorded: ' +
+                markdownInline(record.at) +
+                '\n\n'
+            );
+        return (
+            '\n---\n\n### ' +
+            (record.kind === 'preparation' ? '📝 Prepared input' : '⌨️ Command segment') +
+            ' · ' +
+            segment.ordinal +
+            ' · ' +
+            markdownInline(segment.name || 'Unnamed command') +
+            '\n\n' +
+            markdownTable([
+                ['Input intent', segment.input.intent],
+                ['Recorded at', record.at],
+                [
+                    'Dispatch evidence',
+                    record.kind === 'segment-start' && record.inputSent
+                        ? 'write-dispatched; not remote execution confirmation'
+                        : 'Not established by this record; incomplete evidence may leave dispatch uncertain',
+                ],
+                ['Completion criterion', JSON.stringify(segment.criterion)],
+            ]) +
+            (segment.input.intent === 'send-enter'
+                ? '**Requested input:** Send Enter (one CR; no script text).\n\n'
+                : '**Requested script** (the console appends one CR):\n\n' +
+                  markdownInput(segment.input.command))
+        );
+    }
+    const heading =
+        record.kind === 'observation'
+            ? '📥 Received PTY'
+            : record.kind === 'outcome'
+              ? observationIcon(record.completion) + ' Command observation'
+              : record.kind === 'preparation-end'
+                ? observationIcon(record.reason) + ' Preparation ended'
+                : observationIcon(record.reason) + ' Segment boundary';
+    return '#### ' + heading + '\n\n**' + markdownInline(label) + '**\n\n';
+}
+
 async function* catalog(
     store: ConsoleArchive,
     scope: ConsoleReportScope,
@@ -214,7 +319,7 @@ export async function* streamConsoleReport(
             );
         } else
             yield* text(
-                (format === 'markdown' ? '# Console results\n\n' : 'Console results\n') +
+                (format === 'markdown' ? '# ⌨️ Console results\n\n' : 'Console results\n') +
                     explanation +
                     '\nExecution mode: console. Export scope JSON: ' +
                     (format === 'markdown'
@@ -222,6 +327,14 @@ export async function* streamConsoleReport(
                         : JSON.stringify(scope)) +
                     '\n' +
                     'Each canonical JSON base64 field is authoritative and round-trips exact metadata and bytes. Readable UTF-8 is a control-stripped projection; invalid UTF-8 uses replacement characters.\n\n',
+            );
+        if (format === 'markdown')
+            yield* text(
+                '**Interpretation:** ✅ means a complete retained capture, not command success. ' +
+                    'Shell closure is a separate acknowledgement. 👁️ means prompt observation, ' +
+                    'with no process exit status; ⏹️ means cancellation, ⌛ timeout and ⚠️ incomplete ' +
+                    'capture or recorded transport/storage failure. Prepared input alone does not ' +
+                    'establish dispatch. Context is not a command.\n\n',
             );
         let firstCapture = true;
         for await (const meta of catalog(store, scope, progress)) {
@@ -247,9 +360,16 @@ export async function* streamConsoleReport(
                         .map(csv)
                         .join(',') + '\r\n',
                 );
+            else if (format === 'markdown')
+                yield* text(
+                    markdownCapture(meta) +
+                        'Canonical metadata JSON base64: ' +
+                        exact(meta) +
+                        '\n\n',
+                );
             else
                 yield* text(
-                    (format === 'markdown' ? '## ' : 'Capture ') +
+                    'Capture ' +
                         id +
                         '\n\n' +
                         'State: ' +
@@ -295,9 +415,7 @@ export async function* streamConsoleReport(
                         );
                     } else if (format === 'markdown')
                         yield* text(
-                            '**' +
-                                markdown(label) +
-                                '**\n\n' +
+                            markdownRecord(record, label) +
                                 (readable
                                     ? readable
                                           .split('\n')

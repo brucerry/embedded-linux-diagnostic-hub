@@ -39,6 +39,15 @@ export function captureExportSource(store: CaptureRepository): ExportReportSourc
         filename: 'automation-results',
     };
 }
+export interface ExportRetirementReceipt {
+    id: string;
+    retirement: 'acknowledged';
+    state: 'stream-sent' | 'failed';
+    bytes: number;
+    error?: string;
+}
+const diagnostic = (error: unknown) =>
+    String(error instanceof Error ? error.message : error).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 512);
 interface Job {
     id: string;
     token: string;
@@ -55,18 +64,23 @@ interface Job {
     lastOwnerCheck: number;
     pin: Awaited<ReturnType<CaptureRepository['pin']>>;
     iterator?: AsyncGenerator<Uint8Array>;
-    ending?: Promise<void>;
-    failure?: string;
+    ending?: Promise<ExportRetirementReceipt>;
+    reading?: Promise<IteratorResult<Uint8Array>>;
+    iteratorFailure?: unknown;
+    iteratorFailed: boolean;
+    stopError?: CaptureStorageError;
+    retirement: 'pending' | 'blocked';
+    failure?: unknown;
+    failed: boolean;
+    cleanupError?: unknown;
+    cleanupFailed: boolean;
     done: Promise<void>;
     resolveDone(): void;
     watchdog?: ReturnType<typeof setTimeout>;
 }
-interface Finished {
+interface Finished extends ExportRetirementReceipt {
     owner: string;
     deadline: number;
-    state: 'stream-sent' | 'failed';
-    bytes: number;
-    error?: string;
 }
 /** Tokens select only a server-owned job, never a database, filename or network URL. */
 export class CaptureExportBroker {
@@ -96,54 +110,73 @@ export class CaptureExportBroker {
             );
         return client;
     }
-    private end(job: Job, error?: unknown): Promise<void> {
-        if (job.ending) return job.ending;
-        if (!this.jobs.has(job.id)) return Promise.resolve();
-        job.state = 'closing';
-        if (error)
-            job.failure = String(error instanceof Error ? error.message : error).slice(0, 512);
-        return (job.ending = (async () => {
-            try {
-                if (job.failure)
-                    await this.env
-                        .notify(job.owner, {
-                            type: 'capture-export-status',
-                            id: job.id,
-                            state: 'failed',
-                            error: job.failure,
-                            bytes: job.bytes,
-                            cleanupPending: true,
-                        })
-                        .catch(() => {});
-                await job.pin.release();
-            } catch (releaseError) {
-                error ??= releaseError;
-            } finally {
-                clearTimeout(job.watchdog);
-                this.jobs.delete(job.id);
-                const result: Finished = {
-                    owner: job.owner,
-                    deadline: this.env.now() + 5 * 60000,
-                    state: error ? 'failed' : 'stream-sent',
-                    bytes: job.bytes,
-                    ...(error
-                        ? {
-                              error: String(error instanceof Error ? error.message : error).slice(
-                                  0,
-                                  512,
-                              ),
-                          }
-                        : {}),
-                };
-                this.finished.set(job.id, result);
-                while (this.finished.size > 32)
-                    this.finished.delete(this.finished.keys().next().value!);
-                await this.env
-                    .notify(job.owner, { type: 'capture-export-status', id: job.id, ...result })
-                    .catch(() => {});
-                job.resolveDone();
+    private notify(job: Job, value: object) {
+        // Notification delivery is diagnostic, never a resource-closure barrier.
+        void Promise.resolve().then(() => this.env.notify(job.owner, {
+            type: 'capture-export-status', id: job.id, ...value,
+        })).catch(() => {});
+    }
+    private pendingStatus(job: Job) {
+        return {
+            id: job.id, state: job.state, retirement: job.retirement, bytes: job.bytes,
+            ...(job.state === 'closing' ? { cleanupPending: true } : {}),
+            ...(job.failed ? { error: diagnostic(job.failure) } : {}),
+            ...(job.cleanupFailed ? { cleanupError: diagnostic(job.cleanupError) } : {}),
+        };
+    }
+    private next(job: Job) {
+        const iterator = job.iterator!;
+        // Install the tracked read before invoking an encoder that can call external code.
+        const reading = Promise.resolve().then(() => {
+            if (job.state === 'closing') throw job.stopError;
+            return iterator.next();
+        }).catch((error) => {
+            // Our exact cancellation object proves a controlled stop. Every other iterator
+            // failure is conservatively unclassified: its nested finalizers may have failed.
+            if (job.stopError === undefined || error !== job.stopError) {
+                if (!job.iteratorFailed) job.iteratorFailure = error;
+                job.iteratorFailed = true;
             }
-        })());
+            throw error;
+        });
+        job.reading = reading;
+        void reading.catch(() => {});
+        return reading;
+    }
+    private end(job: Job, error?: unknown): Promise<ExportRetirementReceipt> {
+        if (job.ending) return job.ending;
+        job.state = 'closing';
+        if (arguments.length > 1) { job.failed = true; job.failure = error; }
+        job.stopError ??= new CaptureStorageError('io', 'Export was cancelled during stored-output filtering.');
+        clearTimeout(job.watchdog);
+        // Promise deferral installs the one attempt before notification, return or release.
+        const ending = Promise.resolve().then(async () => {
+            this.notify(job, this.pendingStatus(job));
+            await job.reading?.catch(() => {});
+            if (job.iteratorFailed) throw job.iteratorFailure;
+            await job.iterator?.return(undefined);
+            await job.pin.release();
+            const receipt: ExportRetirementReceipt = {
+                id: job.id, retirement: 'acknowledged',
+                state: job.failed ? 'failed' : 'stream-sent', bytes: job.bytes,
+                ...(job.failed ? { error: diagnostic(job.failure) } : {}),
+            };
+            this.jobs.delete(job.id);
+            this.finished.set(job.id, { ...receipt, owner: job.owner, deadline: this.env.now() + 5 * 60000 });
+            while (this.finished.size > 32) this.finished.delete(this.finished.keys().next().value!);
+            job.resolveDone();
+            this.notify(job, receipt);
+            return receipt;
+        }).catch((cleanupError) => {
+            job.cleanupError = cleanupError;
+            job.cleanupFailed = true;
+            job.retirement = 'blocked';
+            this.notify(job, this.pendingStatus(job));
+            throw cleanupError;
+        });
+        job.ending = ending;
+        void ending.catch(() => {});
+        return ending;
     }
     private async progress(job: Job) {
         if (
@@ -151,9 +184,8 @@ export class CaptureExportBroker {
             !['verifying', 'streaming'].includes(job.state) ||
             job.deadline < this.env.now()
         )
-            throw new CaptureStorageError(
-                'io',
-                'Export expired or was cancelled during stored-output filtering.',
+            throw job.stopError ?? new CaptureStorageError(
+                'io', 'Export expired during stored-output filtering.',
             );
         job.deadline = this.env.now() + this.ttl;
         if (this.env.now() - job.lastOwnerCheck >= 1000) {
@@ -177,20 +209,13 @@ export class CaptureExportBroker {
     private async clean() {
         for (const [id, record] of this.finished)
             if (record.deadline < this.env.now()) this.finished.delete(id);
-        for (const job of [...this.jobs.values()])
-            if (job.deadline < this.env.now()) {
-                job.state = 'closing';
-                job.failure = 'Export expired or download stopped consuming data.';
-                await job.iterator?.return(undefined).catch(() => {});
-                await this.end(
-                    job,
-                    new CaptureStorageError(
-                        'io',
-                        'Export expired or download stopped consuming data.',
-                    ),
-                );
-            }
+        for (const job of this.jobs.values())
+            if (job.state !== 'closing' && job.deadline < this.env.now())
+                void this.end(job, new CaptureStorageError(
+                    'io', 'Export expired or download stopped consuming data.',
+                )).catch(() => {});
     }
+
     async prepare(
         owner: string,
         format: CaptureReportFormat,
@@ -230,6 +255,7 @@ export class CaptureExportBroker {
                 owner,
                 frameUrl,
                 format,
+                retirement: 'pending', failed: false, iteratorFailed: false, cleanupFailed: false,
                 scope: structuredClone(scope),
                 source,
                 state: 'prepared',
@@ -242,7 +268,7 @@ export class CaptureExportBroker {
             };
             this.jobs.set(id, job);
             this.watch(job);
-            return { id, frameUrl, nonce, through: pin.through };
+            return { id, frameUrl, nonce, through: pin.through, retirementProtocol: 1 as const };
         } finally {
             this.preparing--;
         }
@@ -334,8 +360,9 @@ export class CaptureExportBroker {
             this.progress(job),
         );
         try {
-            for await (const ignored of job.iterator) {
-                void ignored;
+            while (true) {
+                const result = await this.next(job);
+                if (result.done) break;
                 if (!this.jobs.has(job.id) || job.state !== 'verifying')
                     throw new CaptureStorageError('io', 'Export cancelled during verification.');
                 job.deadline = this.env.now() + this.ttl;
@@ -347,7 +374,7 @@ export class CaptureExportBroker {
             if (!this.jobs.has(job.id) || job.state !== 'verifying')
                 throw new CaptureStorageError('io', 'Export cancelled during verification.');
         } catch (error) {
-            await this.end(job, error);
+            void this.end(job, error).catch(() => {});
             throw error;
         }
         job.state = 'streaming';
@@ -368,7 +395,7 @@ export class CaptureExportBroker {
                             await this.owner(job.owner);
                             job.lastOwnerCheck = this.env.now();
                         }
-                        const result = await job.iterator!.next();
+                        const result = await this.next(job);
                         if (!this.jobs.has(job.id) || job.state !== 'streaming')
                             throw new CaptureStorageError(
                                 'io',
@@ -383,15 +410,11 @@ export class CaptureExportBroker {
                             controller.enqueue(result.value);
                         }
                     } catch (error) {
-                        await job.iterator!.return(undefined).catch(() => {});
-                        await this.end(job, error);
                         controller.error(error);
+                        void this.end(job, error).catch(() => {});
                     }
                 },
                 cancel: async (reason) => {
-                    job.state = 'closing';
-                    job.failure = 'Download cancelled.';
-                    await job.iterator!.return(undefined).catch(() => {});
                     await this.end(job, reason ?? Error('Download cancelled.'));
                 },
             },
@@ -405,33 +428,21 @@ export class CaptureExportBroker {
         await this.owner(owner);
         const job = this.jobs.get(id),
             finished = this.finished.get(id);
-        if (job?.owner === owner)
-            return {
-                state: job.failure ? 'failed' : job.state,
-                bytes: job.bytes,
-                ...(job.failure ? { error: job.failure, cleanupPending: true } : {}),
-            };
-        if (finished?.owner === owner)
-            return {
-                state: finished.state,
-                bytes: finished.bytes,
-                ...(finished.error ? { error: finished.error } : {}),
-            };
-        throw new CaptureStorageError(
-            'invalid',
-            'Export worker restarted or this job expired; retry the export.',
-        );
+        if (job?.owner === owner) return this.pendingStatus(job);
+        if (finished?.owner === owner) {
+            const { owner: _owner, deadline: _deadline, ...receipt } = finished;
+            return receipt;
+        }
+        throw new CaptureStorageError('invalid', 'Export receipt is unavailable; cleanup is not acknowledged.');
     }
-    async cancel(id: string, owner: string) {
+    async cancel(id: string, owner: string): Promise<ExportRetirementReceipt> {
         const job = this.jobs.get(id);
-        if (!job || job.owner !== owner)
-            throw new CaptureStorageError(
-                'invalid',
-                'Export belongs to another client or expired.',
-            );
-        job.state = 'closing';
-        job.failure = 'Export cancelled.';
-        await job.iterator?.return(undefined).catch(() => {});
-        await this.end(job, Error('Export cancelled.'));
+        if (job?.owner === owner) return this.end(job, Error('Export cancelled.'));
+        const finished = this.finished.get(id);
+        if (finished?.owner === owner && finished.deadline >= this.env.now()) {
+            const { owner: _owner, deadline: _deadline, ...receipt } = finished;
+            return receipt;
+        }
+        throw new CaptureStorageError('invalid', 'Export belongs to another client or its receipt expired.');
     }
 }

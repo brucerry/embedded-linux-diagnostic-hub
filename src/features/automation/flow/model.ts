@@ -4,6 +4,8 @@ export const CARD = { width: 300, height: 168 } as const;
 export const MAX_COORDINATE = 2000;
 export const MAX_PIXELS = 8_000_000;
 export const MAX_PAGES = 128;
+// Serialized metadata/JSON escaping is separate from the 64 KiB raw command budget below.
+export const MAX_SERIALIZED_PLAN_BYTES = 1024 * 1024;
 export const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 export const coordinate = (n: number) =>
     Number.isFinite(n) ? clamp(n, -MAX_COORDINATE, MAX_COORDINATE) : 0;
@@ -70,8 +72,10 @@ export function snapshot(
 ): FlowSnapshot {
     const frozen = active ? input.active : null;
     const plan = frozen?.plan ?? input.draft;
-    if (new TextEncoder().encode(JSON.stringify(plan)).length > 65536)
-        throw Error('Resolve the oversized draft before viewing this flow (64 KiB plan limit).');
+    if (new TextEncoder().encode(JSON.stringify(plan)).length > MAX_SERIALIZED_PLAN_BYTES)
+        throw Error(
+            'Resolve the oversized draft before viewing this flow (1 MiB serialized plan limit).',
+        );
     if (plan.steps.length < 1 || plan.steps.length > 20)
         throw Error('Flow view supports 1–20 commands.');
     const ids = new Set<string>();

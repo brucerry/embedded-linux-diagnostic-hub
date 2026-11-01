@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { transform } from 'esbuild';
 import {
     instrumentProductSource,
     productProbePreimages,
@@ -18,16 +17,33 @@ test('private product probes reject changed lifetime source before compilation',
     assert.equal(instrumentProductSource('export class Other {}', '/src/other.ts'), null);
 });
 
-test('actual page export RPC probe is source-bound and compiles without changing product inputs', async () => {
-    const file = path.resolve(
-        import.meta.dirname,
-        '../src/features/automation/capture/browser-export.ts',
-    );
+test('actual page export RPC probe preserves retirement semantics and rejects changed preimages', async () => {
+    // Canonical worktree cwd is explicit for direct compiled selection; no app is imported.
+    const file = path.resolve('src/features/automation/capture/browser-export.ts');
     const source = await fs.readFile(file, 'utf8');
     const transformed = instrumentProductSource(source, file);
     assert.ok(transformed);
-    assert.ok(transformed?.code.includes('__memoryTrackExportRpc'));
-    assert.ok(transformed.code.includes('__memoryBrowserExports'));
-    await transform(transformed.code, { loader: 'ts', target: 'es2022' });
+    const begin = '    return new Promise((resolve, reject) => {',
+        wrappedBegin = '    return __memoryTrackExportRpc(new Promise((resolve, reject) => {',
+        end = '    });\n}\nexport interface BrowserExportDiagnostic {',
+        wrappedEnd = '    }));\n}\nexport interface BrowserExportDiagnostic {';
+    const suffix = transformed.code.slice(transformed.code.indexOf('\nlet __memoryExportRpcs=0;'));
+    assert.ok(suffix.startsWith('\nlet __memoryExportRpcs=0;'));
+    assert.equal(transformed.code.split(wrappedBegin).length, 2);
+    assert.equal(transformed.code.split(wrappedEnd).length, 2);
+    assert.equal(transformed.code.slice(0, -suffix.length).replace(wrappedBegin, begin).replace(wrappedEnd, end), source,
+        'Only the actual RPC promise is wrapped; retirement/admission code is byte-preserved');
+    assert.ok(suffix.includes('void task.then(release,release);return task;'));
+    assert.ok(suffix.includes('active:activeExports'));
+    assert.ok(suffix.includes('busyHelpers:helpers.filter(helper=>helper.busy).length'));
     assert.throws(() => instrumentProductSource(source + '\n', file), /preimage changed/);
+    assert.throws(() => instrumentProductSource(source.replace('retirementProtocol !== 1', 'retirementProtocol !== 0'), file), /preimage changed/);
+    const compiledSource = process.env.DIAGNOSTIC_HUB_INSTRUMENT_SOURCE;
+    if (compiledSource) {
+        const staged = await fs.readFile(compiledSource, 'utf8');
+        const originalImport = "from '../../../../shared/capture-store'";
+        const explicitImport = 'from ' + JSON.stringify(path.resolve('shared/capture-store.ts'));
+        assert.equal(staged.replace(explicitImport, originalImport), transformed.code,
+            'The separately compiled observation entry is the actual transform with one reviewed import retarget');
+    }
 });

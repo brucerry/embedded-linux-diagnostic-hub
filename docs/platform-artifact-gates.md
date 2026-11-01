@@ -21,6 +21,14 @@ There are27 public files. The descriptor is metadata and does not acquire a sepa
 or publisher-authentication claim. `scripts/lib/windows-setup-release.mjs` remains its schema
 authority. The Windows build invokes the existing packager and uploads those exact outputs.
 
+The package verifiers and standalone Windows setup producer require matching local
+`dist-electron/main.cjs` and `dist-electron/preload.cjs` outputs in the repository checkout.
+Run them from the repository root and retain or reproduce the build outputs for the selected
+package. Missing or mismatched outputs fail the setup preflight before descriptor publication or
+compiler submission; it does not rebuild automatically. This scoped byte comparison does not
+authenticate the publisher or replace the native and exact-artifact gates below. Retained external
+cloud build outputs are evidence, not files at those conventional local paths.
+
 Four native staged-consumer jobs follow the existing website, Windows, Linux and two-architecture
 Mac qualification workflows. They download the existing Actions assets; Mac ZIPs are read directly
 from the unpublished draft. Only receipts/logs are uploaded from Mac: no new Mac binary Actions
