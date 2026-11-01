@@ -36,6 +36,7 @@ export const runClock: RunClock = {
         }),
 };
 export interface FlowBackend {
+    cleanupLabel?: string;
     prepare?(plan: AutomationPlan, signal: AbortSignal, assertFresh: () => void): Promise<void>;
     finishFlow?(reason: 'complete' | 'cancelled'): Promise<void | { failure: string }>;
     receiveTimeSource?: AutomationRecord['receiveTimeSource'];
@@ -67,7 +68,7 @@ export class FlowRunner {
     private repeat = true;
     private stopped = false;
     private active?: Promise<void>;
-    private cleanup?: { retry: () => Promise<unknown>; release: () => void };
+    private cleanup?: { retry: () => Promise<unknown>; release: () => void; label: string };
     private cleanupRetry?: Promise<void>;
     constructor(
         private changed: (s: FlowState) => void,
@@ -93,7 +94,7 @@ export class FlowRunner {
             this.controller = undefined;
             this.changed({
                 state: 'paused',
-                message: 'Console cleanup acknowledged. Arm explicitly to resume.',
+                message: pending.label + ' cleanup acknowledged. Arm explicitly to resume.',
             });
         })();
         this.cleanupRetry = task;
@@ -166,7 +167,9 @@ export class FlowRunner {
                 if (backend.finishFlow)
                     this.changed({
                         state: 'running',
-                        message: 'Finishing flow and saving retained evidence…',
+                        message: backend.cleanupLabel
+                            ? 'Finishing ' + backend.cleanupLabel + ' input retirement…'
+                            : 'Finishing flow and saving retained evidence…',
                     });
                 try {
                     const result = await backend.finishFlow?.(
@@ -178,12 +181,18 @@ export class FlowRunner {
                             message: result.failure + ' Flow paused; arm explicitly to resume.',
                         };
                 } catch (error) {
-                    this.cleanup = { retry: () => backend.finishFlow!('cancelled'), release };
+                    const label = backend.cleanupLabel ?? 'Console';
+                    this.cleanup = {
+                        retry: () => backend.finishFlow!('cancelled'),
+                        release,
+                        label,
+                    };
                     terminal = {
                         state: 'paused',
                         cleanupPending: true,
                         message:
-                            'Console cleanup remains pending: ' +
+                            label +
+                            ' cleanup remains pending: ' +
                             (error instanceof Error ? error.message : String(error)) +
                             '. Later input is disarmed.',
                     };

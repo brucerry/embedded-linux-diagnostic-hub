@@ -35,10 +35,16 @@ blocked while Automation owns input. A distinct `[Automation input, local]` anno
 requested bytes; it is not device echo and is excluded from captured device output and exports.
 Writing bytes does not establish remote completion.
 
-A recoverable read error interrupts an active capture without replaying commands. If an Automation
-write is still outstanding, cleanup closes the port within the existing ownership/watchdog rules;
-reconnect explicitly after checking the target. Fatal removal, a missing replacement stream, or an
-unrecognized error still closes ownership. No recovery path opens another port or resends input.
+A recoverable read error interrupts an active capture without replaying commands. The active
+storage-backed Automation path retains the same host port and replacement reader when a write is
+still outstanding. Reception continues, but input and new runs stay blocked until actual write
+retirement is acknowledged. Cancel does not force release. A write failure keeps the port read-only
+until explicit Disconnect; a write that never settles can remain blocked indefinitely. Disconnect is
+available for this retained owner, subject to other active UI guards, and its cleanup can also
+remain pending. A watchdog reports uncertainty, never successful release. After acknowledged
+retirement, check the target and arm explicitly; nothing is replayed. Fatal removal, a missing
+replacement stream, or an unrecognized error still closes ownership. No recovery path opens another
+port or resends input.
 
 Default COM11 connection and send/receive on Windows 11 were reported working by the user.
 Power-cycle recovery and the revised Automation behavior require a separate physical retest; the

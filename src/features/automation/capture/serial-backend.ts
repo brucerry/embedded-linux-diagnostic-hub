@@ -1,7 +1,7 @@
 import { bytesBase64, serialPayload, type AutomationRecord } from '../../../../shared/automation';
 import type { CaptureRepository } from '../../../../shared/capture-store';
 import { captureToRepository } from '../../../../shared/automation-capture';
-import type { SerialSession } from '../../serial/session';
+import type { SerialAutomationRelease, SerialSession } from '../../serial/session';
 import type { FlowBackend } from '../runner';
 import { observedDeviceTime } from '../serial-completion';
 
@@ -41,12 +41,21 @@ export function serialCaptureBackend(
     store: CaptureRepository,
 ): FlowBackend {
     const generation = session.current.generation;
+    let owner: SerialAutomationRelease | undefined;
     return {
+        cleanupLabel: 'Serial',
         receiveTimeSource: 'local-client',
         connection: () => String(session.current.generation),
         available: () =>
             session.current.state === 'connected' && session.current.generation === generation,
-        acquire: () => session.acquireAutomation(),
+        acquire: () => (owner = session.acquireAutomation()),
+        async finishFlow() {
+            const owned = owner;
+            if (!owned) return;
+            await owned.finish();
+            const failure = owned.failure();
+            return failure ? { failure } : undefined;
+        },
         target: { endpoint: session.current.label, serialSettings: session.framing },
         async execute(step, plan, signal, _id, context) {
             if (!context)

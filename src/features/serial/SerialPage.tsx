@@ -1,6 +1,7 @@
 import { SerialBeach } from './SerialBeach';
 import { serialTerminalOptions } from './theme';
 import { createSerialPortRefresh } from './port-refresh';
+import { serialCanDisconnect } from './admission';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -27,6 +28,7 @@ interface Props {
     session: SerialSession;
     visible: boolean;
     blocked: boolean;
+    disconnectBlocked?: boolean;
     reset: number;
 }
 export default function SerialPage(props: Props) {
@@ -345,6 +347,7 @@ export default function SerialPage(props: Props) {
                         disabled={
                             !supported ||
                             props.blocked ||
+                            session.isOwned ||
                             !session.selectedPort ||
                             !['selected', 'error'].includes(status.state)
                         }
@@ -363,8 +366,12 @@ export default function SerialPage(props: Props) {
                     <button
                         className="button secondary"
                         disabled={
-                            props.blocked ||
-                            !['opening', 'connected', 'error'].includes(status.state)
+                            !serialCanDisconnect(
+                                status.state,
+                                props.blocked,
+                                props.disconnectBlocked ?? true,
+                                session.automationQuarantined,
+                            )
                         }
                         onClick={() => action(() => session.close())}
                     >

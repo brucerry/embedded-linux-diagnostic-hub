@@ -1,4 +1,5 @@
 import { useSerialSession } from '../hooks/useSerialSession';
+import { serialUiAdmission } from '../features/serial/admission';
 import {
     ArrowDown,
     ArrowUp,
@@ -493,13 +494,13 @@ function App() {
                             <SerialPage
                                 session={serial}
                                 visible={view === 'serial'}
-                                blocked={
-                                    automationBusy ||
-                                    resetting ||
-                                    showConnect ||
-                                    showUpdates ||
-                                    Boolean(selectedProbe)
-                                }
+                                {...serialUiAdmission({
+                                    automationBusy,
+                                    resetting,
+                                    showConnect,
+                                    showUpdates,
+                                    selectedProbe: Boolean(selectedProbe),
+                                })}
                                 reset={terminalReset}
                             />
                         </Suspense>
