@@ -62,15 +62,19 @@ export async function startBrowserCaptureExport(
     void completed.catch(() => {});
     const note = (error: unknown, blocked = false, cleanupError?: unknown, remember = true) => {
         if (remember && !hasFailure) { firstFailure = error; hasFailure = true; }
-        const detail = cleanupError ?? (blocked && error !== firstFailure ? error : undefined);
+        let detail = cleanupError ?? (blocked && error !== firstFailure ? error : undefined);
         if (blocked && !hasCleanupFailure) { cleanupFailure = detail ?? error; hasCleanupFailure = true; }
+        // Poll replies and notifications can cross. A prior pending snapshot cannot
+        // erase an unacknowledged cleanup failure or its original diagnostic.
+        if (detail === undefined && hasCleanupFailure && cleanupFailure !== firstFailure) detail = cleanupFailure;
+        const remainsBlocked = blocked || hasCleanupFailure;
         const message = new CaptureStorageError('io',
             String(hasFailure ? (firstFailure instanceof Error ? firstFailure.message : firstFailure) : (error instanceof Error ? error.message : error)) +
             (detail !== undefined ? '; cleanup: ' + String(detail instanceof Error ? detail.message : detail) : '') +
-            (blocked ? ' Cleanup is not acknowledged; this export remains blocked.' : ' Waiting for export cleanup acknowledgement.'),
+            (remainsBlocked ? ' Cleanup is not acknowledged; this export remains blocked.' : ' Waiting for export cleanup acknowledgement.'),
         ).message;
-        if (blocked) { clearInterval(heartbeat); clearTimeout(timer); }
-        try { onDiagnostic?.({ retirement: blocked ? 'blocked' : 'pending', message }); }
+        if (remainsBlocked) { clearInterval(heartbeat); clearTimeout(timer); }
+        try { onDiagnostic?.({ retirement: remainsBlocked ? 'blocked' : 'pending', message }); }
         catch (error) { notificationError ??= error; }
     };
     const cleanup = () => {

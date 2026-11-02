@@ -216,6 +216,12 @@ test('browser export retirement keeps actual broker/helper/view ownership until 
         const repeated = observe(broker.cancel(d.job!.id, 'owner')); await until(() => repeated.outcome !== undefined, 'D repeated cancel rejection');
         assert.equal(repeated.outcome!.ok, false); if (!repeated.outcome!.ok) assert.equal(repeated.outcome!.error, pinError);
         assert.equal(d.state().releaseCalls, 1); assert.equal(Boolean(dCancel.outcome), false); assert.equal(Boolean(dClose.outcome), false); assert.equal(Boolean(d.exported.outcome), false);
+        // A genuine earlier broker snapshot may arrive after its blocked notification.
+        const oldPending = d.state().statuses.find((s) => s.retirement === 'pending');
+        assert.ok(oldPending);
+        serviceEvents.emit('message', { source: worker, data: oldPending });
+        assert.equal(diagnostics[d.index].at(-1)!.retirement, 'blocked');
+        assert.ok(diagnostics[d.index].at(-1)!.message.includes(pinError.message));
         // Unclassified iterator failure cannot be reinterpreted as successful nested closure.
         const iteratorError = new Error('synthetic encoder or nested-cleanup failure');
         const e = start({ label: 'unclassified iterator', iteratorError }); await until(() => Boolean(e.job), 'E admitted');
