@@ -83,6 +83,7 @@ export function useDeviceSession(onResetView: () => void) {
         let cancelled = false;
         const generation = dataGeneration.current;
         void (async () => {
+            let recoveryAvailable = false;
             try {
                 const recovery = await bridge.readUpdateReport();
                 if (cancelled || !recovery) return;
@@ -104,10 +105,15 @@ export function useDeviceSession(onResetView: () => void) {
                 } else {
                     setNotice(`Update complete · report saved: ${recovery.reportPath}`);
                 }
+                recoveryAvailable = true;
                 await bridge.acknowledgeUpdateReport(recovery.id);
             } catch (err) {
-                if (!cancelled)
-                    setError(`Could not reopen the saved update report: ${message(err)}`);
+                if (!cancelled && generation === dataGeneration.current)
+                    setError(
+                        recoveryAvailable
+                            ? `Saved update report remains available; recovery acknowledgement failed: ${message(err)}`
+                            : `Could not reopen the saved update report: ${message(err)}`,
+                    );
             }
         })();
         return () => {
