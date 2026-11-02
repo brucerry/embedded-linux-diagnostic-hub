@@ -18,9 +18,13 @@ function obj(value: unknown): Record<string, unknown> {
         : {};
 }
 const text = (value: unknown): string | undefined =>
-    typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
-function flags(value: unknown): string[] {
-    return Array.isArray(value) ? value.map(String) : [];
+    typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
+        ? String(value)
+        : undefined;
+function flags(value: unknown): string[] | undefined {
+    return Array.isArray(value) && value.every((flag) => typeof flag === 'string')
+        ? value
+        : undefined;
 }
 export function lanSummary(snapshot: Snapshot): NetworkSummary {
     const interfaces = new Map<string, InterfaceSummary>();
@@ -90,7 +94,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
             const f = flags(record.flags),
                 info = obj(record.linkinfo),
                 data = obj(info.info_data);
-            if (Array.isArray(record.flags))
+            if (f)
                 iface.admin = f.includes('UP') ? 'Enabled' : 'Disabled';
             iface.carrier =
                 record.carrier !== undefined
@@ -98,10 +102,10 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                         ? 'Present'
                         : record.carrier === 0
                           ? 'Absent'
-                          : String(record.carrier)
-                    : f.includes('LOWER_UP')
+                          : text(record.carrier) ?? iface.carrier
+                    : f?.includes('LOWER_UP')
                       ? 'Present'
-                      : f.includes('NO-CARRIER')
+                      : f?.includes('NO-CARRIER')
                         ? 'Absent'
                         : iface.carrier;
             iface.state = text(record.operstate) ?? iface.state;
@@ -165,14 +169,20 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                 const iface = ensure(record.ifname, safeNumber(record.ifindex));
                 if (!iface.mac) iface.mac = text(record.address);
                 if (!iface.mtu) iface.mtu = text(record.mtu);
-                if (!iface.admin && Array.isArray(record.flags))
-                    iface.admin = flags(record.flags).includes('UP') ? 'Enabled' : 'Disabled';
+                const f = flags(record.flags);
+                if (!iface.admin && f)
+                    iface.admin = f.includes('UP') ? 'Enabled' : 'Disabled';
                 if (!iface.state) iface.state = text(record.operstate);
                 for (const [index, address] of (Array.isArray(record.addr_info)
                     ? record.addr_info
                     : []
                 ).entries()) {
                     const a = obj(address);
+                    const prefix = text(a.prefixlen);
+                    if (a.prefixlen !== undefined && prefix === undefined)
+                        warnings.push(
+                            'Some ' + r.id + ' address prefix could not be interpreted; raw evidence is retained.',
+                        );
                     iface.groups.push(
                         group(
                             'address-' + index,
@@ -183,7 +193,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                                     'Address / prefix',
                                     text(a.local) !== undefined
                                         ? text(a.local) +
-                                              (a.prefixlen !== undefined ? '/' + a.prefixlen : '')
+                                              (prefix !== undefined ? '/' + prefix : '')
                                         : undefined,
                                 ),
                                 ...field('Scope', a.scope),
