@@ -226,9 +226,11 @@ test('renderer IPC failure reconciles native ownership and unavailable status ca
             reportExportStatus: async () => { if (unavailable) throw Error('status unavailable'); return null; } };
         const action = new ReportExportAction(bridge, (s) => { if (s) changes.push(s); }, () => 'a');
         const detach = action.attach(); await action.start(snapshot);
-        assert.equal(changes.at(-1)!.retirement, 'blocked');
+        assert.equal(changes.at(-1)!.retirement, 'unknown');
         assert.equal(changes.at(-1)!.publication, 'uncertain');
         assert.equal(changes.at(-1)!.outcome, undefined);
+        assert.match(reportExportMessage(changes.at(-1)!), /native retirement status unknown/);
+        assert.doesNotMatch(reportExportMessage(changes.at(-1)!), /normal quit remain blocked/);
         assert.ok(!f.log.includes('dialog')); detach();
     }
     const f = fixture(), changes: ReportExportStatus[] = [];

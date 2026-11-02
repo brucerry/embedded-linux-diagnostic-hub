@@ -3,7 +3,7 @@ export interface ReportExportStatus {
     id: string;
     filename: string;
     publication: 'unpublished' | 'pending' | 'uncertain' | 'published';
-    retirement: 'pending' | 'blocked' | 'acknowledged';
+    retirement: 'pending' | 'blocked' | 'unknown' | 'acknowledged';
     cancelRequested: boolean;
     primary?: string;
     cleanup: string[];
@@ -16,7 +16,8 @@ export function reportExportMessage(value: ReportExportStatus): string {
         value.outcome === 'cancelled' ? 'Report export cancelled' :
         value.outcome === 'failed' ? 'Report export failed; no report published' : 'Report export pending';
     return publication + ' · ' + value.filename +
-        (value.retirement === 'acknowledged' ? '' : value.retirement === 'blocked'
+        (value.retirement === 'acknowledged' ? '' : value.retirement === 'unknown'
+            ? ' · native retirement status unknown; further export blocked' : value.retirement === 'blocked'
             ? ' · cleanup unconfirmed; export and normal quit remain blocked' : ' · retirement pending') +
         (value.cancelRequested && !value.outcome ? ' · cancellation requested' : '') +
         (value.primary ? ' · ' + value.primary : '') +

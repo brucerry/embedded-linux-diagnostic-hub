@@ -55,11 +55,11 @@ export class ReportExportAction {
                     if (status.id !== owner.id) this.owner = { id: status.id };
                     this.accept(status); return;
                 }
-                this.accept({ ...this.value!, publication: 'uncertain', retirement: 'blocked',
+                this.accept({ ...this.value!, publication: 'uncertain', retirement: 'unknown',
                     primary: 'Report export reply has no matching native disposition: ' +
                         String(error instanceof Error ? error.message : error).slice(0, 400) });
             } catch {
-                if (this.owner === owner) this.accept({ ...this.value!, publication: 'uncertain', retirement: 'blocked',
+                if (this.owner === owner) this.accept({ ...this.value!, publication: 'uncertain', retirement: 'unknown',
                     primary: 'Report export reply and native retirement status are unavailable.' });
             }
         }
