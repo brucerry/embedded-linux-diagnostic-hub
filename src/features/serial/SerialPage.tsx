@@ -65,6 +65,7 @@ export default function SerialPage(props: Props) {
     }, []);
     const term = useRef<Terminal | null>(null),
         fit = useRef<FitAddon | null>(null);
+    const terminalEpoch = useRef(0);
     const container = useRef<HTMLDivElement>(null),
         frame = useRef<HTMLDivElement>(null);
     const clear = useRef<HTMLButtonElement>(null),
@@ -104,16 +105,22 @@ export default function SerialPage(props: Props) {
     async function paste() {
         setMenu(null);
         const generation = session.current.generation,
-            inputEpoch = session.inputEpoch;
+            inputEpoch = session.inputEpoch,
+            epoch = terminalEpoch.current;
+        if (!term.current) return;
         try {
             const text = bridge?.readClipboard
                 ? await bridge.readClipboard()
                 : await navigator.clipboard.readText();
-            if (new TextEncoder().encode(text).length > SERIAL_QUEUE_BYTES)
-                throw Error('Clipboard text exceeds the serial paste limit.');
             if (
                 generation !== session.current.generation ||
                 inputEpoch !== session.inputEpoch ||
+                terminalEpoch.current !== epoch
+            )
+                return;
+            if (new TextEncoder().encode(text).length > SERIAL_QUEUE_BYTES)
+                throw Error('Clipboard text exceeds the serial paste limit.');
+            if (
                 session.current.state !== 'connected' ||
                 session.automationActive ||
                 !latest.current.visible ||
@@ -123,6 +130,12 @@ export default function SerialPage(props: Props) {
             term.current?.focus();
             term.current?.paste(text);
         } catch (error) {
+            if (
+                generation !== session.current.generation ||
+                inputEpoch !== session.inputEpoch ||
+                terminalEpoch.current !== epoch
+            )
+                return;
             setError(serialFailure(error));
         }
     }
@@ -253,6 +266,7 @@ export default function SerialPage(props: Props) {
             binary.dispose();
             guards.forEach((g) => g.dispose());
             wheel();
+            terminalEpoch.current++;
             terminal.dispose();
             term.current = null;
             fit.current = null;

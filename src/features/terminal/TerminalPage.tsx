@@ -30,6 +30,7 @@ export default function TerminalPage(props: Props) {
     const clearButton = useRef<HTMLButtonElement>(null);
     const copyButton = useRef<HTMLButtonElement>(null);
     const terminal = useRef<Terminal | null>(null);
+    const terminalEpoch = useRef(0);
     const fit = useRef<FitAddon | null>(null);
     const promptColors = useRef<ReturnType<typeof colorPrompts> | null>(null);
     const id = useRef('');
@@ -70,25 +71,25 @@ export default function TerminalPage(props: Props) {
     }
 
     async function paste() {
-        const current = id.current;
+        const current = id.current,
+            epoch = terminalEpoch.current;
         setMenu(null);
+        if (!current || !terminal.current) return;
         try {
             const text = window.diagnosticHub?.readClipboard
                 ? await window.diagnosticHub.readClipboard()
                 : await navigator.clipboard.readText();
+            if (id.current !== current || terminalEpoch.current !== epoch)
+                return;
             if (new TextEncoder().encode(text).length > TERMINAL_QUEUE_BYTES)
                 throw Error('Clipboard text exceeds the terminal paste limit.');
-            if (
-                !current ||
-                id.current !== current ||
-                !ready.current ||
-                latest.current.blocked ||
-                !latest.current.visible
-            )
+            if (!ready.current || latest.current.blocked || !latest.current.visible)
                 return;
             terminal.current?.focus();
             terminal.current?.paste(text);
         } catch (failure) {
+            if (id.current !== current || terminalEpoch.current !== epoch)
+                return;
             setError(
                 failure instanceof Error ? failure.message : 'Clipboard paste is unavailable.',
             );
@@ -210,6 +211,7 @@ export default function TerminalPage(props: Props) {
             prompts.dispose();
             promptColors.current = null;
             denied.forEach((handler) => handler.dispose());
+            terminalEpoch.current++;
             term.dispose();
             terminal.current = null;
             fit.current = null;
