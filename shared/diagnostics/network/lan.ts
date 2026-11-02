@@ -26,6 +26,12 @@ function flags(value: unknown): string[] | undefined {
         ? value
         : undefined;
 }
+function addressPrefix(family: unknown, value: unknown): string | undefined {
+    const maximum = family === 'inet' ? 32 : family === 'inet6' ? 128 : undefined;
+    const length = safeNumber(value);
+    return maximum !== undefined && length !== undefined && length <= maximum
+        ? String(length) : undefined;
+}
 export function lanSummary(snapshot: Snapshot): NetworkSummary {
     const interfaces = new Map<string, InterfaceSummary>();
     const warnings: string[] = [];
@@ -191,7 +197,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                     : []
                 ).entries()) {
                     const a = obj(address);
-                    const prefix = text(a.prefixlen);
+                    const prefix = addressPrefix(a.family, a.prefixlen);
                     if (a.prefixlen !== undefined && prefix === undefined)
                         warnings.push(
                             'Some ' + r.id + ' address prefix could not be interpreted; raw evidence is retained.',
