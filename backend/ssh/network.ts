@@ -167,7 +167,12 @@ export class NetworkCollector {
                             const info = r.linkinfo as { info_kind?: unknown } | undefined;
                             return r.ifname !== 'lo' && r.link_type === 'ether' && !info?.info_kind;
                         })
-                        .map((r) => String(r.ifname));
+                        .flatMap((r) => {
+                            if (typeof r.ifname === 'string') return [r.ifname];
+                            omit('ethtool', 'unsupported selector',
+                                'Reported interface name is not text; raw evidence is retained.');
+                            return [];
+                        });
                 } catch {
                     /* Raw evidence remains; sysfs names supply optional selectors. */
                 }
