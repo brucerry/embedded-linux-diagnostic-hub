@@ -144,7 +144,7 @@ export function captureRpcRequest(input: unknown): CaptureRpcRequest {
     if (request.op === 'export') {
         if (!['json', 'csv', 'markdown', 'text'].includes(request.format as string))
             throw new CaptureStorageError('invalid', 'Invalid export format.');
-        captureScope(request.scope ?? {});
+        captureScope(request.scope);
     }
     return request;
 }
