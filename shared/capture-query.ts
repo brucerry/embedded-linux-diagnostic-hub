@@ -1,3 +1,4 @@
+import { CaptureTextSearch } from './capture-search';
 import {
     CAPTURE_STORAGE,
     CaptureStorageError,
@@ -182,7 +183,7 @@ export async function matchesCapture(
     if (capture.state === 'active') return false;
     const streams = new Map<
         string,
-        { decoder: TextDecoder; plain: PlainCaptureText; tail: string }
+        { decoder: TextDecoder; plain: PlainCaptureText; search: CaptureTextSearch }
     >();
     for await (const event of store.read(capture.id)) {
         cancelled(signal);
@@ -190,20 +191,20 @@ export async function matchesCapture(
         if (event.type !== 'frame') continue;
         let state = streams.get(event.frame.stream);
         if (!state) {
-            state = { decoder: new TextDecoder(), plain: new PlainCaptureText(), tail: '' };
+            state = {
+                decoder: new TextDecoder(), plain: new PlainCaptureText(),
+                search: new CaptureTextSearch(f.query),
+            };
             streams.set(event.frame.stream, state);
         }
-        const text =
-            state.tail +
-            state.plain
-                .append(state.decoder.decode(event.frame.bytes, { stream: true }))
-                .toLowerCase();
-        if (text.includes(query)) return true;
-        state.tail = query.length > 1 ? text.slice(-(query.length - 1)) : '';
-    }
-    for (const state of streams.values())
-        if ((state.tail + state.plain.append(state.decoder.decode()).toLowerCase()).includes(query))
+        const text = state.plain.append(state.decoder.decode(event.frame.bytes, { stream: true }));
+        if (state.search.append(text))
             return true;
+    }
+    for (const state of streams.values()) {
+        state.search.append(state.plain.append(state.decoder.decode()));
+        if (state.search.finish()) return true;
+    }
     return false;
 }
 export interface CatalogRow {

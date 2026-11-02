@@ -1,3 +1,4 @@
+import { CaptureTextSearch } from './capture-search';
 import { CaptureStorageError, base64Bytes } from './capture-store';
 import { PlainCaptureText } from './capture-query';
 import type { ConsoleSnapshot } from './console-journal';
@@ -52,12 +53,9 @@ export async function matchesConsoleCapture(
         filter.completion === meta.reason;
     const decoder = new TextDecoder(),
         plain = new PlainCaptureText();
-    let carry = '';
+    const textSearch = new CaptureTextSearch(filter.query ?? '');
     const search = (part: string) => {
-        if (queryFound || !query) return;
-        const joined = carry + part.toLowerCase();
-        if (joined.includes(query)) queryFound = true;
-        carry = query.length > 1 ? joined.slice(1 - query.length) : '';
+        if (!queryFound && query && textSearch.append(part)) queryFound = true;
     };
     for await (const item of store.read(meta.header.id)) {
         await progress?.();
@@ -78,11 +76,12 @@ export async function matchesConsoleCapture(
         if (record.kind === 'outcome' && record.completion === filter.completion)
             completionFound = true;
         if (record.kind === 'observation' && query && !queryFound) {
-            // No full-output string: retain only the bounded overlap needed across frames.
+            // No full-output string: query-sized matcher state survives frame boundaries.
             search(plain.append(decoder.decode(base64Bytes(record.base64), { stream: true })));
         }
     }
     search(plain.append(decoder.decode()));
+    if (!queryFound && query) queryFound = textSearch.finish();
     return queryFound && nameFound && completionFound;
 }
 export async function consoleCatalogPage(
