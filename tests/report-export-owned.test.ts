@@ -242,3 +242,36 @@ test('renderer IPC failure reconciles native ownership and unavailable status ca
     assert.equal(changes.at(-1)!.outcome, 'saved'); assert.equal(changes.at(-1)!.publication, 'published');
     assert.equal(f.service.retainedAttempt, undefined); detach();
 });
+
+test('late reconciliation reply or failure cannot downgrade newer native publication and retirement events', async () => {
+    for (const response of ['stale', 'missing', 'rejected', 'lost-after-retirement']) {
+        const f = fixture(), heldClose = gate(), heldRead = gate();
+        f.hooks.close = () => heldClose.promise;
+        let reads = 0, native!: Promise<ReportExportStatus>;
+        const bridge = { ...f.bridge,
+            exportReport: async (s?: Snapshot, id?: string) => {
+                native = f.bridge.exportReport(s, id);
+                if (response === 'lost-after-retirement') await native;
+                throw Error('export reply lost');
+            },
+            reportExportStatus: async () => {
+                if (++reads === 1) return null; // Initial attachment query.
+                const captured = f.service.status();
+                await heldRead.promise;
+                if (response === 'rejected') throw Error('old status read failed');
+                return response === 'missing' ? null : captured;
+            },
+        };
+        const changes: ReportExportStatus[] = [];
+        const action = new ReportExportAction(bridge, (s) => { if (s) changes.push(s); }, () => 'a');
+        const detach = action.attach(), started = action.start(snapshot);
+        await pump(); assert.equal(reads, response === 'lost-after-retirement' ? 1 : 2);
+        heldClose.resolve(); await native;
+        const acknowledged = changes.at(-1)!;
+        assert.equal(acknowledged.publication, 'published'); assert.equal(acknowledged.retirement, 'acknowledged');
+        heldRead.resolve(); await started;
+        assert.deepEqual(changes.at(-1), acknowledged, response);
+        if (response === 'lost-after-retirement') assert.equal(reads, 1);
+        detach();
+    }
+});

@@ -45,12 +45,13 @@ export class ReportExportAction {
             const value = await this.bridge.exportReport(snapshot, owner.id);
             if (this.owner === owner) this.accept(value);
         } catch (error) {
-            if (this.owner !== owner) return;
+            if (this.owner !== owner || this.value?.retirement === 'acknowledged') return;
             // An IPC rejection is not a native retirement acknowledgement. Reconcile
             // status, otherwise keep admission blocked rather than fabricate release.
+            const revision = this.revision;
             try {
                 const status = await this.bridge.reportExportStatus();
-                if (this.owner !== owner) return;
+                if (this.owner !== owner || revision !== this.revision) return;
                 if (status && (status.id === owner.id || status.retirement !== 'acknowledged')) {
                     if (status.id !== owner.id) this.owner = { id: status.id };
                     this.accept(status); return;
@@ -59,7 +60,7 @@ export class ReportExportAction {
                     primary: 'Report export reply has no matching native disposition: ' +
                         String(error instanceof Error ? error.message : error).slice(0, 400) });
             } catch {
-                if (this.owner === owner) this.accept({ ...this.value!, publication: 'uncertain', retirement: 'unknown',
+                if (this.owner === owner && revision === this.revision) this.accept({ ...this.value!, publication: 'uncertain', retirement: 'unknown',
                     primary: 'Report export reply and native retirement status are unavailable.' });
             }
         }
