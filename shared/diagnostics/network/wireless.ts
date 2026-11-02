@@ -10,7 +10,16 @@ import {
     type NetworkSummary,
     type DetailField,
 } from './model';
-export function wirelessInventory(output: string): InterfaceSummary[] {
+function wirelessNumber(token: string | undefined, scale = 1, integer = false): number | undefined {
+    if (!token || !/^\d+(?:\.\d+)?$/.test(token)) return undefined;
+    const value = Number(token) * scale;
+    return Number.isFinite(value) && !(value === 0 && /[1-9]/.test(token)) && value <= Number.MAX_SAFE_INTEGER &&
+        (!integer || ( /^\d+$/.test(token) && Number.isSafeInteger(value))) ? value : undefined;
+}
+function numericWarning(warnings: string[], iface: InterfaceSummary, field: string) {
+    warnings.push(iface.name.slice(0, 128) + ': invalid ' + field + '; raw evidence is retained.');
+}
+export function wirelessInventory(output: string, warnings: string[] = [], invalidIndexes = new Set<InterfaceSummary>()): InterfaceSummary[] {
     const interfaces: InterfaceSummary[] = [];
     let phy: string | undefined,
         iface: InterfaceSummary | undefined,
@@ -60,15 +69,26 @@ export function wirelessInventory(output: string): InterfaceSummary[] {
         if (!m) continue;
         const value = m[2];
         if (!link) {
-            if (m[1] === 'ifindex' && /^\d+$/.test(value)) iface.ifindex = Number(value);
+            if (m[1] === 'ifindex') {
+                iface.ifindex = wirelessNumber(value, 1, true);
+                if (iface.ifindex === undefined) {
+                    invalidIndexes.add(iface);
+                    numericWarning(warnings, iface, 'interface index');
+                } else invalidIndexes.delete(iface);
+            }
             if (m[1] === 'addr') iface.mac = value;
             if (m[1] === 'ssid') iface.ssid = value;
             if (m[1] === 'type') iface.mode = value;
             if (m[1] === 'txpower') iface.txPower = value;
             if (m[1] === 'channel') {
-                iface.channel = value.match(/^(\d+)/)?.[1];
-                const f = value.match(/\((\d+) MHz\)/)?.[1];
-                if (f) iface.frequency = Number(f);
+                const channel = value.match(/^(\S+?)(?=\s|\(|$)/)?.[1];
+                iface.channel = wirelessNumber(channel, 1, true) === undefined ? undefined : channel;
+                if (iface.channel === undefined) numericWarning(warnings, iface, 'channel');
+                const reported = value.match(/\(([^)]*)\)/)?.[1];
+                if (reported !== undefined) {
+                    iface.frequency = wirelessNumber(reported.match(/^(\d+)\s+MHz$/)?.[1], 1, true);
+                    if (iface.frequency === undefined) numericWarning(warnings, iface, 'frequency');
+                }
                 iface.width = value.match(/width:\s*([^,]+)/)?.[1];
             }
         }
@@ -82,7 +102,7 @@ export function wirelessInventory(output: string): InterfaceSummary[] {
     return interfaces.slice(0, 128);
 }
 
-function legacyInventory(output: string): InterfaceSummary[] {
+function legacyInventory(output: string, warnings: string[]): InterfaceSummary[] {
     const entries: InterfaceSummary[] = [];
     let current: InterfaceSummary | undefined,
         block = '';
@@ -107,10 +127,16 @@ function legacyInventory(output: string): InterfaceSummary[] {
         if (!current) continue;
         block += line + '\n';
         current.mode = line.match(/\bMode:\s*(\S+)/)?.[1] ?? current.mode;
-        current.channel = line.match(/\bChannel:\s*(\d+)/)?.[1] ?? current.channel;
-        const frequency = line.match(/\bFrequency:\s*(\d+(?:\.\d+)?)\s*(GHz|MHz)/);
-        if (frequency)
-            current.frequency = Number(frequency[1]) * (frequency[2] === 'GHz' ? 1000 : 1);
+        const channel = line.match(/\bChannel:\s*(\S+?)(?=\s|\(|$)/)?.[1];
+        if (channel !== undefined) {
+            current.channel = wirelessNumber(channel, 1, true) === undefined ? undefined : channel;
+            if (current.channel === undefined) numericWarning(warnings, current, 'channel');
+        }
+        const frequency = line.match(/\bFrequency:\s*(\S+?)\s*(GHz|MHz)(?=\s|$|[),])/);
+        if (/\bFrequency:/.test(line)) {
+            current.frequency = frequency ? wirelessNumber(frequency[1], frequency[2] === 'GHz' ? 1000 : 1) : undefined;
+            if (current.frequency === undefined) numericWarning(warnings, current, 'frequency');
+        }
         current.txPower = line.match(/Tx-Power:\s*(-?\d+(?:\.\d+)?\s*dBm)/)?.[1] ?? current.txPower;
         current.signal = line.match(/Signal:\s*(-?\d+(?:\.\d+)?\s*dBm)/)?.[1] ?? current.signal;
     }
@@ -138,9 +164,10 @@ function legacyInventory(output: string): InterfaceSummary[] {
 export function wirelessSummary(snapshot: Snapshot): NetworkSummary {
     const raw = result(snapshot, 'wireless'),
         warnings: string[] = [];
-    const interfaces = raw?.status === 'collected' ? wirelessInventory(raw.stdout) : [];
+    const invalidIndexes = new Set<InterfaceSummary>();
+    const interfaces = raw?.status === 'collected' ? wirelessInventory(raw.stdout, warnings, invalidIndexes) : [];
     if (!interfaces.length && raw?.status === 'collected') {
-        interfaces.push(...legacyInventory(raw.stdout));
+        interfaces.push(...legacyInventory(raw.stdout, warnings));
         if (interfaces.length)
             warnings.push(
                 'Reduced fallback observations; iw PHY capability and current-channel noise are unavailable.',
@@ -149,7 +176,7 @@ export function wirelessSummary(snapshot: Snapshot): NetworkSummary {
     const groups = [];
     const links = lanSummary(snapshot).interfaces;
     for (const iface of interfaces) {
-        const named = links.filter((i) => i.name === iface.name);
+        const named = invalidIndexes.has(iface) ? [] : links.filter((i) => i.name === iface.name);
         const exact = iface.ifindex === undefined
             ? []
             : named.filter((i) => i.ifindex === iface.ifindex);
@@ -190,9 +217,17 @@ export function wirelessSummary(snapshot: Snapshot): NetworkSummary {
                   : 'Not reported';
             iface.bssid = multi ? undefined : connected?.[1];
             iface.ssid = connection.stdout.match(/^\s*SSID:\s*(.*)$/m)?.[1] ?? iface.ssid;
-            const frequency = connection.stdout.match(/^\s*freq:\s*(\d+)/m)?.[1];
-            if (frequency && !multi) {
-                if (iface.frequency !== undefined && iface.frequency !== Number(frequency)) {
+            const token = connection.stdout.match(/^\s*freq:\s*(.*)$/m)?.[1];
+            const frequency = wirelessNumber(token?.trim().match(/^(\d+)(?:\s+MHz)?$/)?.[1], 1, true);
+            if (token !== undefined && !multi && frequency === undefined) {
+                iface.frequency = undefined;
+                iface.channel = undefined;
+                iface.width = undefined;
+                iface.txPower = undefined;
+                numericWarning(warnings, iface, 'link frequency');
+            }
+            if (frequency !== undefined && !multi) {
+                if (iface.frequency !== undefined && iface.frequency !== frequency) {
                     iface.channel = undefined;
                     iface.width = undefined;
                     iface.txPower = undefined;
@@ -201,7 +236,7 @@ export function wirelessSummary(snapshot: Snapshot): NetworkSummary {
                             ': inventory and link frequencies changed between reads; channel/width/power are not merged.',
                     );
                 }
-                iface.frequency = Number(frequency);
+                iface.frequency = frequency;
             }
             if (!multi)
                 iface.signal = connection.stdout.match(
@@ -274,7 +309,8 @@ export function wirelessSummary(snapshot: Snapshot): NetworkSummary {
             const current = blocks.filter(
                 (b) =>
                     /\[in use\]/.test(b) &&
-                    Number(b.match(/frequency:\s*(\d+)/)?.[1]) === iface.frequency,
+                    iface.frequency !== undefined &&
+                    wirelessNumber(b.match(/frequency:\s*(\d+)\s+MHz(?:\s|$)/)?.[1], 1, true) === iface.frequency,
             );
             if (current.length === 1)
                 iface.noise = current[0].match(/noise:\s*(-?\d+(?:\.\d+)?\s*dBm)/)?.[1];
