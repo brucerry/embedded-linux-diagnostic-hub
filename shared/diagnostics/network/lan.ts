@@ -29,6 +29,11 @@ function flags(value: unknown): string[] | undefined {
 export function lanSummary(snapshot: Snapshot): NetworkSummary {
     const interfaces = new Map<string, InterfaceSummary>();
     const warnings: string[] = [];
+    const invalidIndex = (value: unknown, source: ProbeResult) => {
+        if (value === undefined || safeNumber(value) !== undefined) return false;
+        warnings.push('Some ' + source.id + ' interface index could not be interpreted; raw evidence is retained.');
+        return true;
+    };
     const ensure = (name: string, index?: number) => {
         let iface = interfaces.get(name);
         if (
@@ -89,7 +94,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
     );
     for (const r of links)
         for (const record of readRecords(r)) {
-            if (typeof record.ifname !== 'string') continue;
+            if (typeof record.ifname !== 'string' || invalidIndex(record.ifindex, r)) continue;
             const iface = ensure(record.ifname, safeNumber(record.ifindex));
             const f = flags(record.flags),
                 info = obj(record.linkinfo),
@@ -165,7 +170,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
         if (values !== undefined) {
             decodedAddresses = true;
             for (const record of values) {
-                if (typeof record.ifname !== 'string') continue;
+                if (typeof record.ifname !== 'string' || invalidIndex(record.ifindex, r)) continue;
                 const iface = ensure(record.ifname, safeNumber(record.ifindex));
                 if (!iface.mac) iface.mac = text(record.address);
                 if (!iface.mtu) iface.mtu = text(record.mtu);
@@ -225,10 +230,14 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
             const header = line.match(
                 /^\d+:\s+([^:]+):\s*<(.*?)>.*?mtu\s+(\d+).*?(?:state\s+(\S+))?/,
             );
-            const simple = line.match(/^\d+:\s+([^:]+):/);
+            const simple = line.match(/^(\S+):\s+([^:]+):/);
             const ifconfig = line.match(/^(\S+?)(?::\s+flags=|\s+Link encap:)/);
             if (simple || ifconfig) {
-                iface = ensure((simple?.[1] ?? ifconfig![1]).replace(/@.*$/, ''));
+                if (simple && invalidIndex(simple[1], legacy)) {
+                    iface = undefined;
+                    continue;
+                }
+                iface = ensure((simple?.[2] ?? ifconfig![1]).replace(/@.*$/, ''));
                 if (header) {
                     iface.admin = header[2].split(',').includes('UP') ? 'Enabled' : 'Disabled';
                     iface.mtu = header[3];
@@ -253,9 +262,13 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
         )) {
             let iface: InterfaceSummary | undefined;
             for (const line of r.stdout.split('\n')) {
-                const m = line.match(/^(\d+):\s+([^:]+):\s+<(.*?)>/);
+                const m = line.match(/^(\S+):\s+([^:]+):\s+<(.*?)>/);
                 if (m) {
-                    iface = ensure(m[2].replace(/@.*$/, ''), Number(m[1]));
+                    if (invalidIndex(m[1], r)) {
+                        iface = undefined;
+                        continue;
+                    }
+                    iface = ensure(m[2].replace(/@.*$/, ''), safeNumber(m[1]));
                     iface.admin = m[3].split(',').includes('UP') ? 'Enabled' : 'Disabled';
                     iface.carrier = m[3].includes('LOWER_UP')
                         ? 'Present'
