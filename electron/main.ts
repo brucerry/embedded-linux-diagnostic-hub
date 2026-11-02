@@ -729,7 +729,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         registerHandler('hub:copy-update-path', async (target) =>
             clipboard.writeText(await selectedUpdatePath(target)),
         );
-        registerHandler('hub:read-update-report', () => reports.read());
+        registerHandler('hub:read-update-report', () => updateOwnership.observe(() => reports.read()));
         registerHandler('hub:clear-session-data', () => {
             if ((update.active || updateOwnership.active))
                 throw new Error('Wait for the update to finish before resetting data.');
