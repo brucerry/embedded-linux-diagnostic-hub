@@ -61,7 +61,7 @@ export function consoleArchiveRequest(input: unknown): ConsoleArchiveRequest {
     ]);
     if (v.op === 'list') {
         streamObject(v, ['op', 'after', 'limit']);
-        consoleArchiveBounds(v.after, v.limit ?? 25);
+        consoleArchiveBounds(v.after, v.limit);
     } else if (v.op === 'read' || v.op === 'delete') {
         streamObject(v, ['op', 'id']);
         if (typeof v.id !== 'string') throw Error('Invalid console capture identity.');
