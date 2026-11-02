@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { UpdateOwnership } from './update-ownership';
+import { publishUpdateFile, hashUpdateFile } from './update-owned-file';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { valid } from 'semver';
 import type { UpdateInfo, UpdateReceipt } from '../shared/types';
@@ -37,6 +38,7 @@ export class UpdateReceipts {
     constructor(
         private directory: string,
         private platform: string,
+        private ownership = new UpdateOwnership(),
     ) {
         this.marker = path.join(directory, 'handoff.json');
     }
@@ -83,12 +85,7 @@ export class UpdateReceipts {
         const receipt = this.validate({ ...input, updatedAt: new Date().toISOString() });
         await mkdir(this.directory, { recursive: true, mode: 0o700 });
         const temporary = this.marker + '.' + randomUUID() + '.part';
-        try {
-            await writeFile(temporary, JSON.stringify(receipt), { flag: 'wx', mode: 0o600 });
-            await rename(temporary, this.marker);
-        } finally {
-            await rm(temporary, { force: true });
-        }
+        await publishUpdateFile(this.ownership, 'handoff receipt', temporary, this.marker, JSON.stringify(receipt), () => {});
     }
     async read(): Promise<UpdateReceipt | null> {
         try {
@@ -130,14 +127,8 @@ export class UpdateReceipts {
         )
             throw Error('The update executable location changed or is unavailable.');
         if (hash) {
-            const digest = createHash('sha256');
-            let size = 0;
-            for await (const chunk of createReadStream(file)) {
-                size += chunk.length;
-                if (size > MAX_BYTES) throw Error('The update executable has changed.');
-                digest.update(chunk);
-            }
-            if (digest.digest('hex') !== hash) throw Error('The update executable has changed.');
+            if (await hashUpdateFile(this.ownership, file, MAX_BYTES) !== hash)
+                throw Error('The update executable has changed.');
         }
         return file;
     }

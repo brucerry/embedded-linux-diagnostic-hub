@@ -40,6 +40,7 @@ import { RELEASES_URL, REPOSITORY_URL } from '../shared/project';
 import { validateSnapshot } from '../shared/report';
 import type { Snapshot } from '../shared/types';
 import type { TerminalOpen } from '../shared/terminal';
+import { UpdateOwnership, updateErrors } from './update-ownership';
 import { ReleaseUpdater } from './updates';
 import { HostVerification } from './host-verification';
 import { UpdateCoordinator } from './update-coordinator';
@@ -158,12 +159,17 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             if (window && !window.isDestroyed()) window.webContents.send('hub:report-export-status', status);
         },
     });
+    const updateOwnership = new UpdateOwnership(() => {
+        const message = updateOwnership.describe();
+        if (message && window && !window.isDestroyed())
+            window.webContents.send('hub:update-progress', { stage: 'failed', message });
+    });
     const quit = createQuitController(
         (snapshot: {
             connection: typeof connectionAttempts.snapshot;
             capture: typeof captureHostPromise;
-        }) =>
-            runQuitCleanup({
+        }) => runQuitCleanup({
+                joinUpdate: () => updateOwnership.shutdown(),
                 cancelConnection: () => snapshot.connection?.controller.abort(),
                 clearHostVerification: () => hostVerification.clear(),
                 disconnect: () => ssh.clear(),
@@ -301,11 +307,13 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             app.isPackaged,
             undefined,
             startup.delivery,
+            updateOwnership,
         );
-        const reports = new UpdateReports(path.join(app.getPath('userData'), 'update-reports'));
+        const reports = new UpdateReports(path.join(app.getPath('userData'), 'update-reports'), updateOwnership);
         const receipts = new UpdateReceipts(
             path.join(app.getPath('userData'), 'updates'),
             process.platform,
+            updateOwnership,
         );
         const runningExecutable = startup.currentPath;
         let serial: ReturnType<typeof configureSerial>;
@@ -314,11 +322,15 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             isConnecting: () => connectionAttempts.busy,
             isReportExporting: () => Boolean(reportExports.retainedAttempt),
             quiesceSerial: async () => {
-                activity?.interrupt('Update started. Arm explicitly after reconnecting.');
-                ssh.clearAutomationStream();
-                await serial.quiesce();
-                await consoleService.reset();
-                await ssh.shutdownConsole();
+                const drainage = updateOwnership.hold('Serial and console update drain', serial);
+                try {
+                    activity?.interrupt('Update started. Arm explicitly after reconnecting.');
+                    ssh.clearAutomationStream();
+                    await serial.quiesce();
+                    await consoleService.reset();
+                    await ssh.shutdownConsole();
+                    drainage.acknowledge();
+                } catch (error) { drainage.blocked(error); throw error; }
             },
             isConnected: () => ssh.isConnected,
             waitForCollection: async () => {
@@ -329,7 +341,11 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 ssh.clear();
                 window.webContents.send('hub:disconnected', 'update');
             },
-            progress: (message) => window.webContents.send('hub:update-progress', message),
+            progress: (message) => {
+                const blocked = updateOwnership.describe();
+                // Losing a renderer cannot interrupt native unwind or custody.
+                try { window.webContents.send('hub:update-progress', blocked ? { stage: 'failed', message: blocked } : message); } catch {}
+            },
             restart: async (execPath) => {
                 const info = updater.handoffInfo();
                 if (info.executable !== execPath)
@@ -346,8 +362,10 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                     });
                     setImmediate(() => app.quit());
                 } catch (error) {
-                    await receipts.write({ ...info, state: 'restart-failed' });
-                    throw error;
+                    const cleanup: unknown[] = [];
+                    try { await receipts.write({ ...info, state: 'restart-failed' }); }
+                    catch (receiptError) { cleanup.push(receiptError); }
+                    updateErrors({ failed: true, error }, cleanup);
                 }
             },
         });
@@ -406,7 +424,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 if (!window.isDestroyed())
                     window.webContents.send('hub:automation-interrupted', reason);
             },
-            () => update.active,
+            () => (update.active || updateOwnership.active),
         );
         ipcMain.handle(
             'hub:capture',
@@ -447,7 +465,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 resetCaptureRenderer();
             }
         });
-        serial = configureSerial(window, appUrl, () => update.active);
+        serial = configureSerial(window, appUrl, () => (update.active || updateOwnership.active));
         registerHandler('hub:serial-select', (id, portId) => serial.select(id, portId));
         registerHandler('hub:serial-cleanup-ack', (id) => serial.acknowledge(id));
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -468,7 +486,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             let id = '';
             let credentials: ReturnType<typeof validateConnection> | undefined;
             try {
-                if (update.active)
+                if ((update.active || updateOwnership.active))
                     throw new ConnectionFailure(
                         'policy',
                         'An update is in progress. SSH remains disconnected.',
@@ -547,14 +565,14 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             ssh.clear();
         });
         registerHandler('hub:terminal-open', (request) => {
-            if (update.active || connectionAttempts.busy)
+            if ((update.active || updateOwnership.active) || connectionAttempts.busy)
                 throw Error('Wait for the current connection or update to finish.');
             return ssh.openTerminal(request as TerminalOpen, (event) => {
                 if (!window.isDestroyed()) window.webContents.send('hub:terminal-event', event);
             });
         });
         registerHandler('hub:terminal-input', (id, data) => {
-            if (update.active || connectionAttempts.busy)
+            if ((update.active || updateOwnership.active) || connectionAttempts.busy)
                 throw Error('Terminal input is paused for the connection or update.');
             return ssh.getTerminal(id).write(data);
         });
@@ -564,7 +582,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         );
         registerHandler('hub:terminal-close', (id) => ssh.getTerminal(id).close());
         registerHandler('hub:automation-run', (request) => {
-            if (update.active || connectionAttempts.busy)
+            if ((update.active || updateOwnership.active) || connectionAttempts.busy)
                 throw Error('Automation is paused for the connection or update.');
             return ssh.runAutomation(request as import('../shared/automation').AutomationRequest);
         });
@@ -572,7 +590,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             'hub:automation-stream',
             (request) => {
                 const checked = streamRequest(request);
-                if (checked.action === 'start' && (connectionAttempts.busy || update.active))
+                if (checked.action === 'start' && (connectionAttempts.busy || (update.active || updateOwnership.active)))
                     throw Error('Automation is paused for the connection or update.');
                 return ssh.automationStream(checked);
             },
@@ -584,7 +602,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 const checked = consoleRpcRequest(request);
                 if (
                     ['open', 'step'].includes(checked.action) &&
-                    (connectionAttempts.busy || update.active)
+                    (connectionAttempts.busy || (update.active || updateOwnership.active))
                 )
                     throw Error('Automation is paused for the connection or update.');
                 return ssh.automationConsole(checked, consoleService.createWriter);
@@ -608,12 +626,12 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         registerHandler('hub:device-clock', (connection) => {
             if (connection !== undefined && connection !== ssh.automationConnection)
                 throw Error('Device clock connection changed.');
-            if (update.active || connectionAttempts.busy)
+            if ((update.active || updateOwnership.active) || connectionAttempts.busy)
                 throw Error('Wait for the current connection or update to finish.');
             return ssh.readClock();
         });
         registerHandler('hub:collect', async (options) => {
-            if (update.active) throw new Error('Live collection is paused for the update.');
+            if ((update.active || updateOwnership.active)) throw new Error('Live collection is paused for the update.');
             if (collectionTask) throw new Error('A collection is already running.');
             const pending = ssh
                 .collect(options as import('../shared/diagnostics/network/evidence').CollectOptions)
@@ -638,15 +656,15 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
             return path.basename(keyPath);
         });
         registerHandler('hub:check-updates', (includePrereleases) => {
-            if (update.active) throw new Error('An update is already in progress.');
-            return updater.check(includePrereleases as boolean);
+            if (update.active || updateOwnership.exclusive) throw new Error('An update is already in progress.');
+            return updateOwnership.observe(() => updater.check(includePrereleases as boolean));
         });
         registerHandler('hub:start-update', async (request) => {
-            if (update.active) throw Error('An update is already in progress.');
+            if ((update.active || updateOwnership.active)) throw Error('An update is already in progress.');
             try {
-                return await update.start(request);
+                return await updateOwnership.start(() => update.start(request));
             } finally {
-                serial.release();
+                if (!updateOwnership.held) serial.release();
             }
         });
         registerHandler('hub:read-update-info', async () => {
@@ -682,11 +700,11 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                           automaticUpdateQualified: false,
                       },
                   }
-                : receipts.info(app.getVersion(), runningExecutable);
+                : updateOwnership.observe(() => receipts.info(app.getVersion(), runningExecutable));
         });
         const selectedUpdatePath = async (target: unknown) => {
             if (startup.delivery !== 'installed')
-                return receipts.selectedPath(target, runningExecutable);
+                return updateOwnership.observe(() => receipts.selectedPath(target, runningExecutable));
             if (target !== 'current')
                 throw Error(
                     'Automatic installed update destinations are not qualified. Use verified setup.',
@@ -713,7 +731,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         );
         registerHandler('hub:read-update-report', () => reports.read());
         registerHandler('hub:clear-session-data', () => {
-            if (update.active)
+            if ((update.active || updateOwnership.active))
                 throw new Error('Wait for the update to finish before resetting data.');
             if (connectionAttempts.busy || collectionTask || ssh.isCollecting)
                 throw new Error('Wait for the current connection or collection to finish.');
@@ -722,7 +740,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         });
         registerHandler('hub:acknowledge-update-report', (id) => {
             if (typeof id !== 'string') throw new Error('Invalid saved update report.');
-            return reports.acknowledge(id);
+            return updateOwnership.observe(() => reports.acknowledge(id));
         });
         registerHandler('hub:open-repository', () => shell.openExternal(REPOSITORY_URL));
         registerHandler('hub:open-releases', () => shell.openExternal(RELEASES_URL));
@@ -743,7 +761,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         });
         registerHandler('hub:report-export-status', () => reportExports.status());
         registerHandler('hub:export', (importedData, id) => {
-            if (update.active) throw Error('Wait for the update to finish before exporting a report.');
+            if ((update.active || updateOwnership.active)) throw Error('Wait for the update to finish before exporting a report.');
             const snapshot =
                 importedData !== undefined ? validateSnapshot(importedData) : lastSnapshot;
             if (!snapshot) throw new Error('Collect a diagnostic snapshot before exporting.');

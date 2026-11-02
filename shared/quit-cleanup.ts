@@ -33,6 +33,7 @@ export function throwCleanupFailures(failures: readonly CleanupFailure[]): void 
 }
 
 export interface QuitCleanupPorts {
+    joinUpdate?(): Promise<unknown>;
     cancelConnection(): unknown;
     clearHostVerification(): unknown;
     disconnect(): unknown;
@@ -46,6 +47,9 @@ export interface QuitCleanupPorts {
 
 /** No independent rejection can bypass a sibling join or authorize a dependent store close. */
 export async function runQuitCleanup(ports: QuitCleanupPorts): Promise<void> {
+    // Admission is already frozen by the controller. The admitted update may still
+    // need Serial/SSH/report services and can queue its own restart without joining quit.
+    await ports.joinUpdate?.();
     const failures = await settleCleanup([
         { stage: 'cancel-connection', run: () => ports.cancelConnection() },
         { stage: 'host-verification', run: () => ports.clearHostVerification() },

@@ -1,3 +1,4 @@
+import { updateErrors } from './update-ownership';
 import { validateSnapshot } from '../shared/report';
 import type { Snapshot, UpdateMode, UpdateProgress } from '../shared/types';
 import type { UpdateReports } from './update-reports';
@@ -16,13 +17,14 @@ interface Lifecycle {
 }
 
 // One native transaction owns draining, disconnect, backup, verification and restart.
-// Its lock remains held until quit, or is released on failure without reconnecting SSH.
+// Its transaction lock remains held until quit on success. Native UpdateOwnership
+// separately retains any unacknowledged IO after failure, without reconnecting SSH.
 export class UpdateCoordinator {
     active = false;
 
     constructor(
         private updater: Pick<ReleaseUpdater, 'assertCanDownload' | 'download' | 'executable'>,
-        private reports: Pick<UpdateReports, 'save' | 'arm' | 'acknowledge'>,
+        private reports: Pick<UpdateReports, 'save' | 'arm' | 'acknowledge'> & Partial<Pick<UpdateReports, 'isArmed'>>,
         private lifecycle: Lifecycle,
     ) {}
 
@@ -88,19 +90,11 @@ export class UpdateCoordinator {
                 } catch {
                     // A lost renderer must not interrupt native transaction unwind.
                 }
-                if (armed && saved) {
+                if (saved && (armed || this.reports.isArmed?.(saved))) {
                     try {
                         await this.reports.acknowledge(saved.id);
                     } catch (disarmError) {
-                        throw new AggregateError(
-                            [error, disarmError],
-                            (error instanceof Error ? error.message : String(error)) +
-                                '; recovery marker disarm failed: ' +
-                                (disarmError instanceof Error
-                                    ? disarmError.message
-                                    : String(disarmError)),
-                            { cause: error },
-                        );
+                        updateErrors({ failed: true, error }, [disarmError], 'recovery marker disarm failed');
                     }
                 }
             } finally {

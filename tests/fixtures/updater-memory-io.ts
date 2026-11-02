@@ -18,10 +18,25 @@ export const memory = {
     stats() { return { opens, closes, reads, count: files.size }; },
 };
 export async function mkdir(name: string, options: unknown) { assert.equal(name, '/memory/updates/0.2.0'); assert.deepEqual(options, { recursive: true, mode: 0o700 }); }
-export async function open(name: string, flags: string, mode: number) {
-    file(name); assert.ok(name.endsWith('.part')); assert.equal(flags, 'wx'); assert.equal(mode, 0o600); assert.ok(!files.has(name)); assert.ok(++opens <= 4); files.set(name, Buffer.alloc(0)); let closed = false;
-    return { async writeFile(bytes: Uint8Array) { assert.equal(closed, false); const data = Buffer.concat([files.get(name)!, bytes]); assert.ok(data.length <= 4096); files.set(name, data); }, async close() { assert.equal(closed, false); closed = true; closes++; } };
+export async function open(name: string, flags: string, mode?: number) {
+    file(name); assert.ok(flags === 'wx' || flags === 'r'); assert.ok(++opens <= 24);
+    let closed = false, consumed = false;
+    if (flags === 'wx') { assert.ok(name.endsWith('.part')); assert.equal(mode, 0o600); assert.ok(!files.has(name)); files.set(name, Buffer.alloc(0)); }
+    else assert.ok(files.has(name));
+    return {
+        async writeFile(bytes: Uint8Array) { assert.equal(flags, 'wx'); assert.equal(closed, false); const data = Buffer.concat([files.get(name)!, bytes]); assert.ok(data.length <= 4096); files.set(name, data); },
+        async read(buffer: Buffer, offset: number, length: number, at: null) {
+            assert.equal(flags, 'r'); assert.equal(closed, false); assert.equal(at, null);
+            if (consumed) return { bytesRead: 0, buffer }; consumed = true;
+            assert.ok(++reads <= 12); const data = files.get(name)!; const snapshot = Buffer.from(data);
+            const gate = nextGate; nextGate = undefined; if (gate) { gate.entered = true; await gate.promise; }
+            const error = nextError; nextError = undefined; if (error) throw error;
+            assert.ok(snapshot.length <= length); snapshot.copy(buffer, offset); return { bytesRead: snapshot.length, buffer };
+        },
+        async close() { assert.equal(closed, false); closed = true; closes++; },
+    };
 }
+
 export async function chmod(name: string, mode: number) { file(name); assert.ok(files.has(name)); assert.equal(mode, 0o700); }
 export async function rename(from: string, to: string) { file(from); assert.equal(file(to), prefix); const bytes = files.get(from); assert.ok(bytes); files.set(to, bytes); files.delete(from); }
 export async function rm(name: string, options: unknown) { file(name); assert.ok(name.endsWith('.part')); assert.deepEqual(options, { force: true }); files.delete(name); }
