@@ -12,6 +12,7 @@ assert.ok(sources.terminal.includes('term.dispose();\n            terminal.curre
 assert.ok(sources.serial.includes('terminal.dispose();\n            term.current = null;'));
 assert.ok(sources.terminal.includes('terminalEpoch.current++;\n            term.dispose();'));
 assert.ok(sources.serial.includes('terminalEpoch.current++;\n            terminal.dispose();'));
+assert.ok(sources.terminal.includes('id.current = current;\n        terminalConnection.current = connectionEpoch.current;'));
 type Kind = keyof typeof sources;
 const limit = 256 * 1024;
 function fixture(kind: Kind, desktop = true) {
@@ -27,23 +28,37 @@ function fixture(kind: Kind, desktop = true) {
     const target = { focus() { focus++; }, paste(text: string) { pasted.push(text); } };
     const ref = { current: target as typeof target | null };
     const id = { current: 'terminal-A' }, ready = { current: true };
-    const terminalEpoch = { current: 0 };
+    const terminalEpoch = { current: 0 }, connectionEpoch = { current: 0 };
+    const terminalConnection = { current: 0 };
     const session = { current: { generation: 1, state: 'connected' }, inputEpoch: 1, automationActive: false };
-    const latest = { current: { visible: true, blocked: false } };
+    const latest = { current: { visible: true, blocked: false, connected: true,
+        device: { generation: 1 } as { generation: number } | null, transport: {} } };
+    const renderStart = sources.terminal.indexOf('    if (\n        latest.current.transport');
+    const renderEnd = sources.terminal.indexOf('    latest.current = props;', renderStart);
+    assert.ok(renderStart > 0 && renderEnd > renderStart);
+    const render = new Function('latest', 'connectionEpoch', 'props',
+        sources.terminal.slice(renderStart, renderEnd) + 'latest.current = props;');
+    const bindStart = sources.terminal.indexOf('        id.current = current;');
+    const bindEnd = sources.terminal.indexOf("        setState('opening');", bindStart);
+    assert.ok(bindStart > 0 && bindEnd > bindStart);
+    const bindTerminal = new Function('id', 'terminalConnection', 'connectionEpoch', 'current',
+        sources.terminal.slice(bindStart, bindEnd));
     const readClipboard = () => { reads++; return pending; };
     const bridge = desktop ? { readClipboard } : undefined;
     const paste = new Function(
-        'id', 'terminal', 'term', 'terminalEpoch', 'ready', 'session', 'latest', 'window', 'navigator',
+        'id', 'terminal', 'term', 'terminalEpoch', 'terminalConnection', 'connectionEpoch', 'ready', 'session', 'latest', 'window', 'navigator',
         'bridge', 'setMenu', 'setError', 'serialFailure', 'TERMINAL_QUEUE_BYTES', 'SERIAL_QUEUE_BYTES',
         span + '\nreturn paste;',
     )(
-        id, ref, ref, terminalEpoch, ready, session, latest, { diagnosticHub: bridge },
+        id, ref, ref, terminalEpoch, terminalConnection, connectionEpoch, ready, session, latest, { diagnosticHub: bridge },
         { clipboard: { readText: readClipboard } }, bridge, () => {},
         (error: string) => errors.push(error),
         (error: unknown) => error instanceof Error ? error.message : 'Serial operation failed.',
         limit, limit,
     ) as () => Promise<void>;
     return { paste, resolve, reject, pasted, errors, ref, id, session, latest, ready, terminalEpoch,
+        render: (props: typeof latest.current) => render(latest, connectionEpoch, props),
+        bindTerminal: (current: string) => bindTerminal(id, terminalConnection, connectionEpoch, current),
         focus: () => focus, reads: () => reads };
 }
 
@@ -88,6 +103,7 @@ for (const kind of ['terminal', 'serial'] as const) {
     test(`${kind}: current browser and desktop reads retain input and original failure behavior`, async () => {
         for (const desktop of [false, true]) {
             const success = fixture(kind, desktop), work = success.paste();
+            success.render({ ...success.latest.current }); // Unrelated same-context re-render preserves admission.
             success.resolve('echo one\r\necho two\n'); await work;
             assert.deepEqual(success.pasted, ['echo one\r\necho two\n']);
             assert.equal(success.focus(), 1);
@@ -122,5 +138,42 @@ test('serial: same-generation input epoch invalidates pending clipboard failures
         await work;
         assert.deepEqual(f.errors, []);
         assert.deepEqual(f.pasted, []);
+    }
+});
+
+test('terminal: opening a replacement binds its ID to the new connection and admits current input', async () => {
+    const f = fixture('terminal');
+    f.render({ ...f.latest.current, device: { generation: 2 }, transport: {} });
+    f.bindTerminal('terminal-B'); // Exact initial ID/connection assignments from start(), no transport call.
+    const work = f.paste();
+    assert.equal(f.reads(), 1);
+    f.resolve('new connection input'); await work;
+    assert.deepEqual(f.pasted, ['new connection input']);
+    assert.deepEqual(f.errors, []);
+});
+
+test('terminal: rendered connection changes invalidate clipboard outcomes before passive cleanup clears the old ID', async () => {
+    for (const change of ['disconnect', 'device', 'generation', 'transport'] as const) {
+        for (const outcome of ['resolve', 'reject', 'oversized'] as const) {
+            const f = fixture('terminal'), work = f.paste();
+            // App passes these connection props; old id/terminal refs can remain until effect cleanup.
+            const props = { ...f.latest.current };
+            if (change === 'disconnect') props.connected = false;
+            else if (change === 'device') props.device = null;
+            else if (change === 'generation') props.device = { generation: 2 };
+            else props.transport = {};
+            f.render(props);
+            const subsequent = f.paste();
+            assert.equal(f.reads(), 1, 'Changed props must not admit a second read for the old terminal ID');
+            f.errors.push('New connection diagnostic');
+            if (outcome === 'reject') f.reject(Error('Old clipboard failure'));
+            else f.resolve(outcome === 'oversized' ? 'x'.repeat(limit + 1) : 'stale input');
+            await Promise.all([work, subsequent]);
+            assert.equal(f.id.current, 'terminal-A');
+            assert.equal(f.terminalEpoch.current, 0);
+            assert.deepEqual(f.errors, ['New connection diagnostic']);
+            assert.deepEqual(f.pasted, []);
+            assert.equal(f.focus(), 0);
+        }
     }
 });

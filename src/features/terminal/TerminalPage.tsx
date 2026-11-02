@@ -34,8 +34,17 @@ export default function TerminalPage(props: Props) {
     const fit = useRef<FitAddon | null>(null);
     const promptColors = useRef<ReturnType<typeof colorPrompts> | null>(null);
     const id = useRef('');
+    const terminalConnection = useRef(-1);
     const input = useRef<TerminalInputQueue | null>(null);
     const latest = useRef(props);
+    const connectionEpoch = useRef(0);
+    // Invalidate pending clipboard reads before passive connection cleanup runs.
+    if (
+        latest.current.transport !== props.transport ||
+        latest.current.connected !== props.connected ||
+        latest.current.device?.generation !== props.device?.generation
+    )
+        connectionEpoch.current++;
     latest.current = props;
     const [state, setState] = useState('idle');
     const [error, setError] = useState('');
@@ -72,14 +81,19 @@ export default function TerminalPage(props: Props) {
 
     async function paste() {
         const current = id.current,
-            epoch = terminalEpoch.current;
+            epoch = terminalEpoch.current,
+            connection = connectionEpoch.current;
         setMenu(null);
-        if (!current || !terminal.current) return;
+        if (!current || !terminal.current || terminalConnection.current !== connection) return;
         try {
             const text = window.diagnosticHub?.readClipboard
                 ? await window.diagnosticHub.readClipboard()
                 : await navigator.clipboard.readText();
-            if (id.current !== current || terminalEpoch.current !== epoch)
+            if (
+                id.current !== current ||
+                terminalEpoch.current !== epoch ||
+                connectionEpoch.current !== connection
+            )
                 return;
             if (new TextEncoder().encode(text).length > TERMINAL_QUEUE_BYTES)
                 throw Error('Clipboard text exceeds the terminal paste limit.');
@@ -88,7 +102,11 @@ export default function TerminalPage(props: Props) {
             terminal.current?.focus();
             terminal.current?.paste(text);
         } catch (failure) {
-            if (id.current !== current || terminalEpoch.current !== epoch)
+            if (
+                id.current !== current ||
+                terminalEpoch.current !== epoch ||
+                connectionEpoch.current !== connection
+            )
                 return;
             setError(
                 failure instanceof Error ? failure.message : 'Clipboard paste is unavailable.',
@@ -352,6 +370,7 @@ export default function TerminalPage(props: Props) {
         const transport = props.transport as TerminalTransport;
         const current = crypto.randomUUID();
         id.current = current;
+        terminalConnection.current = connectionEpoch.current;
         setState('opening');
         setError('');
         if (preserveHistory && terminal.current) {
