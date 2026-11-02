@@ -1,4 +1,5 @@
 import { useSerialSession } from '../hooks/useSerialSession';
+import { reportExportMessage } from '../../shared/report-export';
 import { serialUiAdmission } from '../features/serial/admission';
 import {
     ArrowDown,
@@ -106,6 +107,8 @@ function App() {
         disconnect,
         resetData,
         exportReport,
+        reportExport,
+        cancelReportExport,
         importReport,
     } = useDeviceSession(() => setView('overview'));
     const uptimeResult = snapshot?.results.find((result) => result.id === 'uptime');
@@ -293,6 +296,7 @@ function App() {
                                             onClick={exportReport}
                                             disabled={
                                                 !snapshot ||
+                                                (reportExport !== null && reportExport.retirement !== 'acknowledged') ||
                                                 busy ||
                                                 resetting ||
                                                 connecting ||
@@ -444,6 +448,14 @@ function App() {
                                 </span>
                             </div>
                         </>
+                    )}
+                    {reportExport && (
+                        <div className="info-banner" role="status">
+                            <span>{reportExportMessage(reportExport)}</span>
+                            {reportExport.retirement !== 'acknowledged' && !reportExport.cancelRequested && (
+                                <button onClick={cancelReportExport}>Cancel export</button>
+                            )}
+                        </div>
                     )}
                     {error && (
                         <div className="error-banner" role="alert">

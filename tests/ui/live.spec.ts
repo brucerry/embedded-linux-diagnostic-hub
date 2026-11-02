@@ -28,7 +28,11 @@ test('failed live update pauses polling and retains the last snapshot without re
             openReleases: async () => {},
             openRepository: async () => {},
             copyText: async () => {},
-            exportReport: async () => true,
+            exportReport: async (_snapshot, id) => ({ id: id ?? 'fixture', filename: 'diagnostic.json',
+                publication: 'published' as const, retirement: 'acknowledged' as const, cancelRequested: false, cleanup: [], outcome: 'saved' as const }),
+            cancelReportExport: async () => {},
+            reportExportStatus: async () => null,
+            onReportExportStatus: () => () => {},
             onDisconnected: () => () => {},
             collect: async () => {
                 collections++;

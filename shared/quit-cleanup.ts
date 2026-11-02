@@ -41,6 +41,7 @@ export interface QuitCleanupPorts {
     joinSsh(): Promise<unknown>;
     finishConsole(): Promise<unknown>;
     shutdownCapture(): Promise<unknown>;
+    shutdownReports?(): Promise<unknown>;
 }
 
 /** No independent rejection can bypass a sibling join or authorize a dependent store close. */
@@ -75,6 +76,7 @@ export async function runQuitCleanup(ports: QuitCleanupPorts): Promise<void> {
                 },
             },
             { stage: 'native-capture', run: () => ports.shutdownCapture() },
+            { stage: 'report-exports', run: () => ports.shutdownReports?.() },
         ])),
     );
     throwCleanupFailures(failures);
@@ -117,6 +119,8 @@ export function quitAllowsIpc(name: string, operation?: string): boolean {
         case 'hub:serial-cleanup-ack':
         case 'hub:terminal-ack':
         case 'hub:automation-activity-release':
+        case 'hub:cancel-report-export':
+        case 'hub:report-export-status':
             return true;
         case 'hub:automation-stream':
             return ['read', 'ack', 'cancel', 'finalize'].includes(operation ?? '');

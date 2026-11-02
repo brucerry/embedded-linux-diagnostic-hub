@@ -84,7 +84,10 @@ export interface DesktopBridge
     readClipboard?(): Promise<string>;
     openRepository(): Promise<void>;
     openReleases(): Promise<void>;
-    exportReport(importedSnapshot?: Snapshot): Promise<boolean>;
+    exportReport(importedSnapshot?: Snapshot, id?: string): Promise<import('./report-export').ReportExportStatus>;
+    cancelReportExport(id: string): Promise<void>;
+    reportExportStatus(): Promise<import('./report-export').ReportExportStatus | null>;
+    onReportExportStatus(callback: (status: import('./report-export').ReportExportStatus) => void): () => void;
     onDisconnected(callback: (reason?: 'update') => void): () => void;
 }
 

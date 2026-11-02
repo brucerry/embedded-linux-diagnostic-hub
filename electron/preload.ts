@@ -109,8 +109,15 @@ const bridge: DesktopBridge = {
     openRepository: () => ipcRenderer.invoke('hub:open-repository'),
     openReleases: () => ipcRenderer.invoke('hub:open-releases'),
     pickKey: () => ipcRenderer.invoke('hub:pick-key'),
-    exportReport: (importedSnapshot?: Snapshot) =>
-        ipcRenderer.invoke('hub:export', importedSnapshot),
+    exportReport: (importedSnapshot?: Snapshot, id?: string) =>
+        ipcRenderer.invoke('hub:export', importedSnapshot, id),
+    cancelReportExport: (id) => ipcRenderer.invoke('hub:cancel-report-export', id),
+    reportExportStatus: () => ipcRenderer.invoke('hub:report-export-status'),
+    onReportExportStatus: (callback) => {
+        const listener = (_event: unknown, status: import('../shared/report-export').ReportExportStatus) => callback(status);
+        ipcRenderer.on('hub:report-export-status', listener);
+        return () => ipcRenderer.removeListener('hub:report-export-status', listener);
+    },
     onDisconnected: (callback) => {
         const listener = (_event: unknown, reason?: 'update') => {
             automationConnection = '';

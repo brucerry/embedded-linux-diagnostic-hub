@@ -8,6 +8,8 @@ import {
 import { trustedFrameHandler, trustedFrameReadyHandler } from './trusted-ipc';
 import { NativeCaptureHost } from './capture-host';
 import { NativeConsoleService } from './console-service';
+import { NativeReportExports } from './report-export';
+import * as reportFileSystem from 'node:fs/promises';
 import { storageError } from '../shared/capture-store';
 import { consoleRpcRequest } from '../shared/console-rpc';
 import { setupWorkerMain } from './setup-worker';
@@ -35,7 +37,7 @@ import { pathToFileURL } from 'node:url';
 import { DeviceMonitor } from '../backend/ssh/monitor';
 import { validateConnection } from '../backend/ssh/session';
 import { RELEASES_URL, REPOSITORY_URL } from '../shared/project';
-import { createReport, validateSnapshot } from '../shared/report';
+import { validateSnapshot } from '../shared/report';
 import type { Snapshot } from '../shared/types';
 import type { TerminalOpen } from '../shared/terminal';
 import { ReleaseUpdater } from './updates';
@@ -146,6 +148,16 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         return result.canceled ? null : (result.filePath ?? null);
     });
     let quitConnectionFailure: ConnectionFailure | null = null;
+    const reportExports = new NativeReportExports({
+        fs: reportFileSystem, random: randomUUID,
+        choose: (filename) => dialog.showSaveDialog(window, {
+            title: 'Export diagnostic evidence', defaultPath: filename,
+            filters: [{ name: 'JSON diagnostic report', extensions: ['json'] }],
+        }),
+        notify: (status) => {
+            if (window && !window.isDestroyed()) window.webContents.send('hub:report-export-status', status);
+        },
+    });
     const quit = createQuitController(
         (snapshot: {
             connection: typeof connectionAttempts.snapshot;
@@ -165,6 +177,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                     const host = await snapshot.capture;
                     await host?.shutdown();
                 },
+                shutdownReports: () => reportExports.shutdown(),
             }),
     );
     const assertNotQuitting = () => {
@@ -723,22 +736,17 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
                 throw Error('Clipboard text exceeds the terminal paste limit.');
             return text;
         });
-        registerHandler('hub:export', async (importedData) => {
+        registerHandler('hub:cancel-report-export', (id) => {
+            if (typeof id !== 'string') throw Error('Invalid report export identity.');
+            reportExports.cancel(id);
+        });
+        registerHandler('hub:report-export-status', () => reportExports.status());
+        registerHandler('hub:export', (importedData, id) => {
             const snapshot =
                 importedData !== undefined ? validateSnapshot(importedData) : lastSnapshot;
             if (!snapshot) throw new Error('Collect a diagnostic snapshot before exporting.');
-            const choice = await dialog.showSaveDialog(window, {
-                title: 'Export diagnostic evidence',
-                defaultPath: `diagnostic-${snapshot.mode}-${snapshot.capturedAt.replace(/[:.]/g, '-')}.json`,
-                filters: [{ name: 'JSON diagnostic report', extensions: ['json'] }],
-            });
-            if (choice.canceled || !choice.filePath) return false;
-            await writeFile(
-                choice.filePath,
-                JSON.stringify(createReport(snapshot), null, 2),
-                'utf8',
-            );
-            return true;
+            if (typeof id !== 'string') throw Error('Invalid report export identity.');
+            return reportExports.start(id, snapshot);
         });
         launchTiming?.mark('main-load-url-start');
         await window.loadURL(appUrl);

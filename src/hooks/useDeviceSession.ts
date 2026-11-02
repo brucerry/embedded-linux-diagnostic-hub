@@ -12,6 +12,8 @@ import { prepareHistory } from '../services/history';
 
 import { message } from '../services/errors';
 import { ConnectionOperation } from '../services/connection-operation';
+import { ReportExportAction } from '../services/report-export-action';
+import type { ReportExportStatus } from '../../shared/report-export';
 
 // Own the shared desktop/web session lifecycle and in-memory evidence.
 export function useDeviceSession(onResetView: () => void) {
@@ -65,6 +67,15 @@ export function useDeviceSession(onResetView: () => void) {
     const [gateway, setGateway] = useState<GatewayClient | null>(null);
     const importInput = useRef<HTMLInputElement>(null);
     const bridge = window.diagnosticHub;
+    const [reportExport, setReportExport] = useState<ReportExportStatus | null>(null);
+    const reportAction = useRef<ReportExportAction | null>(null);
+    useEffect(() => {
+        if (!bridge) return;
+        const action = new ReportExportAction(bridge, setReportExport, () => crypto.randomUUID());
+        reportAction.current = action;
+        const detach = action.attach();
+        return () => { detach(); if (reportAction.current === action) reportAction.current = null; };
+    }, [bridge]);
     const transport = bridge ?? gateway;
 
     useEffect(() => {
@@ -388,7 +399,7 @@ export function useDeviceSession(onResetView: () => void) {
         if (!snapshot) return;
         try {
             if (bridge) {
-                if (await bridge.exportReport(snapshot)) setNotice('Diagnostic report saved');
+                await reportAction.current?.start(snapshot);
             } else {
                 const url = URL.createObjectURL(
                     new Blob([JSON.stringify(createReport(snapshot), null, 2)], {
@@ -509,6 +520,8 @@ export function useDeviceSession(onResetView: () => void) {
         disconnect,
         resetData,
         exportReport,
+        reportExport,
+        cancelReportExport: () => reportAction.current?.cancel(),
         importReport,
     };
 }

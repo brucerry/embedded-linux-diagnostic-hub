@@ -232,7 +232,11 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 openReleases: async () => {
                     window.desktopTest.releasesOpened++;
                 },
-                exportReport: async () => true,
+                exportReport: async (_snapshot, id) => ({ id: id ?? 'fixture', filename: 'diagnostic.json',
+                    publication: 'published' as const, retirement: 'acknowledged' as const, cancelRequested: false, cleanup: [], outcome: 'saved' as const }),
+                cancelReportExport: async () => {},
+                reportExportStatus: async () => null,
+                onReportExportStatus: () => () => {},
                 onDisconnected: (callback) => {
                     closed = callback;
                     return () => {
