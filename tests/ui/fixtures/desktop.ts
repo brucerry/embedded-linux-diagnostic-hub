@@ -19,6 +19,14 @@ export interface DesktopTestState {
     releasesOpened: number;
     acknowledgements: string[];
     clipboard?: string;
+    clipboardRead: {
+        calls: number;
+        holdNext: boolean;
+        pending: boolean;
+        settled: number;
+        resolve(text: string): void;
+        reject(message: string): void;
+    };
     releaseCollection?: () => void;
     holdNextCollection?: boolean;
     closeConnection?: () => void;
@@ -51,6 +59,8 @@ declare global {
 export async function installDesktop(page: Page, recovery: UpdateRecovery | null = null) {
     await page.addInitScript(
         ({ snapshot, recovery, clockSample }) => {
+            let pendingClipboard:
+                { resolve(text: string): void; reject(error: Error): void } | undefined;
             window.desktopTest = {
                 captureExports: [],
                 requests: [],
@@ -59,6 +69,32 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 collects: 0,
                 releasesOpened: 0,
                 acknowledgements: [],
+                clipboardRead: {
+                    calls: 0,
+                    holdNext: false,
+                    pending: false,
+                    settled: 0,
+                    resolve(text) {
+                        if (new TextEncoder().encode(text).length > 256 * 1024 + 1)
+                            throw Error('Clipboard fixture response exceeds its byte bound.');
+                        if (!pendingClipboard) throw Error('No pending clipboard fixture read.');
+                        const owned = pendingClipboard;
+                        pendingClipboard = undefined;
+                        this.pending = false;
+                        this.settled++;
+                        owned.resolve(text);
+                    },
+                    reject(message) {
+                        if (message.length > 512)
+                            throw Error('Clipboard fixture error exceeds its character bound.');
+                        if (!pendingClipboard) throw Error('No pending clipboard fixture read.');
+                        const owned = pendingClipboard;
+                        pendingClipboard = undefined;
+                        this.pending = false;
+                        this.settled++;
+                        owned.reject(Error(message));
+                    },
+                },
                 clock: {
                     calls: 0,
                     response: { status: 'available', sample: clockSample },
@@ -227,13 +263,31 @@ export async function installDesktop(page: Page, recovery: UpdateRecovery | null
                 copyText: async (text) => {
                     window.desktopTest.clipboard = text;
                 },
-                readClipboard: async () => window.desktopTest.clipboard ?? '',
+                readClipboard: async () => {
+                    const read = window.desktopTest.clipboardRead;
+                    read.calls++;
+                    if (!read.holdNext) return window.desktopTest.clipboard ?? '';
+                    read.holdNext = false;
+                    if (pendingClipboard)
+                        throw Error('A clipboard fixture read is already pending.');
+                    read.pending = true;
+                    return new Promise<string>((resolve, reject) => {
+                        pendingClipboard = { resolve, reject };
+                    });
+                },
                 openRepository: async () => {},
                 openReleases: async () => {
                     window.desktopTest.releasesOpened++;
                 },
-                exportReport: async (_snapshot, id) => ({ id: id ?? 'fixture', filename: 'diagnostic.json',
-                    publication: 'published' as const, retirement: 'acknowledged' as const, cancelRequested: false, cleanup: [], outcome: 'saved' as const }),
+                exportReport: async (_snapshot, id) => ({
+                    id: id ?? 'fixture',
+                    filename: 'diagnostic.json',
+                    publication: 'published' as const,
+                    retirement: 'acknowledged' as const,
+                    cancelRequested: false,
+                    cleanup: [],
+                    outcome: 'saved' as const,
+                }),
                 cancelReportExport: async () => {},
                 reportExportStatus: async () => null,
                 onReportExportStatus: () => () => {},
