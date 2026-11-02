@@ -69,7 +69,8 @@ export default function SerialPage(props: Props) {
         frame = useRef<HTMLDivElement>(null);
     const clear = useRef<HTMLButtonElement>(null),
         copy = useRef<HTMLButtonElement>(null);
-    const labels = useRef(new Map<LocalSerialPort, string>()),
+    const labels = useRef(new WeakMap<LocalSerialPort, string>()),
+        labelOrdinal = useRef(0),
         pendingLabel = useRef('');
     const latest = useRef({ ...props, echo, enter });
     latest.current = { ...props, echo, enter };
@@ -84,7 +85,7 @@ export default function SerialPage(props: Props) {
             labels.current.set(
                 port,
                 'Authorized port ' +
-                    (labels.current.size + 1) +
+                    ++labelOrdinal.current +
                     (info.usbVendorId !== undefined
                         ? ' · USB ' +
                           info.usbVendorId.toString(16).padStart(4, '0') +
@@ -332,7 +333,10 @@ export default function SerialPage(props: Props) {
                                     (port) => {
                                         const chosenName = pendingLabel.current;
                                         pendingLabel.current = '';
-                                        if (chosenName) labels.current.set(port, chosenName);
+                                        if (chosenName) {
+                                            if (!labels.current.has(port)) labelOrdinal.current++;
+                                            labels.current.set(port, chosenName);
+                                        }
                                         return label(port);
                                     },
                                 );
