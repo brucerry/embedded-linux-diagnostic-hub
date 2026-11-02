@@ -29,3 +29,9 @@ UNKNOWN link state is not failure for virtual interfaces; STALE neighbor state i
 Multiple addresses/defaults/tables/multipath remain explicit. Unsafe large counters stay exact
 decimal text and are omitted from imprecise graphs. Driver/BusyBox/iproute2 physical qualification
 remains separate; raw unrecognized evidence is retained.
+
+When the same interface name has multiple observed indices, indexed records stay separate.
+Name-only link, address, sysfs, Ethernet settings and neighbor observations appear in global
+details with an unresolved-index warning and their original source timestamps. They do not
+supply a state or measurement for either indexed interface. A single unambiguous name match
+continues to use the existing fallback; collection order does not prove ownership.

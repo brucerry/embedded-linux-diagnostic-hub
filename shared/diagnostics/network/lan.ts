@@ -48,29 +48,77 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
         warnings.push('Some ' + source.id + ' MTU could not be interpreted; raw evidence is retained.');
         return undefined;
     };
+    // Look ahead only to establish identity ambiguity; interpretation warnings still
+    // follow the original source order below, and decoded JSON is reused.
+    const decoded = new Map<ProbeResult, Record<string, unknown>[] | undefined>();
+    const decodeRecords = (r: ProbeResult, warn = true): Record<string, unknown>[] | undefined => {
+        if (!decoded.has(r)) {
+            try { decoded.set(r, records(r.stdout)); }
+            catch { decoded.set(r, undefined); }
+        }
+        const values = decoded.get(r);
+        if (values === undefined && warn)
+            warnings.push('Some ' + r.id + ' JSON could not be interpreted; raw evidence is retained.');
+        return values;
+    };
+    const readRecords = (r: ProbeResult) => decodeRecords(r) ?? [];
+    const links = section(snapshot, 'ethernet', 'ip-link-json').filter(
+        (r) => r.status === 'collected',
+    );
+    const legacy = result(snapshot, 'interfaces');
+    const addressSections = section(snapshot, 'interfaces', 'ip-address-json')
+        .filter((r) => r.status === 'collected');
+    const textLinks = !links.length ? section(snapshot, 'ethernet', 'ip-link-text')
+        .filter((r) => r.status === 'collected') : [];
+    const knownIndices = new Map<string, Set<number>>();
+    const remember = (name: string, index: number | undefined) => {
+        if (index === undefined) return;
+        const indices = knownIndices.get(name) ?? new Set<number>();
+        indices.add(index);
+        knownIndices.set(name, indices);
+    };
+    for (const r of [...links, ...addressSections])
+        for (const record of decodeRecords(r, false) ?? [])
+            if (typeof record.ifname === 'string')
+                remember(record.ifname, safeNumber(record.ifindex));
+    const useLegacy = !addressSections.some((r) => decodeRecords(r, false) !== undefined) &&
+        legacy && (!addressSections.length || legacy.status === 'collected');
+    if (useLegacy)
+        for (const line of legacy.stdout.split('\n')) {
+            const m = line.match(/^(\S+):\s+([^:]+):/);
+            if (m) remember(m[2].replace(/@.*$/, ''), safeNumber(m[1]));
+        }
+    for (const r of textLinks)
+        for (const line of r.stdout.split('\n')) {
+            const m = line.match(/^(\S+):\s+([^:]+):\s+<(.*?)>/);
+            if (m) remember(m[2].replace(/@.*$/, ''), safeNumber(m[1]));
+        }
+    const unassigned = new Map<string, InterfaceSummary>();
+    const seenIndices = new Map<string, Set<number>>();
     const ensure = (name: string, index?: number) => {
-        let iface = interfaces.get(name);
-        if (
-            iface &&
-            index !== undefined &&
-            iface.ifindex !== undefined &&
-            index !== iface.ifindex
-        ) {
-            warnings.push(
-                name +
-                    ': interface identity changed during collection; conflicting records kept separate.',
-            );
-            const key = name + '#' + index;
-            iface = interfaces.get(key);
+        const known = knownIndices.get(name);
+        if (index === undefined && known && known.size > 1) {
+            warnings.push(name + ': multiple interface indices were observed; name-only observations kept unassigned.');
+            let iface = unassigned.get(name);
             if (!iface) {
-                iface = { id: key, name, ifindex: index, kind: 'Unclassified', groups: [] };
-                interfaces.set(key, iface);
+                iface = { id: name, name, kind: 'Unclassified', groups: [] };
+                unassigned.set(name, iface);
             }
             return iface;
         }
+        if (index !== undefined) {
+            const seen = seenIndices.get(name) ?? new Set<number>();
+            if (seen.size && !seen.has(index))
+                warnings.push(name + ': interface identity changed during collection; conflicting records kept separate.');
+            seen.add(index);
+            seenIndices.set(name, seen);
+        }
+        // Stable tuple keys prevent order-dependent selection and name/#index collisions.
+        const key = JSON.stringify([name, index ?? known?.values().next().value ?? null]);
+        let iface = interfaces.get(key);
         if (!iface) {
-            iface = { id: name, name, ifindex: index, kind: 'Unclassified', groups: [] };
-            interfaces.set(name, iface);
+            iface = { id: key, name, ifindex: index, kind: 'Unclassified', groups: [] };
+            interfaces.set(key, iface);
         }
         if (index !== undefined) iface.ifindex = index;
         return iface;
@@ -92,20 +140,6 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                 group('sysfs', 'Kernel link attributes / cumulative counters', fields, lan),
             );
     }
-    const decodeRecords = (r: ProbeResult): Record<string, unknown>[] | undefined => {
-        try {
-            return records(r.stdout);
-        } catch {
-            warnings.push(
-                'Some ' + r.id + ' JSON could not be interpreted; raw evidence is retained.',
-            );
-            return undefined;
-        }
-    };
-    const readRecords = (r: ProbeResult) => decodeRecords(r) ?? [];
-    const links = section(snapshot, 'ethernet', 'ip-link-json').filter(
-        (r) => r.status === 'collected',
-    );
     for (const r of links)
         for (const record of readRecords(r)) {
             if (typeof record.ifname !== 'string' || invalidIndex(record.ifindex, r)) continue;
@@ -153,6 +187,11 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                     'link',
                     'Link and topology',
                     [
+                        ...(unassigned.get(record.ifname) === iface ? [
+                            ...field('Operational state', record.operstate),
+                            ...field('MAC', record.address),
+                            ...field('Carrier', record.carrier),
+                        ] : []),
                         ...field('Interface index', record.ifindex),
                         ...field('Type', record.link_type),
                         ...field('Kind', iface.kind),
@@ -174,9 +213,6 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
             if (counters.length)
                 iface.groups.push(group('counters', 'Cumulative kernel counters', counters, r));
         }
-    const legacy = result(snapshot, 'interfaces');
-    const addressSections = section(snapshot, 'interfaces', 'ip-address-json')
-        .filter((r) => r.status === 'collected');
     let decodedAddresses = false;
     // Preserve warning order while distinguishing a decoded empty array from failure.
     for (const r of addressSections) {
@@ -251,7 +287,8 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                     iface = undefined;
                     continue;
                 }
-                iface = ensure((simple?.[2] ?? ifconfig![1]).replace(/@.*$/, ''));
+                iface = ensure((simple?.[2] ?? ifconfig![1]).replace(/@.*$/, ''),
+                    simple ? safeNumber(simple[1]) : undefined);
                 if (header) {
                     iface.admin = header[2].split(',').includes('UP') ? 'Enabled' : 'Disabled';
                     iface.mtu = textMtu(line, legacy, iface.mtu);
@@ -271,9 +308,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
         }
     }
     if (!links.length) {
-        for (const r of section(snapshot, 'ethernet', 'ip-link-text').filter(
-            (r) => r.status === 'collected',
-        )) {
+        for (const r of textLinks) {
             let iface: InterfaceSummary | undefined;
             for (const line of r.stdout.split('\n')) {
                 const m = line.match(/^(\S+):\s+([^:]+):\s+<(.*?)>/);
@@ -395,5 +430,13 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                 r,
             ),
         );
+    for (const [name, iface] of unassigned)
+        for (const detail of iface.groups)
+            groups.push({
+                ...detail,
+                id: 'unassigned-' + groups.length,
+                title: name + ' · index unresolved · ' + detail.title,
+                note: 'Name-only observation; multiple interface indices were observed. Not assigned to an indexed interface.',
+            });
     return { interfaces: [...interfaces.values()], groups, warnings: parseWarnings(warnings) };
 }
