@@ -34,6 +34,14 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
         warnings.push('Some ' + source.id + ' interface index could not be interpreted; raw evidence is retained.');
         return true;
     };
+    const textMtu = (line: string, source: ProbeResult, previous?: string) => {
+        const marker = /(?:^|[ \t])mtu(?=[ \t\r]|$)/.exec(line);
+        if (!marker) return previous;
+        const token = line.slice(marker.index + marker[0].length).trim().split(/[ \t]+/, 1)[0];
+        if (/^\d+$/.test(token)) return token;
+        warnings.push('Some ' + source.id + ' MTU could not be interpreted; raw evidence is retained.');
+        return undefined;
+    };
     const ensure = (name: string, index?: number) => {
         let iface = interfaces.get(name);
         if (
@@ -228,7 +236,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
         let iface: InterfaceSummary | undefined;
         for (const line of legacy.stdout.split('\n')) {
             const header = line.match(
-                /^\d+:\s+([^:]+):\s*<(.*?)>.*?mtu\s+(\d+).*?(?:state\s+(\S+))?/,
+                /^\d+:\s+([^:]+):\s*<(.*?)>/,
             );
             const simple = line.match(/^(\S+):\s+([^:]+):/);
             const ifconfig = line.match(/^(\S+?)(?::\s+flags=|\s+Link encap:)/);
@@ -240,7 +248,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                 iface = ensure((simple?.[2] ?? ifconfig![1]).replace(/@.*$/, ''));
                 if (header) {
                     iface.admin = header[2].split(',').includes('UP') ? 'Enabled' : 'Disabled';
-                    iface.mtu = header[3];
+                    iface.mtu = textMtu(line, legacy, iface.mtu);
                 }
                 const state = line.match(/\bstate\s+(\S+)/);
                 if (state) iface.state = state[1];
@@ -276,7 +284,7 @@ export function lanSummary(snapshot: Snapshot): NetworkSummary {
                           ? 'Absent'
                           : iface.carrier;
                     iface.state = line.match(/\bstate\s+(\S+)/)?.[1] ?? iface.state;
-                    iface.mtu = line.match(/\bmtu\s+(\d+)/)?.[1] ?? iface.mtu;
+                    iface.mtu = textMtu(line, r, iface.mtu);
                     iface.groups.push(
                         group('link-text', 'Link (legacy text)', field('Reported link', line), r),
                     );
