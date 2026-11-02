@@ -60,9 +60,15 @@ export class NetworkCollector {
         const evidence: NetworkEvidence = { version: 1, sections: [], omissions: [] };
         primary.networkEvidence = evidence;
         let bytes = outputBytes(primary);
+        // Match the evidence schema without shortening a selector into another identity.
+        const validScope = (scope: string) =>
+            scope.length <= 128 && !/[\x00-\x1f\x7f]/.test(scope);
+        const unsupportedScope = 'Network scope cannot be represented; raw evidence is retained.';
         const omit = (operation: NetworkOperation, scope: string, reason: string) => {
             if (evidence.omissions.length < 32)
-                evidence.omissions.push({ operation, scope, reason });
+                evidence.omissions.push(validScope(scope)
+                    ? { operation, scope, reason }
+                    : { operation, scope: 'unsupported selector', reason: unsupportedScope });
         };
         const run = async (
             operation: NetworkOperation,
@@ -70,6 +76,10 @@ export class NetworkCollector {
             command: string,
             cached = false,
         ): Promise<NetworkSection | undefined> => {
+            if (!validScope(scope)) {
+                omit(operation, 'unsupported selector', unsupportedScope);
+                return;
+            }
             const key = operation + ':' + scope;
             const previous =
                 cached && !options.forceNetworkCapabilities ? this.cache.get(key) : undefined;
@@ -223,9 +233,12 @@ export class NetworkCollector {
                 this.cache.clear();
                 this.topology = topology;
             }
-            const phys = [...new Set(interfaces.map((i) => i.phy))].filter((p) =>
-                /^phy\d+$/.test(p),
-            );
+            const phys = [...new Set(interfaces.map((i) => i.phy))].filter((p) => {
+                if (!/^phy\d+$/.test(p)) return false;
+                if (validScope(p)) return true;
+                omit('iw-phy', 'unsupported selector', unsupportedScope);
+                return false;
+            });
             if (interfaces.length > 8) omit('iw-info', 'all', 'First eight interfaces only.');
             if (phys.length > 4) omit('iw-phy', 'all', 'First four PHYs only.');
             const capabilities = async () => {
