@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NativeReportExports, type ReportExportIO } from '../electron/report-export';
+import { UpdateCoordinator } from '../electron/update-coordinator';
 import { ReportExportAction } from '../src/services/report-export-action';
 import { reportExportMessage, type ReportExportStatus } from '../shared/report-export';
 import { createReport } from '../shared/report';
@@ -274,4 +275,52 @@ test('late reconciliation reply or failure cannot downgrade newer native publica
         if (response === 'lost-after-retirement') assert.equal(reads, 1);
         detach();
     }
+});
+
+function updateWithReportOwner(f: ReturnType<typeof fixture>) {
+    const events: string[] = [];
+    const updater = { assertCanDownload() { events.push('admit'); },
+        async download() { events.push('download'); return '/synthetic/update'; },
+        async executable() { events.push('verify'); return '/synthetic/update'; } };
+    const coordinator = new UpdateCoordinator(updater, {
+        async save() { events.push('save'); return null; }, async arm() { events.push('arm'); },
+        async acknowledge() { events.push('disarm'); },
+    }, {
+        isConnecting: () => false, isReportExporting: () => Boolean(f.service.retainedAttempt),
+        isConnected: () => false, latestSnapshot: () => null,
+        async waitForCollection() { events.push('collection'); },
+        disconnect() { events.push('disconnect'); }, progress() {}, restart() { events.push('restart'); },
+    });
+    return { coordinator, updater, events };
+}
+
+test('report/update admission rejects pending or blocked native report ownership, including after Cancel', async () => {
+    for (const state of ['pending', 'blocked']) {
+        const f = fixture(), close = gate();
+        f.hooks.close = state === 'pending' ? () => close.promise : () => { throw Error('report close unacknowledged'); };
+        f.io.notify = () => { throw Error('renderer unavailable'); };
+        const saved = f.service.start('report', snapshot); await pump();
+        const update = updateWithReportOwner(f);
+        for (const cancel of [false, true]) {
+            if (cancel) f.service.cancel('report');
+            await assert.rejects(update.coordinator.start({ mode: 'clean' }), /report export/i);
+            assert.equal(update.coordinator.active, false); assert.deepEqual(update.events, []);
+        }
+        assert.equal(f.service.status()!.publication, 'published');
+        if (state === 'pending') {
+            close.resolve(); assert.equal((await saved).outcome, 'saved');
+            await update.coordinator.start({ mode: 'clean' }); assert.equal(update.events.at(-1), 'restart');
+        } else {
+            assert.equal(f.service.status()!.retirement, 'blocked');
+            assert.equal(f.opened(), true); assert.equal(f.log.filter((s) => s === 'close').length, 1);
+        }
+    }
+});
+
+test('report/update admission trusts acknowledged native retirement, not a stale renderer failure', async () => {
+    const f = fixture(); f.hooks.write = () => { throw Error('report failed'); };
+    assert.equal((await f.service.start('report', snapshot)).outcome, 'failed');
+    assert.equal(f.service.retainedAttempt, undefined);
+    const update = updateWithReportOwner(f); await update.coordinator.start({ mode: 'clean' });
+    assert.equal(update.coordinator.active, true); assert.equal(update.events.at(-1), 'restart');
 });

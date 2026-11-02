@@ -5,6 +5,7 @@ import type { ReleaseUpdater } from './updates';
 
 interface Lifecycle {
     isConnecting(): boolean;
+    isReportExporting?(): boolean;
     isConnected(): boolean;
     waitForCollection(): Promise<void>;
     quiesceSerial?(): Promise<void>;
@@ -37,6 +38,8 @@ export class UpdateCoordinator {
                 : undefined;
         if (this.active) throw Error('An update is already in progress.');
         if (this.lifecycle.isConnecting()) throw Error('Wait for the SSH connection to finish.');
+        if (this.lifecycle.isReportExporting?.())
+            throw Error('Finish the current report export before updating.');
         this.updater.assertCanDownload();
         this.active = true;
         let armed = false;

@@ -312,6 +312,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         let activity: AutomationActivity | undefined;
         const update = new UpdateCoordinator(updater, reports, {
             isConnecting: () => connectionAttempts.busy,
+            isReportExporting: () => Boolean(reportExports.retainedAttempt),
             quiesceSerial: async () => {
                 activity?.interrupt('Update started. Arm explicitly after reconnecting.');
                 ssh.clearAutomationStream();
@@ -742,6 +743,7 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         });
         registerHandler('hub:report-export-status', () => reportExports.status());
         registerHandler('hub:export', (importedData, id) => {
+            if (update.active) throw Error('Wait for the update to finish before exporting a report.');
             const snapshot =
                 importedData !== undefined ? validateSnapshot(importedData) : lastSnapshot;
             if (!snapshot) throw new Error('Collect a diagnostic snapshot before exporting.');
