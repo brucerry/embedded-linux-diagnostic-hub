@@ -195,6 +195,9 @@ export class NetworkCollector {
                         ),
                     ),
                 ].filter((n) => n !== 'lo');
+            // Getter selectors are names, not indexed observations. Keep the raw
+            // discovery intact while requesting each exact selector only once.
+            names = [...new Set(names)];
             if (names.length > 16) omit('ethtool', 'all', 'First 16 optional interfaces only.');
             for (const name of names.slice(0, 16)) {
                 try {
@@ -239,7 +242,8 @@ export class NetworkCollector {
                 omit('iw-phy', 'unsupported selector', unsupportedScope);
                 return false;
             });
-            if (interfaces.length > 8) omit('iw-info', 'all', 'First eight interfaces only.');
+            const names = [...new Set(interfaces.map((i) => i.name))];
+            if (names.length > 8) omit('iw-info', 'all', 'First eight interfaces only.');
             if (phys.length > 4) omit('iw-phy', 'all', 'First four PHYs only.');
             const capabilities = async () => {
                 await run('iw-version', 'tool', tool('iw', '--version'), true);
@@ -248,30 +252,30 @@ export class NetworkCollector {
             };
             if (options.forceNetworkCapabilities) await capabilities();
             await run('iw-regulatory', 'global', tool('iw', 'reg get'));
-            for (const iface of interfaces.slice(0, 8)) {
+            for (const name of names.slice(0, 8)) {
                 let argument: string;
                 try {
-                    argument = shellArgument(iface.name);
+                    argument = shellArgument(name);
                 } catch (error) {
                     omit('iw-info', 'unsupported selector', String(error).slice(0, 512));
                     continue;
                 }
-                if (/^(managed|P2P-client)$/i.test(iface.mode))
-                    await run('iw-link', iface.name, tool('iw', 'dev ' + argument + ' link'));
+                if (interfaces.some((i) => i.name === name && /^(managed|P2P-client)$/i.test(i.mode)))
+                    await run('iw-link', name, tool('iw', 'dev ' + argument + ' link'));
                 await run(
                     'iw-stations',
-                    iface.name,
+                    name,
                     tool('iw', 'dev ' + argument + ' station dump'),
                 );
-                await run('iw-survey', iface.name, tool('iw', 'dev ' + argument + ' survey dump'));
+                await run('iw-survey', name, tool('iw', 'dev ' + argument + ' survey dump'));
             }
             if (!options.forceNetworkCapabilities) await capabilities();
-            for (const iface of interfaces.slice(0, 8)) {
+            for (const name of names.slice(0, 8)) {
                 try {
                     await run(
                         'iw-power-save',
-                        iface.name,
-                        tool('iw', 'dev ' + shellArgument(iface.name) + ' get power_save'),
+                        name,
+                        tool('iw', 'dev ' + shellArgument(name) + ' get power_save'),
                     );
                 } catch {
                     /* Unsafe selector already has an omission. */
