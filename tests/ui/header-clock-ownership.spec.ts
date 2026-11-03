@@ -51,11 +51,11 @@ async function activeFlow(page: Page) {
     await expect(clock(page)).toContainText('16:35');
     await expect.poll(() => calls(page)).toBe(1);
     await page.getByRole('switch', { name: 'Live updates' }).click();
-    await page.clock.pauseAt(await page.evaluate(() => new Date(Date.now() + 1000).toISOString()));
     await page.getByRole('button', { name: 'Automation', exact: true }).click();
     const flow = page.getByRole('region', { name: 'Automation', exact: true });
-    const stage = (name: string) => flow.getByRole('navigation', { name: 'Automation setup steps' })
-        .getByRole('button', { name: new RegExp(name) }).click();
+    const navigation = flow.getByRole('navigation', { name: 'Automation setup steps' });
+    await expect(navigation).toBeVisible();
+    const stage = (name: string) => navigation.getByRole('button', { name: new RegExp(name) }).click();
     await stage('Commands');
     await flow.getByLabel('Command 1 script').fill('header ownership fixture');
     await stage('Timing');
@@ -67,6 +67,8 @@ async function activeFlow(page: Page) {
     await expect(clock(page)).toHaveClass(/device-clock-stale/);
     await expect(clock(page)).toContainText('Stale');
     await expect(clock(page)).toContainText('16:35');
+    // Let lazy route loading and admission settle before freezing application timers.
+    await page.clock.pauseAt(await page.evaluate(() => new Date(Date.now() + 1000).toISOString()));
     await page.clock.runFor(60_000);
     expect(await calls(page)).toBe(1);
     await expect(clock(page)).toContainText('Stale');
