@@ -24,12 +24,16 @@ assert.ok(source.includes('for (const scheduled of [false, true]) {'));
 assert.ok(source.includes("for (const outcome of ['grant', 'reject'] as const) {"));
 const templates = [...source.matchAll(/\btest\(`([^`]+)`/g)].map((m) => m[1]);
 assert.deepEqual(templates, [
-    '${transport} delayed old lease release cannot clear a third arming attempt',
+    '${transport} cancelled lease release fences repeated Starts until acknowledged',
     "${transport} Cancel during pending lease prevents ${scheduled ? 'scheduled' : 'immediate'} sends and repetition",
-    '${transport} stale lease ${outcome} cannot clear a newer arming attempt',
-    '${transport} stale lease ${outcome} cannot clear or restart a newer active flow',
+    '${transport} cancelled lease ${outcome} fences rearming and preserves later pending admission',
+    '${transport} cancelled lease ${outcome} preserves later active flow after acknowledged retirement',
 ]);
 assert.equal((source.match(/\btest\(/g) ?? []).length, 4);
+assert.equal((source.match(/await expectClockAdmissionBlocked\(page, flow\)/g) ?? []).length, 4);
+assert.equal((source.match(/await expectHeaderResumed\(page, reads\)/g) ?? []).length, 3);
+assert.ok(source.includes('Wait for the current clock reader admission.'));
+
 const titles = [];
 for (const transport of ['ssh', 'serial']) {
     titles.push(templates[0].replace('${transport}', transport));
@@ -42,13 +46,13 @@ for (const transport of ['ssh', 'serial']) {
             titles.push(template.replace('${transport}', transport).replace('${outcome}', outcome));
 }
 const suffixes = [
-    'delayed old lease release cannot clear a third arming attempt',
+    'cancelled lease release fences repeated Starts until acknowledged',
     'Cancel during pending lease prevents immediate sends and repetition',
     'Cancel during pending lease prevents scheduled sends and repetition',
-    'stale lease grant cannot clear a newer arming attempt',
-    'stale lease reject cannot clear a newer arming attempt',
-    'stale lease grant cannot clear or restart a newer active flow',
-    'stale lease reject cannot clear or restart a newer active flow',
+    'cancelled lease grant fences rearming and preserves later pending admission',
+    'cancelled lease reject fences rearming and preserves later pending admission',
+    'cancelled lease grant preserves later active flow after acknowledged retirement',
+    'cancelled lease reject preserves later active flow after acknowledged retirement',
 ];
 const expected = ['ssh', 'serial'].flatMap((transport) => suffixes.map((s) => `${transport} ${s}`));
 assert.deepEqual([...titles].sort(), [...expected].sort());
@@ -68,7 +72,7 @@ const rejected = titles.flatMap((title) => [
 ]);
 rejected.push(
     fullName('other Cancel during pending lease prevents scheduled sends and repetition'),
-    fullName('ssh stale lease other cannot clear a newer arming attempt'),
+    fullName('ssh cancelled lease other fences rearming and preserves later pending admission'),
     fullName('desktop clipboard text from an old connection cannot affect its replacement'),
 );
 for (const title of rejected) assert.equal(grep.test(title), false, title);
@@ -92,10 +96,10 @@ assert.ok(workflow.includes('timeout-minutes: 15'));
 assert.ok(workflow.includes('retention-days: 3'));
 assert.ok(workflow.includes('contents: read'));
 assert.ok(workflow.includes(
-    'test "$(git -C tooling rev-parse HEAD^)" = 5953b5b63c6b36f0b45b6af59f6178e32051a753',
+    'test "$(git -C tooling rev-parse HEAD^)" = 7b285b9236b00fb5613b8b03c8f3d4b14df289fc',
 ));
 assert.ok(workflow.includes(
-    'test "$(git -C application rev-parse HEAD)" = 63a9dce4db46495845d572c78da711e3471465fe',
+    'test "$(git -C application rev-parse HEAD)" = 7b285b9236b00fb5613b8b03c8f3d4b14df289fc',
 ));
 console.log(JSON.stringify({
     kind: 'source-only-automation-arming-selection',

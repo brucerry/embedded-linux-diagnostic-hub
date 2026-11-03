@@ -17,7 +17,7 @@ const baseURL = 'http://127.0.0.1:5198';
 export default defineConfig({
     testDir: path.join(application, 'tests/ui'),
     testMatch: 'automation-arming.spec.ts',
-    grep: /(?:^| )automation-arming\.spec\.ts (?:ssh|serial) (?:delayed old lease release cannot clear a third arming attempt|Cancel during pending lease prevents (?:scheduled|immediate) sends and repetition|stale lease (?:grant|reject) cannot clear (?:a newer arming attempt|or restart a newer active flow))$/,
+    grep: /(?:^| )automation-arming\.spec\.ts (?:ssh|serial) (?:cancelled lease release fences repeated Starts until acknowledged|Cancel during pending lease prevents (?:scheduled|immediate) sends and repetition|cancelled lease (?:grant|reject) (?:fences rearming and preserves later pending admission|preserves later active flow after acknowledged retirement))$/,
     fullyParallel: false,
     forbidOnly: true,
     workers: 1,
