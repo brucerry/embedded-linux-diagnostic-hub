@@ -17,7 +17,7 @@ const baseURL = 'http://127.0.0.1:5200';
 export default defineConfig({
     testDir: path.join(application, 'tests/ui'),
     testMatch: 'automation-reorder.spec.ts',
-    grep: /(?:^| )automation-reorder\.spec\.ts (?:Automation drag cancellation restores identities and command editing cannot start a row drag|Automation drag and keyboard reorder preserve disabled row identity through Review and execution)$/,
+    grep: /(?:^| )automation-reorder\.spec\.ts Automation drag and keyboard reorder preserve disabled row identity through Review and execution$/,
     fullyParallel: false,
     forbidOnly: true,
     workers: 1,

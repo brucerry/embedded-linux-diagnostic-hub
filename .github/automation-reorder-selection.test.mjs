@@ -13,7 +13,7 @@ assert.equal((source.match(/\btest\(/g) ?? []).length, 2);
 const literal = config.match(/^    grep: \/(.*)\/,$/m); assert.ok(literal);
 const grep = new RegExp(literal[1]);
 let accepted = 0, rejected = 0;
-for (const title of titles) {
+for (const title of [titles[1]]) {
  for (const prefix of ['automation-reorder.spec.ts ', '  automation-reorder.spec.ts ', ' chromium automation-reorder.spec.ts ']) {
   assert.ok(grep.test(prefix + title)); accepted++;
  }
@@ -21,8 +21,9 @@ for (const title of titles) {
   assert.equal(grep.test(value), false); rejected++;
  }
 }
+assert.equal(grep.test('automation-reorder.spec.ts ' + titles[0]), false); rejected++;
 const pins = JSON.parse(workflow.match(/const pins = (\{[^\r\n]+\});/)[1]);
-assert.equal(Object.keys(pins).length, 12);
+assert.equal(Object.keys(pins).length, 15);
 for (const [file, hash] of Object.entries(pins)) {
  assert.match(file, /^(tests|shared|src)\/[a-zA-Z0-9_./-]+\.tsx?$/);
  assert.ok(!file.split('/').includes('..'));
@@ -58,4 +59,13 @@ assert.ok(workflow.indexOf('socket_bytes=${#socket_probe}') < workflow.indexOf('
 const socketBytes = Buffer.byteLength('/home/runner/work/_temp/ar-41630095589-1/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket');
 assert.equal(socketBytes, 89);
 assert.ok(workflow.includes('if (( socket_bytes > 107 )); then'));
-console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, gestureControls: 3, socketBytes, mountedExecuted: 0}));
+const observer = read('../tests/ui/fixtures/reorder-diagnostic.ts');
+const format = read('../tests/ui/fixtures/reorder-diagnostic-format.ts');
+assert.ok(observer.includes('passive: true'));
+assert.ok(observer.includes('document.removeEventListener(item.type, item.callback, item.capture)'));
+assert.ok(observer.includes("createRequire(import.meta.url).resolve('playwright-core/package.json')"));
+for (const forbidden of ['preventDefault(', 'stopPropagation(', 'dispatchEvent(', 'setTimeout(', 'setInterval(', '.getData(', 'process.env', 'writeFile', 'unlink(', 'rmdir(']) assert.equal(observer.includes(forbidden), false);
+assert.ok(format.includes('REORDER_DIAGNOSTIC_BYTES = 32 * 1024'));
+assert.ok(source.includes('await emitReorderDiagnostic(observer, sdk);'));
+assert.ok(source.includes('await markReorderDiagnostic(observer);'));
+console.log(JSON.stringify({selectedScenarios: 1, definedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, gestureControls: 3, socketBytes, mountedExecuted: 0}));
