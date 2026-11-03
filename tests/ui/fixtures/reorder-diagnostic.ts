@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
-interface Collector { mark(): void; finish(): unknown }
+interface Collector { mark(): void; inspect(): unknown; finish(): unknown }
 export interface ReorderObserver {
     handle: JSHandle<Collector> | null;
     status: 'active' | 'not-started' | 'install-failed' | 'collect-failed';
@@ -101,7 +101,8 @@ export async function startReorderDiagnostic(flow: Locator): Promise<ReorderObse
                 }
                 sample('before');
                 return {
-                    mark() { if (!stopped) sample('after-gesture'); },
+                    mark() { if (!stopped) { sample('after-gesture'); remove(); } },
+                    inspect() { return { events, snapshots, counts, overflow, observerErrors }; },
                     finish() {
                         if (!stopped) {
                             try { sample('final'); } finally { stopped = true; remove(); }
@@ -118,4 +119,9 @@ export async function startReorderDiagnostic(flow: Locator): Promise<ReorderObse
 export async function markReorderDiagnostic(observer: ReorderObserver): Promise<void> {
     try { await observer.handle?.evaluate(api => api.mark()); }
     catch { observer.markFailed = true; }
+}
+
+export async function readReorderDiagnostic(observer: ReorderObserver): Promise<unknown> {
+    try { return await observer.handle?.evaluate(api => api.inspect()); }
+    catch { observer.markFailed = true; return null; }
 }

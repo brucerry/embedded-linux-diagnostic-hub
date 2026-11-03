@@ -1,8 +1,9 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installDesktop } from './fixtures/desktop';
 import { installSshStream } from './fixtures/ssh-stream';
-import { startReorderDiagnostic, markReorderDiagnostic, reorderSdkIdentity, type ReorderObserver } from './fixtures/reorder-diagnostic';
-import { emitReorderDiagnostic } from './fixtures/reorder-diagnostic-format';
+import { startReorderDiagnostic, markReorderDiagnostic, readReorderDiagnostic, reorderSdkIdentity, type ReorderObserver } from './fixtures/reorder-diagnostic';
+import { emitReorderDiagnostic, encodeReorderDiagnostic } from './fixtures/reorder-diagnostic-format';
+import { reorderGesturePoints } from './fixtures/reorder-gesture-geometry';
 
 const stage = (flow: Locator, name: string) => flow
     .getByRole('navigation', { name: 'Automation setup steps' })
@@ -80,7 +81,62 @@ test('Automation drag and keyboard reorder preserve disabled row identity throug
         expect(original.map((item) => item.enabled)).toEqual([true, false, true]);
         expect(new Set(original.map((item) => item.id)).size).toBe(3);
         observer = await startReorderDiagnostic(flow);
-        await rows(flow).first().getByRole('img').dragTo(rows(flow).last(), { steps: 2 });
+        // Use stable row identities; never let target scrolling occur with the button down.
+        const sourceRow = flow.locator(`[data-step-id="${original[0].id}"]`);
+        const targetRow = flow.locator(`[data-step-id="${original[2].id}"]`);
+        const sourceHandle = sourceRow.getByRole('img');
+        await sourceRow.evaluate(row => window.scrollTo({ top: scrollY + row.getBoundingClientRect().top - 160, behavior: 'instant' }));
+        const geometry = async () => {
+            const start = await sourceHandle.boundingBox(), target = await targetRow.boundingBox();
+            const viewport = page.viewportSize();
+            if (!start || !target || !viewport) throw Error('Missing visible reorder geometry.');
+            return reorderGesturePoints(start, target, viewport);
+        };
+        const hit = (point: { x: number; y: number }) => page.evaluate(point => {
+            const node = document.elementFromPoint(point.x, point.y);
+            return { row: node?.closest('[data-step-id]')?.getAttribute('data-step-id'),
+                handle: Boolean(node?.closest('.automation-drag-handle')), scroll: scrollY };
+        }, point);
+        await expect.poll(async () => {
+            try {
+                const points = await geometry();
+                return (await hit(points.start)).row === original[0].id && (await hit(points.drop)).row === original[2].id;
+            } catch { return false; }
+        }).toBe(true);
+        const baselineScroll = await page.evaluate(() => scrollY);
+        let points = await geometry(), held = false;
+        try {
+            expect(await hit(points.start)).toMatchObject({ row: original[0].id, handle: true });
+            await page.mouse.move(points.start.x, points.start.y);
+            await page.mouse.down(); held = true;
+            await page.mouse.move(points.initiate.x, points.initiate.y, { steps: 2 });
+            const started = JSON.parse(encodeReorderDiagnostic({ status: observer.status, data: await readReorderDiagnostic(observer) }, {}));
+            expect(started.events.filter((e: any) => e.type === 'dragstart' && e.phase === 'capture').map((e: any) => e.target.row)).toEqual([original[0].id]);
+            expect(await page.evaluate(() => scrollY)).toBe(baselineScroll);
+            // Initiated drag state delivers dragOver on the first target move.
+            points = await geometry();
+            expect((await hit(points.drop)).row).toBe(original[2].id);
+            await page.mouse.move(points.drop.x, points.drop.y, { steps: 1 });
+            await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);
+            // Preview changes DOM positions: remeasure the same target before drop.
+            points = await geometry();
+            expect((await hit(points.drop)).row).toBe(original[2].id);
+            await page.mouse.move(points.drop.x, points.drop.y, { steps: 1 });
+            await page.mouse.up(); held = false;
+        } finally {
+            if (held) { try { await page.mouse.up(); } catch { observer.markFailed = true; } }
+        }
+        const observed = JSON.parse(encodeReorderDiagnostic({ status: observer.status, data: await readReorderDiagnostic(observer) }, {}));
+        expect(observed.observerErrors).toBe(0);
+        expect(observed.overflow).toBe(false);
+        expect(observed.droppedAtSerialization).toBe(0);
+        const captured = observed.events.filter((e: any) => e.phase === 'capture');
+        expect(captured.filter((e: any) => e.type === 'pointerdown').map((e: any) => e.target.row)).toEqual([original[0].id]);
+        expect(captured.filter((e: any) => e.type === 'dragstart').map((e: any) => e.target.row)).toEqual([original[0].id]);
+        expect(captured.filter((e: any) => e.type === 'dragover').some((e: any) => e.target.row === original[2].id)).toBe(true);
+        expect(captured.filter((e: any) => e.type === 'drop').map((e: any) => e.target.row)).toEqual([original[2].id]);
+        const downAt = captured.find((e: any) => e.type === 'pointerdown').ms;
+        expect(captured.filter((e: any) => e.ms >= downAt).every((e: any) => e.state.view[1] === baselineScroll)).toBe(true);
         await markReorderDiagnostic(observer);
         await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);
         await expect(flow.locator('.automation-drag-placeholder')).toHaveCount(0);
