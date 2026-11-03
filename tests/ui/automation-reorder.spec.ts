@@ -74,7 +74,7 @@ test('Automation drag and keyboard reorder preserve disabled row identity throug
     const original = await state(flow);
     expect(original.map((item) => item.enabled)).toEqual([true, false, true]);
     expect(new Set(original.map((item) => item.id)).size).toBe(3);
-    await rows(flow).first().getByRole('img').dragTo(rows(flow).last());
+    await rows(flow).first().getByRole('img').dragTo(rows(flow).last(), { steps: 2 });
     await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);
     await expect(flow.locator('.automation-drag-placeholder')).toHaveCount(0);
     await expect(flow.locator('.automation-reorder-notice')).toHaveText('Step order updated.');
