@@ -68,7 +68,11 @@ export class FlowRunner {
     private repeat = true;
     private stopped = false;
     private active?: Promise<void>;
-    private cleanup?: { retry: () => Promise<unknown>; release: () => void; label: string };
+    private cleanup?: {
+        retry: () => Promise<void | { failure: string }>;
+        release: () => void;
+        label: string;
+    };
     private cleanupRetry?: Promise<void>;
     constructor(
         private changed: (s: FlowState) => void,
@@ -86,7 +90,7 @@ export class FlowRunner {
         const pending = this.cleanup;
         if (!pending) return Promise.resolve();
         const task = (async () => {
-            await pending.retry();
+            const outcome = await pending.retry();
             if (this.cleanup === pending) {
                 pending.release();
                 this.cleanup = undefined;
@@ -94,7 +98,9 @@ export class FlowRunner {
             this.controller = undefined;
             this.changed({
                 state: 'paused',
-                message: pending.label + ' cleanup acknowledged. Arm explicitly to resume.',
+                message: outcome?.failure
+                    ? outcome.failure + ' Flow paused; arm explicitly to resume.'
+                    : pending.label + ' cleanup acknowledged. Arm explicitly to resume.',
             });
         })();
         this.cleanupRetry = task;
