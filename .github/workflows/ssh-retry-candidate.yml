@@ -81,7 +81,7 @@ jobs:
                   lfs: false
             - uses: actions/checkout@v6
               with:
-                  ref: 017bf2ee8f49a4de177f9cffbe657da5729a95da
+                  ref: fbed3980957db0965b32d07c4bd00eb4e8e3c10b
                   path: application
                   fetch-depth: 1
                   persist-credentials: false
@@ -98,9 +98,9 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = 017bf2ee8f49a4de177f9cffbe657da5729a95da
-                  test "$(git -C application rev-parse HEAD)" = 017bf2ee8f49a4de177f9cffbe657da5729a95da
-                  test "$(git -C application rev-parse 'HEAD^{tree}')" = d164656d26877b78c47f1de479ef0ae25b9dce07
+                  test "$(git -C tooling rev-parse HEAD^)" = fbed3980957db0965b32d07c4bd00eb4e8e3c10b
+                  test "$(git -C application rev-parse HEAD)" = fbed3980957db0965b32d07c4bd00eb4e8e3c10b
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = fac0e40a6a4fa631e3ca9adaa32b1d7859c202f7
                   test ! -e application/node_modules
                   test ! -L application/node_modules
                   node - <<'NODE'
@@ -141,7 +141,7 @@ jobs:
                   const config = fs.readFileSync('../tooling/.github/ssh-retry-candidate.config.ts');
                   if (hash(config) !== '360727ee10474801f8e973d107789c63a90bc95e6c59e8990ce343c8fb0ad024')
                     throw Error('Changed sandboxed Automation configuration');
-                  const pins = {"tests/ui/connection-retries.spec.ts":"12d1915a0bd02eb2fe5be43a310ebd2dbc08a264422484ae985338dd1367cd25","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd"};
+                  const pins = {"tests/ui/connection-retries.spec.ts":"328d275d46f2a8090c85137cf8d4ecc6ec14fe2c2be1c4ef6351d8c9c1671a71","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd"};
                   for (const [file, expected] of Object.entries(pins)) {
                     if (hash(fs.readFileSync(file)) !== expected)
                       throw Error('Changed selected Automation input: ' + file);
@@ -168,7 +168,7 @@ jobs:
                   const file = path.join(scope, 'report.json');
                   if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
                   const receipt = JSON.stringify({
-                    source: '017bf2ee8f49a4de177f9cffbe657da5729a95da',
+                    source: 'fbed3980957db0965b32d07c4bd00eb4e8e3c10b',
                     tooling: process.env.GITHUB_SHA,
                     run: process.env.GITHUB_RUN_ID,
                     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -181,7 +181,7 @@ jobs:
             - uses: actions/upload-artifact@v4
               if: always() && steps.receipt.outputs.ready == 'true'
               with:
-                  name: ssh-retry-017bf2e-${{ github.run_id }}
+                  name: ssh-retry-fbed398-${{ github.run_id }}
                   path: ${{ env.HUB_SSH_RETRY_SCOPE }}/receipt.json
                   if-no-files-found: error
                   retention-days: 3

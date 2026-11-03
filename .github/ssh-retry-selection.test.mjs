@@ -32,6 +32,18 @@ assert.ok(workflow.includes('branches: [ci/ssh-retry-candidate-20261103]'));
 assert.ok(workflow.includes('timeout-minutes: 15') && workflow.includes('retention-days: 3'));
 assert.ok(!workflow.includes('workflow_dispatch:'));
 assert.ok(!source.includes('screenshot(') && !source.includes("waitForEvent('download')"));
+// Protect the repaired observer against the actual busy/idle submit contract.
+const modal = read('../src/features/connection/ConnectModal.tsx');
+assert.equal((modal.match(/type="submit"/g) ?? []).length, 1);
+assert.ok(modal.includes("{busy ? 'Connecting & collecting…' : 'Connect via SSH'}"));
+assert.ok(source.includes(`const connect = modal.locator('form button[type="submit"]');`));
+assert.ok(source.includes("await expect(connect).toHaveCount(1);"));
+assert.ok(source.includes("await expect(connect).toHaveText('Connect via SSH');"));
+assert.ok(source.includes("await expect(connect).toHaveText('Connecting & collecting…');"));
+assert.equal((source.match(/await expect\(connect\)\.toBeDisabled\(\);/g) ?? []).length, 2);
+for (const statement of ['page.clock.runFor(2999)', 'page.clock.runFor(1)',
+    'cleanupAcknowledgedAt!)).toBe(3000)', 'maxActive: 1, cleanupCount: 2'])
+ assert.ok(source.includes(statement));
 // Literal source binding plus byte arithmetic only; never runs the workflow/shell/browser.
 const scopeLine = 'scope="$RUNNER_TEMP/sr-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"';
 const guard = `export LC_ALL=C
