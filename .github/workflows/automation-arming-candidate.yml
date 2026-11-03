@@ -1,0 +1,178 @@
+name: Candidate Automation arming only
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/automation-arming-63a9dce-20261103]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: automation-arming-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    arming:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/automation-arming-63a9dce-20261103
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/automation-arming-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_AUTOMATION_ARMING_SCOPE=%s\n' "$scope"
+                      printf 'HUB_AUTOMATION_ARMING_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: 63a9dce4db46495845d572c78da711e3471465fe
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = 5953b5b63c6b36f0b45b6af59f6178e32051a753
+                  test "$(git -C application rev-parse HEAD)" = 63a9dce4db46495845d572c78da711e3471465fe
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 9b491d0fa22050985fef29e8ddc2e0cd4f5adb0e
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/automation-arming-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected Automation sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/automation-arming-candidate.config.ts');
+                  if (hash(config) !== '411fdb97f0ab8729b7fe766f2802fbca947ac67139aa7433e428edddc91bd142')
+                    throw Error('Changed sandboxed Automation configuration');
+                  const pins = {"tests/ui/automation-arming.spec.ts":"d329c3a353e1dbf17abd7bad1aa87c2752ca91b3881a2122aa244a715aba484d","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/serial.ts":"318d0ff4e09e58bcb33a8aa980a43da963a80e9a2227742fddc0e53da516e50c","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected Automation input: ' + file);
+                  }
+                  fs.mkdirSync('.automation-arming-ci');
+                  fs.writeFileSync('.automation-arming-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run the fourteen mounted arming cases once
+              working-directory: application
+              shell: bash
+              run: |
+                  node node_modules/playwright/cli.js test --config .automation-arming-ci/config.ts > "$HUB_AUTOMATION_ARMING_SCOPE/test.log" 2>&1
+            - name: Bound the candidate receipt
+              if: always()
+              id: receipt
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const scope = process.env.HUB_AUTOMATION_ARMING_SCOPE;
+                  if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) process.exit(0);
+                  const file = path.join(scope, 'report.json');
+                  if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  const receipt = JSON.stringify({
+                    source: '63a9dce4db46495845d572c78da711e3471465fe',
+                    tooling: process.env.GITHUB_SHA,
+                    run: process.env.GITHUB_RUN_ID,
+                    attempt: process.env.GITHUB_RUN_ATTEMPT,
+                    report: JSON.parse(fs.readFileSync(file, 'utf8'))
+                  });
+                  if (Buffer.byteLength(receipt) > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  fs.writeFileSync(path.join(scope, 'receipt.json'), receipt, { flag: 'wx' });
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n');
+                  NODE
+            - uses: actions/upload-artifact@v4
+              if: always() && steps.receipt.outputs.ready == 'true'
+              with:
+                  name: automation-arming-63a9dce-${{ github.run_id }}
+                  path: ${{ env.HUB_AUTOMATION_ARMING_SCOPE }}/receipt.json
+                  if-no-files-found: error
+                  retention-days: 3
