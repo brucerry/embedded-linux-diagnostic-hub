@@ -81,7 +81,7 @@ jobs:
                   lfs: false
             - uses: actions/checkout@v6
               with:
-                  ref: f846f2a5fdcef2b7150d8a7f13363848c9773afc
+                  ref: 252377c04b3571e0aff81cd817a198d964b6afed
                   path: application
                   fetch-depth: 1
                   persist-credentials: false
@@ -98,9 +98,9 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = f846f2a5fdcef2b7150d8a7f13363848c9773afc
-                  test "$(git -C application rev-parse HEAD)" = f846f2a5fdcef2b7150d8a7f13363848c9773afc
-                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 227062deae8ba319d1ff4522e060a6bd4ad0f507
+                  test "$(git -C tooling rev-parse HEAD^)" = 252377c04b3571e0aff81cd817a198d964b6afed
+                  test "$(git -C application rev-parse HEAD)" = 252377c04b3571e0aff81cd817a198d964b6afed
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 83fa9797200267f453c294ff8be304ae55673a72
                   test ! -e application/node_modules
                   test ! -L application/node_modules
                   node - <<'NODE'
@@ -141,7 +141,7 @@ jobs:
                   const config = fs.readFileSync('../tooling/.github/header-clock-candidate.config.ts');
                   if (hash(config) !== '72ee14daf330310bebae4c1950501d5c9419637c103bcc3b91c1b76f5ea07336')
                     throw Error('Changed sandboxed Automation configuration');
-                  const pins = {"tests/ui/header-clock-ownership.spec.ts":"6b4f03c4e0060eef45677deb32d4f4aa556b7af86252a1eaeff74f8aff709d3b","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd"};
+                  const pins = {"tests/ui/header-clock-ownership.spec.ts":"1f46bdf9d137d71e64f2b086733799d0d52002673843c68ac6fb1d904aad0f11","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/automation.ts":"5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4","shared/ssh-stream-rpc.ts":"f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2","tests/header-clock-fixture-contract.test.ts":"9f60e007c0eb07a43a221ba50ac30de7a3ec3f4d808111fcba6a63cb6220e126"};
                   for (const [file, expected] of Object.entries(pins)) {
                     if (hash(fs.readFileSync(file)) !== expected)
                       throw Error('Changed selected Automation input: ' + file);
@@ -168,7 +168,7 @@ jobs:
                   const file = path.join(scope, 'report.json');
                   if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
                   const receipt = JSON.stringify({
-                    source: 'f846f2a5fdcef2b7150d8a7f13363848c9773afc',
+                    source: '252377c04b3571e0aff81cd817a198d964b6afed',
                     tooling: process.env.GITHUB_SHA,
                     run: process.env.GITHUB_RUN_ID,
                     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -181,7 +181,7 @@ jobs:
             - uses: actions/upload-artifact@v4
               if: always() && steps.receipt.outputs.ready == 'true'
               with:
-                  name: header-clock-f846f2a-${{ github.run_id }}
+                  name: header-clock-252377c-${{ github.run_id }}
                   path: ${{ env.HUB_HEADER_CLOCK_SCOPE }}/receipt.json
                   if-no-files-found: error
                   retention-days: 3

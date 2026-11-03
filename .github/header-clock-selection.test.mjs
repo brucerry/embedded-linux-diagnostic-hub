@@ -21,11 +21,22 @@ for (const title of titles) {
  }
 }
 const pins = JSON.parse(workflow.match(/const pins = (\{[^\r\n]+\});/)[1]);
-assert.equal(Object.keys(pins).length, 8);
+assert.equal(Object.keys(pins).length, 11);
 for (const [file, hash] of Object.entries(pins)) {
  assert.match(file, /^(tests|shared)\/[a-zA-Z0-9_./-]+\.ts$/); assert.ok(!file.split('/').includes('..'));
  assert.equal(createHash('sha256').update(read('../' + file)).digest('hex'), hash);
 }
+// Reject fixture-owner mistakes before dependency installation or browser launch.
+// Extract the actual validator's pattern as data; do not evaluate application modules.
+const validator = read('../shared/automation.ts');
+const ownerPattern = validator.match(/!\/(.*?)\/\.test\(v\.connection\)/);
+assert.ok(ownerPattern);
+const owner = source.match(/connection: '([^']+)'/);
+assert.ok(owner);
+const validOwner = new RegExp(ownerPattern[1]);
+assert.equal(validOwner.test(owner[1]), true);
+assert.equal(validOwner.test('header-owner'), false);
+assert.equal(owner[1], 'header-clock-fixture');
 assert.equal(createHash('sha256').update(config).digest('hex'), workflow.match(/if \(hash\(config\) !== '([a-f0-9]{64})'\)/)[1]);
 assert.ok(config.includes('chromiumSandbox: true') && config.includes('workers: 1') && config.includes('retries: 0'));
 assert.ok(workflow.includes('branches: [ci/header-clock-candidate-20261103]'));
@@ -71,4 +82,4 @@ assert.equal(bytes(rootFor(107)) <= 107, true);
 assert.equal(bytes(rootFor(108)) <= 107, false);
 assert.equal(bytes('/' + 'é'.repeat(40)) <= 107, false);
 assert.equal(bytes('/runner temporary'), 83);
-console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, socketBoundaryControls: 6, oldSocketBytes: 108, newSocketBytes: 89, mountedExecuted: 0}));
+console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, socketBoundaryControls: 6, oldSocketBytes: 108, newSocketBytes: 89, mountedExecuted: 0}));
