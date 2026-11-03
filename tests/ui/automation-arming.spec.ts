@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Locator } from '@playwright/test';
 import { installDesktop } from './fixtures/desktop';
 import { installSerial } from './fixtures/serial';
 import { installSshStream } from './fixtures/ssh-stream';
@@ -77,8 +77,25 @@ async function prepare(page: Page, transport: 'ssh' | 'serial', scheduled = fals
     return flow;
 }
 
+async function expectClockAdmissionBlocked(page: Page, flow: Locator) {
+    const start = flow.getByRole('button', { name: 'Start flow', exact: true });
+    await expect(start).toBeEnabled();
+    await start.click();
+    await expect(flow.getByText('Wait for the current clock reader admission.', { exact: true }))
+        .toBeVisible();
+    expect(await page.evaluate(() => window.armingTest.pending.length)).toBe(1);
+    await expect(start).toBeEnabled();
+    await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0);
+}
+
+async function expectHeaderResumed(page: Page, previousReads: number) {
+    // This real hook read begins only after its matching reservation is returned.
+    await expect.poll(() => page.evaluate(() => window.desktopTest.clock.calls))
+        .toBeGreaterThan(previousReads);
+}
+
 for (const transport of ['ssh', 'serial'] as const) {
-    test(`${transport} delayed old lease release cannot clear a third arming attempt`, async ({
+    test(`${transport} cancelled lease release fences repeated Starts until acknowledged`, async ({
         page,
     }) => {
         const flow = await prepare(page, transport),
@@ -96,39 +113,26 @@ for (const transport of ['ssh', 'serial'] as const) {
         await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(1);
         await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
         await page.evaluate(() => window.armingTest.pending[0].resolve('old-release'));
-        await expect
-            .poll(() => page.evaluate(() => Boolean(window.armingTest.releaseOld)))
+        await expect.poll(() => page.evaluate(() => Boolean(window.armingTest.releaseOld)))
             .toBe(true);
+        await expectClockAdmissionBlocked(page, flow);
+        await expectClockAdmissionBlocked(page, flow);
+        const reads = await page.evaluate(() => window.desktopTest.clock.calls);
+        await page.evaluate(() => window.armingTest.releaseOld!());
+        await expectHeaderResumed(page, reads);
         await start.click();
         await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
-        await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
-        await start.click();
-        await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(3);
-        await page.evaluate(() => {
-            window.armingTest.releaseOld!();
-            window.armingTest.pending[1].resolve('second-release');
-        });
-        await expect
-            .poll(() => page.evaluate(() => window.armingTest.released.includes('second-release')))
-            .toBe(true);
         await expect(start).toBeDisabled();
         await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toBeVisible();
+        await expect(flow).not.toContainText('Wait for the current clock reader admission.');
         await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
-        await page.evaluate(() => window.armingTest.pending[2].resolve('third-release'));
-        await expect
-            .poll(() => page.evaluate(() => window.armingTest.released.includes('third-release')))
-            .toBe(true);
-        await page.clock.runFor(31000);
-        expect(
-            await page.evaluate(
-                (mode) =>
-                    mode === 'serial'
-                        ? window.serialTest.writes.length
-                        : window.armingTest.executions,
-                transport,
-            ),
-        ).toBe(0);
+        await page.evaluate(() => window.armingTest.pending[1].resolve('new-cancelled-release'));
+        await expect.poll(() => page.evaluate(() => window.armingTest.released))
+            .toEqual(['old-release', 'new-cancelled-release']);
         await expect(start).toBeEnabled();
+        await page.clock.runFor(31000);
+        expect(await page.evaluate((mode) => mode === 'serial'
+            ? window.serialTest.writes.length : window.armingTest.executions, transport)).toBe(0);
     });
     for (const scheduled of [false, true]) {
         test(`${transport} Cancel during pending lease prevents ${scheduled ? 'scheduled' : 'immediate'} sends and repetition`, async ({
@@ -164,7 +168,7 @@ for (const transport of ['ssh', 'serial'] as const) {
         });
     }
     for (const outcome of ['grant', 'reject'] as const) {
-        test(`${transport} stale lease ${outcome} cannot clear a newer arming attempt`, async ({
+        test(`${transport} cancelled lease ${outcome} fences rearming and preserves later pending admission`, async ({
             page,
         }) => {
             const flow = await prepare(page, transport);
@@ -172,83 +176,66 @@ for (const transport of ['ssh', 'serial'] as const) {
             await start.click();
             await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(1);
             await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
-            await expect(start).toBeEnabled();
-            await start.click();
-            await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
+            await expectClockAdmissionBlocked(page, flow);
+            const reads = await page.evaluate(() => window.desktopTest.clock.calls);
             await page.evaluate((result) => {
                 const pending = window.armingTest.pending[0];
                 if (result === 'grant') pending.resolve('stale-lease');
                 else pending.reject(Error('stale lease failure must stay hidden'));
             }, outcome);
             if (outcome === 'grant')
-                await expect
-                    .poll(() => page.evaluate(() => window.armingTest.released))
+                await expect.poll(() => page.evaluate(() => window.armingTest.released))
                     .toEqual(['stale-lease']);
-            await expect(start).toBeDisabled();
-            await expect(
-                flow.getByRole('button', { name: 'Cancel run', exact: true }),
-            ).toBeVisible();
+            await expectHeaderResumed(page, reads);
             await expect(flow).not.toContainText('stale lease failure');
+            await start.click();
+            await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
+            await expect(start).toBeDisabled();
+            await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toBeVisible();
+            await expect(flow).not.toContainText('Wait for the current clock reader admission.');
             expect(await page.evaluate(() => window.armingTest.executions)).toBe(0);
             await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
             await page.evaluate(() => window.armingTest.pending[1].resolve('new-cancelled-lease'));
-            await expect
-                .poll(() =>
-                    page.evaluate(() => window.armingTest.released.includes('new-cancelled-lease')),
-                )
+            await expect.poll(() => page.evaluate(() => window.armingTest.released.includes('new-cancelled-lease')))
                 .toBe(true);
             await page.clock.runFor(31000);
-            expect(
-                await page.evaluate(
-                    (mode) =>
-                        mode === 'serial'
-                            ? window.serialTest.writes.length
-                            : window.armingTest.executions,
-                    transport,
-                ),
-            ).toBe(0);
+            expect(await page.evaluate((mode) => mode === 'serial'
+                ? window.serialTest.writes.length : window.armingTest.executions, transport)).toBe(0);
             await expect(start).toBeEnabled();
         });
-        test(`${transport} stale lease ${outcome} cannot clear or restart a newer active flow`, async ({
+        test(`${transport} cancelled lease ${outcome} preserves later active flow after acknowledged retirement`, async ({
             page,
         }) => {
             const flow = await prepare(page, transport);
             const start = flow.getByRole('button', { name: 'Start flow', exact: true });
-            const calls = () =>
-                page.evaluate(
-                    (mode) =>
-                        mode === 'serial'
-                            ? window.serialTest.writes.length
-                            : window.armingTest.executions,
-                    transport,
-                );
+            const calls = () => page.evaluate((mode) => mode === 'serial'
+                ? window.serialTest.writes.length : window.armingTest.executions, transport);
             await start.click();
             await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(1);
             await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
-            await start.click();
-            await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
-            await page.evaluate(() => window.armingTest.pending[1].resolve('active-new-lease'));
-            await expect.poll(calls).toBe(1);
+            await expectClockAdmissionBlocked(page, flow);
+            const reads = await page.evaluate(() => window.desktopTest.clock.calls);
             await page.evaluate((result) => {
                 const pending = window.armingTest.pending[0];
                 if (result === 'grant') pending.resolve('late-old-lease');
                 else pending.reject(Error('stale active failure must stay hidden'));
             }, outcome);
             if (outcome === 'grant')
-                await expect
-                    .poll(() => page.evaluate(() => window.armingTest.released))
+                await expect.poll(() => page.evaluate(() => window.armingTest.released))
                     .toEqual(['late-old-lease']);
-            await expect(start).toBeDisabled();
-            await expect(
-                flow.getByRole('button', { name: 'Cancel run', exact: true }),
-            ).toBeVisible();
+            await expectHeaderResumed(page, reads);
             await expect(flow).not.toContainText('stale active failure');
+            await start.click();
+            await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
+            await page.evaluate(() => window.armingTest.pending[1].resolve('active-new-lease'));
+            await expect.poll(calls).toBe(1);
+            await expect(start).toBeDisabled();
+            await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toBeVisible();
+            await expect(flow).not.toContainText('stale active failure');
+            await expect(flow).not.toContainText('Wait for the current clock reader admission.');
             expect(await calls()).toBe(1);
             await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
-            await expect
-                .poll(() =>
-                    page.evaluate(() => window.armingTest.released.includes('active-new-lease')),
-                )
+            await expect.poll(() => page.evaluate(() => window.armingTest.released.includes('active-new-lease')))
                 .toBe(true);
             await expect(start).toBeEnabled();
             await page.clock.runFor(31000);
