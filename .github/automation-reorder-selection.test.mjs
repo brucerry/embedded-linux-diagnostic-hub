@@ -37,7 +37,13 @@ assert.equal(new RegExp(pattern[1]).test('header-owner'), false);
 const page = read('../src/features/automation/AutomationPage.tsx');
 for (const text of ['data-step-id={s.id}', 'onPointerDownCapture=', 'onDragStart=', 'onDragEnd={() => finishDrag(false)}', 'previewDrag(s.id);', 'finishDrag(true);', 'if (!commit && dragOriginal.current) setSteps(dragOriginal.current);', '.filter((s) => s.enabled)']) assert.ok(page.includes(text));
 assert.ok(source.includes("await expect(flow.getByRole('navigation', { name: 'Automation setup steps' })).toBeVisible();"));
-assert.ok(source.includes(".dragTo(rows(flow).last())"));
+// One intercepted Chromium move can initiate dragEnter without delivering dragOver.
+// Require the two-move real pointer gesture; retain all original order assertions.
+const gesture = "await rows(flow).first().getByRole('img').dragTo(rows(flow).last(), { steps: 2 });";
+const validGesture = text => text.includes(gesture);
+assert.equal(validGesture(source), true);
+assert.equal(validGesture(gesture.replace(', { steps: 2 }', '')), false);
+assert.equal(validGesture(gesture.replace('steps: 2', 'steps: 1')), false);
 assert.ok(source.includes("name: 'Move command 2 up'"));
 assert.ok(source.includes("await page.keyboard.press('Escape')"));
 assert.ok(source.includes("await transfer.dispose()"));
@@ -52,4 +58,4 @@ assert.ok(workflow.indexOf('socket_bytes=${#socket_probe}') < workflow.indexOf('
 const socketBytes = Buffer.byteLength('/home/runner/work/_temp/ar-41630095589-1/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket');
 assert.equal(socketBytes, 89);
 assert.ok(workflow.includes('if (( socket_bytes > 107 )); then'));
-console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, socketBytes, mountedExecuted: 0}));
+console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, gestureControls: 3, socketBytes, mountedExecuted: 0}));
