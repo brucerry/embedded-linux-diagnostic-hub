@@ -88,10 +88,32 @@ async function expectClockAdmissionBlocked(page: Page, flow: Locator) {
     await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0);
 }
 
-async function expectHeaderResumed(page: Page, previousReads: number) {
-    // This real hook read begins only after its matching reservation is returned.
-    await expect.poll(() => page.evaluate(() => window.desktopTest.clock.calls))
-        .toBeGreaterThan(previousReads);
+async function rearmAfterSettlement(
+    page: Page,
+    flow: Locator,
+    transport: 'ssh' | 'serial',
+    previousReads: number,
+    retiredError?: string,
+) {
+    if (transport === 'ssh') {
+        // A connected header provides an additional positive release observation.
+        await expect.poll(() => page.evaluate(() => window.desktopTest.clock.calls))
+            .toBeGreaterThan(previousReads);
+    } else {
+        // Serial-only setup has no SSH header provider; zero reads is a precondition,
+        // not proof of retirement. The second lease request below proves readmission.
+        expect(previousReads).toBe(0);
+        expect(await page.evaluate(() => window.desktopTest.connects)).toBe(0);
+    }
+    if (retiredError) await expect(flow).not.toContainText(retiredError);
+    expect(await page.evaluate((mode) => mode === 'serial'
+        ? window.serialTest.writes.length : window.armingTest.executions, transport)).toBe(0);
+    await flow.getByRole('button', { name: 'Start flow', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
+    expect(await page.evaluate((mode) => mode === 'serial'
+        ? window.serialTest.writes.length : window.armingTest.executions, transport)).toBe(0);
+    if (transport === 'serial')
+        expect(await page.evaluate(() => window.desktopTest.clock.calls)).toBe(0);
 }
 
 for (const transport of ['ssh', 'serial'] as const) {
@@ -119,9 +141,7 @@ for (const transport of ['ssh', 'serial'] as const) {
         await expectClockAdmissionBlocked(page, flow);
         const reads = await page.evaluate(() => window.desktopTest.clock.calls);
         await page.evaluate(() => window.armingTest.releaseOld!());
-        await expectHeaderResumed(page, reads);
-        await start.click();
-        await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
+        await rearmAfterSettlement(page, flow, transport, reads);
         await expect(start).toBeDisabled();
         await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toBeVisible();
         await expect(flow).not.toContainText('Wait for the current clock reader admission.');
@@ -186,14 +206,13 @@ for (const transport of ['ssh', 'serial'] as const) {
             if (outcome === 'grant')
                 await expect.poll(() => page.evaluate(() => window.armingTest.released))
                     .toEqual(['stale-lease']);
-            await expectHeaderResumed(page, reads);
+            await rearmAfterSettlement(page, flow, transport, reads, 'stale lease failure');
             await expect(flow).not.toContainText('stale lease failure');
-            await start.click();
-            await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
             await expect(start).toBeDisabled();
             await expect(flow.getByRole('button', { name: 'Cancel run', exact: true })).toBeVisible();
             await expect(flow).not.toContainText('Wait for the current clock reader admission.');
-            expect(await page.evaluate(() => window.armingTest.executions)).toBe(0);
+            expect(await page.evaluate((mode) => mode === 'serial'
+                ? window.serialTest.writes.length : window.armingTest.executions, transport)).toBe(0);
             await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
             await page.evaluate(() => window.armingTest.pending[1].resolve('new-cancelled-lease'));
             await expect.poll(() => page.evaluate(() => window.armingTest.released.includes('new-cancelled-lease')))
@@ -223,10 +242,8 @@ for (const transport of ['ssh', 'serial'] as const) {
             if (outcome === 'grant')
                 await expect.poll(() => page.evaluate(() => window.armingTest.released))
                     .toEqual(['late-old-lease']);
-            await expectHeaderResumed(page, reads);
+            await rearmAfterSettlement(page, flow, transport, reads, 'stale active failure');
             await expect(flow).not.toContainText('stale active failure');
-            await start.click();
-            await expect.poll(() => page.evaluate(() => window.armingTest.pending.length)).toBe(2);
             await page.evaluate(() => window.armingTest.pending[1].resolve('active-new-lease'));
             await expect.poll(calls).toBe(1);
             await expect(start).toBeDisabled();

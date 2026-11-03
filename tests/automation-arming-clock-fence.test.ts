@@ -38,13 +38,15 @@ async function until(check: () => boolean) {
 
 for (const transport of ['ssh', 'serial'] as const)
     for (const outcome of ['held-release', 'rejected-acquisition'] as const)
-        test(`${transport} cancelled pre-arm keeps actual clock fence through ${outcome}`, async () => {
+        for (const headerConnected of (transport === 'serial' ? [true, false] : [true]))
+        test(`${transport}${headerConnected ? '' : ' disconnected header'} cancelled pre-arm keeps actual clock fence through ${outcome}`, async () => {
             const pending: ReturnType<typeof gate<string>>[] = [], tasks: Promise<void>[] = [];
             const releaseOld = gate<void>(), liveLeases = new Set<string>(), released: string[] = [];
             const resumes: (() => void)[] = [], timers = new Map<number, () => void>();
             let reads = 0, runnerStarts = 0, repositories = 0, headerState: any = { sample: null };
+            const expectedInitialReads = headerConnected ? 1 : 0;
             const header: any = {
-                generation: 1, reset: 0, blocked: false, visible: true,
+                generation: headerConnected ? 1 : undefined, reset: 0, blocked: false, visible: true,
                 transport: { async readDeviceClock() {
                     assert.ok(++reads <= 4);
                     return { status: 'available', sample: { date: '2028-02-29', time: '12:00:00',
@@ -85,7 +87,7 @@ for (const transport of ['ssh', 'serial'] as const)
                 activityEpoch: { current: 0 }, flowInspectionId: { current: null },
                 props: { clockAdmission: { async quiesce() {
                     const resume = await owner.quiesce(); resumes.push(resume); return resume;
-                } }, connected: true, transport: active, serial: { current: { generation: 1,
+                } }, connected: headerConnected, transport: active, serial: { current: { generation: 1,
                     label: 'synthetic Serial' }, framing: 'synthetic' }, target: { endpoint: 'synthetic' },
                     busy: false, blocked: false, onBusy },
                 latest: { current: { transport: active, connected: true, blocked: false, onBusy } },
@@ -122,11 +124,17 @@ for (const transport of ['ssh', 'serial'] as const)
                 assert.equal(ctx.arming.current, false); assert.equal(ui.running, false);
                 assert.equal(header.reservation.current, oldToken);
                 for (const callback of timers.values()) callback();
-                assert.equal(reads, 1);
+                assert.equal(reads, expectedInitialReads);
             };
             let oldToken: symbol;
             try {
                 await until(() => header.flight.current === null);
+                assert.equal(reads, expectedInitialReads);
+                assert.equal(timers.size, headerConnected ? 1 : 0);
+                if (!headerConnected) {
+                    assert.equal(headerState.status, 'disconnected');
+                    assert.equal(header.refresh.current, null);
+                }
                 start(); await until(() => pending.length === 1);
                 oldToken = header.reservation.current; assert.ok(oldToken);
                 page().cancel();
@@ -139,7 +147,7 @@ for (const transport of ['ssh', 'serial'] as const)
                 if (outcome === 'held-release') releaseOld.resolve();
                 else pending[0].reject(Error('Cancelled acquisition error must stay hidden'));
                 await tasks[0]; await until(() => header.flight.current === null);
-                assert.equal(header.reservation.current, null); assert.equal(reads, 2);
+                assert.equal(header.reservation.current, null); assert.equal(reads, expectedInitialReads * 2);
                 assert.equal(ui.error, 'Wait for the current clock reader admission.');
                 assert.equal(liveLeases.size, 0); assert.equal(runnerStarts, 0);
                 start(); await until(() => pending.length === 2);
@@ -147,10 +155,10 @@ for (const transport of ['ssh', 'serial'] as const)
                 assert.ok(newToken && newToken !== oldToken); assert.equal(ui.error, '');
                 assert.equal(ui.running, true); assert.equal(ctx.arming.current, true);
                 resumes[0](); // A duplicate old-token completion cannot retire the current owner.
-                assert.equal(header.reservation.current, newToken); assert.equal(reads, 2);
+                assert.equal(header.reservation.current, newToken); assert.equal(reads, expectedInitialReads * 2);
                 page().cancel(); grant(1, 'new-cancelled-release'); await tasks.at(-1);
                 await until(() => header.flight.current === null);
-                assert.equal(header.reservation.current, null); assert.equal(reads, 3);
+                assert.equal(header.reservation.current, null); assert.equal(reads, expectedInitialReads * 3);
                 assert.equal(runnerStarts, 0); assert.equal(liveLeases.size, 0);
                 assert.equal(ui.running, false); assert.equal(ctx.arming.current, false);
             } finally {
