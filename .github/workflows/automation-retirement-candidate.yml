@@ -72,7 +72,7 @@ jobs:
                   lfs: false
             - uses: actions/checkout@v6
               with:
-                  ref: c1f3a9d92b288a8bcd4b3e6b0259041fcf6fb69d
+                  ref: 2d0698c901abab35610aaf5522dfd3d228849e97
                   path: application
                   fetch-depth: 1
                   persist-credentials: false
@@ -89,9 +89,9 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = c1f3a9d92b288a8bcd4b3e6b0259041fcf6fb69d
-                  test "$(git -C application rev-parse HEAD)" = c1f3a9d92b288a8bcd4b3e6b0259041fcf6fb69d
-                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 760797f675045596189db3c82e023dc4a8fd936b
+                  test "$(git -C tooling rev-parse HEAD^)" = 2d0698c901abab35610aaf5522dfd3d228849e97
+                  test "$(git -C application rev-parse HEAD)" = 2d0698c901abab35610aaf5522dfd3d228849e97
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 66dd90f086256b6316aec116728abc368ecc19c6
                   test ! -e application/node_modules
                   test ! -L application/node_modules
                   node - <<'NODE'
@@ -132,7 +132,7 @@ jobs:
                   const config = fs.readFileSync('../tooling/.github/automation-retirement-candidate.config.ts');
                   if (hash(config) !== '4ec951d4f7b3cbfab9189bf9278bf94a19892a69deb1cc33a25dea38698b0deb')
                     throw Error('Changed sandboxed Automation configuration');
-                  const pins = {"tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","tests/ui/automation-retirement.spec.ts":"a99154cbbf1bd9171ce3c6e009199f2247afb05192583998d252e8f8a6dbbc7f","tests/ui/fixtures/serial-custody.ts":"5f8485453675cafc088c7c965507c20a8ceba8f63174d3a52a2131a2364c04fe"};
+                  const pins = {"tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","tests/ui/automation-retirement.spec.ts":"1fefebc49d2a043caa03cbecc265e712d72fa7d2b0181751241d7153509d033c","tests/ui/fixtures/serial-custody.ts":"416b1cfb1d7a8e7a68d4774f996bd572cf9feb16f7d4664a9e775b9363f5752c"};
                   for (const [file, expected] of Object.entries(pins)) {
                     if (hash(fs.readFileSync(file)) !== expected)
                       throw Error('Changed selected Automation input: ' + file);
@@ -159,7 +159,7 @@ jobs:
                   const file = path.join(scope, 'report.json');
                   if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
                   const receipt = JSON.stringify({
-                    source: 'c1f3a9d92b288a8bcd4b3e6b0259041fcf6fb69d',
+                    source: '2d0698c901abab35610aaf5522dfd3d228849e97',
                     tooling: process.env.GITHUB_SHA,
                     run: process.env.GITHUB_RUN_ID,
                     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -172,7 +172,7 @@ jobs:
             - uses: actions/upload-artifact@v4
               if: always() && steps.receipt.outputs.ready == 'true'
               with:
-                  name: automation-retirement-c1f3a9d-${{ github.run_id }}
+                  name: automation-retirement-2d0698c-${{ github.run_id }}
                   path: ${{ env.HUB_AUTOMATION_RETIREMENT_SCOPE }}/receipt.json
                   if-no-files-found: error
                   retention-days: 3
