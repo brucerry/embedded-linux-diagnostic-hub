@@ -170,7 +170,7 @@ test('schedule missing date/time, DST fold and missing device sample point to th
             );
         })
         .toBe(true);
-    await expect(await errorText(page, flow.getByLabel('Start clock'))).toContainText('verified');
+    await expect(await errorText(page, flow.getByLabel('Start clock'))).toContainText('Choose local time for Serial scheduling.');
     await screen(page, 'automation-schedule-validation.png');
     await flow.getByLabel('Start clock').selectOption('local');
     await flow.getByRole('button', { name: 'Next: Review & Run', exact: true }).click();

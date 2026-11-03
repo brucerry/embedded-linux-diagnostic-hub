@@ -40,6 +40,12 @@ export interface NetworkSummary {
     groups: DetailGroup[];
     warnings: string[];
 }
+export function interfaceLabel(iface: Pick<InterfaceSummary, 'name' | 'ifindex' | 'phy' | 'kind'>): string {
+    return iface.name +
+        (iface.ifindex !== undefined ? ' · ifindex ' + iface.ifindex : '') +
+        (iface.phy ? ' · ' + iface.phy : '') +
+        (iface.kind !== 'Unclassified' ? ' · ' + iface.kind : '');
+}
 const scalar = (value: unknown): value is string | number | boolean =>
     typeof value === 'string' ||
     typeof value === 'boolean' ||
