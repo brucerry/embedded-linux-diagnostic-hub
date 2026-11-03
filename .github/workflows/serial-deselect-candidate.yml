@@ -1,0 +1,187 @@
+name: Candidate Serial Deselect only
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/serial-deselect-candidate-20261103]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: serial-deselect-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    deselect:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/serial-deselect-candidate-20261103
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/sd-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_SERIAL_DESELECT_SCOPE=%s\n' "$scope"
+                      printf 'HUB_SERIAL_DESELECT_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: a869e392b394365cb89eef98dcd8e30f55f0cf7a
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = a869e392b394365cb89eef98dcd8e30f55f0cf7a
+                  test "$(git -C application rev-parse HEAD)" = a869e392b394365cb89eef98dcd8e30f55f0cf7a
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 7da314fa85cf477390b299a199abeaab70ed25f2
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/serial-deselect-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected Serial Deselect sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/serial-deselect-candidate.config.ts');
+                  if (hash(config) !== 'de98cf97f8dc226aa38416e3e3fe9e67405b9515a60a0dcdbeedeefa2961da9f')
+                    throw Error('Changed sandboxed Serial Deselect configuration');
+                  const pins = {"tests/ui/serial-deselect.spec.ts":"efc3f33d8319e62439476dcdc73fd197ebc4b72990473952318e68ba7bb6a217","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/serial.ts":"318d0ff4e09e58bcb33a8aa980a43da963a80e9a2227742fddc0e53da516e50c","tests/ui/fixtures/serial-custody.ts":"416b1cfb1d7a8e7a68d4774f996bd572cf9feb16f7d4664a9e775b9363f5752c","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/serial.ts":"1512e509359ccddc3d304294b332bd0ffde3e6f1f1f46497635960ab707921f6","src/features/serial/session.ts":"979ef0a9175fa9d96f6f916599e17282d2271723ca843b3431e626b53e70d464","src/features/serial/SerialPage.tsx":"827a50016dee4ddba1bb1e8b9c61363a0fba1b37eba6ff511eb9d31a0309ee60","src/features/serial/admission.ts":"fa18a47312d2110fb1fbce2e2c1aa6c01d55b5efb61e2d5cf288258dcc3d161d","src/app/App.tsx":"2f3cf67deb14a62cb3fe0c97dfcaddd556ec7d6343e970a1b8428658c577e90a"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected Serial Deselect input: ' + file);
+                  }
+                  fs.mkdirSync('.serial-deselect-ci');
+                  fs.writeFileSync('.serial-deselect-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the two mocked Serial Deselect cases once
+              working-directory: application
+              shell: bash
+              run: |
+                  node node_modules/playwright/cli.js test --config .serial-deselect-ci/config.ts > "$HUB_SERIAL_DESELECT_SCOPE/test.log" 2>&1
+            - name: Bound the candidate receipt
+              if: always()
+              id: receipt
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const scope = process.env.HUB_SERIAL_DESELECT_SCOPE;
+                  if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) process.exit(0);
+                  const file = path.join(scope, 'report.json');
+                  if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  const receipt = JSON.stringify({
+                    source: 'a869e392b394365cb89eef98dcd8e30f55f0cf7a',
+                    tooling: process.env.GITHUB_SHA,
+                    run: process.env.GITHUB_RUN_ID,
+                    attempt: process.env.GITHUB_RUN_ATTEMPT,
+                    report: JSON.parse(fs.readFileSync(file, 'utf8'))
+                  });
+                  if (Buffer.byteLength(receipt) > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  fs.writeFileSync(path.join(scope, 'receipt.json'), receipt, { flag: 'wx' });
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n');
+                  NODE
+            - uses: actions/upload-artifact@v4
+              if: always() && steps.receipt.outputs.ready == 'true'
+              with:
+                  name: serial-deselect-candidate-a869e39-${{ github.run_id }}
+                  path: ${{ env.HUB_SERIAL_DESELECT_SCOPE }}/receipt.json
+                  if-no-files-found: error
+                  retention-days: 3
