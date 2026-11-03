@@ -81,7 +81,7 @@ jobs:
                   lfs: false
             - uses: actions/checkout@v6
               with:
-                  ref: cc20a8f27fb68ccfc83cdbdef9273ac00512d4ca
+                  ref: 94c3b3dcbfe3920e29b5c85b3fc7f3657ea23135
                   path: application
                   fetch-depth: 1
                   persist-credentials: false
@@ -98,9 +98,9 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = cc20a8f27fb68ccfc83cdbdef9273ac00512d4ca
-                  test "$(git -C application rev-parse HEAD)" = cc20a8f27fb68ccfc83cdbdef9273ac00512d4ca
-                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 391a5a8529758baef70902cbe8f225b7cd7d5e11
+                  test "$(git -C tooling rev-parse HEAD^)" = 94c3b3dcbfe3920e29b5c85b3fc7f3657ea23135
+                  test "$(git -C application rev-parse HEAD)" = 94c3b3dcbfe3920e29b5c85b3fc7f3657ea23135
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = f11566db5cd5fdcca38364455fde4eee6ec8f479
                   test ! -e application/node_modules
                   test ! -L application/node_modules
                   node - <<'NODE'
@@ -141,7 +141,7 @@ jobs:
                   const config = fs.readFileSync('../tooling/.github/automation-reorder-candidate.config.ts');
                   if (hash(config) !== '76d6640b05084732e9397eb11cd67ee038418aeda92db08f42628f7103c8999d')
                     throw Error('Changed sandboxed Automation configuration');
-                  const pins = {"tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/automation.ts":"5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4","shared/ssh-stream-rpc.ts":"f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2","tests/ui/automation-reorder.spec.ts":"9f18053e2d2c8ac454c469d20bf53f740a70041bd99ef5131e4c563be76dbcdf","src/features/automation/AutomationPage.tsx":"3717d5a6ee75db887b3fc4f6c91af5c24e7231033f9e7186e0f083e42e1a6c6f","src/features/automation/runner.ts":"2d2bf6231964c5903fb19d38f5f9a5b10d4395847f23b316f74ffeb77bad7884","tests/ui/fixtures/reorder-diagnostic.ts":"78c00867d948d117d10ca39350d9cbc2cf683deb985aa1332a5a0cac978f8e0a","tests/ui/fixtures/reorder-diagnostic-format.ts":"efa66f4757945b77452c92b2cbc7629ccf71fb0d8bd2699c96cc33d0bfd04913","tests/reorder-diagnostic-memory.test.ts":"d311f37fa0e2c1b87695246d828535f77672ce27c263ee1319875b4c0f3daf5f"};
+                  const pins = {"tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/automation.ts":"5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4","shared/ssh-stream-rpc.ts":"f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2","tests/ui/automation-reorder.spec.ts":"adb08f4d1ec475ceff53eb7fe7c723e2d35eacab33b5b4387299f8de5d78b223","src/features/automation/AutomationPage.tsx":"3717d5a6ee75db887b3fc4f6c91af5c24e7231033f9e7186e0f083e42e1a6c6f","src/features/automation/runner.ts":"2d2bf6231964c5903fb19d38f5f9a5b10d4395847f23b316f74ffeb77bad7884","tests/ui/fixtures/reorder-diagnostic.ts":"3b346e0c87f94c80fc5b79ca7e1c9838efa0b3c04b144aea4329dea8e1a3f5f6","tests/ui/fixtures/reorder-diagnostic-format.ts":"efa66f4757945b77452c92b2cbc7629ccf71fb0d8bd2699c96cc33d0bfd04913","tests/reorder-diagnostic-memory.test.ts":"d311f37fa0e2c1b87695246d828535f77672ce27c263ee1319875b4c0f3daf5f","tests/ui/fixtures/reorder-gesture-geometry.ts":"bc5627882a885a11d7d38eea9ee52dfd66ea7291b6a065cb2df4c9147c0b2027","tests/reorder-gesture-memory.test.ts":"7aa92eb1f072998a4d089d2f08d69f7fa9210a215634c8da8f68ea277fbd7113"};
                   for (const [file, expected] of Object.entries(pins)) {
                     if (hash(fs.readFileSync(file)) !== expected)
                       throw Error('Changed selected Automation input: ' + file);
@@ -168,7 +168,7 @@ jobs:
                   const file = path.join(scope, 'report.json');
                   if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
                   const receipt = JSON.stringify({
-                    source: 'cc20a8f27fb68ccfc83cdbdef9273ac00512d4ca',
+                    source: '94c3b3dcbfe3920e29b5c85b3fc7f3657ea23135',
                     tooling: process.env.GITHUB_SHA,
                     run: process.env.GITHUB_RUN_ID,
                     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -181,7 +181,7 @@ jobs:
             - uses: actions/upload-artifact@v4
               if: always() && steps.receipt.outputs.ready == 'true'
               with:
-                  name: automation-reorder-diagnostic-cc20a8f-${{ github.run_id }}
+                  name: automation-reorder-diagnostic-94c3b3d-${{ github.run_id }}
                   path: ${{ env.HUB_AUTOMATION_REORDER_SCOPE }}/receipt.json
                   if-no-files-found: error
                   retention-days: 3

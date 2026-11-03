@@ -23,7 +23,7 @@ for (const title of [titles[1]]) {
 }
 assert.equal(grep.test('automation-reorder.spec.ts ' + titles[0]), false); rejected++;
 const pins = JSON.parse(workflow.match(/const pins = (\{[^\r\n]+\});/)[1]);
-assert.equal(Object.keys(pins).length, 15);
+assert.equal(Object.keys(pins).length, 17);
 for (const [file, hash] of Object.entries(pins)) {
  assert.match(file, /^(tests|shared|src)\/[a-zA-Z0-9_./-]+\.tsx?$/);
  assert.ok(!file.split('/').includes('..'));
@@ -38,13 +38,18 @@ assert.equal(new RegExp(pattern[1]).test('header-owner'), false);
 const page = read('../src/features/automation/AutomationPage.tsx');
 for (const text of ['data-step-id={s.id}', 'onPointerDownCapture=', 'onDragStart=', 'onDragEnd={() => finishDrag(false)}', 'previewDrag(s.id);', 'finishDrag(true);', 'if (!commit && dragOriginal.current) setSteps(dragOriginal.current);', '.filter((s) => s.enabled)']) assert.ok(page.includes(text));
 assert.ok(source.includes("await expect(flow.getByRole('navigation', { name: 'Automation setup steps' })).toBeVisible();"));
-// One intercepted Chromium move can initiate dragEnter without delivering dragOver.
-// Require the two-move real pointer gesture; retain all original order assertions.
-const gesture = "await rows(flow).first().getByRole('img').dragTo(rows(flow).last(), { steps: 2 });";
-const validGesture = text => text.includes(gesture);
+// Initiate on the observed source before any target movement; no auto-scroll locator drag.
+const down = 'await page.mouse.down();';
+const initiate = 'await page.mouse.move(points.initiate.x, points.initiate.y, { steps: 2 });';
+const target = 'await page.mouse.move(points.drop.x, points.drop.y, { steps: 1 });';
+const validGesture = text => text.indexOf(down) >= 0 && text.indexOf(initiate) > text.indexOf(down) && text.indexOf(target) > text.indexOf(initiate);
 assert.equal(validGesture(source), true);
-assert.equal(validGesture(gesture.replace(', { steps: 2 }', '')), false);
-assert.equal(validGesture(gesture.replace('steps: 2', 'steps: 1')), false);
+assert.equal(validGesture([target, down, initiate].join('\n')), false);
+assert.equal(validGesture([down, target, initiate].join('\n')), false);
+assert.equal(source.includes('.dragTo('), false);
+assert.ok(source.includes("behavior: 'instant'"));
+assert.ok(source.includes('baselineScroll'));
+assert.ok(source.includes('await readReorderDiagnostic(observer)'));
 assert.ok(source.includes("name: 'Move command 2 up'"));
 assert.ok(source.includes("await page.keyboard.press('Escape')"));
 assert.ok(source.includes("await transfer.dispose()"));
