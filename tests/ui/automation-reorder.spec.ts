@@ -1,6 +1,8 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { installDesktop } from './fixtures/desktop';
 import { installSshStream } from './fixtures/ssh-stream';
+import { startReorderDiagnostic, markReorderDiagnostic, reorderSdkIdentity, type ReorderObserver } from './fixtures/reorder-diagnostic';
+import { emitReorderDiagnostic } from './fixtures/reorder-diagnostic-format';
 
 const stage = (flow: Locator, name: string) => flow
     .getByRole('navigation', { name: 'Automation setup steps' })
@@ -69,33 +71,41 @@ test('Automation drag cancellation restores identities and command editing canno
 });
 
 test('Automation drag and keyboard reorder preserve disabled row identity through Review and execution', async ({ page }) => {
-    const flow = await setup(page, 3);
-    await rows(flow).nth(1).getByRole('checkbox', { name: 'Enabled', exact: true }).uncheck();
-    const original = await state(flow);
-    expect(original.map((item) => item.enabled)).toEqual([true, false, true]);
-    expect(new Set(original.map((item) => item.id)).size).toBe(3);
-    await rows(flow).first().getByRole('img').dragTo(rows(flow).last(), { steps: 2 });
-    await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);
-    await expect(flow.locator('.automation-drag-placeholder')).toHaveCount(0);
-    await expect(flow.locator('.automation-reorder-notice')).toHaveText('Step order updated.');
-    await flow.getByRole('button', { name: 'Move command 2 up', exact: true }).focus();
-    await page.keyboard.press('Enter');
-    await expect.poll(() => state(flow)).toEqual([original[2], original[1], original[0]]);
-    await expect(flow.locator('.automation-reorder-notice')).toHaveText('Step moved to position 1');
-    expect(await page.evaluate(() => window.sshStreamTest.commands)).toEqual([]);
-    await stage(flow, 'Review');
-    const preview = flow.locator('.automation-preview');
-    await expect(preview.locator('pre')).toHaveText(['"command 3"', '"command 1"']);
-    await expect(preview).not.toContainText('Named 2');
-    await flow.getByRole('button', { name: 'Run once', exact: true }).click();
-    await expect(flow.getByRole('status')).toContainText('Flow finished');
-    expect(await page.evaluate(() => window.sshStreamTest.commands)).toEqual(['command 3', 'command 1']);
-    await expect.poll(() => page.evaluate(() => window.sshStreamTest.finalized)).toBe(2);
-    const results = flow.getByLabel('Stored SSH captures', { exact: true }).locator('tbody tr');
-    await expect(results).toHaveCount(2);
-    await expect(results.filter({ hasText: 'Named 3' })).toHaveCount(1);
-    await expect(results.filter({ hasText: 'Named 1' })).toHaveCount(1);
-    await expect(results.filter({ hasText: 'Named 2' })).toHaveCount(0);
-    expect(await page.evaluate(() => window.sshStreamTest.legacyCalls)).toBe(0);
-    expect(await page.evaluate(() => window.desktopTest.terminal!.inputs)).toEqual([]);
+    const sdk = reorderSdkIdentity();
+    let observer: ReorderObserver = { handle: null, status: 'not-started', markFailed: false };
+    try {
+        const flow = await setup(page, 3);
+        await rows(flow).nth(1).getByRole('checkbox', { name: 'Enabled', exact: true }).uncheck();
+        const original = await state(flow);
+        expect(original.map((item) => item.enabled)).toEqual([true, false, true]);
+        expect(new Set(original.map((item) => item.id)).size).toBe(3);
+        observer = await startReorderDiagnostic(flow);
+        await rows(flow).first().getByRole('img').dragTo(rows(flow).last(), { steps: 2 });
+        await markReorderDiagnostic(observer);
+        await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);
+        await expect(flow.locator('.automation-drag-placeholder')).toHaveCount(0);
+        await expect(flow.locator('.automation-reorder-notice')).toHaveText('Step order updated.');
+        await flow.getByRole('button', { name: 'Move command 2 up', exact: true }).focus();
+        await page.keyboard.press('Enter');
+        await expect.poll(() => state(flow)).toEqual([original[2], original[1], original[0]]);
+        await expect(flow.locator('.automation-reorder-notice')).toHaveText('Step moved to position 1');
+        expect(await page.evaluate(() => window.sshStreamTest.commands)).toEqual([]);
+        await stage(flow, 'Review');
+        const preview = flow.locator('.automation-preview');
+        await expect(preview.locator('pre')).toHaveText(['"command 3"', '"command 1"']);
+        await expect(preview).not.toContainText('Named 2');
+        await flow.getByRole('button', { name: 'Run once', exact: true }).click();
+        await expect(flow.getByRole('status')).toContainText('Flow finished');
+        expect(await page.evaluate(() => window.sshStreamTest.commands)).toEqual(['command 3', 'command 1']);
+        await expect.poll(() => page.evaluate(() => window.sshStreamTest.finalized)).toBe(2);
+        const results = flow.getByLabel('Stored SSH captures', { exact: true }).locator('tbody tr');
+        await expect(results).toHaveCount(2);
+        await expect(results.filter({ hasText: 'Named 3' })).toHaveCount(1);
+        await expect(results.filter({ hasText: 'Named 1' })).toHaveCount(1);
+        await expect(results.filter({ hasText: 'Named 2' })).toHaveCount(0);
+        expect(await page.evaluate(() => window.sshStreamTest.legacyCalls)).toBe(0);
+        expect(await page.evaluate(() => window.desktopTest.terminal!.inputs)).toEqual([]);
+    } finally {
+        await emitReorderDiagnostic(observer, sdk);
+    }
 });
