@@ -17,7 +17,7 @@ const baseURL = 'http://127.0.0.1:5197';
 export default defineConfig({
     testDir: path.join(application, '.clipboard-ci'),
     testMatch: 'clipboard-owner.spec.ts',
-    grep: /^desktop clipboard (text|failure|oversized) from an old connection cannot affect its replacement$/,
+    grep: /(?:^| )clipboard-owner\.spec\.ts desktop clipboard (text|failure|oversized) from an old connection cannot affect its replacement$/,
     fullyParallel: false,
     forbidOnly: true,
     workers: 1,

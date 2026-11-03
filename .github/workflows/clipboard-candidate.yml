@@ -89,7 +89,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = 63a9dce4db46495845d572c78da711e3471465fe
+                  test "$(git -C tooling rev-parse HEAD^)" = 461df227359224c2798048b262a8ab4058992174
                   test "$(git -C application rev-parse HEAD)" = 63a9dce4db46495845d572c78da711e3471465fe
                   test "$(git -C application rev-parse 'HEAD^{tree}')" = 9b491d0fa22050985fef29e8ddc2e0cd4f5adb0e
                   test ! -e application/node_modules
@@ -102,6 +102,7 @@ jobs:
                       throw Error('Unexpected package source');
                   }
                   NODE
+                  node tooling/.github/clipboard-candidate-selection.test.mjs
             - name: Install only locked dependencies without lifecycle scripts
               working-directory: application
               run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
@@ -129,7 +130,7 @@ jobs:
                   const crypto = require('node:crypto');
                   const hash = x => crypto.createHash('sha256').update(x).digest('hex');
                   const config = fs.readFileSync('../tooling/.github/clipboard-candidate.config.ts');
-                  if (hash(config) !== 'af91c2d2557cf2c258076f24b72325226187a4018a6bdf52a519bcef6839609c')
+                  if (hash(config) !== 'd26b2bb78dc80a00d4779ba85247feec77821751dc157ed29eb2818cb2df6f58')
                     throw Error('Changed sandboxed configuration');
                   const source = fs.readFileSync('tests/ui/terminal.spec.ts', 'utf8');
                   if (hash(source) !== '1a3faa8f850856eca1da33319420cc733de6880d277a7e2824840599ce12d21d')
