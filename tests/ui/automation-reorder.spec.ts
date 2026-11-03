@@ -4,6 +4,7 @@ import { installSshStream } from './fixtures/ssh-stream';
 import { startReorderDiagnostic, markReorderDiagnostic, readReorderDiagnostic, reorderSdkIdentity, type ReorderObserver } from './fixtures/reorder-diagnostic';
 import { emitReorderDiagnostic, encodeReorderDiagnostic } from './fixtures/reorder-diagnostic-format';
 import { reorderGesturePoints } from './fixtures/reorder-gesture-geometry';
+import { visitReorderTarget } from './fixtures/reorder-target-move';
 
 const stage = (flow: Locator, name: string) => flow
     .getByRole('navigation', { name: 'Automation setup steps' })
@@ -113,15 +114,15 @@ test('Automation drag and keyboard reorder preserve disabled row identity throug
             const started = JSON.parse(encodeReorderDiagnostic({ status: observer.status, data: await readReorderDiagnostic(observer) }, {}));
             expect(started.events.filter((e: any) => e.type === 'dragstart' && e.phase === 'capture').map((e: any) => e.target.row)).toEqual([original[0].id]);
             expect(await page.evaluate(() => scrollY)).toBe(baselineScroll);
-            // Initiated drag state delivers dragOver on the first target move.
+            // A new target can receive only drag-enter first; send the next move before waiting.
             points = await geometry();
             expect((await hit(points.drop)).row).toBe(original[2].id);
-            await page.mouse.move(points.drop.x, points.drop.y, { steps: 1 });
+            await visitReorderTarget(page.mouse, points.drop);
             await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);
             // Preview changes DOM positions: remeasure the same target before drop.
             points = await geometry();
             expect((await hit(points.drop)).row).toBe(original[2].id);
-            await page.mouse.move(points.drop.x, points.drop.y, { steps: 1 });
+            await visitReorderTarget(page.mouse, points.drop);
             await page.mouse.up(); held = false;
         } finally {
             if (held) { try { await page.mouse.up(); } catch { observer.markFailed = true; } }
