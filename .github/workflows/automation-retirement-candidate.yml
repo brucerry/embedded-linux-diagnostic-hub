@@ -98,7 +98,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = 2d0698c901abab35610aaf5522dfd3d228849e97
+                  test "$(git -C tooling rev-parse HEAD^)" = 97658fded899407d081ad9592b9d907eaa395b48
                   test "$(git -C application rev-parse HEAD)" = 2d0698c901abab35610aaf5522dfd3d228849e97
                   test "$(git -C application rev-parse 'HEAD^{tree}')" = 66dd90f086256b6316aec116728abc368ecc19c6
                   test ! -e application/node_modules
