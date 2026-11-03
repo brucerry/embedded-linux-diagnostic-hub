@@ -16,6 +16,7 @@ export interface SerialCustodyState {
     leases: string[];
     releases: string[];
     appendAcks: number;
+    observeBridge(): void;
 }
 declare global {
     interface Window {
@@ -28,10 +29,30 @@ export async function installSerialCustody(page: Page) {
     await page.addInitScript(() => {
         let receive: ReadableStreamDefaultController<Uint8Array>;
         let writeAck: (() => void) | undefined, closeAck: (() => void) | undefined;
+        let observing = false;
         const state: SerialCustodyState = {
             opens: 0, readers: 0, writes: [], writeAcks: 0,
             aborts: 0, readerCancels: 0, closes: 0, closeAcks: 0,
             leases: [], releases: [], appendAcks: 0,
+            observeBridge() {
+                if (observing) throw Error('Synthetic bridge observation already installed.');
+                observing = true;
+                const bridge = window.diagnosticHub!;
+                const captureStorage = bridge.captureStorage!;
+                bridge.captureStorage = async (request) => {
+                    const reply = await captureStorage(request);
+                    if (request.op === 'append' && reply.ok) state.appendAcks++;
+                    return reply;
+                };
+                bridge.acquireAutomationActivity = async () => {
+                    const id = 'serial-custody-' + (state.leases.length + 1);
+                    state.leases.push(id);
+                    return id;
+                };
+                bridge.releaseAutomationActivity = async (id) => {
+                    state.releases.push(id);
+                };
+            },
             acknowledgeWrite() {
                 if (!writeAck) throw Error('No owned pending synthetic write.');
                 const ack = writeAck;
@@ -101,19 +122,5 @@ export async function installSerialCustody(page: Page) {
         });
         Object.defineProperty(navigator, 'serial', { value: api, configurable: true });
         window.serialCustodyTest = state;
-        const captureStorage = window.diagnosticHub!.captureStorage!;
-        window.diagnosticHub!.captureStorage = async (request) => {
-            const reply = await captureStorage(request);
-            if (request.op === 'append' && reply.ok) state.appendAcks++;
-            return reply;
-        };
-        window.diagnosticHub!.acquireAutomationActivity = async () => {
-            const id = 'serial-custody-' + (state.leases.length + 1);
-            state.leases.push(id);
-            return id;
-        };
-        window.diagnosticHub!.releaseAutomationActivity = async (id) => {
-            state.releases.push(id);
-        };
     });
 }

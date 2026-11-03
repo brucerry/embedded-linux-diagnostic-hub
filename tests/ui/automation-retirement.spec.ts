@@ -6,6 +6,8 @@ async function prepare(page: Page) {
     await installDesktop(page);
     await installSerialCustody(page);
     await page.goto('/');
+    // Bridge observation is installed after navigation, not by assuming init-script order.
+    await page.evaluate(() => window.serialCustodyTest.observeBridge());
     await page.getByRole('button', { name: 'Serial', exact: true }).click();
     const serial = page.getByRole('region', { name: 'Local serial terminal' });
     await serial.getByLabel('Local serial port', { exact: true }).selectOption('0');
