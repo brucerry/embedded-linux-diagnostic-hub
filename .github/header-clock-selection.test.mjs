@@ -32,6 +32,21 @@ assert.ok(workflow.includes('branches: [ci/header-clock-candidate-20261103]'));
 assert.ok(workflow.includes('timeout-minutes: 15') && workflow.includes('retention-days: 3'));
 assert.ok(!workflow.includes('workflow_dispatch:'));
 assert.ok(!source.includes('screenshot(') && !source.includes("waitForEvent('download')"));
+// Keep lazy route/module loading outside the deliberately frozen clock phase.
+const app = read('../src/app/App.tsx');
+assert.ok(app.includes("const AutomationPage = lazy(() => import('../features/automation/AutomationPage'));"));
+const ready = 'await expect(navigation).toBeVisible();';
+const armed = 'await expect.poll(() => page.evaluate(() => window.headerOwnershipTest.readPending)).toBe(true);';
+const pause = 'await page.clock.pauseAt(';
+const minute = 'await page.clock.runFor(60_000);';
+const validOrder = text => text.indexOf(ready) >= 0
+ && text.indexOf(armed) > text.indexOf(ready)
+ && text.indexOf(pause) > text.indexOf(armed)
+ && text.indexOf(minute) > text.indexOf(pause);
+assert.equal(validOrder(source), true);
+assert.equal(validOrder([pause, ready, armed, minute].join('\n')), false);
+assert.equal(validOrder([ready, pause, armed, minute].join('\n')), false);
+assert.equal((source.match(/page\.clock\.pauseAt\(/g) ?? []).length, 1);
 // Literal source binding plus byte arithmetic only; never runs the workflow/shell/browser.
 const scopeLine = 'scope="$RUNNER_TEMP/hc-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"';
 const guard = `export LC_ALL=C
