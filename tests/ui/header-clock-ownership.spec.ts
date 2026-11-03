@@ -18,7 +18,7 @@ const fresh = {
 
 async function activeFlow(page: Page) {
     await installDesktop(page);
-    await installSshStream(page, { connection: 'header-owner', stdout: 'owned output', stderr: '', exitCode: 0 });
+    await installSshStream(page, { connection: 'header-clock-fixture', stdout: 'owned output', stderr: '', exitCode: 0 });
     await page.clock.install();
     await page.goto('/');
     // Gate one actual streaming read after navigation; do not rely on init-script ordering.
