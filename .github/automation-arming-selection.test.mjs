@@ -31,7 +31,21 @@ assert.deepEqual(templates, [
 ]);
 assert.equal((source.match(/\btest\(/g) ?? []).length, 4);
 assert.equal((source.match(/await expectClockAdmissionBlocked\(page, flow\)/g) ?? []).length, 4);
-assert.equal((source.match(/await expectHeaderResumed\(page, reads\)/g) ?? []).length, 3);
+assert.equal((source.match(/await rearmAfterSettlement\(page, flow, transport, reads/g) ?? []).length, 3);
+assert.ok(!source.includes('expectHeaderResumed'));
+const helper = source.slice(source.indexOf('async function rearmAfterSettlement('),
+    source.indexOf("for (const transport of ['ssh', 'serial'] as const) {"));
+const branches = helper.split("if (transport === 'ssh') {")[1]?.split('} else {');
+assert.ok(branches && branches.length === 2);
+assert.ok(branches[0].includes('.toBeGreaterThan(previousReads)'));
+const serialPrecondition = branches[1].split('\n    }')[0];
+assert.ok(!serialPrecondition.includes('expect.poll'));
+assert.ok(serialPrecondition.includes('expect(previousReads).toBe(0)'));
+assert.ok(serialPrecondition.includes('window.desktopTest.connects'));
+assert.ok(helper.includes('window.armingTest.pending.length)).toBe(2)'));
+assert.ok(helper.includes('window.serialTest.writes.length'));
+assert.ok(helper.includes('window.desktopTest.clock.calls)).toBe(0)'));
+assert.ok(helper.includes('if (retiredError) await expect(flow).not.toContainText(retiredError)'));
 assert.ok(source.includes('Wait for the current clock reader admission.'));
 
 const titles = [];
@@ -96,10 +110,10 @@ assert.ok(workflow.includes('timeout-minutes: 15'));
 assert.ok(workflow.includes('retention-days: 3'));
 assert.ok(workflow.includes('contents: read'));
 assert.ok(workflow.includes(
-    'test "$(git -C tooling rev-parse HEAD^)" = 7b285b9236b00fb5613b8b03c8f3d4b14df289fc',
+    'test "$(git -C tooling rev-parse HEAD^)" = c5ffe5d146f28ce54bfb9db2a79f1e35ffe97185',
 ));
 assert.ok(workflow.includes(
-    'test "$(git -C application rev-parse HEAD)" = 7b285b9236b00fb5613b8b03c8f3d4b14df289fc',
+    'test "$(git -C application rev-parse HEAD)" = c5ffe5d146f28ce54bfb9db2a79f1e35ffe97185',
 ));
 console.log(JSON.stringify({
     kind: 'source-only-automation-arming-selection',

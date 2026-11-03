@@ -72,7 +72,7 @@ jobs:
                   lfs: false
             - uses: actions/checkout@v6
               with:
-                  ref: 7b285b9236b00fb5613b8b03c8f3d4b14df289fc
+                  ref: c5ffe5d146f28ce54bfb9db2a79f1e35ffe97185
                   path: application
                   fetch-depth: 1
                   persist-credentials: false
@@ -89,9 +89,9 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = 7b285b9236b00fb5613b8b03c8f3d4b14df289fc
-                  test "$(git -C application rev-parse HEAD)" = 7b285b9236b00fb5613b8b03c8f3d4b14df289fc
-                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 8f41a114f90a5418a7bd532b2521f28481f5118f
+                  test "$(git -C tooling rev-parse HEAD^)" = c5ffe5d146f28ce54bfb9db2a79f1e35ffe97185
+                  test "$(git -C application rev-parse HEAD)" = c5ffe5d146f28ce54bfb9db2a79f1e35ffe97185
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = fe939c75a412184bcf9d6fdba811682fde55e60f
                   test ! -e application/node_modules
                   test ! -L application/node_modules
                   node - <<'NODE'
@@ -132,7 +132,7 @@ jobs:
                   const config = fs.readFileSync('../tooling/.github/automation-arming-candidate.config.ts');
                   if (hash(config) !== '044eea29a02657e48a1aba6c66c2721a2c28d3d013cf11445d358d363309e397')
                     throw Error('Changed sandboxed Automation configuration');
-                  const pins = {"tests/ui/automation-arming.spec.ts":"5ed046b147419bbe3dbd71e6885136cb886b49af6a704e2d641c482a34eb1f27","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/serial.ts":"318d0ff4e09e58bcb33a8aa980a43da963a80e9a2227742fddc0e53da516e50c","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd"};
+                  const pins = {"tests/ui/automation-arming.spec.ts":"25d00be3fd2d0a2e47037dee03ba0ef697747687801696de859e7c4b55f7e288","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/serial.ts":"318d0ff4e09e58bcb33a8aa980a43da963a80e9a2227742fddc0e53da516e50c","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd"};
                   for (const [file, expected] of Object.entries(pins)) {
                     if (hash(fs.readFileSync(file)) !== expected)
                       throw Error('Changed selected Automation input: ' + file);
@@ -159,7 +159,7 @@ jobs:
                   const file = path.join(scope, 'report.json');
                   if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
                   const receipt = JSON.stringify({
-                    source: '7b285b9236b00fb5613b8b03c8f3d4b14df289fc',
+                    source: 'c5ffe5d146f28ce54bfb9db2a79f1e35ffe97185',
                     tooling: process.env.GITHUB_SHA,
                     run: process.env.GITHUB_RUN_ID,
                     attempt: process.env.GITHUB_RUN_ATTEMPT,
@@ -172,7 +172,7 @@ jobs:
             - uses: actions/upload-artifact@v4
               if: always() && steps.receipt.outputs.ready == 'true'
               with:
-                  name: automation-arming-7b285b9-${{ github.run_id }}
+                  name: automation-arming-c5ffe5d-${{ github.run_id }}
                   path: ${{ env.HUB_AUTOMATION_ARMING_SCOPE }}/receipt.json
                   if-no-files-found: error
                   retention-days: 3
