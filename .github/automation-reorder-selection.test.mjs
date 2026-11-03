@@ -63,7 +63,7 @@ const observer = read('../tests/ui/fixtures/reorder-diagnostic.ts');
 const format = read('../tests/ui/fixtures/reorder-diagnostic-format.ts');
 assert.ok(observer.includes('passive: true'));
 assert.ok(observer.includes('document.removeEventListener(item.type, item.callback, item.capture)'));
-assert.ok(observer.includes("createRequire(import.meta.url).resolve('playwright-core/package.json')"));
+assert.ok(observer.includes("createRequire(__filename).resolve('playwright-core/package.json')"));
 for (const forbidden of ['preventDefault(', 'stopPropagation(', 'dispatchEvent(', 'setTimeout(', 'setInterval(', '.getData(', 'process.env', 'writeFile', 'unlink(', 'rmdir(']) assert.equal(observer.includes(forbidden), false);
 assert.ok(format.includes('REORDER_DIAGNOSTIC_BYTES = 32 * 1024'));
 assert.ok(source.includes('await emitReorderDiagnostic(observer, sdk);'));
