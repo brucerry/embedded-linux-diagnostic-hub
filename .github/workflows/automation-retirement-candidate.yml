@@ -44,7 +44,16 @@ jobs:
                       test ! -e "$GITHUB_WORKSPACE/$slot"
                       test ! -L "$GITHUB_WORKSPACE/$slot"
                   done
-                  scope="$RUNNER_TEMP/automation-retirement-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  scope="$RUNNER_TEMP/ar-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
                   test ! -e "$scope"
                   test ! -L "$scope"
                   mkdir "$scope"

@@ -32,4 +32,28 @@ assert.ok(workflow.includes('branches: [ci/automation-retirement-candidate-20261
 assert.ok(workflow.includes('timeout-minutes: 15') && workflow.includes('retention-days: 3'));
 assert.ok(!workflow.includes('workflow_dispatch:'));
 assert.ok(!source.includes('screenshot(') && !source.includes("waitForEvent('download')"));
-console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, mountedExecuted: 0}));
+// Literal source binding plus byte arithmetic only; never runs the workflow/shell/browser.
+const scopeLine = 'scope="$RUNNER_TEMP/ar-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"';
+const guard = `export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=\${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\\n' "$socket_bytes"
+                      exit 1
+                  fi`;
+assert.ok(workflow.includes(scopeLine) && workflow.includes(guard));
+assert.ok(workflow.indexOf(scopeLine) < workflow.indexOf(guard));
+assert.ok(workflow.indexOf(guard) < workflow.indexOf('mkdir "$scope"'));
+const suffix = '/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket';
+const bytes = (root, prefix = 'ar') => Buffer.byteLength(`${root}/${prefix}-41608752526-1${suffix}`);
+assert.equal(bytes('/home/runner/work/_temp', 'automation-retirement'), 108);
+assert.equal(bytes('/home/runner/work/_temp'), 89);
+assert.equal(bytes('/home/runner/work/_temp') <= 107, true);
+const rootFor = n => '/' + 'x'.repeat(n - bytes('') - 1);
+assert.equal(bytes(rootFor(107)), 107);
+assert.equal(bytes(rootFor(108)), 108);
+assert.equal(bytes(rootFor(107)) <= 107, true);
+assert.equal(bytes(rootFor(108)) <= 107, false);
+assert.equal(bytes('/' + 'é'.repeat(40)) <= 107, false);
+assert.equal(bytes('/runner temporary'), 83);
+console.log(JSON.stringify({selectedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, socketBoundaryControls: 6, oldSocketBytes: 108, newSocketBytes: 89, mountedExecuted: 0}));
