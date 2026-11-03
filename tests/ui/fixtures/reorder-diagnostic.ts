@@ -14,7 +14,7 @@ export interface ReorderObserver {
 /** Read only the installed SDK's two fixed files; never evaluate SDK modules. */
 export function reorderSdkIdentity(): unknown {
     try {
-        const file = createRequire(import.meta.url).resolve('playwright-core/package.json');
+        const file = createRequire(__filename).resolve('playwright-core/package.json');
         const core = join(dirname(file), 'lib/coreBundle.js');
         const sizes = [statSync(file), statSync(core)];
         if (!sizes.every(s => s.isFile()) || sizes[0].size > 64 * 1024 || sizes[1].size > 64 * 1024 * 1024)
