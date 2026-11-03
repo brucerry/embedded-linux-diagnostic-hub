@@ -23,7 +23,7 @@ for (const title of [titles[1]]) {
 }
 assert.equal(grep.test('automation-reorder.spec.ts ' + titles[0]), false); rejected++;
 const pins = JSON.parse(workflow.match(/const pins = (\{[^\r\n]+\});/)[1]);
-assert.equal(Object.keys(pins).length, 17);
+assert.equal(Object.keys(pins).length, 19);
 for (const [file, hash] of Object.entries(pins)) {
  assert.match(file, /^(tests|shared|src)\/[a-zA-Z0-9_./-]+\.tsx?$/);
  assert.ok(!file.split('/').includes('..'));
@@ -41,11 +41,19 @@ assert.ok(source.includes("await expect(flow.getByRole('navigation', { name: 'Au
 // Initiate on the observed source before any target movement; no auto-scroll locator drag.
 const down = 'await page.mouse.down();';
 const initiate = 'await page.mouse.move(points.initiate.x, points.initiate.y, { steps: 2 });';
-const target = 'await page.mouse.move(points.drop.x, points.drop.y, { steps: 1 });';
+const target = 'await visitReorderTarget(page.mouse, points.drop);';
 const validGesture = text => text.indexOf(down) >= 0 && text.indexOf(initiate) > text.indexOf(down) && text.indexOf(target) > text.indexOf(initiate);
 assert.equal(validGesture(source), true);
 assert.equal(validGesture([target, down, initiate].join('\n')), false);
 assert.equal(validGesture([down, target, initiate].join('\n')), false);
+const targetMoves = read('../tests/ui/fixtures/reorder-target-move.ts');
+assert.equal(source.split(target).length - 1, 2);
+assert.equal(targetMoves.split('await mouse.move(point.x, point.y, { steps: 1 });').length - 1, 2);
+assert.ok(targetMoves.includes("import type { Mouse } from '@playwright/test';"));
+const preview = 'await expect.poll(() => state(flow)).toEqual([original[1], original[2], original[0]]);';
+assert.ok(source.indexOf(target) < source.indexOf(preview, source.indexOf(target)));
+assert.ok(source.indexOf(target, source.indexOf(target) + 1) < source.indexOf('await page.mouse.up(); held = false;'));
+assert.equal(/mouse\.(up|down)|setTimeout|dispatchEvent|process\./.test(targetMoves), false);
 assert.equal(source.includes('.dragTo('), false);
 assert.ok(source.includes("behavior: 'instant'"));
 assert.ok(source.includes('baselineScroll'));
@@ -73,4 +81,4 @@ for (const forbidden of ['preventDefault(', 'stopPropagation(', 'dispatchEvent('
 assert.ok(format.includes('REORDER_DIAGNOSTIC_BYTES = 32 * 1024'));
 assert.ok(source.includes('await emitReorderDiagnostic(observer, sdk);'));
 assert.ok(source.includes('await markReorderDiagnostic(observer);'));
-console.log(JSON.stringify({selectedScenarios: 1, definedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, gestureControls: 3, socketBytes, mountedExecuted: 0}));
+console.log(JSON.stringify({selectedScenarios: 1, definedScenarios: titles.length, acceptedFullNames: accepted, rejectedFullNames: rejected, sourcePins: Object.keys(pins).length, fixtureOwnerControls: 2, gestureControls: 3, targetVisits: 2, targetMovesPerVisit: 2, socketBytes, mountedExecuted: 0}));
