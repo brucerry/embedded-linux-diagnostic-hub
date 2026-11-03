@@ -168,10 +168,14 @@ test('cleanup acknowledgement starts the exact three-second retry and Cancel fen
         };
     });
     const modal = await openConnection(page);
-    const connect = modal.getByRole('button', { name: 'Connect via SSH', exact: true });
+    // The accessible label changes while busy; keep the same unique submit control.
+    const connect = modal.locator('form button[type="submit"]');
+    await expect(connect).toHaveCount(1);
+    await expect(connect).toHaveText('Connect via SSH');
     await connect.click();
     await expect.poll(() => page.evaluate(() => window.retryBoundaryTest.cleanupIds.length)).toBe(1);
     await expect(connect).toBeDisabled();
+    await expect(connect).toHaveText('Connecting & collecting…');
     await expect(page.getByText('NOT CONNECTED', { exact: true })).toBeVisible();
     await page.clock.runFor(6000);
     expect(await page.evaluate(() => window.retryBoundaryTest.attempts)).toBe(1);
