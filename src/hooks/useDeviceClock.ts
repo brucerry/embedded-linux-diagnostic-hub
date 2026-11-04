@@ -183,7 +183,9 @@ export function useDeviceClock({
             )
         )
             refresh.current?.();
-        observed.current = { generation, uptime };
+        // Missing evidence does not replace the last valid same-generation baseline.
+        if (uptime !== null || previous.generation !== generation)
+            observed.current = { generation, uptime };
     }, [generation, uptime]);
 
     if (generation === undefined || !transport) return { status: 'disconnected', sample: null, quiesce };

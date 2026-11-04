@@ -22,7 +22,8 @@ const effectStart = hook.indexOf('        const previous = observed.current;');
 const effectEnd = hook.indexOf('    }, [generation, uptime]);');
 assert(effectStart >= 0 && effectEnd > effectStart);
 const effectBody = hook.slice(effectStart, effectEnd);
-assert(effectBody.endsWith('        observed.current = { generation, uptime };\n'));
+assert(effectBody.includes('if (uptime !== null || previous.generation !== generation)'));
+assert(effectBody.endsWith('            observed.current = { generation, uptime };\n'));
 const bindEffect = new Function('observed', 'generation', 'uptime', 'deviceRebooted', 'refresh', effectBody);
 
 function report(stdout: string, status = 'collected') {
@@ -35,11 +36,11 @@ function clockInput(snapshot: Snapshot | null, imported = false): number | null 
     assert(seen);
     return seen.uptime;
 }
-function refreshes(next: number | null, previous = 100, generation = 7) {
+function refreshes(next: number | null, previous: number | null = 100, generation = 7) {
     let calls = 0;
     const observed = { current: { generation: 7, uptime: previous as number | null } };
     bindEffect(observed, generation, next, deviceRebooted, { current: () => { calls++; } });
-    assert.equal(observed.current.uptime, next);
+    assert.equal(observed.current.uptime, next === null && generation === 7 ? previous : next);
     return calls;
 }
 
