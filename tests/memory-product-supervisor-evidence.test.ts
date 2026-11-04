@@ -22,6 +22,7 @@ import {
     type ProductClock,
 } from './fixtures/memory-product-owner';
 import { syncCloseEvidence } from './fixtures/memory-resource-evidence';
+import { verifySoak } from './fixtures/memory-resource-verifier';
 import {
     createSourceBinding,
     sourceBindingFromArguments,
@@ -29,6 +30,9 @@ import {
     validateSourceBinding,
     validateClosedChild,
     parseSupervisorJSON,
+    createHarnessObserver,
+    harnessObserverSHA256,
+    validateHarnessObserver,
 } from '../scripts/lib/product-supervisor-contract.mjs';
 
 const directory = path.resolve(
@@ -163,6 +167,26 @@ class Filesystem implements EvidenceFileSystem {
         };
     }
 }
+function syntheticRuntime() {
+    return {
+        executablePath: '/synthetic/node',
+        executableSHA256: 'c'.repeat(64),
+        node: 'v24.19.0',
+        platform: 'linux',
+        arch: 'x64',
+        versions: { node: '24.19.0', v8: 'synthetic-v8' },
+        execArgv: ['--import', '/synthetic/observer.mjs'],
+        nodeOptions: null,
+    };
+}
+function syntheticTimeline(binding: unknown, observer: unknown) {
+    return (
+        JSON.stringify({ time: 1, stage: 'supervisor-source-binding', data: binding }) +
+        '\n' +
+        JSON.stringify({ time: 2, stage: 'supervisor-harness-observer', data: observer }) +
+        '\n'
+    );
+}
 function fixture() {
     const clock = new Clock();
     const job = productJob(
@@ -176,8 +200,10 @@ function fixture() {
         clock,
     );
     const filesystem = new Filesystem();
+    const observer = createHarnessObserver(syntheticRuntime());
     const binding = createSourceBinding({
         jobNonce: job.nonce,
+        observerSHA256: harnessObserverSHA256(observer),
         sourceSHA256: 'a'.repeat(64),
         adapterSHA256: 'b'.repeat(64),
         lane: 'gateway',
@@ -186,13 +212,7 @@ function fixture() {
         component: false,
         calibration: false,
     });
-    filesystem.put(
-        'timeline.jsonl',
-        JSON.stringify({ time: 1, stage: 'supervisor-source-binding', data: binding }) +
-            '\n' +
-            JSON.stringify({ time: 2, stage: 'synthetic-only', data: null }) +
-            '\n',
-    );
+    filesystem.put('timeline.jsonl', syntheticTimeline(binding, observer));
     const io = supervisorEvidenceIO(directory, filesystem);
     const events = Object.assign(new EventEmitter(), {
         connected: true,
@@ -218,11 +238,11 @@ function fixture() {
         killErrors: [],
         elapsedMs: 1,
     };
-    return { clock, job, binding, filesystem, io, events, owner, lifecycle };
+    return { clock, job, binding, observer, filesystem, io, events, owner, lifecycle };
 }
 async function closeChild(f: ReturnType<typeof fixture>) {
     await f.owner.join();
-    await finishProductEvidence(f.owner, f.binding, f.io, f.clock);
+    await finishProductEvidence(f.owner, f.binding, f.observer, f.io, f.clock);
 }
 
 test('file sync/close precedes IPC disconnect; parent sidecar is explicitly non-qualifying', async () => {
@@ -237,7 +257,7 @@ test('file sync/close precedes IPC disconnect; parent sidecar is explicitly non-
             f.filesystem.events.indexOf('IPC:disconnect'),
     );
     assert.equal(f.owner.snapshot().completed, true);
-    const row = await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
+    const row = await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
     assert.equal(row.status, 'collected-non-qualifying-supervisor-evidence');
     assert.equal(row.qualification, false);
     assert.equal(row.releaseAcceptance, false);
@@ -276,7 +296,10 @@ test('reserved arguments and foreign output locations cannot override parent evi
 
 test('unjoined ownership cannot finish even with a written manifest', async () => {
     const f = fixture();
-    await assert.rejects(finishProductEvidence(f.owner, f.binding, f.io, f.clock), /descendants/);
+    await assert.rejects(
+        finishProductEvidence(f.owner, f.binding, f.observer, f.io, f.clock),
+        /descendants/,
+    );
     assert.equal(f.owner.snapshot().completed, false);
     assert.ok(f.owner.snapshot().invalid);
     assert.equal(f.events.connected, true);
@@ -301,7 +324,7 @@ for (const stage of [
             throw first;
         });
         await assert.rejects(
-            finishProductEvidence(f.owner, f.binding, f.io, f.clock),
+            finishProductEvidence(f.owner, f.binding, f.observer, f.io, f.clock),
             (error: unknown) => error === first,
         );
         assert.equal(f.owner.snapshot().completed, false);
@@ -384,6 +407,7 @@ for (const update of [
             const row = await writeSupervisorEvidence(
                 f.job,
                 f.binding,
+                f.observer,
                 { ...f.lifecycle, ...update },
                 f.io,
             );
@@ -419,7 +443,7 @@ test('missing and foreign/malformed child manifests or changed timeline bytes re
             if (mode === 'extra') value.ownerCompleted = true;
             f.filesystem.put('child-evidence.json', JSON.stringify(value) + '\n');
         }
-        const row = await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
+        const row = await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
         assert.equal(row.status, 'invalid-non-qualifying-supervisor-evidence', mode);
         assert.equal(row.timeline, null);
         assert.ok(row.failures.length);
@@ -439,7 +463,7 @@ test('unknown closure and a later close never upgrade evidence or detach the own
     child.emit('exit', 0, null);
     f.clock.advance(2400000);
     const lifecycle = await observed.outcome;
-    const sidecar = await writeSupervisorEvidence(f.job, f.binding, lifecycle, f.io);
+    const sidecar = await writeSupervisorEvidence(f.job, f.binding, f.observer, lifecycle, f.io);
     assert.equal(sidecar.timeline, null);
     assert.equal(sidecar.lifecycle?.closeObserved, false);
     assert.equal(child.connected, true);
@@ -499,7 +523,7 @@ for (const stage of ['open:wx', 'write', 'sync', 'close']) {
                 throw failure;
             });
             await assert.rejects(
-                writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io),
+                writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io),
                 (error: unknown) => error === failure,
             );
             assert.ok(f.filesystem.files.has('timeline.jsonl'));
@@ -513,6 +537,7 @@ test('spawn request failure remains an invalid non-qualifying record with no inf
     const result = await writeSupervisorEvidence(
         f.job,
         f.binding,
+        f.observer,
         null,
         f.io,
         Error('synthetic spawn call failure'),
@@ -523,17 +548,17 @@ test('spawn request failure remains an invalid non-qualifying record with no inf
     assert.match(result.failures[0], /synthetic spawn call failure/);
 });
 
-test('v2 retained graph verifies exact bytes against independent expected source/job without qualification', async () => {
+test('v3 retained graph verifies exact bytes against independent expected source/job without qualification', async () => {
     const f = fixture();
     await closeChild(f);
-    await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
-    const graph = await verifySupervisorEvidence(f.job, f.binding, f.io);
+    await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
+    const graph = await verifySupervisorEvidence(f.job, f.binding, f.observer, f.io);
     assert.equal(graph.kind, 'verified-non-qualifying-supervisor-graph');
     assert.equal(graph.qualification, false);
     assert.equal(graph.releaseAcceptance, false);
     assert.equal(graph.timeline.name, 'timeline.jsonl');
     const foreignJob = { ...f.job, nonce: '22222222-2222-2222-2222-222222222222' };
-    await assert.rejects(verifySupervisorEvidence(foreignJob, f.binding, f.io));
+    await assert.rejects(verifySupervisorEvidence(foreignJob, f.binding, f.observer, f.io));
     for (const update of [
         { sourceSHA256: 'c'.repeat(64) },
         { adapterSHA256: 'c'.repeat(64) },
@@ -542,7 +567,9 @@ test('v2 retained graph verifies exact bytes against independent expected source
         { viewer: true },
         { requestedMode: 'component' },
     ])
-        await assert.rejects(verifySupervisorEvidence(f.job, { ...f.binding, ...update }, f.io));
+        await assert.rejects(
+            verifySupervisorEvidence(f.job, { ...f.binding, ...update }, f.observer, f.io),
+        );
 });
 
 test('both GC modes and all requested scopes verify only as synthetic non-qualifying graphs', async () => {
@@ -550,14 +577,10 @@ test('both GC modes and all requested scopes verify only as synthetic non-qualif
         for (const requestedMode of ['full-product', 'component', 'calibration']) {
             const f = fixture();
             f.binding = { ...f.binding, gcMode, requestedMode };
-            f.filesystem.put(
-                'timeline.jsonl',
-                JSON.stringify({ time: 1, stage: 'supervisor-source-binding', data: f.binding }) +
-                    '\n',
-            );
+            f.filesystem.put('timeline.jsonl', syntheticTimeline(f.binding, f.observer));
             await closeChild(f);
-            await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
-            const graph = await verifySupervisorEvidence(f.job, f.binding, f.io);
+            await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
+            const graph = await verifySupervisorEvidence(f.job, f.binding, f.observer, f.io);
             assert.equal(graph.qualification, false);
             assert.equal(graph.releaseAcceptance, false);
             assert.equal(graph.binding.requestedMode, requestedMode);
@@ -566,9 +589,15 @@ test('both GC modes and all requested scopes verify only as synthetic non-qualif
 
 test('readback rejects invalid lifecycle metadata before reading potentially live child evidence', async () => {
     const f = fixture();
-    await writeSupervisorEvidence(f.job, f.binding, { ...f.lifecycle, closeObserved: false }, f.io);
+    await writeSupervisorEvidence(
+        f.job,
+        f.binding,
+        f.observer,
+        { ...f.lifecycle, closeObserved: false },
+        f.io,
+    );
     f.filesystem.events.length = 0;
-    await assert.rejects(verifySupervisorEvidence(f.job, f.binding, f.io));
+    await assert.rejects(verifySupervisorEvidence(f.job, f.binding, f.observer, f.io));
     assert.ok(!f.filesystem.events.some((event) => /timeline|child-evidence/.test(event)));
 });
 
@@ -588,7 +617,7 @@ test('strict source binding schemas retain requested-scope semantics and reject 
     const f = fixture();
     assert.equal(validateSourceBinding(f.binding), f.binding);
     for (const update of [
-        { schemaVersion: 2 },
+        { schemaVersion: 1 },
         { kind: 'staged-artifact-producer' },
         { qualification: true },
         { sourceSHA256: '' },
@@ -610,6 +639,7 @@ test('strict source binding schemas retain requested-scope semantics and reject 
             'a'.repeat(64),
             'b'.repeat(64),
             f.job.nonce,
+            f.observer,
         ).viewer,
         true,
     );
@@ -619,6 +649,7 @@ test('strict source binding schemas retain requested-scope semantics and reject 
             'a'.repeat(64),
             'b'.repeat(64),
             f.job.nonce,
+            f.observer,
         ).requestedMode,
         'component',
     );
@@ -628,6 +659,7 @@ test('strict source binding schemas retain requested-scope semantics and reject 
             'a'.repeat(64),
             'b'.repeat(64),
             f.job.nonce,
+            f.observer,
         ).requestedMode,
         'calibration',
     );
@@ -648,12 +680,14 @@ test('strict source binding schemas retain requested-scope semantics and reject 
                 'a'.repeat(64),
                 'b'.repeat(64),
                 f.job.nonce,
+                f.observer,
             ),
         );
 });
 
 for (const mode of [
     'v1',
+    'v2',
     'unknown-version',
     'kind',
     'qualification',
@@ -669,11 +703,12 @@ for (const mode of [
     test('semantic retained parent graph rejects ' + mode, async () => {
         const f = fixture();
         await closeChild(f);
-        await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
+        await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
         const value = JSON.parse(
             f.filesystem.files.get('supervisor-evidence.json')!.bytes.toString(),
         );
         if (mode === 'v1') value.schemaVersion = 1;
+        if (mode === 'v2') value.schemaVersion = 2;
         if (mode === 'unknown-version') value.schemaVersion = 99;
         if (mode === 'kind') value.kind = 'staged-artifact-producer';
         if (mode === 'qualification') value.qualification = true;
@@ -686,17 +721,18 @@ for (const mode of [
         if (mode === 'timeline-reference') value.timeline.bytes++;
         if (mode === 'lifecycle') value.lifecycle.closeObserved = false;
         f.filesystem.put('supervisor-evidence.json', JSON.stringify(value) + '\n');
-        await assert.rejects(verifySupervisorEvidence(f.job, f.binding, f.io));
+        await assert.rejects(verifySupervisorEvidence(f.job, f.binding, f.observer, f.io));
     });
 }
 
-test('child v1/foreign binding and fixed filenames cannot be relabeled into a v2 graph', async () => {
+test('child legacy/foreign binding and fixed filenames cannot be relabeled into a v3 graph', async () => {
     const f = fixture();
     await closeChild(f);
     const value = JSON.parse(f.filesystem.files.get('child-evidence.json')!.bytes.toString());
-    const timeline = await f.io.timeline(f.binding);
+    const timeline = await f.io.timeline(f.binding, f.observer);
     for (const update of [
         { schemaVersion: 1 },
+        { schemaVersion: 2 },
         { binding: { ...f.binding, sourceSHA256: 'c'.repeat(64) } },
         { timeline: { ...timeline, name: '../foreign.jsonl' } },
         { ownerCompletion: 'passed' },
@@ -704,16 +740,236 @@ test('child v1/foreign binding and fixed filenames cannot be relabeled into a v2
         assert.throws(() =>
             validateClosedChild(
                 { ...value, ...update },
-                { job: f.job, binding: f.binding, timeline },
+                { job: f.job, binding: f.binding, observer: f.observer, timeline },
             ),
         );
+});
+
+test('independent matching harness snapshots are retained as observer-only v3 evidence', async () => {
+    const f = fixture();
+    const childObserver = createHarnessObserver(syntheticRuntime());
+    assert.notEqual(childObserver, f.observer);
+    assert.equal(harnessObserverSHA256(childObserver), harnessObserverSHA256(f.observer));
+    await f.owner.join();
+    await finishProductEvidence(f.owner, f.binding, childObserver, f.io, f.clock);
+    const row = await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
+    assert.equal(row.schemaVersion, 3);
+    assert.equal(row.qualification, false);
+    const child = JSON.parse(f.filesystem.files.get('child-evidence.json')!.bytes.toString());
+    assert.equal(child.observer.role, 'harness-observer');
+    assert.equal(child.observer.qualification, false);
+    const graph = await verifySupervisorEvidence(f.job, f.binding, f.observer, f.io);
+    assert.equal(graph.releaseAcceptance, false);
+    assert.equal(graph.observer.role, 'harness-observer');
+});
+
+test('harness snapshots copy and freeze observations while preserving flags and null environment exactly', () => {
+    const raw = syntheticRuntime(),
+        observed = createHarnessObserver(raw);
+    const digest = harnessObserverSHA256(observed);
+    raw.versions.v8 = 'changed-after-snapshot';
+    raw.execArgv.push('--foreign');
+    assert.equal(harnessObserverSHA256(observed), digest);
+    for (const value of [
+        observed,
+        observed.runtime,
+        observed.runtime.versions,
+        observed.runtime.execArgv,
+    ])
+        assert.equal(Object.isFrozen(value), true);
+    assert.throws(() => observed.runtime.execArgv.push('--cannot-mutate'));
+    const reordered = createHarnessObserver({
+        ...syntheticRuntime(),
+        versions: { v8: 'synthetic-v8', node: '24.19.0' },
+    });
+    assert.equal(harnessObserverSHA256(reordered), digest);
+    const empty = createHarnessObserver({ ...syntheticRuntime(), nodeOptions: '' });
+    assert.notEqual(harnessObserverSHA256(empty), digest);
+    const windows = createHarnessObserver({
+        ...syntheticRuntime(),
+        platform: 'win32',
+        executablePath: 'C:\\synthetic\\node.exe',
+    });
+    assert.equal(windows.runtime.executablePath, 'C:\\synthetic\\node.exe');
+    const versionMap = JSON.parse('{"node":"24.19.0","__proto__":"synthetic-only"}');
+    const safe = createHarnessObserver({ ...syntheticRuntime(), versions: versionMap });
+    assert.equal(Object.getPrototypeOf(safe.runtime.versions), Object.prototype);
+    assert.equal(Object.hasOwn(safe.runtime.versions, '__proto__'), true);
+});
+
+test('observer schema rejects missing/unknown/bounded identity fields without collecting a real identity', () => {
+    const f = fixture();
+    for (const update of [
+        { schemaVersion: 2 },
+        { role: 'shipping-runtime' },
+        { kind: 'staged-artifact-producer' },
+        { qualification: true },
+        { extra: true },
+        { runtime: null },
+    ])
+        assert.throws(() => validateHarnessObserver({ ...f.observer, ...update }));
+    for (const update of [
+        { executablePath: 'relative/node' },
+        { executableSHA256: '' },
+        { node: 'v22.0.0' },
+        { versions: { node: '24.0.0' } },
+        { versions: Object.assign(Object.create({ node: '24.19.0' }), { v8: 'synthetic' }) },
+        { arch: 'unknown' },
+        { platform: 'unknown' },
+        { execArgv: 'not-an-array' },
+        { execArgv: Array(65).fill('--x') },
+        { nodeOptions: undefined },
+        { nodeOptions: 'x'.repeat(8193) },
+        { extra: true },
+    ])
+        assert.throws(() => createHarnessObserver({ ...syntheticRuntime(), ...update }));
+    assert.throws(() => createHarnessObserver(undefined));
+    assert.throws(
+        () =>
+            createHarnessObserver({
+                ...syntheticRuntime(),
+                execArgv: Array(5).fill('x'.repeat(4096)),
+            }),
+        /metadata bound/,
+    );
+});
+
+for (const [name, update] of [
+    ['path', { executablePath: '/foreign/node' }],
+    ['hash', { executableSHA256: 'd'.repeat(64) }],
+    ['node', { node: 'v24.20.0', versions: { node: '24.20.0', v8: 'synthetic-v8' } }],
+    ['versions', { versions: { node: '24.19.0', v8: 'foreign-v8' } }],
+    ['arch', { arch: 'arm64' }],
+    ['platform', { platform: 'darwin' }],
+    ['flag-order', { execArgv: ['/synthetic/observer.mjs', '--import'] }],
+    [
+        'duplicate-flag',
+        {
+            execArgv: [
+                '--import',
+                '/synthetic/observer.mjs',
+                '--import',
+                '/synthetic/observer.mjs',
+            ],
+        },
+    ],
+    ['environment', { nodeOptions: '--require=/foreign/preload.cjs' }],
+] as const) {
+    test(
+        'foreign harness ' + name + ' cannot match independently supplied observer context',
+        async () => {
+            const f = fixture(),
+                foreign = createHarnessObserver({ ...syntheticRuntime(), ...update });
+            assert.throws(() => validateHarnessObserver(foreign, f.observer), /identity mismatch/);
+            await closeChild(f);
+            const value = JSON.parse(
+                f.filesystem.files.get('child-evidence.json')!.bytes.toString(),
+            );
+            value.observer = foreign;
+            f.filesystem.put('child-evidence.json', JSON.stringify(value) + '\n');
+            const result = await writeSupervisorEvidence(
+                f.job,
+                f.binding,
+                f.observer,
+                f.lifecycle,
+                f.io,
+            );
+            assert.equal(result.status, 'invalid-non-qualifying-supervisor-evidence');
+            assert.equal(result.childEvidence, null);
+        },
+    );
+}
+
+test('absent or mismatched observers cannot finish child custody or fall back to input metadata', async () => {
+    const f = fixture();
+    await f.owner.join();
+    await assert.rejects(finishProductEvidence(f.owner, f.binding, undefined, f.io, f.clock));
+    assert.equal(f.owner.snapshot().completed, false);
+    assert.equal(f.events.connected, true);
+    assert.equal(f.filesystem.files.has('child-evidence.json'), false);
+    const absentParent = fixture();
+    await assert.rejects(
+        writeSupervisorEvidence(
+            absentParent.job,
+            absentParent.binding,
+            undefined,
+            absentParent.lifecycle,
+            absentParent.io,
+        ),
+    );
+    assert.equal(absentParent.filesystem.files.has('supervisor-evidence.json'), false);
+    const g = fixture();
+    await closeChild(g);
+    await writeSupervisorEvidence(g.job, g.binding, g.observer, g.lifecycle, g.io);
+    g.filesystem.events.length = 0;
+    await assert.rejects(verifySupervisorEvidence(g.job, g.binding, undefined, g.io));
+    assert.deepEqual(g.filesystem.events, []);
+    const child = JSON.parse(g.filesystem.files.get('child-evidence.json')!.bytes.toString());
+    delete child.observer;
+    g.filesystem.put('child-evidence.json', JSON.stringify(child) + '\n');
+    await assert.rejects(verifySupervisorEvidence(g.job, g.binding, g.observer, g.io));
+});
+
+test('virtual child refuses absent/read-failed observers before adapter import', async () => {
+    await assert.rejects(verifySoak({ observerFailure: 'missing' }), /supervisor contract object/);
+    await assert.rejects(
+        verifySoak({ observerFailure: 'read' }),
+        /Synthetic observer read failure/,
+    );
+});
+
+test('virtual child rechecks work deadline after observer reads and initial timeline writes before importing', async () => {
+    await assert.rejects(
+        verifySoak({ observerDelayMs: 2340000 }),
+        /work admission deadline exhausted/,
+    );
+    await assert.rejects(
+        verifySoak({ initialEmitDelayMs: 2340000 }),
+        /work admission deadline exhausted/,
+    );
+});
+
+test('foreign timeline observer is refused even after both retained references are honestly rehashed', async () => {
+    const f = fixture();
+    await closeChild(f);
+    await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
+    const foreign = createHarnessObserver({ ...syntheticRuntime(), nodeOptions: '--foreign' });
+    f.filesystem.put('timeline.jsonl', syntheticTimeline(f.binding, foreign));
+    const timeline = await f.io.hash('timeline.jsonl', timelineLimit);
+    const child = JSON.parse(f.filesystem.files.get('child-evidence.json')!.bytes.toString());
+    child.timeline = timeline;
+    f.filesystem.put('child-evidence.json', JSON.stringify(child) + '\n');
+    const parent = JSON.parse(f.filesystem.files.get('supervisor-evidence.json')!.bytes.toString());
+    parent.timeline = timeline;
+    parent.childEvidence = await f.io.hash('child-evidence.json', 32 * 1024);
+    f.filesystem.put('supervisor-evidence.json', JSON.stringify(parent) + '\n');
+    await assert.rejects(
+        verifySupervisorEvidence(f.job, f.binding, f.observer, f.io),
+        /identity mismatch/,
+    );
+});
+
+test('observer timeline record must be present second and unique', () => {
+    const f = fixture(),
+        line = (stage: string, data: unknown) => JSON.stringify({ time: 1, stage, data }) + '\n';
+    for (const bytes of [
+        line('supervisor-source-binding', f.binding),
+        line('supervisor-source-binding', f.binding) + line('other', f.observer),
+        syntheticTimeline(f.binding, f.observer) + line('supervisor-harness-observer', f.observer),
+    ]) {
+        const parser = sourceBindingTimeline(f.binding, f.observer);
+        assert.throws(() => {
+            parser.push(Buffer.from(bytes));
+            parser.finish();
+        });
+    }
 });
 
 test('streaming timeline context is unique, byte bounded, UTF8 strict and mode/source bound', async () => {
     const f = fixture();
     const line = (value: unknown) => Buffer.from(JSON.stringify(value) + '\n');
-    const valid = line({ time: 1, stage: 'supervisor-source-binding', data: f.binding });
-    const parser = sourceBindingTimeline(f.binding);
+    const valid = Buffer.from(syntheticTimeline(f.binding, f.observer));
+    const parser = sourceBindingTimeline(f.binding, f.observer);
     for (let index = 0; index < valid.length; index++)
         parser.push(valid.subarray(index, index + 1));
     parser.finish();
@@ -758,7 +1014,7 @@ test('streaming timeline context is unique, byte bounded, UTF8 strict and mode/s
         Buffer.concat([valid, Buffer.alloc(1024 ** 2 + 1, 120)]),
     ];
     for (const bytes of invalid) {
-        const broken = sourceBindingTimeline(f.binding);
+        const broken = sourceBindingTimeline(f.binding, f.observer);
         assert.throws(() => {
             broken.push(bytes);
             broken.finish();
@@ -774,20 +1030,16 @@ test('streaming timeline context is unique, byte bounded, UTF8 strict and mode/s
             data: { ...f.binding, requestedMode: 'calibration' },
         }).toString(),
     );
-    const result = await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
+    const result = await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
     assert.equal(result.status, 'invalid-non-qualifying-supervisor-evidence');
 });
 
 test('foreign-run timeline cannot be relabeled by honestly updating both retained file references', async () => {
     const f = fixture();
     await closeChild(f);
-    await writeSupervisorEvidence(f.job, f.binding, f.lifecycle, f.io);
+    await writeSupervisorEvidence(f.job, f.binding, f.observer, f.lifecycle, f.io);
     const foreignBinding = { ...f.binding, jobNonce: '22222222-2222-2222-2222-222222222222' };
-    f.filesystem.put(
-        'timeline.jsonl',
-        JSON.stringify({ time: 1, stage: 'supervisor-source-binding', data: foreignBinding }) +
-            '\n',
-    );
+    f.filesystem.put('timeline.jsonl', syntheticTimeline(foreignBinding, f.observer));
     const timeline = await f.io.hash('timeline.jsonl', timelineLimit);
     const child = JSON.parse(f.filesystem.files.get('child-evidence.json')!.bytes.toString());
     child.timeline = timeline;
@@ -797,7 +1049,7 @@ test('foreign-run timeline cannot be relabeled by honestly updating both retaine
     parent.childEvidence = await f.io.hash('child-evidence.json', 32 * 1024);
     f.filesystem.put('supervisor-evidence.json', JSON.stringify(parent) + '\n');
     await assert.rejects(
-        verifySupervisorEvidence(f.job, f.binding, f.io),
+        verifySupervisorEvidence(f.job, f.binding, f.observer, f.io),
         /source binding mismatch: jobNonce/,
     );
 });
@@ -809,7 +1061,7 @@ test('a delayed manifest sync cannot finish the owner after the unchanged total 
         f.clock.time = f.job.deadlineMs;
     });
     await assert.rejects(
-        finishProductEvidence(f.owner, f.binding, f.io, f.clock),
+        finishProductEvidence(f.owner, f.binding, f.observer, f.io, f.clock),
         /existing total deadline/,
     );
     assert.equal(f.owner.snapshot().completed, false);

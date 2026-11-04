@@ -6,9 +6,9 @@ are always false. The final staged-artifact consumer remains blocked on missing 
 producer contracts. No product, calibration, threshold or measurement result is supplied by this
 source change.
 
-The current emitted graph uses strict source-bound v2 parent/child schemas. The shared schema and
+The current emitted graph uses strict observer-bound v3 parent/child schemas. The shared schema and
 semantic readback API are documented in [the diagnostic contract](product-supervisor-contract.md).
-V1 data cannot be relabeled into v2; all release gates remain held.
+V1/v2 data cannot be relabeled into v3; all release gates remain held.
 
 The supervisor creates a new nonce-prefixed directory under the requested `--out`, which must be
 under the repository's excluded `validation/`. This allocation precedes the child's source
@@ -20,10 +20,13 @@ The child uses the supervisor's directory and fixed `timeline.jsonl` path. After
 join and timeline sync/close succeed, it hashes the closed timeline and exclusively writes, syncs
 and closes `child-evidence.json`. That manifest binds the job nonce and exact timeline
 name/bytes/SHA256, source/adapter hashes and requested scope. The timeline starts with one exact
-source/run binding record. It explicitly makes no owner-completion claim. Only then does the
-existing `ProductRunOwner.finish(true)` validate custody and disconnect IPC. A manifest/hash/I/O
-failure holds the owner and prevents `finish`; the unchanged total deadline is checked before and
-after the evidence handoff. There is no new IPC evidence message or acknowledgement protocol.
+source/run binding record and a second full harness-observer snapshot. Parent and child
+independently call `nodeRuntimeIdentity()` and retain exact immutable observer envelopes; their
+digest is part of the source binding. This never claims shipping runtime identity. It explicitly
+makes no owner-completion claim. Only then does the existing `ProductRunOwner.finish(true)` validate
+custody and disconnect IPC. A manifest/hash/I/O failure holds the owner and prevents `finish`; the
+unchanged total deadline is checked before and after the evidence handoff. There is no new IPC
+evidence message or acknowledgement protocol.
 
 The supervisor waits for the existing observed lifecycle outcome. Only actual normal code-zero
 spawn/exit/close, with no error, timeout, cancellation request or inconsistent exit/close values,

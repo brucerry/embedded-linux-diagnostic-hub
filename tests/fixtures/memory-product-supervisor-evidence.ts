@@ -14,6 +14,8 @@ import {
     validateCollectedSupervisorHeader,
     validateEvidenceReference,
     parseSupervisorJSON,
+    validateHarnessObserver,
+    harnessObserverSHA256,
 } from '../../scripts/lib/product-supervisor-contract.mjs';
 import {
     productClock,
@@ -25,10 +27,11 @@ import {
 export const timelineLimit = SUPERVISOR_TIMELINE_LIMIT;
 export const metadataLimit = SUPERVISOR_METADATA_LIMIT;
 export type SourceBinding = ReturnType<typeof validateSourceBinding>;
+export type HarnessObserver = ReturnType<typeof validateHarnessObserver>;
 export type EvidenceReference = { name: string; bytes: number; sha256: string };
 export interface SupervisorEvidenceIO {
     hash(name: string, maximum: number): Promise<EvidenceReference>;
-    timeline(binding: SourceBinding): Promise<EvidenceReference>;
+    timeline(binding: SourceBinding, observer: HarnessObserver): Promise<EvidenceReference>;
     json(name: string, maximum: number): Promise<{ reference: EvidenceReference; value: unknown }>;
     write(name: string, value: unknown): Promise<void>;
 }
@@ -167,9 +170,14 @@ export function supervisorEvidenceIO(
         async hash(name, maximum) {
             return (await read(name, maximum, false)).reference;
         },
-        async timeline(binding) {
+        async timeline(binding, observer) {
             return (
-                await read('timeline.jsonl', timelineLimit, false, sourceBindingTimeline(binding))
+                await read(
+                    'timeline.jsonl',
+                    timelineLimit,
+                    false,
+                    sourceBindingTimeline(binding, observer),
+                )
             ).reference;
         },
         async json(name, maximum) {
@@ -257,23 +265,27 @@ export function supervisorOutput(
 export async function finishProductEvidence(
     owner: ProductRunOwner,
     binding: SourceBinding,
+    observer: HarnessObserver,
     io: SupervisorEvidenceIO,
     clock: ProductClock = productClock,
 ) {
     try {
         validateSourceBinding(binding);
+        validateHarnessObserver(observer);
+        assert.equal(binding.observerSHA256, harnessObserverSHA256(observer));
         assert.equal(binding.jobNonce, owner.job.nonce, 'Foreign child source binding nonce.');
         assert.ok(
             clock.now() < owner.job.deadlineMs,
             'Child evidence handoff exceeded the existing total deadline.',
         );
-        const timeline = await io.timeline(binding);
+        const timeline = await io.timeline(binding, observer);
         await io.write('child-evidence.json', {
-            schemaVersion: 2,
+            schemaVersion: 3,
             kind: 'product-child-closed-timeline',
             qualification: false,
             nonce: owner.job.nonce,
             binding,
+            observer,
             timeline,
             ownerCompletion: 'not-asserted',
         });
@@ -308,12 +320,15 @@ export type SupervisorLifecycle = {
 export async function writeSupervisorEvidence(
     job: ProductJob,
     binding: SourceBinding,
+    observer: HarnessObserver,
     lifecycle: SupervisorLifecycle | null,
     io: SupervisorEvidenceIO,
     initialFailure?: unknown,
 ) {
     validateSupervisorJob(job);
     validateSourceBinding(binding);
+    validateHarnessObserver(observer);
+    assert.equal(binding.observerSHA256, harnessObserverSHA256(observer));
     assert.equal(binding.jobNonce, job.nonce, 'Foreign supervisor source binding nonce.');
     const failures: string[] = [];
     const retain = (error: unknown) => failures.push(String(error).slice(0, 1024));
@@ -331,15 +346,15 @@ export async function writeSupervisorEvidence(
     if (lifecycleValid)
         try {
             const observed = await io.json('child-evidence.json', metadataLimit);
-            const actual = await io.timeline(binding);
-            validateClosedChild(observed.value, { job, binding, timeline: actual });
+            const actual = await io.timeline(binding, observer);
+            validateClosedChild(observed.value, { job, binding, observer, timeline: actual });
             childEvidence = observed.reference;
             timeline = actual;
         } catch (error) {
             retain(error);
         }
     const record = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         kind: 'product-supervisor-observation',
         qualification: false,
         releaseAcceptance: false,
@@ -348,6 +363,7 @@ export async function writeSupervisorEvidence(
             : 'collected-non-qualifying-supervisor-evidence',
         job,
         binding,
+        observer,
         lifecycle: snapshot,
         childEvidence,
         timeline,
@@ -362,28 +378,33 @@ export async function writeSupervisorEvidence(
 export async function verifySupervisorEvidence(
     job: ProductJob,
     binding: SourceBinding,
+    observer: HarnessObserver,
     io: SupervisorEvidenceIO,
 ) {
     validateSupervisorJob(job);
     validateSourceBinding(binding);
+    validateHarnessObserver(observer);
+    assert.equal(binding.observerSHA256, harnessObserverSHA256(observer));
     const parent = await io.json('supervisor-evidence.json', metadataLimit);
-    validateCollectedSupervisorHeader(parent.value, { job, binding });
+    validateCollectedSupervisorHeader(parent.value, { job, binding, observer });
     const child = await io.json('child-evidence.json', metadataLimit);
-    const timeline = await io.timeline(binding);
+    const timeline = await io.timeline(binding, observer);
     validateCollectedSupervisor(parent.value, child.value, {
         job,
         binding,
+        observer,
         childReference: child.reference,
         timeline,
     });
     validateEvidenceReference(parent.reference, 'supervisor-evidence.json', metadataLimit);
     return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'verified-non-qualifying-supervisor-graph',
         qualification: false,
         releaseAcceptance: false,
         binding,
         job,
+        observer,
         supervisor: parent.reference,
         child: child.reference,
         timeline,

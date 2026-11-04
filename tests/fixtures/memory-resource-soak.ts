@@ -6,7 +6,10 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { productJob, ProductRunOwner, observeProductOwner, productClock } from './memory-product-owner';
-import { sourceBindingFromArguments } from '../../scripts/lib/product-supervisor-contract.mjs';
+import {
+    sourceBindingFromArguments,
+    createHarnessObserver,
+} from '../../scripts/lib/product-supervisor-contract.mjs';
 import { syncCloseEvidence } from './memory-resource-evidence';
 import {
     supervisorEvidenceIO,
@@ -79,7 +82,11 @@ async function main(owner: ProductRunOwner) {
         await sourceFingerprint(fileURLToPath(new URL('../..', import.meta.url))),
         'Composed source fingerprint mismatch.',
     );
-    const binding = sourceBindingFromArguments(args, sourceSHA256, adapterHash, owner.job.nonce);
+    const observer = createHarnessObserver(await nodeRuntimeIdentity());
+    const binding = sourceBindingFromArguments(
+        args, sourceSHA256, adapterHash, owner.job.nonce, observer,
+    );
+    owner.assertAdmissible();
     const output = supervisorOutput(
         destination!, args.get('supervisor-output') ?? '', lane!, gcMode, owner.job,
     );
@@ -94,6 +101,8 @@ async function main(owner: ProductRunOwner) {
         await writes;
     };
     await emit('supervisor-source-binding', binding);
+    await emit('supervisor-harness-observer', observer);
+    owner.assertAdmissible();
     const { createQualificationDriver } = await import(pathToFileURL(adapterPath).href);
     let driver: QualificationDriver;
     let stop = false;
@@ -460,7 +469,9 @@ async function main(owner: ProductRunOwner) {
                 throw new AggregateError(errors, 'Product timeline sync/close failed.');
             }
         }
-        if (ownershipJoined) await finishProductEvidence(owner, binding, supervisorEvidenceIO(output));
+        if (ownershipJoined) await finishProductEvidence(
+            owner, binding, observer, supervisorEvidenceIO(output),
+        );
     }
     if (failure) throw failure;
 }
@@ -483,7 +494,10 @@ async function supervise() {
         args.get('driver') ?? fileURLToPath(new URL('./memory-resource-platform.ts', import.meta.url)),
     );
     const adapterSHA256 = sha256(await fs.readFile(adapterPath));
-    const binding = sourceBindingFromArguments(args, sourceSHA256, adapterSHA256, job.nonce);
+    const observer = createHarnessObserver(await nodeRuntimeIdentity());
+    const binding = sourceBindingFromArguments(
+        args, sourceSHA256, adapterSHA256, job.nonce, observer,
+    );
     assert.ok(
         productClock.now() < job.deadlineMs - job.reserveMs,
         'Supervisor source preflight exhausted work admission.',
@@ -514,7 +528,9 @@ async function supervise() {
         );
     } catch (error) {
         try {
-            await writeSupervisorEvidence(job, binding, null, supervisorEvidenceIO(output), error);
+            await writeSupervisorEvidence(
+                job, binding, observer, null, supervisorEvidenceIO(output), error,
+            );
         } catch (evidenceError) {
             throw new AggregateError(
                 [error, evidenceError],
@@ -536,7 +552,9 @@ async function supervise() {
     };
     child.once('close', release);
     const row = await observed.outcome;
-    const evidence = await writeSupervisorEvidence(job, binding, row, supervisorEvidenceIO(output));
+    const evidence = await writeSupervisorEvidence(
+        job, binding, observer, row, supervisorEvidenceIO(output),
+    );
     // An exit does not establish inherited-stream closure. Unknown retains the child/IPC/listeners.
     if (
         !row.spawnObserved ||

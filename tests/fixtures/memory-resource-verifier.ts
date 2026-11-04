@@ -20,6 +20,9 @@ type Options = {
     unsupportedScope?: boolean;
     calibration?: boolean;
     missingOwners?: boolean;
+    observerDelayMs?: number;
+    initialEmitDelayMs?: number;
+    observerFailure?: 'missing' | 'read';
 };
 export async function verifySoak(options: Options = {}) {
     let clock = 0,
@@ -28,6 +31,7 @@ export async function verifySoak(options: Options = {}) {
         cycles = 0,
         policyIdentity = '';
     let receipt: any, assessmentContext: any;
+    let driverImports = 0;
     let checkpoints = 0,
         shutdownSamples = 0,
         finalShutdownSamples = 0;
@@ -218,6 +222,8 @@ export async function verifySoak(options: Options = {}) {
                         Buffer.concat([virtualFiles.get(file)!, Buffer.from(line)]),
                     );
                     const item = JSON.parse(line);
+                    if (item.stage === 'supervisor-harness-observer')
+                        clock += options.initialEmitDelayMs ?? 0;
                     if (item.stage === 'receipt') receipt = item.data;
                     if (item.stage === 'assessment-context') assessmentContext = item.data;
                     if (item.stage === 'quiescent-checkpoint') checkpoints++;
@@ -266,10 +272,22 @@ export async function verifySoak(options: Options = {}) {
             if (id === './memory-resource-identity')
                 return {
                     sourceFingerprint: async () => 'a'.repeat(64),
-                    nodeRuntimeIdentity: async () => ({
-                        executableSHA256: 'c'.repeat(64),
-                        launch: [],
-                    }),
+                    nodeRuntimeIdentity: async () => {
+                        clock += options.observerDelayMs ?? 0;
+                        if (options.observerFailure === 'read')
+                            throw Error('Synthetic observer read failure.');
+                        if (options.observerFailure === 'missing') return undefined;
+                        return {
+                            executablePath: '/synthetic/node',
+                            executableSHA256: 'c'.repeat(64),
+                            node: 'v24.19.0',
+                            platform: 'linux',
+                            arch: 'x64',
+                            versions: { node: '24.19.0', v8: 'synthetic-v8' },
+                            execArgv: ['--import', '/synthetic/observer.mjs'],
+                            nodeOptions: null,
+                        };
+                    },
                     sha256(bytes: string | Uint8Array) {
                         const value = hash(bytes);
                         if (typeof bytes === 'string' && bytes.includes('"checkpointGrouping"'))
@@ -277,7 +295,10 @@ export async function verifySoak(options: Options = {}) {
                         return value;
                     },
                 };
-            if (id.startsWith('file:')) return { createQualificationDriver: async () => driver };
+            if (id.startsWith('file:')) {
+                driverImports++;
+                return { createQualificationDriver: async () => driver };
+            }
             if (id.endsWith('.mjs')) return realRequire(path.resolve(path.dirname(file), id));
             if (id.startsWith('.')) return load(path.resolve(path.dirname(file), id + '.ts'));
             return realRequire(id);
@@ -315,7 +336,16 @@ export async function verifySoak(options: Options = {}) {
         ...(options.policy ? ['--memory-policy=C:/reviewed-policy.json'] : []),
     ];
     load(path.join(root, 'tests/fixtures/memory-resource-soak.ts'));
-    await done;
+    try {
+        await done;
+    } catch (error) {
+        if (driverImports !== 0)
+            throw new AggregateError(
+                [error],
+                'Virtual preflight failure admitted an adapter import.',
+            );
+        throw error;
+    }
     return {
         receipt,
         assessmentContext,
@@ -324,6 +354,7 @@ export async function verifySoak(options: Options = {}) {
         samples,
         shutdownSamples,
         finalShutdownSamples,
+        driverImports,
         virtualIPCClosed: !virtualProcess.connected,
         virtualTimersRemaining: virtualTimers.size,
         evidenceSynced,
