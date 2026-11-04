@@ -71,9 +71,10 @@ not prove the process's mapped image, dynamic loader behavior, production deskto
 roles, installed-artifact provenance or native-addon absence. No real identity collection or product
 execution is supplied by this source change; tests use explicitly synthetic complete identities.
 
-The next bounded source task is a reviewed bridge from a frozen final commit/tree to its exact
-path/content fingerprint inventory, refusing dirty, foreign or ambiguous source. It must remain
-non-qualifying and cannot invent staged artifact records. Exact shipping runtime/loader producers
-remain missing, along with final source/artifact mapping, independently reviewed per-GC
-policy/assessment/calibration evidence, real full-product metrics and coverage, at least 30 minutes
-and 100 measured cycles per GC mode, and actual cleanup/retirement.
+The [committed-source bridge](committed-source-bridge.md) now maps observed source bytes to
+explicitly supplied immutable commit/tree identities and the exact fingerprint traversal. It remains
+non-qualifying and supplies no staged artifact records. Final composition must still be frozen and
+observed independently. Exact shipping runtime/loader producers remain missing, along with final
+source/artifact mapping, independently reviewed per-GC policy/assessment/calibration evidence, real
+full-product metrics and coverage, at least 30 minutes and 100 measured cycles per GC mode, and
+actual cleanup/retirement.
