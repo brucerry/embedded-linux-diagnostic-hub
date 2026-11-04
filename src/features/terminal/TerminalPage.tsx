@@ -38,7 +38,7 @@ export default function TerminalPage(props: Props) {
     const input = useRef<TerminalInputQueue | null>(null);
     const latest = useRef(props);
     const connectionEpoch = useRef(0);
-    // Invalidate pending clipboard reads before passive connection cleanup runs.
+    // Invalidate pending terminal callbacks before passive connection cleanup runs.
     if (
         latest.current.transport !== props.transport ||
         latest.current.connected !== props.connected ||
@@ -205,12 +205,25 @@ export default function TerminalPage(props: Props) {
         const resize = term.onResize((size) => {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
-                if (ready.current && id.current)
-                    void latest.current.transport
-                        ?.resizeTerminal?.(id.current, size)
-                        .catch(() =>
-                            setError('Terminal resizing failed. Reconnect the device to retry.'),
-                        );
+                const current = id.current,
+                    epoch = terminalEpoch.current,
+                    connection = connectionEpoch.current,
+                    transport = latest.current.transport;
+                if (ready.current && current && terminalConnection.current === connection)
+                    void transport?.resizeTerminal?.(current, size).catch(() => {
+                        if (
+                            id.current !== current ||
+                            terminalEpoch.current !== epoch ||
+                            connectionEpoch.current !== connection ||
+                            terminalConnection.current !== connection ||
+                            latest.current.transport !== transport ||
+                            !latest.current.connected ||
+                            !ready.current ||
+                            !terminal.current
+                        )
+                            return;
+                        setError('Terminal resizing failed. Reconnect the device to retry.');
+                    });
             }, 100);
         });
         const observer = new ResizeObserver(() => {
