@@ -1,4 +1,6 @@
-import { verifyNativeMainSources, nativeMainSourcePins, transformNativeOwnedSource } from './memory-product-native-main-transform';
+import { prepareNativeBuild } from './memory-product-native-preparation';
+import { nativeObserverBuildPlugin } from './memory-product-native-build-plugin';
+import { verifyNativeMainSources } from './memory-product-native-main-transform';
 import { verifyProductHostSources } from './memory-product-host-source';
 import { productStartup } from './memory-product-startup';
 import fs from 'node:fs/promises';
@@ -39,13 +41,7 @@ export async function createProductNative(options: {
     const root = path.resolve(options.profile, '..', 'native-app'),
         renderer = path.join(root, 'dist'),
         desktop = path.join(root, 'dist-electron');
-    await fs.mkdir(desktop, { recursive: true });
-    admit();
-    await fs.mkdir(options.profile, { recursive: true });
-    admit();
     const downloads = path.resolve(options.profile, '..', 'native-downloads');
-    await fs.mkdir(downloads, { recursive: true });
-    admit();
     const run = async (args: string[], env: NodeJS.ProcessEnv = process.env) =>
         new Promise<{ stdout: string; stderr: string }>(
             (resolve, reject) => (
@@ -68,64 +64,68 @@ export async function createProductNative(options: {
             ),
         );
     const vite = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js');
-    await options.emit(
-        'native-renderer-build',
-        await run(
-            [
-                vite,
-                'build',
-                '--mode',
-                'desktop',
-                '--config',
-                'tests/fixtures/memory-product.vite.mts',
-            ],
-            {
-                ...process.env,
-                HUB_PRODUCT_BUILD_OUT: renderer,
-                HUB_PRODUCT_AGGREGATE_COLD_START: options.coldStart ? '1' : '0',
-            },
-        ),
-    );
-    admit();
+    // Runtime profile activation remains outside the build-only module and is never
+    // invoked by the compile-only smoke. The existing runtime creator still requires it.
     const profile = await sshQualificationProfile();
-    admit();
-    await build({
-        absWorkingDir: sourceRoot,
-        entryPoints: ['electron/main.ts', 'electron/preload.ts'],
-        bundle: true,
-        platform: 'node',
-        format: 'cjs',
-        outdir: desktop,
-        outExtension: { '.js': '.cjs' },
-        external: ['electron'],
-        plugins: [
-            {
-                name: 'private-native-product-observers',
-                setup(b) {
-                    b.onResolve({ filter: /^ssh2$/ }, () => ({ path: profile.sshEntry, external: true }));
-                    b.onLoad({ filter: /\.ts$/ }, async args => {
-                        const file = path.relative(sourceRoot, args.path).split(path.sep).join('/');
-                        if (!Object.hasOwn(nativeMainSourcePins, file)) return;
-                        const source = await fs.readFile(args.path, 'utf8');
-                        return { contents: transformNativeOwnedSource(source, file, hostBinding).code, loader: 'ts' };
-                    });
-                },
-            },
-        ],
+    let metadata!: { name: string; version: string; productName: string };
+    await prepareNativeBuild({
+        admit,
+        verify: async () => { await verifyProductHostSources(sourceRoot, 'native'); await verifyNativeMainSources(sourceRoot); },
+        directories: async () => {
+            await fs.mkdir(desktop, { recursive: true });
+            await fs.mkdir(options.profile, { recursive: true });
+            await fs.mkdir(downloads, { recursive: true });
+        },
+        renderer: async () => {
+            await options.emit(
+                'native-renderer-build',
+                await run(
+                    [
+                        vite,
+                        'build',
+                        '--mode',
+                        'desktop',
+                        '--config',
+                        'tests/fixtures/memory-product.vite.mts',
+                    ],
+                    {
+                        ...process.env,
+                        HUB_PRODUCT_BUILD_OUT: renderer,
+                        HUB_PRODUCT_AGGREGATE_COLD_START: options.coldStart ? '1' : '0',
+                    },
+                ),
+            );
+        },
+        main: async () => {
+            await build({
+                absWorkingDir: sourceRoot,
+                entryPoints: ['electron/main.ts', 'electron/preload.ts'],
+                bundle: true,
+                platform: 'node',
+                format: 'cjs',
+                outdir: desktop,
+                outExtension: { '.js': '.cjs' },
+                external: ['electron'],
+                plugins: [nativeObserverBuildPlugin(sourceRoot, hostBinding, profile.sshEntry)],
+            });
+        },
+        syntax: async () => {
+            for (const file of ['main.cjs', 'preload.cjs'])
+                await run(['--check', path.join(desktop, file)]);
+        },
+        metadata: async () => {
+            metadata = JSON.parse(await fs.readFile(path.join(sourceRoot, 'package.json'), 'utf8'));
+            await fs.writeFile(
+                path.join(root, 'package.json'),
+                JSON.stringify({
+                    name: metadata.name,
+                    version: metadata.version,
+                    productName: metadata.productName,
+                    main: 'dist-electron/main.cjs',
+                }),
+            );
+        },
     });
-    for (const file of ['main.cjs', 'preload.cjs'])
-        await run(['--check', path.join(desktop, file)]);
-    admit();
-    const metadata = JSON.parse(await fs.readFile(path.join(sourceRoot, 'package.json'), 'utf8'));
-    await fs.writeFile(
-        path.join(root, 'package.json'),
-        JSON.stringify({
-            name: metadata.name,
-            version: metadata.version,
-            productName: metadata.productName,
-            main: 'dist-electron/main.cjs',
-        }),
-    );
     const exitFile = path.resolve(options.profile, '..', 'native-will-quit.json');
     const environment = Object.fromEntries(
         Object.entries(process.env).filter(

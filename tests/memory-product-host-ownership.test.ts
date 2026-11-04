@@ -194,7 +194,7 @@ test('private wiring uses owned IPC, validates readback, and checks native sourc
         'Adding a Gateway observer must not admit target controls in the Gateway role.');
     const native = await read('memory-product-native-host.ts');
     assert.ok(native.indexOf('await verifyNativeMainSources(sourceRoot)') < native.indexOf('await fs.mkdir(desktop'));
-    assert.match(native, /transformNativeOwnedSource\(source, file, hostBinding\)/);
+    assert.match(native, /nativeObserverBuildPlugin\(sourceRoot, hostBinding, profile.sshEntry\)/);
     const main = await fs.readFile('electron/main.ts', 'utf8');
     assert.equal(createHash('sha256').update(main).digest('hex'),
         '5c2fb3610fdf1801e521be69cc726572df82d4357c03a2c488695783855b78ef');

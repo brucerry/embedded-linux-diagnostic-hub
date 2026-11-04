@@ -50,8 +50,10 @@ test('main observation inverse preserves production admission, update and quit c
 test('private native adapter verifies dependencies before output and applies reviewed transformations at build reads', async () => {
     const source = await fs.readFile('tests/fixtures/memory-product-native-host.ts', 'utf8');
     assert.ok(source.indexOf('await verifyNativeMainSources(sourceRoot)') < source.indexOf('await fs.mkdir(desktop'));
-    assert.ok(source.includes('Object.hasOwn(nativeMainSourcePins, file)'));
-    assert.ok(source.includes('transformNativeOwnedSource(source, file, hostBinding).code'));
+    const plugin = await fs.readFile('tests/fixtures/memory-product-native-build-plugin.ts', 'utf8');
+    assert.ok(plugin.includes('Object.hasOwn(nativeMainSourcePins, file)'));
+    assert.ok(plugin.includes('transformNativeOwnedSource(source, file, accepted).code'));
+    assert.ok(source.includes('await prepareNativeBuild('));
     assert.ok(source.includes('if (observation.error) throw Error(observation.error)'));
     assert.ok(!source.includes('005de35d840bcc87567c4530677359986886137c293eb79327305bd6b25c1a9d'));
 });
