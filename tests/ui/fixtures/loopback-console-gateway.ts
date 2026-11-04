@@ -12,6 +12,7 @@ import { attachTerminalFixture, terminalFixtureState } from '../../fixtures/term
 import { DEVICE_CLOCK_COMMAND } from '../../../shared/diagnostics/device-clock';
 import { clockOutput } from '../../fixtures/device-clock';
 import { createLoopbackDiagnostics } from './loopback-diagnostics';
+import { createClientRetirement, loopbackListening } from './loopback-client-retirement';
 
 
 // Test-only owner is published before crypto, listeners or gateway acquisition.
@@ -39,6 +40,7 @@ export function allocateLoopbackGateway() {
     let closeTask: Promise<void> | undefined;
     let closing = false, journalFailed = false, journalCreated = false;
     const clients = new Set<unknown>();
+    const clientRetirement = createClientRetirement();
     const diagnostics = createLoopbackDiagnostics();
     let acceptedClients = 0, readyClients = 0, probeExecutions = 0;
     diagnostics.stage('allocated');
@@ -50,7 +52,7 @@ export function allocateLoopbackGateway() {
         const g = gateway?.ownershipSnapshot;
         return { ...state, closing, journalFailed, sshClients: clients.size,
             acceptedClients, readyClients, probeExecutions, diagnostic: diagnostics.snapshot(),
-            sshListening: sshServer?.listening ?? false,
+            sshListening: loopbackListening(sshServer),
             gateway: g ? { serverListening: g.serverListening, cleanupTimers: g.cleanupTimers,
                 requestTasks: g.requestTasks, httpSockets: g.httpSockets, httpResponses: g.httpResponses,
                 httpBodyReaders: g.httpBodyReaders, pendingConnections: g.pendingConnections,
@@ -94,6 +96,13 @@ export function allocateLoopbackGateway() {
             // Start both retirements before joining either; rejection never skips the other owner.
             const results = await Promise.allSettled(tasks);
             const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map(r => r.reason);
+            if (errors.length) {
+                diagnostics.cleanupFailure(snapshot(), ['retirement-rejected']);
+                record();
+            }
+            // Keep custody until each accepted client's own close event is observed.
+            // There is no timer, forced close, retry or server-callback substitution.
+            await clientRetirement.join();
             if (clients.size || state.fileHandles || state.failedFileCloses || journalFailed)
                 errors.push(Error('Loopback resource or evidence retirement remains unacknowledged.'));
             if (errors.length) diagnostics.cleanupFailure(snapshot(), [
@@ -148,7 +157,9 @@ export function allocateLoopbackGateway() {
             const terminal = terminalFixtureState();
             const activeServer = new Server({ hostKeys: [key] }, (client) => {
                 acceptedClients = Math.min(65535, acceptedClients + 1);
-                clients.add(client); record();
+                clients.add(client);
+                clientRetirement.track(client);
+                record();
                 client.once('close', () => { clients.delete(client); record(); });
                 let connected = false;
                 client.on('ready', () => {
