@@ -1,0 +1,244 @@
+name: Candidate production fix UI without artifact storage
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/production-fixes255-20261104]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: production-fixes-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        outputs:
+            payload: ${{ steps.receipt.outputs.payload }}
+            digest: ${{ steps.receipt.outputs.digest }}
+            bytes: ${{ steps.receipt.outputs.bytes }}
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/production-fixes255-20261104
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/fx-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_FIXES_SCOPE=%s\n' "$scope"
+                      printf 'HUB_FIXES_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: d9029b3c5922c07547e45a3e4be0b9ee5fa6879f
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = d9029b3c5922c07547e45a3e4be0b9ee5fa6879f
+                  test "$(git -C application rev-parse HEAD)" = d9029b3c5922c07547e45a3e4be0b9ee5fa6879f
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 3c43dcb2b56670d4e13bcbe53177218c009107a9
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/production-fixes-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected production fix UI sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/production-fixes-candidate.config.ts');
+                  if (hash(config) !== '2eeb120861a61efa2b64b956f5b57bca1f1f8497e0da2750e170207b08bdd6d6')
+                    throw Error('Changed sandboxed production fix UI configuration');
+                  const pins = {"package.json":"77811e04b711dd9e0bf6f781e6b243c9f25219193719d9faa2624d8269657d2c","package-lock.json":"19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3","vite.config.mts":"cfadddb9f251753919be202a8e0c96888fa1a381753c1053b854e0cf408b08a1","index.html":"6bd1551ed4c62d69965cdec8daeb16bd2d622e36f983f61ea93d1bd4366c1e56","tests/ui/production-evidence.spec.ts":"c132a5a742b3ab72c00399b3db92dad440bbcfda2702282505f8831846885d69","tests/ui/ssh-cleanup-fault.spec.ts":"ce913f4f15dccbc653b751cd0013c374e2dd272b58ec44ddb0e6b359c1cc3b03","tests/ui/fixtures/ssh-cleanup-fault.ts":"45d58a7f8cbfaf764e7158fb438b52ce7ca93aa71af9cfa72a5e316eab4e9857","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/ui/fixtures/ssh-stream.ts":"0b61a96a7bbc305c3da45dad4a0c13594fbea41497669d3ba153438533ba3bd9","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","shared/diagnostics/evidence.ts":"a82a5090a67d7cb4bd895a2a3bcc41681c8b196706e18a4eee9b1a6c9f2c8469","src/features/evidence/EvidenceModal.tsx":"4cfa997a12752ee2023418d449c4371b30299c42ccc47e35e8d3915df355d7a5","src/features/evidence/EvidenceTree.tsx":"9016bd5a581862b842ad43384405e5289269617aa05f3acd3dab60f29ad95c2b","src/features/automation/capture/ssh-stream-client.ts":"a1b81822296844c8ae3abe5a97a486ff5eb5d9ad53f6520594f6d9ecf15599a3","src/features/automation/capture/ssh-backend.ts":"23017918f4334ba44eab34ef6ae984a2a7a9db13b2662acf278b0e4c1d1a01f7","src/features/automation/runner.ts":"cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a","src/features/automation/AutomationPage.tsx":"ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4","backend/ssh/stream-host.ts":"224f9914811347f2b01de205b7c8d2664fdb5596a2524a38047109d1f7043e5c","shared/capture-store.ts":"5cc2fe2ac3027d9c87b4d06d12d14a342f4c160f92961abd43502f3249ff8568","shared/capture-rpc.ts":"255f7434b7bbadda2401f3245902fe2ac40add0dab610f7d154363e655fe9949","shared/ssh-stream-rpc.ts":"f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2","src/features/automation/capture/indexeddb-store.ts":"c7e5c7c9b6caa52552b1e566bfdc67d9db5057d4d2385eba18a1ff819bd34fee"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected production fix UI input: ' + file);
+                  }
+                  fs.mkdirSync('.production-fixes-ci');
+                  fs.writeFileSync('.production-fixes-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the four production fix cases once
+              id: sdk
+              working-directory: application
+              shell: bash
+              run: |
+                  set +e
+                  node node_modules/playwright/cli.js test --config .production-fixes-ci/config.ts > "$HUB_FIXES_SCOPE/test.log" 2>&1
+                  sdk_exit=$?
+                  set -e
+                  SDK_EXIT="$sdk_exit" node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const exitCode = Number(process.env.SDK_EXIT);
+                  if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) throw Error('Invalid SDK command outcome');
+                  fs.writeFileSync(path.join(process.env.HUB_FIXES_SCOPE, 'sdk-outcome.json'),
+                    JSON.stringify({ schema: 1, exitCode }), { flag: 'wx' });
+                  NODE
+                  exit "$sdk_exit"
+            - name: Project the bounded receipt to job outputs
+              if: always()
+              id: receipt
+              env:
+                  SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const { pathToFileURL } = require('node:url');
+                  const { createHash } = require('node:crypto');
+                  (async () => {
+                    const scope = process.env.HUB_FIXES_SCOPE;
+                    if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) return;
+                    const file = path.join(scope, 'report.json');
+                    if (fs.statSync(file).size > 1048576) throw Error('RAW_REPORT_CAP');
+                    const outcomeFile = path.join(scope, 'sdk-outcome.json');
+                    if (!fs.existsSync(outcomeFile) || fs.statSync(outcomeFile).size > 1024) throw Error('SDK_OUTCOME');
+                    const command = JSON.parse(fs.readFileSync(outcomeFile, 'utf8'));
+                    if (command.schema !== 1 || !Number.isInteger(command.exitCode) || command.exitCode < 0 || command.exitCode > 255) throw Error('SDK_OUTCOME');
+                    const raw = { command, sdkStepOutcome: process.env.SDK_STEP_OUTCOME || null,
+                      source: 'd9029b3c5922c07547e45a3e4be0b9ee5fa6879f', tooling: process.env.GITHUB_SHA,
+                      run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
+                      report: JSON.parse(fs.readFileSync(file, 'utf8')) };
+                    const helper = path.join(process.env.GITHUB_WORKSPACE, 'tooling/.github/production-fixes-log-receipt.mjs');
+                    if (createHash('sha256').update(fs.readFileSync(helper)).digest('hex') !== '4c661473ed9a12d79f1bb631a888fa490598057320edf74f6274d71b25af5d59') throw Error('HELPER_CHANGED');
+                    const { encode } = await import(pathToFileURL(helper).href);
+                    const result = encode(raw);
+                    fs.appendFileSync(process.env.GITHUB_OUTPUT, 'payload=' + result.payload + '\n' +
+                      'digest=' + result.digest + '\n' + 'bytes=' + result.bytes + '\n');
+                  })().catch(() => { console.error('BOUNDED_RECEIPT_UNAVAILABLE'); process.exitCode = 1; });
+                  NODE
+    receipt-only:
+        needs: files
+        if: ${{ always() }}
+        runs-on: ubuntu-22.04
+        timeout-minutes: 2
+        permissions: {}
+        steps:
+            - name: Emit only the framed receipt
+              env:
+                  RECEIPT_PAYLOAD: ${{ needs.files.outputs.payload }}
+                  RECEIPT_DIGEST: ${{ needs.files.outputs.digest }}
+                  RECEIPT_BYTES: ${{ needs.files.outputs.bytes }}
+                  PRODUCER_RESULT: ${{ needs.files.result }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  export LC_ALL=C
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/production-fixes255-20261104
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$EUID" -ne 0
+                  if [[ ! "$RECEIPT_BYTES" =~ ^[1-9][0-9]{0,4}$ ]] ||
+                     (( RECEIPT_BYTES > 32768 )) ||
+                     [[ ! "$RECEIPT_DIGEST" =~ ^[a-f0-9]{64}$ ]] ||
+                     [[ ! "$RECEIPT_PAYLOAD" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] ||
+                     (( ${#RECEIPT_PAYLOAD} > 43692 )); then
+                      printf '%s\n' HUB_FIXES255_UNAVAILABLE
+                      exit 1
+                  fi
+                  printf 'HUB_FIXES255_V1 %s %s %s\n' "$RECEIPT_BYTES" "$RECEIPT_DIGEST" "$RECEIPT_PAYLOAD"
+                  test "$PRODUCER_RESULT" = success
