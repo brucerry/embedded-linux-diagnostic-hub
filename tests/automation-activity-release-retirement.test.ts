@@ -10,7 +10,7 @@ import type { AutomationPlan } from '../shared/automation';
 import type { FlowInspection } from '../src/features/automation/flow/inspection';
 const pageText=readFileSync('src/features/automation/AutomationPage.tsx','utf8');
 assert.ok(pageText.includes(boundSpan));assert.ok(pageText.includes(activityReleaseSpan));
-assert.ok(pageText.includes("(!runner.current?.busy && activityFailure) ? 'Retry cleanup'"));
+assert.ok(pageText.includes("(!arming.current && !runner.current?.busy && activityFailure) ? 'Retry cleanup'"));
 const hookText=readFileSync('src/hooks/useDeviceClock.ts','utf8');assert.ok(hookText.includes(clockSpans[2]));
 const changedText=readFileSync('tests/fixtures/automation-page-runner-change.ts','utf8');
 const changedSpan=changedText.slice(changedText.indexOf('            (next) => {'),changedText.indexOf('    ];')).trimEnd();

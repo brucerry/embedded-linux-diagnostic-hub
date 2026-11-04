@@ -585,7 +585,7 @@ export default function AutomationPage(props: Props) {
                 });
             return;
         }
-        if (!runner.current?.busy && activityRetirements.current?.hasFailures) {
+        if (!arming.current && !runner.current?.busy && activityRetirements.current?.hasFailures) {
             // Explicit retry joins the same retained IDs; it never repeats a command or starts a run.
             void activityRetirements.current.retryFailures().catch(() => {});
             return;
@@ -599,8 +599,10 @@ export default function AutomationPage(props: Props) {
             arming.current = false;
             flowInspectionId.current = null;
             setFlowInspection(null);
-            setRunning(false);
-            latest.current.onBusy(false);
+            // Cancelling this arm cannot retire an older failed activity release.
+            const active = Boolean(activityRetirements.current?.hasFailures);
+            setRunning(active);
+            latest.current.onBusy(active);
             setState({
                 state: 'paused',
                 message: 'Flow cancelled before arming. Arm explicitly to resume.',
@@ -946,7 +948,7 @@ export default function AutomationPage(props: Props) {
                         <div className="automation-run-actions">
                             {' '}
                             <button className="button danger" disabled={!running} onClick={cancel}>
-                                {state.cleanupPending || (!runner.current?.busy && activityFailure) ? 'Retry cleanup' : 'Cancel run'}
+                                {state.cleanupPending || (!arming.current && !runner.current?.busy && activityFailure) ? 'Retry cleanup' : 'Cancel run'}
                             </button>
                         </div>
                     )}
