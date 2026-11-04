@@ -40,12 +40,37 @@ function toolchain(value) {
         'runtime',
         'esbuildEntryPath',
         'esbuildEntrySHA256',
+        'esbuildEntryFormat',
+        'esbuildEntryBytes',
         'npmEntryPath',
         'npmEntrySHA256',
         'npmVersion',
         'npmPackageSHA256',
     ]);
-    assert.ok(Buffer.byteLength(JSON.stringify(value)) <= 16 * 1024);
+    // A normally optimized esbuild bin may be native. This engine only admits a
+    // byte/hash-bound Node shebang script; never send native bytes to Node.
+    assert.ok(value.esbuildEntryBytes instanceof Uint8Array);
+    assert.ok(
+        value.esbuildEntryBytes.byteLength > 0 && value.esbuildEntryBytes.byteLength <= 64 * 1024,
+        'Unsupported esbuild script size.',
+    );
+    const entry = Buffer.from(value.esbuildEntryBytes);
+    assert.equal(sourceDigest(entry), value.esbuildEntrySHA256, 'Esbuild entry bytes/hash differ.');
+    const headers = [
+        '#!/usr/bin/env node\n',
+        '#!/usr/bin/env node\r\n',
+        '#!/usr/bin/node\n',
+        '#!/usr/bin/node\r\n',
+    ];
+    assert.ok(
+        headers.some((header) =>
+            entry.subarray(0, Buffer.byteLength(header)).equals(Buffer.from(header)),
+        ),
+        'Native or unrecognized esbuild entry is unsupported before staging.',
+    );
+    assert.equal(value.esbuildEntryFormat, 'node-script');
+    const { esbuildEntryBytes: _entryBytes, ...observed } = value;
+    assert.ok(Buffer.byteLength(JSON.stringify(observed)) <= 16 * 1024);
     assert.ok(valid(value.npmVersion));
     for (const field of ['esbuildEntrySHA256', 'npmEntrySHA256', 'npmPackageSHA256'])
         assert.match(value[field], /^[a-f0-9]{64}$/);
@@ -77,7 +102,7 @@ function toolchain(value) {
     assert.equal(r.versions.node, r.node.slice(1));
     assert.ok(Array.isArray(r.execArgv));
     assert.equal(r.nodeOptions, null);
-    return JSON.parse(JSON.stringify(value));
+    return JSON.parse(JSON.stringify(observed));
 }
 function entries(files) {
     assert.ok(files instanceof Map);

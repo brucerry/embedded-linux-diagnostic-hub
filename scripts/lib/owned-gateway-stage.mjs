@@ -287,6 +287,7 @@ export class OwnedGatewayStage {
         assert.ok(!this.#roles.has(role), 'Gateway command replay refused.');
         if (role === 'lock') assert.ok(this.#completed.has('build'));
         this.#roles.add(role);
+        if (role === 'build') assert.equal(toolchain.esbuildEntryFormat, 'node-script');
         const node = toolchain.runtime.executablePath;
         const command =
             role === 'build'

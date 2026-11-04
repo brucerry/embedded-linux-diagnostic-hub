@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { observeOwnedChild } from '../../scripts/lib/owned-child.mjs';
-import { gitObjectID } from '../../scripts/lib/committed-source-bridge.mjs';
+import { gitObjectID, sourceDigest } from '../../scripts/lib/committed-source-bridge.mjs';
 
 export function memoryFilesystem() {
     const records = new Map<string, any>(),
@@ -320,7 +320,13 @@ export const syntheticTools = () => ({
         nodeOptions: null,
     },
     esbuildEntryPath: '/synthetic/esbuild/bin/esbuild',
-    esbuildEntrySHA256: 'b'.repeat(64),
+    esbuildEntrySHA256: sourceDigest(
+        Buffer.from('#!/usr/bin/env node\n// synthetic esbuild entry, never executed\n'),
+    ),
+    esbuildEntryFormat: 'node-script',
+    esbuildEntryBytes: Buffer.from(
+        '#!/usr/bin/env node\n// synthetic esbuild entry, never executed\n',
+    ),
     npmEntryPath: '/synthetic/npm/bin/npm-cli.js',
     npmEntrySHA256: 'c'.repeat(64),
     npmVersion: '11.0.0',

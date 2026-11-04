@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { sourceDigest } from '../scripts/lib/committed-source-bridge.mjs';
 import { gunzipSync } from 'fflate';
 import {
     projectGatewayLock,
@@ -155,6 +156,12 @@ test('offline lock plan confines config/cache/prefix to the new owner without HO
 test('successful memory pipeline binds actual-source orchestration, staged bytes, strict tar, gzip and missing qualification', async () => {
     const f = pipelineFixture(),
         { record, owner } = await produceGatewayArchive(f.context, f.options, f.io);
+    assert.equal(record.builder.esbuildEntryFormat, 'node-script');
+    assert.equal(Object.hasOwn(record.builder, 'esbuildEntryBytes'), false);
+    assert.deepEqual(f.plans[0].command.slice(0, 2), [
+        '/synthetic/node',
+        '/synthetic/esbuild/bin/esbuild',
+    ]);
     assert.equal(record.kind, 'gateway-source-build-archive');
     assert.equal(record.status, 'built');
     assert.equal(record.context.sourceCommit, f.context.sourceCommit);
@@ -427,5 +434,31 @@ test('malformed closure without a valid PID cannot retire its command owner', as
         assert.equal(stage.snapshot().failed, true);
         assert.equal(stage.snapshot().command?.id, plan.id);
         assert.throws(() => stage.assertQuiescent());
+    }
+});
+
+test('native, mismatched and unsupported esbuild entry observations fail before staging or dispatch', async () => {
+    for (const kind of ['native', 'changed-bytes', 'unknown-header', 'wrong-format', 'oversized']) {
+        const f = pipelineFixture(),
+            tools: any = syntheticTools();
+        if (kind === 'oversized') {
+            tools.esbuildEntryBytes = Buffer.alloc(65537, 0x20);
+            Buffer.from('#!/usr/bin/env node\n').copy(tools.esbuildEntryBytes);
+        }
+        if (kind === 'native')
+            tools.esbuildEntryBytes = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 1]);
+        if (kind === 'unknown-header')
+            tools.esbuildEntryBytes = Buffer.from('#!/bin/sh\necho synthetic\n');
+        if (kind === 'changed-bytes')
+            tools.esbuildEntryBytes = Buffer.concat([
+                tools.esbuildEntryBytes,
+                Buffer.from('changed'),
+            ]);
+        else tools.esbuildEntrySHA256 = sourceDigest(tools.esbuildEntryBytes);
+        if (kind === 'wrong-format') tools.esbuildEntryFormat = 'native-executable';
+        f.io.observeToolchain = async () => tools;
+        await assert.rejects(produceGatewayArchive(f.context, f.options, f.io));
+        assert.equal(f.plans.length, 0);
+        assert.equal(f.filesystem.records.has('/project/validation/gateway-test'), false);
     }
 });

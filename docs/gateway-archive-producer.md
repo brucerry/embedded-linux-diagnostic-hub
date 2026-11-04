@@ -45,12 +45,19 @@ Unknown, stale or rejected dispatch retains its command owner. A later closure c
 already latched failure.
 
 The build plan uses the observed Node/esbuild entries, frozen `gateway/main.ts`, external `ssh2` and
-an output inside the owned build directory. The lock plan uses the observed Node/npm entry, owned
-prefix/cache and the two new config files, with `--offline`, `--ignore-scripts`,
-`--package-lock-only`, `--omit=optional`, disabled audit/fund/global/workspaces. It performs no
-online fallback. Explicit config paths select new files for this command; they do not modify
-existing settings. A future execution review must also constrain npm environment overrides, proxy/CA
-trust, cache/log effects and installed toolchain provenance before dispatch.
+an output inside the owned build directory. Only an observed Node shebang script is supported for
+the esbuild entry: its supplied bytes (at most 64 KiB) must match the full entry SHA256 and declared
+`node-script` format before any staging allocation. Exact supported shebang headers are checked
+byte-for-byte. Optimized native esbuild entries and unknown headers fail before staging; this
+revision does not dispatch native executables or change permissions. The header is a launcher
+contract, not a proof of script syntax, behavior or transitive module identity. Raw entry bytes are
+omitted from the record; its format and full hash are retained and reobserved through the producer
+sequence. The lock plan uses the observed Node/npm entry, owned prefix/cache and the two new config
+files, with `--offline`, `--ignore-scripts`, `--package-lock-only`, `--omit=optional`, disabled
+audit/fund/global/workspaces. It performs no online fallback. Explicit config paths select new files
+for this command; they do not modify existing settings. A future execution review must also
+constrain npm environment overrides, proxy/CA trust, cache/log effects and installed toolchain
+provenance before dispatch.
 
 There is deliberately **no default command executor**. A future admitted adapter must observe real
 spawn/exit/close events using the existing raw lifecycle contract, preserve its owner on rejection,
