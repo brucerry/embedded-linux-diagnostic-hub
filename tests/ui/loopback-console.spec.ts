@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { consoleFixture } from '../fixtures/ssh-console';
 import { allocateLoopbackGateway } from './fixtures/loopback-console-gateway';
+import { installLoopbackPassiveObserver } from './fixtures/loopback-passive-observer';
 let currentOwner: ReturnType<typeof allocateLoopbackGateway> | undefined;
 test.afterEach(async () => { await currentOwner?.close(); });
 async function readOwnedDownload(download: Download, owner: ReturnType<typeof allocateLoopbackGateway>, budget: { remaining: number }) {
@@ -92,6 +93,7 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
     const budget = { remaining: 8 * 1024 * 1024 };
     const allowed = new Set([new URL(test.info().project.use.baseURL as string).origin]);
     let blockedRequests = 0;
+    let passive: ReturnType<typeof installLoopbackPassiveObserver> | undefined;
     await page.context().route('**/*', route => {
         const url = new URL(route.request().url());
         if (url.protocol === 'http:' && url.hostname === '127.0.0.1' && allowed.has(url.origin)) return route.continue();
@@ -104,6 +106,7 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
         expect(gateway.options.host).toBe('127.0.0.1');
         expect(new URL(gateway.url).hostname).toBe('127.0.0.1');
         allowed.add(new URL(gateway.url).origin);
+        passive = installLoopbackPassiveObserver(page, new URL(page.url()).origin, new URL(gateway.url).origin, owner);
         await connect(page, gateway, owner);
         // The application keeps its separate Terminal shell open across navigation.
         await expect.poll(() => model.state.opens).toBe(1);
@@ -207,6 +210,7 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
     finally {
         owner.stage('finally');
         try { await owner.close(); } catch (error) { failures.push(error); }
+        passive?.stop();
         if (owner.snapshot().listenerError) failures.push(Error('Unexpected loopback listener error was recorded.'));
         try {
             await info.attach('loopback-owned-summary', { contentType: 'application/json', body: JSON.stringify({

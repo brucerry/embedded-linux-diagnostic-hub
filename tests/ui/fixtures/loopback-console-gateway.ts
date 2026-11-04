@@ -314,5 +314,7 @@ export function allocateLoopbackGateway() {
     };
     return { start, close: closeOwned, snapshot, fileOpened, fileClosed, fileCloseFailed,
         stage: diagnostics.stage, modalState: diagnostics.modalState,
+        observe: diagnostics.observe, observerFailed: diagnostics.observerFailed,
+        observerStopped: diagnostics.observerStopped, observerOverflow: diagnostics.observerOverflow,
         caseFailure: () => diagnostics.caseFailure(snapshot()) };
 }
