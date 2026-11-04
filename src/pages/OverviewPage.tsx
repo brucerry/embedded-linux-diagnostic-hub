@@ -14,7 +14,7 @@ import {
     Unplug,
 } from 'lucide-react';
 import { useMemo } from 'react';
-import { evidence, formatKiB, summarize } from '../../shared/diagnostics/metrics';
+import { evidence, formatMemoryDetail, summarize } from '../../shared/diagnostics/metrics';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
 import type { Category, Probe, Snapshot } from '../../shared/types';
 import { RoundedIcon } from '../components/RoundedIcon';
@@ -150,11 +150,7 @@ export function OverviewPage({
                         summary.memory.usedPercent === null ? '—' : `${summary.memory.usedPercent}`
                     }
                     unit={summary.memory.usedPercent === null ? '' : '%'}
-                    detail={
-                        summary.memory.total
-                            ? `${formatKiB(summary.memory.available ?? summary.memory.free ?? 0)} ${summary.memory.available === null ? 'free' : 'available'} of ${formatKiB(summary.memory.total)}`
-                            : 'Memory data unavailable'
-                    }
+                    detail={formatMemoryDetail(summary.memory)}
                 >
                     <Progress value={summary.memory.usedPercent ?? 0} />
                 </Metric>
