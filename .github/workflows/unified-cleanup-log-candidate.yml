@@ -1,0 +1,244 @@
+name: Candidate unified cleanup without artifact storage
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/unified-cleanup-log-candidate-232]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: unified-cleanup-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        outputs:
+            payload: ${{ steps.receipt.outputs.payload }}
+            digest: ${{ steps.receipt.outputs.digest }}
+            bytes: ${{ steps.receipt.outputs.bytes }}
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/unified-cleanup-log-candidate-232
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/lc-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_UNIFIED_CLEANUP_SCOPE=%s\n' "$scope"
+                      printf 'HUB_UNIFIED_CLEANUP_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: b1ae35ee059e48b2733b6270b5cbe67b2fbeafd0
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = b1ae35ee059e48b2733b6270b5cbe67b2fbeafd0
+                  test "$(git -C application rev-parse HEAD)" = b1ae35ee059e48b2733b6270b5cbe67b2fbeafd0
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = f5f3db39583fb63a33aab708fc12353fbdc0d311
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/unified-cleanup-log-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected cleanup retry sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/unified-cleanup-log-candidate.config.ts');
+                  if (hash(config) !== 'e955840e201e1f75dec1624fd66714a87be8ce94f163c3bcaa2e972dc6c27ebf')
+                    throw Error('Changed sandboxed cleanup retry configuration');
+                  const pins = {"package.json":"77811e04b711dd9e0bf6f781e6b243c9f25219193719d9faa2624d8269657d2c","shared/automation-result.ts":"7299b32a5232ac8d145ef7dfd2aceeca49c1e1e2996281b150357ae86ad71d17","shared/automation-stream.ts":"ec7f5d5817e6ce1ab75f584adf91d023cc0118bb06b5fcafc8ebd96c7430269f","shared/automation-time.ts":"30c10d81a5b9561bb7542fd70ef9742a8f9ae8a80e95280e110a17b1ef13ab6f","shared/automation.ts":"5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4","shared/capture-export.ts":"67940983c706225bc3f5f58348dab37b0a1d8e03f0a9df64594aaaae982c86a8","shared/capture-query.ts":"78ee18109e662aa09b5147d19ed995c207b2073f2065af8448a8ee8b8eefefca","shared/capture-report.ts":"68689b44dd4f7077dcd1054553026004aad48e1ee3f516bbf68e28c1b4d6f4bb","shared/capture-search.ts":"3a368e6634ef05d0acf8dc0f354b78b16d94a53e8a3350e424855f7e44a7b425","shared/capture-store.ts":"5cc2fe2ac3027d9c87b4d06d12d14a342f4c160f92961abd43502f3249ff8568","shared/console-archive-rpc.ts":"2e78223655aed50b5755b881370805985f0a2353a25f6a4ad7120f909bfce8cd","shared/console-journal.ts":"e07f9d57c27478eda40b9818d0a04b8b17ab6068747ff988b1e4d53565c8cbf9","shared/console-query.ts":"4f36610b86eb6eab459b40dd22e6bd5db689e5ee4c3291d082473d094769ae6c","shared/console-report.ts":"3c5facca0bef1676cdadae5c802587c5bba8b69998a0e0d01093131d22504742","shared/console-rpc.ts":"b24c43ddd12bea7d73591d45d6e9ad764c42284051d84ebd17f82170fd75c843","shared/console-storage.ts":"8f4c67a9f6b934e4c2e7981fa4a3334e553b4de32671edb504847100a7b84788","shared/ssh-console.ts":"59a78da3e3d3942cdd0d044d2208436d50a6e7cff8f07e58f3c0871bebaa0e9c","shared/ssh-stream-rpc.ts":"f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2","src/app/App.tsx":"2f3cf67deb14a62cb3fe0c97dfcaddd556ec7d6343e970a1b8428658c577e90a","src/features/automation/AutomationPage.tsx":"ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4","src/features/automation/capture/console-archive.ts":"91b00037270c3bfe0a42ae08bbb4310a848e92a2a09b88d915440e9cc9968a05","src/features/automation/capture/console-backend.ts":"f833c7e1d15f402a5cebdb4c8bcfa7229ef00126c213266452dacdb60ae0be52","src/features/automation/capture/ssh-console-client.ts":"ab045092c0e34678684e4db48e9493ad66166d3e393c39965c044b6cd1c6f801","src/features/automation/capture/use-console-results.ts":"cafb9d2cd56d3da00b4968d1e7436fb7872268758cb23c108671e6072b27da48","src/features/automation/runner.ts":"cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a","src/hooks/useDeviceSession.ts":"88e161fa297d78830f211e336a74588238ce7b40a8ba85bf03bac4e9932b8884","tests/automation-cleanup-retry-client-contract.test.ts":"1376ac28d6a244b1662467f09be2882a16089defcf151d2cdddff1bb3b358570","tests/fixtures/runner-cancel-fixture.ts":"d862e87b6cd97cfa46f9b61bca35919756f9a12b5416ea349c065f577066d446","tests/ui/cleanup-retry-outcome.spec.ts":"4c9ae5ef1ba21e2b99398d326a40668476111e72504f41a68c9531b79833b7a7","tests/ui/fixtures/cleanup-retry.ts":"1504eac07e6a0d5fa474810e4877315983a4f986c5af6653da4098ed8ee72ca7","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","vite.config.mts":"cfadddb9f251753919be202a8e0c96888fa1a381753c1053b854e0cf408b08a1","shared/types.ts":"fca52a42e06b0582cc103ed63e74610b0eb8fbbc41f123d69e4d030fe8617f88","shared/capture-rpc.ts":"255f7434b7bbadda2401f3245902fe2ac40add0dab610f7d154363e655fe9949","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","src/hooks/useDeviceClock.ts":"a1005f5e2554dfd628e2381790bd15e3c324cc2786f6cdbfb48540b5778fb7bf","src/components/DeviceClock.tsx":"bf4aa1734fa4299a251df9458b0cf3d31d04a74f0979b39e8f201a1c32d09ae9","src/hooks/useSerialSession.ts":"da51a179ec073b28498abb09cfcf47a2ea602836728727be7ae36737b0b086bc","src/features/serial/SerialPage.tsx":"827a50016dee4ddba1bb1e8b9c61363a0fba1b37eba6ff511eb9d31a0309ee60","src/features/serial/session.ts":"979ef0a9175fa9d96f6f916599e17282d2271723ca843b3431e626b53e70d464","src/features/serial/admission.ts":"fa18a47312d2110fb1fbce2e2c1aa6c01d55b5efb61e2d5cf288258dcc3d161d","src/features/automation/activity-release.ts":"5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b","src/features/automation/capture/repository.ts":"80b7f6c953183287cb4ae7e711d73cfc472ecab9f2abb32ce6be3f2147404a28","src/features/automation/capture/serial-backend.ts":"b26d5961bd678da2b68f434ba8d3f324be39ab2afcb94063d6feb272569bc5e2","src/features/automation/capture/indexeddb-store.ts":"c7e5c7c9b6caa52552b1e566bfdc67d9db5057d4d2385eba18a1ff819bd34fee","src/features/automation/capture/StoredSerialResults.tsx":"660986c37bfb4d7f14efbbf81404fe853ebed00f5c111f0f216b507564becd5e","tests/ui/activity-release-retry.spec.ts":"2194be33f84794fec9d10d60b0e526e203667fbc5f57a9185417d9ef83f48b19","tests/ui/fixtures/activity-release-retry.ts":"fe16c5ac6bdbe05a6ad77f6d8233a2b0116d1e06dc4b892c501000458f0a06df","tests/ui/fixtures/serial.ts":"318d0ff4e09e58bcb33a8aa980a43da963a80e9a2227742fddc0e53da516e50c","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","electron/automation-activity.ts":"1a3e969e9545476ca0157c6504e9df072ff1240e68e512ef4fc6370aa573d95c","package-lock.json":"19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3","src/features/terminal/TerminalPage.tsx":"c67ae2cf6789d84a9dc6f15324faa4616b5585f7b779c323da09f21d2152ff39"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected cleanup retry input: ' + file);
+                  }
+                  fs.mkdirSync('.unified-cleanup-ci');
+                  fs.writeFileSync('.unified-cleanup-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the two unified cleanup cases once
+              id: sdk
+              working-directory: application
+              shell: bash
+              run: |
+                  set +e
+                  node node_modules/playwright/cli.js test --config .unified-cleanup-ci/config.ts > "$HUB_UNIFIED_CLEANUP_SCOPE/test.log" 2>&1
+                  sdk_exit=$?
+                  set -e
+                  SDK_EXIT="$sdk_exit" node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const exitCode = Number(process.env.SDK_EXIT);
+                  if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) throw Error('Invalid SDK command outcome');
+                  fs.writeFileSync(path.join(process.env.HUB_UNIFIED_CLEANUP_SCOPE, 'sdk-outcome.json'),
+                    JSON.stringify({ schema: 1, exitCode }), { flag: 'wx' });
+                  NODE
+                  exit "$sdk_exit"
+            - name: Project the bounded receipt to job outputs
+              if: always()
+              id: receipt
+              env:
+                  SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const { pathToFileURL } = require('node:url');
+                  const { createHash } = require('node:crypto');
+                  (async () => {
+                    const scope = process.env.HUB_UNIFIED_CLEANUP_SCOPE;
+                    if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) return;
+                    const file = path.join(scope, 'report.json');
+                    if (fs.statSync(file).size > 1048576) throw Error('RAW_REPORT_CAP');
+                    const outcomeFile = path.join(scope, 'sdk-outcome.json');
+                    if (!fs.existsSync(outcomeFile) || fs.statSync(outcomeFile).size > 1024) throw Error('SDK_OUTCOME');
+                    const command = JSON.parse(fs.readFileSync(outcomeFile, 'utf8'));
+                    if (command.schema !== 1 || !Number.isInteger(command.exitCode) || command.exitCode < 0 || command.exitCode > 255) throw Error('SDK_OUTCOME');
+                    const raw = { command, sdkStepOutcome: process.env.SDK_STEP_OUTCOME || null,
+                      source: 'b1ae35ee059e48b2733b6270b5cbe67b2fbeafd0', tooling: process.env.GITHUB_SHA,
+                      run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
+                      report: JSON.parse(fs.readFileSync(file, 'utf8')) };
+                    const helper = path.join(process.env.GITHUB_WORKSPACE, 'tooling/.github/cleanup-log-receipt.mjs');
+                    if (createHash('sha256').update(fs.readFileSync(helper)).digest('hex') !== 'c5a9c8bc1b6b38822ee341a9ea6db1ee08aa8ae806c8c3fd62aa6cb315512000') throw Error('HELPER_CHANGED');
+                    const { encode } = await import(pathToFileURL(helper).href);
+                    const result = encode(raw);
+                    fs.appendFileSync(process.env.GITHUB_OUTPUT, 'payload=' + result.payload + '\n' +
+                      'digest=' + result.digest + '\n' + 'bytes=' + result.bytes + '\n');
+                  })().catch(() => { console.error('BOUNDED_RECEIPT_UNAVAILABLE'); process.exitCode = 1; });
+                  NODE
+    receipt-only:
+        needs: files
+        if: ${{ always() }}
+        runs-on: ubuntu-22.04
+        timeout-minutes: 2
+        permissions: {}
+        steps:
+            - name: Emit only the framed receipt
+              env:
+                  RECEIPT_PAYLOAD: ${{ needs.files.outputs.payload }}
+                  RECEIPT_DIGEST: ${{ needs.files.outputs.digest }}
+                  RECEIPT_BYTES: ${{ needs.files.outputs.bytes }}
+                  PRODUCER_RESULT: ${{ needs.files.result }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  export LC_ALL=C
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/unified-cleanup-log-candidate-232
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$EUID" -ne 0
+                  if [[ ! "$RECEIPT_BYTES" =~ ^[1-9][0-9]{0,4}$ ]] ||
+                     (( RECEIPT_BYTES > 32768 )) ||
+                     [[ ! "$RECEIPT_DIGEST" =~ ^[a-f0-9]{64}$ ]] ||
+                     [[ ! "$RECEIPT_PAYLOAD" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] ||
+                     (( ${#RECEIPT_PAYLOAD} > 43692 )); then
+                      printf '%s\n' HUB_CLEANUP232_UNAVAILABLE
+                      exit 1
+                  fi
+                  printf 'HUB_CLEANUP232_V1 %s %s %s\n' "$RECEIPT_BYTES" "$RECEIPT_DIGEST" "$RECEIPT_PAYLOAD"
+                  test "$PRODUCER_RESULT" = success
