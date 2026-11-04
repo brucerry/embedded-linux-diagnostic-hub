@@ -1,0 +1,244 @@
+name: Candidate LAN JSON syntax without artifact storage
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/lan-json-syntax-candidate-241-20261104]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: lan-json-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        outputs:
+            payload: ${{ steps.receipt.outputs.payload }}
+            digest: ${{ steps.receipt.outputs.digest }}
+            bytes: ${{ steps.receipt.outputs.bytes }}
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/lan-json-syntax-candidate-241-20261104
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/lj-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_LAN_SCOPE=%s\n' "$scope"
+                      printf 'HUB_LAN_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: a6ab44e1196a13c8a4d858a6cb026bb06d22b237
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = a6ab44e1196a13c8a4d858a6cb026bb06d22b237
+                  test "$(git -C application rev-parse HEAD)" = a6ab44e1196a13c8a4d858a6cb026bb06d22b237
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 8e9023a5d812be0fb03c5e49abf0c7b111be68c1
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/lan-json-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected LAN JSON syntax sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/lan-json-candidate.config.ts');
+                  if (hash(config) !== 'dace01b530f5a9f81947adc416f4762b25ff12fdc81dc1ed05eb1dac49e49898')
+                    throw Error('Changed sandboxed LAN JSON syntax configuration');
+                  const pins = {"package.json":"77811e04b711dd9e0bf6f781e6b243c9f25219193719d9faa2624d8269657d2c","package-lock.json":"19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3","vite.config.mts":"cfadddb9f251753919be202a8e0c96888fa1a381753c1053b854e0cf408b08a1","index.html":"6bd1551ed4c62d69965cdec8daeb16bd2d622e36f983f61ea93d1bd4366c1e56","tests/ui/lan-json-syntax.spec.ts":"f523e30d1f899532acbe8c7b9f9de72f62696a51d9dc0f17577646a0ad71db08","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/network-json-syntax-ui.ts":"a37abea203672e9dfefd057e762dd5f2264620d1f8abcb5c10d626b84d5c5aa6","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/report.ts":"c1affc12a8481b6d4d8ce8ffe7f74ee7810a7b9e4a3ec229b6f88eae70e5e128","shared/diagnostics/network/json.ts":"cdc23f2e02cba517032f64f42c208853c30843f9e066100683b66bf17c9a1dd0","shared/diagnostics/network/lan.ts":"47310fd4d1aa1b265c4d29efd5ed1d06c1a79250c71242386aefffd4f956b564","shared/diagnostics/network/model.ts":"0960cb63e750bf6a5da03065b0eca8bfd49cdd4ba785550027047725ae5c5c9d","shared/diagnostics/network/evidence.ts":"9791c9cc25cd426b5b30eec0cc599e4ccf3dd24a11d8c019373a93a6c40594ef","shared/diagnostics/presentation.ts":"42bca13b41f91d1976627fb62a03d01d5fcd1e4b8b15e70f478adad3c3a6588b","src/features/network/NetworkSummary.tsx":"af532e419359591b5547a597c678f451f8bdad4f3d6f5fd771dd22c60fffd8f6","src/features/evidence/EvidenceModal.tsx":"4cfa997a12752ee2023418d449c4371b30299c42ccc47e35e8d3915df355d7a5","src/hooks/useDeviceSession.ts":"88e161fa297d78830f211e336a74588238ce7b40a8ba85bf03bac4e9932b8884","src/services/history.ts":"b22571523543465fda6a718f3c1909b0f64113ea679ec89e459fd2576c3ca8e7","src/services/history.worker.ts":"24712b1a5da94e99a924fb830ffa9da782f7bac024f123575a6377600a44f1e2","src/pages/OverviewPage.tsx":"ce10466affb9c4b608609aa46c96d95b214b39f6dfbbd139e797c30e766103e0","src/pages/DiagnosticsPage.tsx":"75dc6688ffacf635d872fbf8dc517f1aea7b3482ad885846aede671122bfce37","src/components/Nav.tsx":"c8a57cc7526969be41d58b903c658c6889d6f27d0fad65eda3e34f65da798b42","src/app/App.tsx":"f50177d6153738876d1715b460412b1fa9b06986a47e6e44f8cef42e6eeb5f63"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected LAN JSON syntax input: ' + file);
+                  }
+                  fs.mkdirSync('.lan-json-ci');
+                  fs.writeFileSync('.lan-json-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the one LAN JSON syntax case once
+              id: sdk
+              working-directory: application
+              shell: bash
+              run: |
+                  set +e
+                  node node_modules/playwright/cli.js test --config .lan-json-ci/config.ts > "$HUB_LAN_SCOPE/test.log" 2>&1
+                  sdk_exit=$?
+                  set -e
+                  SDK_EXIT="$sdk_exit" node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const exitCode = Number(process.env.SDK_EXIT);
+                  if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) throw Error('Invalid SDK command outcome');
+                  fs.writeFileSync(path.join(process.env.HUB_LAN_SCOPE, 'sdk-outcome.json'),
+                    JSON.stringify({ schema: 1, exitCode }), { flag: 'wx' });
+                  NODE
+                  exit "$sdk_exit"
+            - name: Project the bounded receipt to job outputs
+              if: always()
+              id: receipt
+              env:
+                  SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const { pathToFileURL } = require('node:url');
+                  const { createHash } = require('node:crypto');
+                  (async () => {
+                    const scope = process.env.HUB_LAN_SCOPE;
+                    if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) return;
+                    const file = path.join(scope, 'report.json');
+                    if (fs.statSync(file).size > 1048576) throw Error('RAW_REPORT_CAP');
+                    const outcomeFile = path.join(scope, 'sdk-outcome.json');
+                    if (!fs.existsSync(outcomeFile) || fs.statSync(outcomeFile).size > 1024) throw Error('SDK_OUTCOME');
+                    const command = JSON.parse(fs.readFileSync(outcomeFile, 'utf8'));
+                    if (command.schema !== 1 || !Number.isInteger(command.exitCode) || command.exitCode < 0 || command.exitCode > 255) throw Error('SDK_OUTCOME');
+                    const raw = { command, sdkStepOutcome: process.env.SDK_STEP_OUTCOME || null,
+                      source: 'a6ab44e1196a13c8a4d858a6cb026bb06d22b237', tooling: process.env.GITHUB_SHA,
+                      run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
+                      report: JSON.parse(fs.readFileSync(file, 'utf8')) };
+                    const helper = path.join(process.env.GITHUB_WORKSPACE, 'tooling/.github/lan-json-log-receipt.mjs');
+                    if (createHash('sha256').update(fs.readFileSync(helper)).digest('hex') !== 'bf22236e4be294b21177cf536ab07be86ea3a9d722132bc69f0f365d01e240d9') throw Error('HELPER_CHANGED');
+                    const { encode } = await import(pathToFileURL(helper).href);
+                    const result = encode(raw);
+                    fs.appendFileSync(process.env.GITHUB_OUTPUT, 'payload=' + result.payload + '\n' +
+                      'digest=' + result.digest + '\n' + 'bytes=' + result.bytes + '\n');
+                  })().catch(() => { console.error('BOUNDED_RECEIPT_UNAVAILABLE'); process.exitCode = 1; });
+                  NODE
+    receipt-only:
+        needs: files
+        if: ${{ always() }}
+        runs-on: ubuntu-22.04
+        timeout-minutes: 2
+        permissions: {}
+        steps:
+            - name: Emit only the framed receipt
+              env:
+                  RECEIPT_PAYLOAD: ${{ needs.files.outputs.payload }}
+                  RECEIPT_DIGEST: ${{ needs.files.outputs.digest }}
+                  RECEIPT_BYTES: ${{ needs.files.outputs.bytes }}
+                  PRODUCER_RESULT: ${{ needs.files.result }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  export LC_ALL=C
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/lan-json-syntax-candidate-241-20261104
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$EUID" -ne 0
+                  if [[ ! "$RECEIPT_BYTES" =~ ^[1-9][0-9]{0,4}$ ]] ||
+                     (( RECEIPT_BYTES > 32768 )) ||
+                     [[ ! "$RECEIPT_DIGEST" =~ ^[a-f0-9]{64}$ ]] ||
+                     [[ ! "$RECEIPT_PAYLOAD" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] ||
+                     (( ${#RECEIPT_PAYLOAD} > 43692 )); then
+                      printf '%s\n' HUB_LAN241_UNAVAILABLE
+                      exit 1
+                  fi
+                  printf 'HUB_LAN241_V1 %s %s %s\n' "$RECEIPT_BYTES" "$RECEIPT_DIGEST" "$RECEIPT_PAYLOAD"
+                  test "$PRODUCER_RESULT" = success
