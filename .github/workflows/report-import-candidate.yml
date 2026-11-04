@@ -1,0 +1,192 @@
+name: Candidate historical report import only
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/integration216-report-import]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: report-import-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/integration216-report-import
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/ri-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_REPORT_IMPORT_SCOPE=%s\n' "$scope"
+                      printf 'HUB_REPORT_IMPORT_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: 4745d466139031de2c81e5b3e3b19ea8b24d72bf
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = 4745d466139031de2c81e5b3e3b19ea8b24d72bf
+                  test "$(git -C application rev-parse HEAD)" = 4745d466139031de2c81e5b3e3b19ea8b24d72bf
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 825f83b3489382bdf68518f4135e6cd60ebfec79
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/report-import-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected report import sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/report-import-candidate.config.ts');
+                  if (hash(config) !== '3521bf6449065a17b06bae4eb9553b7fb3fac2b7e91c65688d6c67335d448001')
+                    throw Error('Changed sandboxed report import configuration');
+                  const pins = {"tests/ui/report-import-reliability.spec.ts":"d9c1ff8557c355f48ad58a29f95f1b54d846b7fc25f816ec341bb486627e019a","tests/ui/fixtures/report-import-data.ts":"fbd32bcb7b2723f4cd9fcec181e43fa5eab1828233654996317e6a0b08eb55d2","tests/report-import-data-memory.test.ts":"0b36df07adbdae33e11cd1988c26bbab11380aea29538971d9986233712ce8a4","src/hooks/useDeviceSession.ts":"88e161fa297d78830f211e336a74588238ce7b40a8ba85bf03bac4e9932b8884","src/app/App.tsx":"2f3cf67deb14a62cb3fe0c97dfcaddd556ec7d6343e970a1b8428658c577e90a","src/pages/OverviewPage.tsx":"84eb190f99646ece52d79b33d11f43bbd100514aa91d73150ac5dade583fee51","src/pages/DiagnosticsPage.tsx":"75dc6688ffacf635d872fbf8dc517f1aea7b3482ad885846aede671122bfce37","src/features/evidence/EvidenceModal.tsx":"4cfa997a12752ee2023418d449c4371b30299c42ccc47e35e8d3915df355d7a5","src/components/Modal.tsx":"b25b760fba3f9ce684933780ef367b247c33634f8c09b8aa049e66894363bcff","src/services/history.ts":"b22571523543465fda6a718f3c1909b0f64113ea679ec89e459fd2576c3ca8e7","src/services/history.worker.ts":"24712b1a5da94e99a924fb830ffa9da782f7bac024f123575a6377600a44f1e2","shared/report.ts":"c1affc12a8481b6d4d8ce8ffe7f74ee7810a7b9e4a3ec229b6f88eae70e5e128","shared/report-time.ts":"7b67b37d77a865bed490fb08f74cd5516c0a2d5c2b28a9c6144916a45e9be10e","shared/project.ts":"68ba5fcb24d8dd6675d7525001642d75acef3f79fe72b1946dcc627a7198d110","shared/types.ts":"fca52a42e06b0582cc103ed63e74610b0eb8fbbc41f123d69e4d030fe8617f88","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/presentation.ts":"c48aa75e84ffbd7dbd981171c615524f3a1421bae121fcaf418708d99d7a09d0","shared/diagnostics/evidence.ts":"c57dda1e499c82025e39b952b7874352192d667cbe831bea4caa79af151e49e7","shared/diagnostics/metrics.ts":"a3b58ce030b24e21079297364e3c17409b83dfeb65cad386ff79ae21d2d760d4","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/diagnostics/network/evidence.ts":"9791c9cc25cd426b5b30eec0cc599e4ccf3dd24a11d8c019373a93a6c40594ef","package.json":"77811e04b711dd9e0bf6f781e6b243c9f25219193719d9faa2624d8269657d2c","package-lock.json":"19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3","vite.config.mts":"cfadddb9f251753919be202a8e0c96888fa1a381753c1053b854e0cf408b08a1","shared/diagnostics/network/model.ts":"0960cb63e750bf6a5da03065b0eca8bfd49cdd4ba785550027047725ae5c5c9d","src/features/network/NetworkSummary.tsx":"af532e419359591b5547a597c678f451f8bdad4f3d6f5fd771dd22c60fffd8f6","src/features/automation/runner.ts":"cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a","src/features/automation/AutomationPage.tsx":"ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4","src/features/automation/activity-release.ts":"5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected report import input: ' + file);
+                  }
+                  fs.mkdirSync('.report-import-ci');
+                  fs.writeFileSync('.report-import-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the historical report import reliability case once
+              working-directory: application
+              shell: bash
+              run: |
+                  node node_modules/playwright/cli.js test --config .report-import-ci/config.ts > "$HUB_REPORT_IMPORT_SCOPE/test.log" 2>&1
+            - name: Bound the candidate receipt
+              if: always()
+              id: receipt
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const scope = process.env.HUB_REPORT_IMPORT_SCOPE;
+                  if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) process.exit(0);
+                  const file = path.join(scope, 'report.json');
+                  if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  const receipt = JSON.stringify({
+                    source: '4745d466139031de2c81e5b3e3b19ea8b24d72bf',
+                    tooling: process.env.GITHUB_SHA,
+                    run: process.env.GITHUB_RUN_ID,
+                    attempt: process.env.GITHUB_RUN_ATTEMPT,
+                    report: JSON.parse(fs.readFileSync(file, 'utf8'))
+                  });
+                  if (Buffer.byteLength(receipt) > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  fs.writeFileSync(path.join(scope, 'receipt.json'), receipt, { flag: 'wx' });
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n');
+                  NODE
+            - uses: actions/upload-artifact@v4
+              if: always() && steps.receipt.outputs.ready == 'true'
+              with:
+                  name: report-import-candidate-4745d46-${{ github.run_id }}
+                  path: ${{ env.HUB_REPORT_IMPORT_SCOPE }}/receipt.json
+                  if-no-files-found: error
+                  retention-days: 3

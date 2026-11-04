@@ -1,133 +1,54 @@
-name: Verify and build Linux application
+name: Current combined source - private Linux packages only
 
+# Publication/execution is a separate explicit decision. One new branch push admits
+# one job only after current visibility/access/runner/billing allowance checks.
+# No paid upgrade, permission expansion or native qualification is implied.
 on:
-    workflow_call:
-    workflow_dispatch:
-        inputs:
-            artifact_only:
-                description: 'Private build artifacts only; no app/native qualification or publication'
-                type: boolean
-                default: false
-            app_source_sha:
-                description: 'Reviewed exact application commit (different from workflow commit)'
-                type: string
-                default: ''
-            build_id:
-                description: 'Fresh independently chosen lowercase 32-hex private build identity'
-                type: string
-                default: ''
     push:
-        branches: [main]
-    pull_request:
+        branches: [ci/integration216-linux-package-readback]
 
 permissions:
     contents: read
 
 concurrency:
-    group: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_only == true && format('linux-private-artifact-{0}', github.run_id) || format('linux-{0}-{1}', github.workflow, github.ref) }}
-    cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.artifact_only == true) }}
+    group: linux-private-integrated-${{ github.run_id }}
+    cancel-in-progress: false
 
 jobs:
-    build:
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.artifact_only == true) }}
-        runs-on: ubuntu-22.04
-        timeout-minutes: 30
-        steps:
-            - uses: actions/checkout@v6
-            - uses: actions/setup-node@v7
-              with:
-                  node-version: '24'
-                  cache: npm
-            - run: npm ci
-            - run: npm run verify
-            - name: Build isolated JS runtime and require reviewed memory policy
-              # No dependency mutation: the memory launcher derives and verifies its own JS-only SSH bundle.
-              # Policy must still come from final combined-candidate calibration and review.
-              env:
-                  HUB_MEMORY_POLICY: ${{ vars.HUB_MEMORY_POLICY }}
-                  HUB_MEMORY_POLICY_SHA256: ${{ vars.HUB_MEMORY_POLICY_SHA256 }}
-              run: |
-                  mkdir -p validation/memory
-                  if [ -z "$HUB_MEMORY_POLICY" ] || ! [[ "$HUB_MEMORY_POLICY_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
-                      echo '{"status":"blocked","reason":"Reviewed exact-source/runtime memory policy and independent SHA256 are required"}' > validation/memory/ci-adoption-blocked.json
-                      echo '::error::Memory gate blocked: provide the exact reviewed Ubuntu policy and its independently approved SHA256 first.'
-                      exit 1
-                  fi
-                  npm run test:memory:fast -- --policy="$HUB_MEMORY_POLICY" --policy-sha256="$HUB_MEMORY_POLICY_SHA256"
-              timeout-minutes: 3
-            - name: Retain memory diagnostic receipt, including failures
-              if: always()
-              uses: actions/upload-artifact@v4
-              with:
-                  name: linux-node-memory-resource
-                  path: |
-                      validation/memory/
-                      validation/memory-runtime/
-                  if-no-files-found: error
-            - run: npx playwright install --with-deps chromium
-            - run: npm run test:e2e
-            - run: npm run package:linux
-            - run: npm run verify:linux
-            - name: Run the packaged Linux application over loopback SSH
-              run: xvfb-run -a npx tsx tests/desktop-smoke.ts
-              env:
-                  HUB_TEST_SANDBOX: '1'
-                  HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
-            - name: Verify native windows on Linux
-              run: xvfb-run -a npx tsx tests/native-window-smoke.ts
-              env:
-                  HUB_TEST_SANDBOX: '1'
-                  HUB_TEST_EXECUTABLE: ${{ github.workspace }}/release/linux-unpacked/AppRun
-            - name: Run AppImage without FUSE
-              run: xvfb-run -a npx tsx tests/desktop-smoke.ts
-              env:
-                  HUB_TEST_SANDBOX: '1'
-                  HUB_TEST_EXECUTABLE:
-                      ${{ github.workspace }}/release/Diagnostic-Hub-linux-x64.AppImage
-                  HUB_TEST_APPIMAGE: '1'
-            - name: Build distinct future-version AppImage handoff fixture
-              run: node scripts/build-update-fixture.mjs
-            - name: Verify portable update download and actual AppImage relaunch
-              run: xvfb-run -a npm run test:desktop-update
-              env:
-                  HUB_TEST_SANDBOX: '1'
-            - name: Record Linux build identity
-              run: node scripts/record-linux-build.mjs
-            - run: npm run checksums
-            - uses: actions/upload-artifact@v4
-              with:
-                  name: Diagnostic-Hub-linux-x64
-                  path: |
-                      release/Diagnostic-Hub-linux-x64.AppImage
-                      release/Diagnostic-Hub-linux-x64.AppImage.sha256
-                      release/Diagnostic-Hub-linux-x64.tar.gz
-                      release/Diagnostic-Hub-linux-x64.tar.gz.sha256
-                      release/linux-build-info.json
-                  if-no-files-found: error
-            - name: Retain isolated update handoff evidence separately
-              uses: actions/upload-artifact@v4
-              with:
-                  name: linux-update-handoff-evidence
-                  path: validation/update-handoff/
-                  if-no-files-found: error
     private-artifacts:
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_only == true }}
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' && github.run_attempt == 1
         runs-on: ubuntu-22.04
         timeout-minutes: 30
         env:
             DH_ARTIFACT_ONLY: 'true'
-            DH_APP_SOURCE_SHA: ${{ inputs.app_source_sha }}
-            DH_BUILD_ID: ${{ inputs.build_id }}
+            DH_APP_SOURCE_SHA: '4745d466139031de2c81e5b3e3b19ea8b24d72bf'
+            DH_BUILD_ID: 'e95f5e37029a4d34bd5dc53ba7f4cc38'
+            DH_WORKFLOW_FILE_SHA: ${{ github.workflow_sha }}
             NODE_DISABLE_COMPILE_CACHE: '1'
         steps:
-            - name: Admit manual first attempt and fresh checkout slots
+            - name: Require one fresh non-root hosted job before checkout
               shell: bash
               run: |
                   set -euo pipefail
-                  [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+                  [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+                  [[ "$RUNNER_ENVIRONMENT" == github-hosted && "$(id -u)" != 0 ]]
                   [[ "$GITHUB_REPOSITORY" == brucerry/embedded-linux-diagnostic-hub ]]
-                  [[ "$DH_APP_SOURCE_SHA" =~ ^[a-f0-9]{40}$ && "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
-                  [[ "$DH_APP_SOURCE_SHA" != "$GITHUB_SHA" && "$DH_BUILD_ID" =~ ^[a-f0-9]{32}$ ]]
+                  [[ "$GITHUB_REF" == refs/heads/ci/integration216-linux-package-readback ]]
+                  [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ && "$DH_WORKFLOW_FILE_SHA" == "$GITHUB_SHA" ]]
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_DEBUG_NATIVE NODE_USE_ENV_PROXY NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS NODE_V8_COVERAGE HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE REQUESTS_CA_BUNDLE LD_PRELOAD LD_LIBRARY_PATH GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected inherited configuration: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  # A read-only config query does not invoke fsmonitor. Refuse an active helper
+                  # before checkout, without disabling hooks, filters or any Git configuration.
+                  if package_fsmonitor_value=$(/usr/bin/git config --type=bool --get core.fsmonitor); then
+                      [[ "$package_fsmonitor_value" == false ]]
+                  else
+                      package_git_status=$?
+                      [[ "$package_git_status" == 1 ]]
+                  fi
                   for slot in application tooling private-artifacts; do
                       [[ ! -e "$GITHUB_WORKSPACE/$slot" && ! -L "$GITHUB_WORKSPACE/$slot" ]]
                   done
@@ -135,7 +56,7 @@ jobs:
               with:
                   ref: ${{ github.sha }}
                   path: tooling
-                  fetch-depth: 1
+                  fetch-depth: 2
                   persist-credentials: false
                   clean: false
                   set-safe-directory: false
@@ -143,7 +64,7 @@ jobs:
                   lfs: false
             - uses: actions/checkout@v6
               with:
-                  ref: ${{ inputs.app_source_sha }}
+                  ref: 4745d466139031de2c81e5b3e3b19ea8b24d72bf
                   path: application
                   fetch-depth: 1
                   persist-credentials: false
@@ -156,161 +77,43 @@ jobs:
                   node-version: '24.22.0'
             - name: Admit exact source and 16 GiB dependency headroom
               timeout-minutes: 2
-              run: node tooling/scripts/linux-artifact-ci.mjs admit
-            - name: Install locked build dependencies in the new checkout
+              run: node tooling/scripts/linux-private-integrated-ci.mjs admit
+            - name: Install only locked dependencies with preserved HOME and owned caches
               timeout-minutes: 8
-              working-directory: application
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  node="$(command -v node)"
-                  npm_cli="$(dirname "$node")/../lib/node_modules/npm/bin/npm-cli.js"
-                  root="$GITHUB_WORKSPACE/private-artifacts/$DH_BUILD_ID"
-                  env -i PATH="$(dirname "$node"):/usr/local/bin:/usr/bin:/bin" LC_ALL=C CI=true \
-                      HOME="$root/home" NODE_DISABLE_COMPILE_CACHE=1 NO_UPDATE_NOTIFIER=1 \
-                      NPM_CONFIG_USERCONFIG="$root/npm-user.npmrc" NPM_CONFIG_GLOBALCONFIG="$root/npm-global.npmrc" \
-                      npm_config_cache="$root/npm-cache" ELECTRON_CACHE="$root/electron-cache" \
-                      ELECTRON_BUILDER_CACHE="$root/builder-cache" \
-                      "$node" "$npm_cli" ci --no-audit --no-fund
+              run: node tooling/scripts/linux-private-integrated-ci.mjs dependencies
             - name: Record tool manifests and require 12 GiB packaging headroom
               timeout-minutes: 2
-              run: node tooling/scripts/linux-artifact-ci.mjs pre-package
-            - name: Build only the existing AppImage and tar targets
+              run: node tooling/scripts/linux-private-integrated-ci.mjs pre-package
+            - name: Build only existing AppImage and tar targets; never launch them
               timeout-minutes: 12
-              working-directory: application
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  node="$(command -v node)"
-                  npm_cli="$(dirname "$node")/../lib/node_modules/npm/bin/npm-cli.js"
-                  root="$GITHUB_WORKSPACE/private-artifacts/$DH_BUILD_ID"
-                  env -i PATH="$(dirname "$node"):/usr/local/bin:/usr/bin:/bin" LC_ALL=C CI=true \
-                      HOME="$root/home" NODE_DISABLE_COMPILE_CACHE=1 NO_UPDATE_NOTIFIER=1 \
-                      NPM_CONFIG_USERCONFIG="$root/npm-user.npmrc" NPM_CONFIG_GLOBALCONFIG="$root/npm-global.npmrc" \
-                      npm_config_cache="$root/npm-cache" ELECTRON_CACHE="$root/electron-cache" \
-                      ELECTRON_BUILDER_CACHE="$root/builder-cache" \
-                      "$node" "$npm_cli" run package:linux
+              run: node tooling/scripts/linux-private-integrated-ci.mjs package
             - name: Bind private records and account every upload byte
               timeout-minutes: 5
-              run: node tooling/scripts/linux-artifact-ci.mjs finalize
+              run: node tooling/scripts/linux-private-integrated-ci.mjs finalize
             - name: Retain only the checked private artifact cohort
               if: ${{ success() }}
               timeout-minutes: 5
               uses: actions/upload-artifact@v4
               with:
-                  name: linux-private-${{ inputs.build_id }}
+                  name: linux-private-integrated-${{ env.DH_BUILD_ID }}-${{ github.run_id }}
                   path: |
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.AppImage
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.tar.gz
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.AppImage.sha256
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/Diagnostic-Hub-linux-x64.tar.gz.sha256
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/source-manifest.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/private-source.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/tooling-identity.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/admission.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/pre-package.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/flat-inventory.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/diagnostic-hub-setup-payload.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/linux-build-info.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/build-result.json
-                      ${{ github.workspace }}/private-artifacts/${{ inputs.build_id }}/upload/upload-accounting.json
-                  retention-days: 7
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/Diagnostic-Hub-linux-x64.AppImage
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/Diagnostic-Hub-linux-x64.tar.gz
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/Diagnostic-Hub-linux-x64.AppImage.sha256
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/Diagnostic-Hub-linux-x64.tar.gz.sha256
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/source-manifest.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/private-source.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/tooling-identity.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/admission.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/pre-package.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/flat-inventory.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/diagnostic-hub-setup-payload.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/linux-build-info.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/build-result.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/upload/upload-accounting.json
+                      ${{ github.workspace }}/private-artifacts/${{ env.DH_BUILD_ID }}/cohort-receipt.json
+                  retention-days: 3
                   compression-level: 0
                   overwrite: false
                   include-hidden-files: false
-                  if-no-files-found: error
-    gnome:
-        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.artifact_only == true) }}
-        needs: build
-        runs-on: ubuntu-24.04
-        timeout-minutes: 20
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - image: ubuntu:22.04
-                      shell: 42
-                      backend: wayland
-                    - image: ubuntu:22.04
-                      shell: 42
-                      backend: x11
-                    - image: ubuntu:24.04
-                      shell: 46
-                      backend: wayland
-                    - image: ubuntu:24.04
-                      shell: 46
-                      backend: x11
-                    - image: ubuntu:26.04
-                      shell: 50
-                      backend: wayland
-                    - image: debian:13
-                      shell: 48
-                      backend: wayland
-                    - image: debian:13
-                      shell: 48
-                      backend: x11
-        container:
-            image: ${{ matrix.image }}
-            options: --cap-add=SYS_ADMIN --security-opt seccomp=unconfined --shm-size=1g
-        env:
-            HUB_GNOME_ISOLATED: '1'
-            HUB_GNOME_BACKEND: ${{ matrix.backend }}
-        steps:
-            - name: Install isolated qualification prerequisites
-              run: |
-                  apt-get update -qq
-                  audio_package=libasound2t64
-                  if [ '${{ matrix.shell }}' = 42 ]; then audio_package=libasound2; fi
-                  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates curl python3 systemd dbus-x11 xvfb x11-utils x11-apps xdotool gnome-shell pipewire openssh-server openssl util-linux libnss3 libatk-bridge2.0-0 libgbm1 "$audio_package"
-                  if [ "${{ matrix.shell }}" = 50 ]; then apt-get install -y --no-install-recommends mutter-dev-bin wireplumber; fi
-                  mkdir -p /run/dbus /run/systemd/seats /run/systemd/sessions /run/systemd/users /run/systemd/inhibit
-                  dbus-daemon --system --fork
-                  # The job container does not boot systemd. D-Bus activation uses
-                  # Exec=/bin/false, so start the real login manager explicitly.
-                  SYSTEMD_LOG_TARGET=console /usr/lib/systemd/systemd-logind > /tmp/hub-ci-logind.log 2>&1 &
-                  logind_pid=$!
-                  login_ready=0
-                  for attempt in $(seq 1 100); do
-                      if gdbus call --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 --method org.freedesktop.DBus.Properties.Get org.freedesktop.login1.Manager PreparingForSleep > /tmp/hub-ci-login1-preflight.log 2>&1; then
-                          login_ready=1
-                          break
-                      fi
-                      if ! kill -0 "$logind_pid" 2>/dev/null; then break; fi
-                      sleep .2
-                  done
-                  if [ "$login_ready" != 1 ]; then
-                      cat /tmp/hub-ci-logind.log /tmp/hub-ci-login1-preflight.log
-                      exit 1
-                  fi
-            - uses: actions/checkout@v6
-            - uses: actions/setup-node@v7
-              with:
-                  node-version: '24'
-                  cache: npm
-            - uses: actions/download-artifact@v4
-              with:
-                  name: Diagnostic-Hub-linux-x64
-                  path: release
-            - run: npm ci
-            - name: Verify the actual targeted shell and run native qualification
-              run: |
-                  test "$(gnome-shell --version | sed -E 's/.* ([0-9]+)\..*/\1/')" = '${{ matrix.shell }}'
-                  bash tests/gnome-ssh-server.sh
-                  mkdir -p validation/gnome
-                  # Chromium and the real compositor share this private container budget.
-                  # Record and check capacity without sharing the host IPC namespace.
-                  df -B1 /dev/shm > validation/gnome/shared-memory-preflight.txt
-                  python3 -B -c 'import os; s = os.statvfs("/dev/shm"); assert s.f_blocks * s.f_frsize >= 1024 ** 3, "Private shared-memory budget is below 1 GiB"'
-                  cp /tmp/hub-ci-logind.log /tmp/hub-ci-login1-preflight.log validation/gnome/
-                  chown -R hubengineer:hubengineer "$GITHUB_WORKSPACE"
-                  chmod +x release/Diagnostic-Hub-linux-x64.AppImage
-                  export HUB_TEST_EXECUTABLE="$GITHUB_WORKSPACE/release/Diagnostic-Hub-linux-x64.AppImage"
-                  export HUB_TEST_LINUX_CONNECTION="$(cat /tmp/hub-gnome-connection-path)"
-                  export HUB_GNOME_EVIDENCE="$GITHUB_WORKSPACE/validation/gnome"
-                  runuser -u hubengineer --preserve-environment -- bash tests/gnome-session.sh
-            - uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                  name: gnome-evidence-${{ matrix.shell }}-${{ matrix.backend }}
-                  path: validation/gnome
                   if-no-files-found: error

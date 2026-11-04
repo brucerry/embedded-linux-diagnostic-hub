@@ -1,0 +1,192 @@
+name: Candidate mocked update failure UI only
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/integration216-update-failure]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: update-failure-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/integration216-update-failure
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/uf-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_UPDATE_FAILURE_SCOPE=%s\n' "$scope"
+                      printf 'HUB_UPDATE_FAILURE_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: 4745d466139031de2c81e5b3e3b19ea8b24d72bf
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = 4745d466139031de2c81e5b3e3b19ea8b24d72bf
+                  test "$(git -C application rev-parse HEAD)" = 4745d466139031de2c81e5b3e3b19ea8b24d72bf
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 825f83b3489382bdf68518f4135e6cd60ebfec79
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/update-failure-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected update failure sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/update-failure-candidate.config.ts');
+                  if (hash(config) !== 'be8ef883a6bc78639711237e62d46b6425c7b477464cabcdb4896468002be37c')
+                    throw Error('Changed sandboxed update failure configuration');
+                  const pins = {"tests/ui/update-failure-retry.spec.ts":"faba415fe29de918674ec035433883f224bf7cdedd1384d50d9f4389ba1a741b","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","src/features/updates/UpdateModal.tsx":"4095d782e49ddd2e198c478b45982f44274dcb5572cfd9abb9f72998be16d54f","src/components/Modal.tsx":"b25b760fba3f9ce684933780ef367b247c33634f8c09b8aa049e66894363bcff","src/app/App.tsx":"2f3cf67deb14a62cb3fe0c97dfcaddd556ec7d6343e970a1b8428658c577e90a","src/hooks/useDeviceSession.ts":"88e161fa297d78830f211e336a74588238ce7b40a8ba85bf03bac4e9932b8884","shared/types.ts":"fca52a42e06b0582cc103ed63e74610b0eb8fbbc41f123d69e4d030fe8617f88","electron/updates.ts":"ffe6534111bcb92048a5bbb7e34639ceefc0f90b297064c376aa987ad4e60e8b","electron/update-coordinator.ts":"51e753c10932985d211e12b4b066b304fae7d9f25f1b3cd88848995ad85fec93","electron/update-ownership.ts":"e019015944ac47575349ca9ea4428ab209885f29fe0866040aa711381492e6f8","electron/preload.ts":"7904f67fb164c483515ba25356e303e50ce3ce1eb3f09a7394c503509780de93","electron/main.ts":"5c2fb3610fdf1801e521be69cc726572df82d4357c03a2c488695783855b78ef","shared/project.ts":"68ba5fcb24d8dd6675d7525001642d75acef3f79fe72b1946dcc627a7198d110","src/services/errors.ts":"cf3334ac6ece8c4df8f1c7a695d14c61b9edda38f071d24aadd9c88575ee0c1f","shared/diagnostics/network/model.ts":"0960cb63e750bf6a5da03065b0eca8bfd49cdd4ba785550027047725ae5c5c9d","src/features/network/NetworkSummary.tsx":"af532e419359591b5547a597c678f451f8bdad4f3d6f5fd771dd22c60fffd8f6","src/features/automation/runner.ts":"cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a","src/features/automation/AutomationPage.tsx":"ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4","src/features/automation/activity-release.ts":"5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected update failure input: ' + file);
+                  }
+                  fs.mkdirSync('.update-failure-ci');
+                  fs.writeFileSync('.update-failure-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the mocked update failure UI case once
+              working-directory: application
+              shell: bash
+              run: |
+                  node node_modules/playwright/cli.js test --config .update-failure-ci/config.ts > "$HUB_UPDATE_FAILURE_SCOPE/test.log" 2>&1
+            - name: Bound the candidate receipt
+              if: always()
+              id: receipt
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const scope = process.env.HUB_UPDATE_FAILURE_SCOPE;
+                  if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) process.exit(0);
+                  const file = path.join(scope, 'report.json');
+                  if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  const receipt = JSON.stringify({
+                    source: '4745d466139031de2c81e5b3e3b19ea8b24d72bf',
+                    tooling: process.env.GITHUB_SHA,
+                    run: process.env.GITHUB_RUN_ID,
+                    attempt: process.env.GITHUB_RUN_ATTEMPT,
+                    report: JSON.parse(fs.readFileSync(file, 'utf8'))
+                  });
+                  if (Buffer.byteLength(receipt) > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  fs.writeFileSync(path.join(scope, 'receipt.json'), receipt, { flag: 'wx' });
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n');
+                  NODE
+            - uses: actions/upload-artifact@v4
+              if: always() && steps.receipt.outputs.ready == 'true'
+              with:
+                  name: update-failure-candidate-4745d46-${{ github.run_id }}
+                  path: ${{ env.HUB_UPDATE_FAILURE_SCOPE }}/receipt.json
+                  if-no-files-found: error
+                  retention-days: 3
