@@ -179,7 +179,7 @@ test('actual lost finalize reply separates retired host from still-owned client 
     assert.equal(executions, 1);
 });
 
-test('private wiring uses owned IPC, validates readback, and retains the native stale-pin stop before builds', async () => {
+test('private wiring uses owned IPC, validates readback, and checks native source admission before builds', async () => {
     const read = (name: string) => fs.readFile('tests/fixtures/' + name, 'utf8');
     const entry = await read('memory-product-gateway-host.ts');
     assert.match(entry, /void runGatewayHost\(\{ createTarget: createProductTarget, \.\.\.observation \}\)/);
@@ -193,12 +193,9 @@ test('private wiring uses owned IPC, validates readback, and retains the native 
     assert.ok(host.includes("validHostRequest(input, nonce, role === 'ssh-fixture-node' && Boolean(extension))"),
         'Adding a Gateway observer must not admit target controls in the Gateway role.');
     const native = await read('memory-product-native-host.ts');
-    const expected = '005de35d840bcc87567c4530677359986886137c293eb79327305bd6b25c1a9d';
-    assert.ok(native.indexOf(expected) < native.indexOf('await fs.mkdir(desktop'));
-    assert.match(native, /streamOwnership:__memoryObserveHost\(sshSnapshot,__memoryHostBinding,'native'\)/);
-    // This is an observed source mismatch; the native path is not claimed runnable.
+    assert.ok(native.indexOf('await verifyNativeMainSources(sourceRoot)') < native.indexOf('await fs.mkdir(desktop'));
+    assert.match(native, /transformNativeOwnedSource\(source, file, hostBinding\)/);
     const main = await fs.readFile('electron/main.ts', 'utf8');
-    const actual = createHash('sha256').update(main).digest('hex');
-    assert.notEqual(actual, expected);
-    assert.equal(actual, '5c2fb3610fdf1801e521be69cc726572df82d4357c03a2c488695783855b78ef');
+    assert.equal(createHash('sha256').update(main).digest('hex'),
+        '5c2fb3610fdf1801e521be69cc726572df82d4357c03a2c488695783855b78ef');
 });

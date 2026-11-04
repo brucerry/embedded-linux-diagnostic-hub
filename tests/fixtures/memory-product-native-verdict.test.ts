@@ -1,3 +1,4 @@
+import { mainOwnerNames, nativeMainPreimage } from './memory-product-native-main-state';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { observeProductHost, hostPins } from './memory-product-host-ownership';
@@ -6,6 +7,10 @@ import { assertProductNativeShutdown } from './memory-product-native-verdict';
 const streams = () => ({ currentStates: 0, retiringStates: 0, producers: 0, readers: 0,
     pendingAcks: 0, pendingDataBytes: 0, shutdownWaiters: 0 });
 const valid = () => ({
+    mainOwnership: { sourceMain: nativeMainPreimage, quitPhase: 'ready', ownsProfile: true,
+        owners: Object.fromEntries(mainOwnerNames.map(name => [name, 0])),
+        metadata: { reportPublication: null, reportRetirement: null, reportStopping: true,
+            updatePublications: { published: 0, removed: 0, uncertain: 0 }, updateStopping: true } },
     ssh: { streams: streams() },
     streamOwnership: observeProductHost({ streams: streams() }, { protocol: 1,
         production: '96a56cdbb462320c54fe74022d7436e665a31d31', realm: 'native', pins: hostPins('native') }, 'native'),
@@ -18,7 +23,7 @@ const valid = () => ({
         cache: { completed: 12, expiredPins: 3 },
     },
     // No journal was ever opened: this is intentionally not an ended=true requirement.
-    console: { closed: false },
+    console: { references: 0, readers: 0, pins: 0, pendingReaders: 0, pendingPins: 0, requests: 0, exports: 0, transition: false, writer: false, closed: false },
 });
 const options = () => ({
     captureExpected: true,
@@ -188,4 +193,18 @@ test('native false resource boolean cannot mask pending streams or absent source
     const value = valid();
     value.streamOwnership.binding.pins['backend/ssh/session.ts'] = '0'.repeat(64);
     rejects(value);
+});
+
+
+test('main report/update/acquisition custody and production quit phase are mandatory', () => {
+    for (const name of mainOwnerNames) {
+        const snapshot = valid(); snapshot.mainOwnership.owners[name] = 1; rejects(snapshot);
+    }
+    for (const quitPhase of ['idle', 'waiting', 'blocked', 'unknown']) {
+        const snapshot = valid(); snapshot.mainOwnership.quitPhase = quitPhase; rejects(snapshot);
+    }
+    rejects({ ...valid(), mainOwnership: undefined });
+    for (const name of ['references', 'readers', 'pins', 'pendingReaders', 'pendingPins', 'requests', 'exports']) {
+        const snapshot = valid(); Object.assign(snapshot.console, { [name]: 1 }); rejects(snapshot);
+    }
 });

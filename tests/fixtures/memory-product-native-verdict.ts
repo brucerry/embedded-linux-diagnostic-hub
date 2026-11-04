@@ -1,3 +1,4 @@
+import { assertNativeMainRetired, assertNativeConsoleRetired } from './memory-product-native-main-state';
 import { verifyProductHostObservation, assertHostStreamsRetired } from './memory-product-host-ownership';
 /** Private qualification verdict. This validates observed state, never performs cleanup. */
 const ownerNames = ['writer', 'reader', 'pin', 'export', 'rpc', 'cleanup'] as const;
@@ -48,6 +49,8 @@ export function assertProductNativeShutdown(
         own(snapshot, 'ssh', 'snapshot'), 'native');
     const streamRetirement = assertHostStreamsRetired(streamObservation);
     falseValue(own(snapshot, 'consoleHasResources', 'snapshot'), 'consoleHasResources');
+    assertNativeConsoleRetired(own(snapshot, 'console', 'snapshot'));
+    const mainRetirement = assertNativeMainRetired(own(snapshot, 'mainOwnership', 'snapshot'));
     const activity = object(own(snapshot, 'activity', 'snapshot'), 'activity');
     falseValue(own(activity, 'lease', 'activity'), 'activity.lease');
 
@@ -93,6 +96,7 @@ export function assertProductNativeShutdown(
         scope: 'native-owner-snapshot-and-terminal-downloads' as const,
         capturePresent: captureValue !== null,
         streamRetirement,
+        mainRetirement,
         cachedMetadata,
         downloadStates,
     };

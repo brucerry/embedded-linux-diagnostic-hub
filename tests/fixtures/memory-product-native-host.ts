@@ -1,3 +1,4 @@
+import { verifyNativeMainSources, nativeMainSourcePins, transformNativeOwnedSource } from './memory-product-native-main-transform';
 import { verifyProductHostSources } from './memory-product-host-source';
 import { productStartup } from './memory-product-startup';
 import fs from 'node:fs/promises';
@@ -15,55 +16,6 @@ import { runNativeCleanup } from './memory-product-native-cleanup';
 import { assertProductNativeShutdown } from './memory-product-native-verdict';
 import type { AggregateWindowTransition } from './memory-product-aggregate-contract';
 
-const mainProbe = String.raw`
-    let __memoryNativeReadWrapped=false;
-    let __memoryNativeReport:any=null,__memoryNativeReportOrdinal=0;
-    const __memoryNativeDownloads={ready:false,error:null as string|null,next:0,records:[] as any[],navigations:[] as string[]};
-    (globalThis as any).__memoryNativeDownloads=__memoryNativeDownloads;
-    app.whenReady().then(()=>{try{
-    session.defaultSession.on('will-download',(_event,item)=>{
-        const records=__memoryNativeDownloads.records;
-        if(records.length>=16)throw Error('Private native download receipt bound exceeded.');
-        const directory=process.env.HUB_PRODUCT_NATIVE_DOWNLOADS;
-        if(!directory||!path.isAbsolute(directory))throw Error('Private native download destination missing.');
-        const name=item.getFilename();
-        const ordinal=__memoryNativeDownloads.next++;
-        const row={ordinal,file:path.join(directory,ordinal+'-'+name.replace(/[^a-zA-Z0-9._-]/g,'_')),name,state:'started',receivedBytes:0};
-        records.push(row);item.setSavePath(row.file);
-        item.once('done',(_done,state)=>{row.state=state;row.receivedBytes=item.getReceivedBytes();});
-    });
-    __memoryNativeDownloads.ready=true;
-    }catch(error){__memoryNativeDownloads.error=String(error);}});
-    app.on('web-contents-created',(_event,contents)=>contents.on('will-navigate',(_navigation,url)=>{if(__memoryNativeDownloads.navigations.length<16)__memoryNativeDownloads.navigations.push(url.slice(0,512));}));
-    const __memoryNativeSnapshot=()=>{
-        const host=(globalThis as any).__memoryProductCapture;
-        const checked=(object:any,names:string[])=>{for(const name of names)if(!Object.hasOwn(object,name))throw Error('Native owner field absent: '+name);return object;};
-        let capture:any=null;
-        if(host){
-            const h=checked(host,['store','server','exports','closing']);
-            const s=checked(h.server,['writer','beginning','readers','pins','mutations','calls','disposed','pinReservations','completed','expiredPins']);
-            const d=checked(h.store,['active','modifying','closed','closing','readers','pins','deleting','operation','resultWriting','listing','catalog','metadataQueues','metadataUncertain','jsonOperations']);
-            capture={owners:{writer:Number(Boolean(s.writer))+Number(Boolean(s.beginning))+Number(Boolean(d.active))+Number(d.modifying),reader:s.readers.size+[...d.readers.values()].reduce((a:number,b:number)=>a+b,0),pin:s.pins.size+s.pinReservations+d.pins,export:h.exports.size,rpc:s.calls,cleanup:s.mutations.size+d.deleting.size+d.resultWriting.size+Number(Boolean(d.operation))+d.listing+d.metadataQueues.size+d.metadataUncertain.size+d.jsonOperations.size+Number(d.closing)},services:{rpcTimer:!s.disposed,storeOpen:!d.closed,catalogOpen:Boolean(d.catalog)},cache:{completed:s.completed.size,expiredPins:s.expiredPins.size}};
-        }
-        const activity=(globalThis as any).__memoryProductActivity;
-        const sshSnapshot=ssh.ownershipSnapshot;
-        return {ssh:sshSnapshot,streamOwnership:__memoryObserveHost(sshSnapshot,__memoryHostBinding,'native'),sshHasResources:ssh.hasResources,console:consoleService.snapshot,consoleHasResources:consoleService.hasResources,capture,activity:activity?{lease:Boolean(activity.lease),suspended:activity.suspended}:null,memory:process.memoryUsage(),versions:process.versions};
-    };
-    (globalThis as any).__memoryNativeQualification={snapshot:__memoryNativeSnapshot,
-    prepareReport(file:string){const host=(globalThis as any).__memoryProductCapture;if(!host||__memoryNativeReport)throw Error('Native report boundary unavailable/busy.');const directory=process.env.HUB_PRODUCT_NATIVE_DOWNLOADS;if(!directory||path.dirname(file)!==directory)throw Error('Native test destination escaped its private directory.');const original=host.destination;__memoryNativeReport={file,original,invoked:false,format:null};host.destination=async(format:any)=>{if(__memoryNativeReport.invoked)throw Error('Duplicate native Save destination.');__memoryNativeReport.invoked=true;__memoryNativeReport.format=format;return file;};},
-    reportStatus(){return __memoryNativeReport?{file:__memoryNativeReport.file,invoked:__memoryNativeReport.invoked,format:__memoryNativeReport.format}:null;},
-    finishReport(){const host=(globalThis as any).__memoryProductCapture;if(!host||!__memoryNativeReport||host.exports.size)throw Error('Native report not joined.');const {original,...receipt}=__memoryNativeReport;host.destination=original;__memoryNativeReport=null;return receipt;},
-    readFault:{
-        arm(action:any){const host=(globalThis as any).__memoryProductCapture;if(!host?.store)throw Error('Actual native capture store missing.');if(!__memoryNativeReadWrapped){__memoryNativeReadFault.wrap(host.store);__memoryNativeReadWrapped=true;}__memoryNativeReadFault.arm(action);},
-        status:()=>__memoryNativeReadFault.status(),release:()=>__memoryNativeReadFault.release(),clear:()=>__memoryNativeReadFault.clear()
-    }};
-    const __memoryNativeQuit={ready:false,release:false,request(){setImmediate(()=>app.quit());},allow(){this.release=true;setImmediate(()=>app.quit());}};
-    (globalThis as any).__memoryNativeQuit=__memoryNativeQuit;
-    app.on('will-quit',(event)=>{
-        if(!__memoryNativeQuit.release){event.preventDefault();__memoryNativeQuit.ready=true;return;}
-        const file=process.env.HUB_PRODUCT_NATIVE_EXIT;if(file)__memoryWriteSnapshot(file,JSON.stringify({at:new Date().toISOString(),snapshot:__memoryNativeSnapshot(),downloads:__memoryNativeDownloads.records}));
-    });
-`;
 
 export async function createProductNative(options: {
     signal?: AbortSignal;
@@ -83,15 +35,7 @@ export async function createProductNative(options: {
         require = createRequire(import.meta.url);
     // Verify the ownership snapshot producers before creating output or starting a build.
     const hostBinding = await verifyProductHostSources(sourceRoot, 'native');
-    const guarded = async (file: string, expected: string) => {
-        const source = await fs.readFile(file, 'utf8');
-        if (createHash('sha256').update(source).digest('hex') !== expected)
-            throw Error('Native probe preimage changed: ' + file);
-        return source;
-    };
-    // Keep the existing main-probe boundary closed: do not blindly refresh its stale pin.
-    await guarded(path.join(sourceRoot, 'electron/main.ts'),
-        '005de35d840bcc87567c4530677359986886137c293eb79327305bd6b25c1a9d');
+    await verifyNativeMainSources(sourceRoot);
     const root = path.resolve(options.profile, '..', 'native-app'),
         renderer = path.join(root, 'dist'),
         desktop = path.join(root, 'dist-electron');
@@ -145,7 +89,6 @@ export async function createProductNative(options: {
     admit();
     const profile = await sshQualificationProfile();
     admit();
-    admit();
     await build({
         absWorkingDir: sourceRoot,
         entryPoints: ['electron/main.ts', 'electron/preload.ts'],
@@ -159,67 +102,13 @@ export async function createProductNative(options: {
             {
                 name: 'private-native-product-observers',
                 setup(b) {
-                    b.onLoad({ filter: /[\\/]backend[\\/]ssh[\\/](stream-host|session)\.ts$/ }, async args => {
-                        const file = Object.keys(hostBinding.pins).find(file =>
-                            path.resolve(sourceRoot, file) === path.resolve(args.path));
-                        if (!file) throw Error('Unsupported private native SSH source resolution.');
-                        return { contents: await guarded(args.path, hostBinding.pins[file]), loader: 'ts' };
+                    b.onResolve({ filter: /^ssh2$/ }, () => ({ path: profile.sshEntry, external: true }));
+                    b.onLoad({ filter: /\.ts$/ }, async args => {
+                        const file = path.relative(sourceRoot, args.path).split(path.sep).join('/');
+                        if (!Object.hasOwn(nativeMainSourcePins, file)) return;
+                        const source = await fs.readFile(args.path, 'utf8');
+                        return { contents: transformNativeOwnedSource(source, file, hostBinding).code, loader: 'ts' };
                     });
-                    b.onResolve({ filter: /^ssh2$/ }, () => ({
-                        path: profile.sshEntry,
-                        external: true,
-                    }));
-                    b.onLoad({ filter: /[\\/]electron[\\/]main\.ts$/ }, async (args) => {
-                        let source = await guarded(
-                            args.path,
-                            '005de35d840bcc87567c4530677359986886137c293eb79327305bd6b25c1a9d',
-                        );
-                        const needle = "    app.on('window-all-closed', () => app.quit());";
-                        if (source.split(needle).length !== 2)
-                            throw Error('Native lifecycle observer boundary changed.');
-                        source = source.replace(needle, mainProbe + '\n' + needle);
-                        return {
-                            contents:
-                                "import {observeProductHost as __memoryObserveHost} from '../tests/fixtures/memory-product-host-ownership';\n" +
-                                "const __memoryHostBinding=" + JSON.stringify(hostBinding) + ";\n" +
-                                "import {writeFileSync as __memoryWriteSnapshot} from 'node:fs';\nimport {workerReadFault as __memoryNativeReadFault} from '../tests/fixtures/memory-product-worker-faults';\n" +
-                                source,
-                            loader: 'ts',
-                        };
-                    });
-                    for (const [file, name, expected, field] of [
-                        [
-                            'capture-host',
-                            'NativeCaptureHost',
-                            'a939da5ab4819be7306427db68c34bfe6b07593f73bdc056b2a3661ac227b2e3',
-                            '__memoryProductCapture',
-                        ],
-                        [
-                            'automation-activity',
-                            'AutomationActivity',
-                            '1a3e969e9545476ca0157c6504e9df072ff1240e68e512ef4fc6370aa573d95c',
-                            '__memoryProductActivity',
-                        ],
-                    ])
-                        b.onLoad(
-                            { filter: new RegExp('[\\\\/]electron[\\\\/]' + file + '\\.ts$') },
-                            async (args) => {
-                                const source = await guarded(args.path, expected),
-                                    needle = 'export class ' + name + ' {';
-                                if (source.split(needle).length !== 2)
-                                    throw Error('Native constructor probe boundary changed.');
-                                return {
-                                    contents: source.replace(
-                                        needle,
-                                        needle +
-                                            '\n private readonly __qualification = ((globalThis as any).' +
-                                            field +
-                                            '=this);',
-                                    ),
-                                    loader: 'ts',
-                                };
-                            },
-                        );
                 },
             },
         ],
@@ -310,12 +199,12 @@ export async function createProductNative(options: {
                     run: async () => {
                         const deadline = Date.now() + 10000;
                         while (Date.now() < deadline) {
-                            if (
-                                await application.evaluate(() =>
-                                    Boolean((globalThis as any).__memoryNativeQuit.ready),
-                                )
-                            )
-                                return;
+                            const observation = await application.evaluate(() => {
+                                const quit = (globalThis as any).__memoryNativeQuit;
+                                return { ready: quit.ready as boolean, error: quit.error as string | null };
+                            });
+                            if (observation.error) throw Error(observation.error);
+                            if (observation.ready) return;
                             await new Promise((resolve) => setTimeout(resolve, 20));
                         }
                         throw Error(
