@@ -151,6 +151,11 @@ the harness runtime-inspection and JSONL soak formats do not establish final art
 identity or durable parent exit/cleanup. They must not be promoted into release evidence by
 relabeling. The single `reviewedPolicySHA256` summary field is not a contract for both GC policies.
 
+The [source-bound supervisor v2 contract](product-supervisor-contract.md) now supplies diagnostic
+source/run/byte/lifecycle graph checks, shared with the actual source emitter. Its verifier always
+returns non-qualifying evidence. It does not authenticate a real producer, bind shipping artifacts
+or interpret memory/policy results, and it is not an acceptance path around this release block.
+
 Before removing this block, supply and independently review the real producer schemas, then consume
 the exact retained payloads against final source/artifacts/runtime/profile, separately reviewed GC
 policies, passed full-product measured results (at least 30 minutes and 100 measured cycles per GC

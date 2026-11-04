@@ -2,7 +2,19 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { requireObservedClosure } from '../../scripts/lib/owned-child.mjs';
+import {
+    SUPERVISOR_TIMELINE_LIMIT,
+    SUPERVISOR_METADATA_LIMIT,
+    sourceBindingTimeline,
+    validateSourceBinding,
+    validateSupervisorJob,
+    validateNormalSupervisorLifecycle,
+    validateClosedChild,
+    validateCollectedSupervisor,
+    validateCollectedSupervisorHeader,
+    validateEvidenceReference,
+    parseSupervisorJSON,
+} from '../../scripts/lib/product-supervisor-contract.mjs';
 import {
     productClock,
     type ProductClock,
@@ -10,11 +22,13 @@ import {
     type ProductRunOwner,
 } from './memory-product-owner';
 
-export const timelineLimit = 512 * 1024 ** 2;
-export const metadataLimit = 32 * 1024;
+export const timelineLimit = SUPERVISOR_TIMELINE_LIMIT;
+export const metadataLimit = SUPERVISOR_METADATA_LIMIT;
+export type SourceBinding = ReturnType<typeof validateSourceBinding>;
 export type EvidenceReference = { name: string; bytes: number; sha256: string };
 export interface SupervisorEvidenceIO {
     hash(name: string, maximum: number): Promise<EvidenceReference>;
+    timeline(binding: SourceBinding): Promise<EvidenceReference>;
     json(name: string, maximum: number): Promise<{ reference: EvidenceReference; value: unknown }>;
     write(name: string, value: unknown): Promise<void>;
 }
@@ -88,7 +102,12 @@ export function supervisorEvidenceIO(
         return path.join(directory, name);
     };
     const checkDirectory = () => assertSupervisorDirectory(directory, filesystem);
-    async function read(name: string, maximum: number, collect: boolean) {
+    async function read(
+        name: string,
+        maximum: number,
+        collect: boolean,
+        parser?: ReturnType<typeof sourceBindingTimeline>,
+    ) {
         await checkDirectory();
         assert.ok(Number.isSafeInteger(maximum) && maximum > 0 && maximum <= timelineLimit);
         const target = file(name);
@@ -121,11 +140,13 @@ export function supervisorEvidenceIO(
                 bytes += bytesRead;
                 assert.ok(bytes <= maximum, 'Supervisor evidence grew beyond its byte bound.');
                 hash.update(buffer.subarray(0, bytesRead));
+                parser?.push(buffer.subarray(0, bytesRead));
                 if (collect) chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
             }
             assert.equal(bytes, before.size, 'Supervisor evidence length changed.');
             unchanged(before, await handle.stat());
             unchanged(before, await filesystem.lstat(target));
+            parser?.finish();
             result = {
                 reference: { name, bytes, sha256: hash.digest('hex') },
                 contents: Buffer.concat(chunks),
@@ -146,12 +167,17 @@ export function supervisorEvidenceIO(
         async hash(name, maximum) {
             return (await read(name, maximum, false)).reference;
         },
+        async timeline(binding) {
+            return (
+                await read('timeline.jsonl', timelineLimit, false, sourceBindingTimeline(binding))
+            ).reference;
+        },
         async json(name, maximum) {
             assert.ok(maximum <= metadataLimit);
             const result = await read(name, maximum, true);
             return {
                 reference: result.reference,
-                value: JSON.parse(result.contents.toString('utf8')),
+                value: parseSupervisorJSON(result.contents),
             };
         },
         async write(name, value) {
@@ -230,20 +256,24 @@ export function supervisorOutput(
 /** Called only after the child timeline sync/close and actual descendant joins. */
 export async function finishProductEvidence(
     owner: ProductRunOwner,
+    binding: SourceBinding,
     io: SupervisorEvidenceIO,
     clock: ProductClock = productClock,
 ) {
     try {
+        validateSourceBinding(binding);
+        assert.equal(binding.jobNonce, owner.job.nonce, 'Foreign child source binding nonce.');
         assert.ok(
             clock.now() < owner.job.deadlineMs,
             'Child evidence handoff exceeded the existing total deadline.',
         );
-        const timeline = await io.hash('timeline.jsonl', timelineLimit);
+        const timeline = await io.timeline(binding);
         await io.write('child-evidence.json', {
-            schemaVersion: 1,
+            schemaVersion: 2,
             kind: 'product-child-closed-timeline',
             qualification: false,
             nonce: owner.job.nonce,
+            binding,
             timeline,
             ownerCompletion: 'not-asserted',
         });
@@ -277,10 +307,14 @@ export type SupervisorLifecycle = {
 /** Observations only. Even a complete normal lifecycle is never release acceptance. */
 export async function writeSupervisorEvidence(
     job: ProductJob,
+    binding: SourceBinding,
     lifecycle: SupervisorLifecycle | null,
     io: SupervisorEvidenceIO,
     initialFailure?: unknown,
 ) {
+    validateSupervisorJob(job);
+    validateSourceBinding(binding);
+    assert.equal(binding.jobNonce, job.nonce, 'Foreign supervisor source binding nonce.');
     const failures: string[] = [];
     const retain = (error: unknown) => failures.push(String(error).slice(0, 1024));
     if (initialFailure !== undefined) retain(initialFailure);
@@ -289,18 +323,7 @@ export async function writeSupervisorEvidence(
     let lifecycleValid = false;
     const snapshot = lifecycle ? { ...lifecycle, killErrors: [...lifecycle.killErrors] } : null;
     try {
-        requireObservedClosure(snapshot);
-        assert.ok(snapshot);
-        for (const field of ['spawnObserved', 'exitObserved', 'closeObserved'] as const)
-            assert.equal(snapshot[field], true);
-        assert.equal(
-            snapshot.code,
-            0,
-            'Product supervisor child did not exit normally with code zero.',
-        );
-        assert.equal(snapshot.terminationRequested, false);
-        assert.deepEqual(snapshot.killErrors, []);
-        assert.ok(Number.isFinite(snapshot.elapsedMs) && snapshot.elapsedMs >= 0);
+        validateNormalSupervisorLifecycle(snapshot);
         lifecycleValid = true;
     } catch (error) {
         retain(error);
@@ -308,29 +331,15 @@ export async function writeSupervisorEvidence(
     if (lifecycleValid)
         try {
             const observed = await io.json('child-evidence.json', metadataLimit);
-            const value = observed.value as Record<string, any>;
-            assert.deepEqual(Object.keys(value).sort(), [
-                'kind',
-                'nonce',
-                'ownerCompletion',
-                'qualification',
-                'schemaVersion',
-                'timeline',
-            ]);
-            assert.equal(value.schemaVersion, 1);
-            assert.equal(value.kind, 'product-child-closed-timeline');
-            assert.equal(value.qualification, false);
-            assert.equal(value.nonce, job.nonce, 'Foreign product evidence nonce.');
-            assert.equal(value.ownerCompletion, 'not-asserted');
-            const actual = await io.hash('timeline.jsonl', timelineLimit);
-            assert.deepEqual(value.timeline, actual, 'Closed child timeline bytes differ.');
+            const actual = await io.timeline(binding);
+            validateClosedChild(observed.value, { job, binding, timeline: actual });
             childEvidence = observed.reference;
             timeline = actual;
         } catch (error) {
             retain(error);
         }
     const record = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'product-supervisor-observation',
         qualification: false,
         releaseAcceptance: false,
@@ -338,6 +347,7 @@ export async function writeSupervisorEvidence(
             ? 'invalid-non-qualifying-supervisor-evidence'
             : 'collected-non-qualifying-supervisor-evidence',
         job,
+        binding,
         lifecycle: snapshot,
         childEvidence,
         timeline,
@@ -346,4 +356,36 @@ export async function writeSupervisorEvidence(
     };
     await io.write('supervisor-evidence.json', record);
     return record;
+}
+
+/** Exact retained graph readback against independently supplied source/job context. */
+export async function verifySupervisorEvidence(
+    job: ProductJob,
+    binding: SourceBinding,
+    io: SupervisorEvidenceIO,
+) {
+    validateSupervisorJob(job);
+    validateSourceBinding(binding);
+    const parent = await io.json('supervisor-evidence.json', metadataLimit);
+    validateCollectedSupervisorHeader(parent.value, { job, binding });
+    const child = await io.json('child-evidence.json', metadataLimit);
+    const timeline = await io.timeline(binding);
+    validateCollectedSupervisor(parent.value, child.value, {
+        job,
+        binding,
+        childReference: child.reference,
+        timeline,
+    });
+    validateEvidenceReference(parent.reference, 'supervisor-evidence.json', metadataLimit);
+    return {
+        schemaVersion: 1,
+        kind: 'verified-non-qualifying-supervisor-graph',
+        qualification: false,
+        releaseAcceptance: false,
+        binding,
+        job,
+        supervisor: parent.reference,
+        child: child.reference,
+        timeline,
+    };
 }
