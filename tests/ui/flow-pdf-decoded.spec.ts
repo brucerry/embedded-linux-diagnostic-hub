@@ -15,8 +15,14 @@ test('PDF decodes overview, readable graph tiles and every continued detail line
     const input = { images, svg: result.svg, scene: flowPdfVisualCase };
     const report = await page.evaluate(inspectDecodedFlowPdf, input);
     expect(report.decodedJpegs).toBe(structure.pages);
+    // Font metrics can produce two to four detail pages. The oracle computes
+    // this count independently from authored text before reading any JPEG.
+    expect(report.detailPageCount).toBeGreaterThanOrEqual(2);
+    expect(report.detailPageCount).toBeLessThanOrEqual(4);
+    expect(structure.pages).toBe(3 + report.detailPageCount);
     expect(report.pages.map(p => p.role)).toEqual([
-        'overview', 'graph-1', 'graph-2', 'details-1', 'details-2',
+        'overview', 'graph-1', 'graph-2',
+        ...Array.from({ length: report.detailPageCount }, (_, index) => `details-${index + 1}`),
     ]);
     expect(report.detailLines).toBeGreaterThan(45);
     expect(report.pages.every(p => p.comparisons >= 3)).toBe(true);
@@ -33,7 +39,7 @@ test('PDF decodes overview, readable graph tiles and every continued detail line
         ['empty graph body', 1, [32, 65, 778, 467], /graph-1 card 1/],
         ['missing connecting edge', 1, [421, 297, 78, 10], /graph-1 connecting edge/],
         ['empty details body', 3, [32, 65, 778, 467], /details-1 detail line/],
-        ['missing continued details', 4, [32, 65, 778, 467], /details-2 detail line/],
+        ['missing continued details', images.length - 1, [32, 65, 778, 467], new RegExp(`details-${report.detailPageCount} detail line`)],
     ] as const) {
         const jpeg = await page.evaluate(async ({ jpeg, rectangle }) => {
             const image = new Image(); image.src = 'data:image/jpeg;base64,' + jpeg;

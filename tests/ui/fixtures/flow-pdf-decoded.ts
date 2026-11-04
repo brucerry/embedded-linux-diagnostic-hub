@@ -210,7 +210,7 @@ export async function inspectDecodedFlowPdf(input: DecodedFlowPdfInput) {
                 }
             }
         }
-        return { pages: reports, decodedJpegs: reports.length,
+        return { pages: reports, decodedJpegs: reports.length, detailPageCount: detailPages.length,
             detailLines: detailPages.reduce((sum, lines) => sum + lines.length, 0) };
     } finally {
         graph.src = '';
