@@ -30,6 +30,10 @@ Multiple addresses/defaults/tables/multipath remain explicit. Unsafe large count
 decimal text and are omitted from imprecise graphs. Driver/BusyBox/iproute2 physical qualification
 remains separate; raw unrecognized evidence is retained.
 
+Large-integer preservation does not repair malformed JSON. LAN summaries retain invalid network JSON
+as raw evidence with an interpretation warning; unreadable optional address JSON retains readable
+primary address text as the fallback.
+
 When the same interface name has multiple observed indices, indexed records stay separate.
 Name-only link, address, sysfs, Ethernet settings and neighbor observations appear in global
 details with an unresolved-index warning and their original source timestamps. They do not

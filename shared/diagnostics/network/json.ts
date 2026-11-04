@@ -6,7 +6,8 @@ export function networkJson(text: string): unknown {
     let encoded = '',
         index = 0,
         nodes = 0,
-        depth = 0;
+        depth = 0,
+        preservedInteger = false;
     while (index < text.length) {
         const character = text[index];
         if (character === '"') {
@@ -25,10 +26,10 @@ export function networkJson(text: string): unknown {
             const match = text.slice(index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
             if (!match) throw Error('Invalid JSON number.');
             const token = match[0];
-            encoded +=
-                /^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token))
-                    ? JSON.stringify(token)
-                    : token;
+            if (/^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token))) {
+                encoded += JSON.stringify(token);
+                preservedInteger = true;
+            } else encoded += token;
             index += token.length;
         } else {
             if (character === '{' || character === '[') {
@@ -39,6 +40,9 @@ export function networkJson(text: string): unknown {
             index++;
         }
     }
+    // Quoting an integer can also make an invalid bare object key look valid.
+    // Validate the original syntax after bounds checking, before trusting the rewrite.
+    if (preservedInteger) JSON.parse(text);
     return JSON.parse(encoded);
 }
 export function records(text: string): Record<string, unknown>[] {
