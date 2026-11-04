@@ -175,7 +175,7 @@ export async function observedLifecycle(mode = 'normal') {
     }
     return observer.outcome;
 }
-export function sourceFixture() {
+export function sourceFixture(additionalFiles: Map<string, Buffer> = new Map()) {
     const sri = 'sha512-' + Buffer.alloc(64, 1).toString('base64');
     const dep = (name: string, version = '1.0.0', extra = {}) => ({
         version,
@@ -220,6 +220,7 @@ export function sourceFixture() {
         ['gateway/Caddyfile.example', Buffer.from('synthetic proxy configuration')],
         ['docs/gateway.md', Buffer.from('synthetic Gateway instructions')],
         ['gateway/main.ts', Buffer.from('synthetic source entry, never executed')],
+        ...additionalFiles,
     ]);
     const objects = new Map<string, any>(),
         index: any[] = [];
