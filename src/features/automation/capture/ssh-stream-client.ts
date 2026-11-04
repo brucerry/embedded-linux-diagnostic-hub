@@ -17,6 +17,7 @@ export class SshStreamClient {
         import('../../../../shared/automation-stream').StreamedCommandCapture
     >;
     private owner?: { id: string; connection: string; capability: string };
+    private startUncertain = false;
     constructor(
         private rpc: SshStreamRpc,
         private source: 'local-client' | 'gateway',
@@ -58,7 +59,8 @@ export class SshStreamClient {
         signal: AbortSignal,
         assertFresh?: () => void,
     ) {
-        if (this.owner) throw Error('Finalize the previous SSH capture first.');
+        if (this.owner || this.startUncertain)
+            throw Error('Finalize the previous SSH capture first.');
         if (!sink.flush) throw Error('Full SSH capture requires durable storage acknowledgements.');
         // Storage initialization has already awaited; retain the runner's original arm baseline.
         assertFresh?.();
@@ -66,21 +68,35 @@ export class SshStreamClient {
         if (signal.aborted) throw Error('Cancelled before SSH stream start.');
         // Promise continuations can resume before the queued watchdog after app suspension.
         assertFresh?.();
-        const started = streamObject(
-            await this.rpc({ protocol: 1, action: 'start', epoch, request }),
-            ['protocol', 'capability'],
-        );
-        if (
-            started.protocol !== 1 ||
-            typeof started.capability !== 'string' ||
-            !/^[a-f0-9]{64}$/.test(started.capability)
-        )
-            throw Error('Invalid SSH stream capability.');
-        this.owner = {
-            id: request.id,
-            connection: request.connection,
-            capability: started.capability,
-        };
+        // A rejected or malformed reply cannot prove that the host did not acquire execution.
+        // Keep admission closed without replaying start when its capability was not received.
+        this.startUncertain = true;
+        try {
+            const started = streamObject(
+                await this.rpc({ protocol: 1, action: 'start', epoch, request }),
+                ['protocol', 'capability'],
+            );
+            if (
+                started.protocol !== 1 ||
+                typeof started.capability !== 'string' ||
+                !/^[a-f0-9]{64}$/.test(started.capability)
+            )
+                throw Error('Invalid SSH stream capability.');
+            this.owner = {
+                id: request.id,
+                connection: request.connection,
+                capability: started.capability,
+            };
+            this.startUncertain = false;
+        } catch (error) {
+            try {
+                sink.rejectObservation(
+                    0,
+                    new CaptureStorageError('io', 'SSH stream start acknowledgement is uncertain.'),
+                );
+            } catch {}
+            throw error;
+        }
         let cancelTask: Promise<unknown> | undefined;
         const cancel = () => {
             cancelTask ??= this.call('cancel').catch(() => {});
@@ -122,6 +138,10 @@ export class SshStreamClient {
     async finalize() {
         // Even a concurrent caller cannot release server ownership ahead of pending local IO.
         await this.executing?.catch(() => {});
+        if (this.startUncertain)
+            throw Error(
+                'SSH stream start outcome is uncertain; ownership retirement is unconfirmed.',
+            );
         if (!this.owner) return;
         const owner = this.owner;
         const reply = streamObject(await this.call('finalize'), ['ok']);

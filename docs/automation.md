@@ -32,6 +32,11 @@ and releases it after completion or interruption. Page exit, sleep/timer stalls,
 disconnect/replacement, ownership loss, clock jumps or stale/failed samples pause work; resume
 requires explicit rearming, with no catch-up or persistent OS task.
 
+Independent SSH capture keeps later input disarmed when finalization is unacknowledged. Explicit
+cleanup retry joins the same owned retirement without executing the command or recording its
+evidence again. A missing or invalid start acknowledgment cannot establish ownership retirement;
+cleanup stays pending rather than replaying an uncertain command or claiming it has stopped.
+
 Run once honors the configured wall-clock start and step delays but disables repetition; its label
 explicitly identifies scheduled execution. Execution boundaries validate real IANA zones and
 matching wall-time/offset/instant metadata and reject extraneous or inapplicable calibration.

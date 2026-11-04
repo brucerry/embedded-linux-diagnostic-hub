@@ -17,14 +17,33 @@ export function sshCaptureBackend(
         throw Error('Update the desktop app or gateway to enable full SSH capture.');
     const connection = transport.automationConnection(),
         client = new SshStreamClient((input) => transport.automationStream!(input), source);
+    let finalizeFailure: { error: unknown } | undefined;
     return {
+        cleanupLabel: 'SSH',
         receiveTimeSource: source,
         connection: () => transport.automationConnection!(),
         available: () => available() && transport.automationConnection!() === connection,
         acquire: () => () => {},
         target,
         sampleClock,
-        finalize: () => client.finalize(),
+        async finalize() {
+            try {
+                await client.finalize();
+            } catch (error) {
+                finalizeFailure = { error };
+                throw error;
+            }
+        },
+        async finishFlow() {
+            // Transfer an uncertain step finalization to the runner's explicit cleanup retry.
+            // Do not retry it automatically or release the Page's admission/host activity lease.
+            if (finalizeFailure) {
+                const { error } = finalizeFailure;
+                finalizeFailure = undefined;
+                throw error;
+            }
+            await client.finalize();
+        },
         async execute(step, plan, signal, id, context) {
             if (!context?.assertFresh)
                 throw Error('Stored SSH capture requires the runner freshness context.');

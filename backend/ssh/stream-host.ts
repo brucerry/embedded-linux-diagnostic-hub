@@ -34,6 +34,13 @@ type State = {
 /** One request and one outstanding observation; raw/outcome finalization releases execution ownership. */
 export class SshStreamHost {
     private state?: State;
+    // One bounded retirement receipt permits a lost reply to be retried without replaying work.
+    private finalizedOwner?: {
+        id: string;
+        connection: string;
+        capability: string;
+        source: State['source'];
+    };
     private retiring = new Set<State>();
     private quiescent = new Set<() => void>();
     private shutdownTask?: Promise<void>;
@@ -56,6 +63,7 @@ export class SshStreamHost {
     ) {}
     clear() {
         this.epoch = randomBytes(16).toString('hex');
+        this.finalizedOwner = undefined;
         const s = this.state;
         if (!s) return;
         this.retiring.add(s);
@@ -239,6 +247,15 @@ export class SshStreamHost {
                 });
             return { protocol: 1, capability: s.capability };
         }
+        const finalized = this.finalizedOwner;
+        if (
+            r.action === 'finalize' &&
+            finalized?.id === r.id &&
+            finalized.connection === r.connection &&
+            finalized.capability === r.capability &&
+            finalized.source === source
+        )
+            return { ok: true };
         const s = this.state;
         if (
             !s ||
@@ -269,6 +286,12 @@ export class SshStreamHost {
             s.finalized.resolve();
             await s.running;
             if (this.state === s) {
+                this.finalizedOwner = {
+                    id: s.request.id,
+                    connection: s.request.connection,
+                    capability: s.capability,
+                    source: s.source,
+                };
                 this.retiring.add(s);
                 this.state = undefined;
                 this.prune(s);
