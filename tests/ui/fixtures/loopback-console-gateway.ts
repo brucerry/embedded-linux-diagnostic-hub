@@ -11,6 +11,7 @@ import { demoSnapshot } from '../../fixtures/snapshots';
 import { attachTerminalFixture, terminalFixtureState } from '../../fixtures/terminal';
 import { DEVICE_CLOCK_COMMAND } from '../../../shared/diagnostics/device-clock';
 import { clockOutput } from '../../fixtures/device-clock';
+import { createLoopbackDiagnostics } from './loopback-diagnostics';
 
 
 // Test-only owner is published before crypto, listeners or gateway acquisition.
@@ -38,6 +39,9 @@ export function allocateLoopbackGateway() {
     let closeTask: Promise<void> | undefined;
     let closing = false, journalFailed = false, journalCreated = false;
     const clients = new Set<unknown>();
+    const diagnostics = createLoopbackDiagnostics();
+    let acceptedClients = 0, readyClients = 0, probeExecutions = 0;
+    diagnostics.stage('allocated');
     const state = { phase: 'allocated', sshCreated: false, sshBound: false,
         gatewayCreated: false, gatewayBound: false, listenerError: false,
         sshCloseAcknowledged: false, gatewayCloseAcknowledged: false,
@@ -45,6 +49,7 @@ export function allocateLoopbackGateway() {
     const snapshot = () => {
         const g = gateway?.ownershipSnapshot;
         return { ...state, closing, journalFailed, sshClients: clients.size,
+            acceptedClients, readyClients, probeExecutions, diagnostic: diagnostics.snapshot(),
             sshListening: sshServer?.listening ?? false,
             gateway: g ? { serverListening: g.serverListening, cleanupTimers: g.cleanupTimers,
                 requestTasks: g.requestTasks, httpSockets: g.httpSockets, httpResponses: g.httpResponses,
@@ -68,6 +73,7 @@ export function allocateLoopbackGateway() {
     function closeOwned(): Promise<void> {
         if (closeTask) return closeTask;
         closing = true; state.phase = 'closing'; record();
+        diagnostics.stage('cleanup-started');
         closeTask = (async () => {
             // start never awaits close; freezing admission prevents late HTTP acquisition.
             await startTask?.catch(() => undefined);
@@ -90,9 +96,15 @@ export function allocateLoopbackGateway() {
             const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map(r => r.reason);
             if (clients.size || state.fileHandles || state.failedFileCloses || journalFailed)
                 errors.push(Error('Loopback resource or evidence retirement remains unacknowledged.'));
+            if (errors.length) diagnostics.cleanupFailure(snapshot(), [
+                ...(results.some(r => r.status === 'rejected') ? ['retirement-rejected'] : []),
+                ...(clients.size || state.fileHandles || state.failedFileCloses ? ['resource-unacknowledged'] : []),
+                ...(journalFailed ? ['journal-unacknowledged'] : []),
+            ]);
             state.cleanupAcknowledged = errors.length === 0 && state.sshCloseAcknowledged && state.gatewayCloseAcknowledged;
             state.phase = state.cleanupAcknowledged ? 'closed' : 'blocked'; record();
             if (journalFailed && errors.length === 0) errors.push(Error('Final ownership journal was not acknowledged.'));
+            if (journalFailed) diagnostics.cleanupFailure(snapshot(), ['journal-unacknowledged']);
             if (errors.length) throw new AggregateError(errors, 'Loopback fixture cleanup failed; no retry or forced disposition.');
         })();
         void closeTask.catch(() => {});
@@ -123,7 +135,6 @@ export function allocateLoopbackGateway() {
             const data = demoSnapshot();
             let authentications = 0;
             let connectedSessions = 0;
-            let probeExecutions = 0;
             const clock = {
                 output: clockOutput(),
                 stderr: '',
@@ -136,15 +147,17 @@ export function allocateLoopbackGateway() {
             };
             const terminal = terminalFixtureState();
             const activeServer = new Server({ hostKeys: [key] }, (client) => {
+                acceptedClients = Math.min(65535, acceptedClients + 1);
                 clients.add(client); record();
                 client.once('close', () => { clients.delete(client); record(); });
                 let connected = false;
                 client.on('ready', () => {
                     connected = true;
                     connectedSessions++;
+                    readyClients++; record();
                 });
                 client.on('close', () => {
-                    if (connected) connectedSessions--;
+                    if (connected) { connectedSessions--; readyClients--; record(); }
                 });
                 client.on('error', () => {});
                 client.on('authentication', (auth) => {
@@ -206,7 +219,7 @@ export function allocateLoopbackGateway() {
                                 else respondClock();
                                 return;
                             }
-                            probeExecutions++;
+                            probeExecutions = Math.min(65535, probeExecutions + 1);
                             const probe = probes.find((item) => info.command.endsWith(item.command));
                             const result = data.results.find((item) => item.id === probe?.id);
                             const respond = () => {
@@ -288,5 +301,6 @@ export function allocateLoopbackGateway() {
         void startTask.catch(() => {});
         return startTask;
     };
-    return { start, close: closeOwned, snapshot, fileOpened, fileClosed, fileCloseFailed };
+    return { start, close: closeOwned, snapshot, fileOpened, fileClosed, fileCloseFailed,
+        stage: diagnostics.stage, modalState: diagnostics.modalState };
 }

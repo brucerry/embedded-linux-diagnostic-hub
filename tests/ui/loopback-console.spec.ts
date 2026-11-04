@@ -64,7 +64,7 @@ async function showConsole(page: Page) {
     await stage(flow, 'Connection');
     return flow;
 }
-async function connect(page: Page, gateway: Awaited<ReturnType<ReturnType<typeof allocateLoopbackGateway>['start']>>) {
+async function connect(page: Page, gateway: Awaited<ReturnType<ReturnType<typeof allocateLoopbackGateway>['start']>>, owner: ReturnType<typeof allocateLoopbackGateway>) {
     await page.getByRole('button', { name: 'Connect device', exact: true }).first().click();
     const modal = page.getByRole('dialog', { name: 'Connect a Linux device' });
     await modal.getByLabel('Gateway HTTPS address').fill(gateway.url);
@@ -75,9 +75,12 @@ async function connect(page: Page, gateway: Awaited<ReturnType<ReturnType<typeof
     await modal.getByLabel('Password', { exact: true }).fill(gateway.options.password);
     await modal.getByRole('button', { name: 'Read fingerprint' }).click();
     await expect(modal.locator('.fingerprint-panel code')).toHaveText(gateway.pinned);
+    owner.stage('fingerprint-verified');
     await modal.getByLabel('I verified this fingerprint with a trusted source.').check();
+    owner.stage('connect-requested');
     await modal.getByRole('button', { name: 'Connect via SSH' }).click();
     await expect(modal).not.toBeVisible();
+    owner.stage('dialog-closed');
 }
 test('actual authenticated gateway and browser journal keep Script/Enter/Enter/Script in one owned console', async ({
     page,
@@ -96,13 +99,15 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
     });
     try {
         await page.goto('/');
+        owner.stage('page-ready');
         const gateway = await owner.start(undefined, { ...model, origin: new URL(page.url()).origin });
         expect(gateway.options.host).toBe('127.0.0.1');
         expect(new URL(gateway.url).hostname).toBe('127.0.0.1');
         allowed.add(new URL(gateway.url).origin);
-        await connect(page, gateway);
+        await connect(page, gateway, owner);
         // The application keeps its separate Terminal shell open across navigation.
         await expect.poll(() => model.state.opens).toBe(1);
+        owner.stage('terminal-opened');
         const terminalShells = model.state.opens;
         const flow = await showConsole(page);
         await flow
@@ -122,6 +127,7 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
         await flow.getByLabel('Command 3 delay', { exact: true }).fill('2');
         await stage(flow, 'Review');
         await flow.getByRole('button', { name: 'Run once', exact: true }).click();
+        owner.stage('flow-started');
         await expect.poll(() => model.state.inputs.length).toBeGreaterThan(0);
         await flow.getByRole('button', { name: 'Show flow', exact: true }).click();
         const viewer = page.getByRole('dialog', { name: 'Automation flow', exact: true });
@@ -188,8 +194,17 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
                 .map((r: any) => Buffer.from(r.segment.requestBase64, 'base64').toString()),
         ).toEqual(['cd /\r', '\r', '\r', 'pwd\r']);
         expect(blockedRequests).toBe(0);
-    } catch (error) { failures.push(error); }
+        owner.stage('exports-reached');
+    } catch (error) {
+        failures.push(error);
+        owner.stage('case-failure');
+        try {
+            const modal = page.getByRole('dialog', { name: 'Connect a Linux device' });
+            owner.modalState(await modal.isVisible(), await modal.getByRole('button', { name: 'Connecting & collecting…', exact: true }).isVisible());
+        } catch (diagnosticError) { failures.push(diagnosticError); }
+    }
     finally {
+        owner.stage('finally');
         try { await owner.close(); } catch (error) { failures.push(error); }
         if (owner.snapshot().listenerError) failures.push(Error('Unexpected loopback listener error was recorded.'));
         try {
