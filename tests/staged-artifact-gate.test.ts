@@ -132,6 +132,15 @@ function example(id: string) {
         executableSHA256: 'd'.repeat(64),
         asarSHA256: 'e'.repeat(64),
         versions: { electron: '44.5.1', node: '24.21.0', chrome: 'fixture' },
+        executable: lane.platform === 'win32' ? 'C:\\synthetic\\hub.exe' : '/synthetic/hub',
+        asar:
+            lane.platform === 'win32'
+                ? 'C:\\synthetic\\resources\\app.asar'
+                : '/synthetic/resources/app.asar',
+        rendererPID: 123,
+        contextsSeparated: true,
+        pageNodeAbsent: true,
+        osSandboxed: true,
         sandbox: true,
     };
     const assets =

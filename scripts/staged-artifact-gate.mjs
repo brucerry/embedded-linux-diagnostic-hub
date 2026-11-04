@@ -18,6 +18,7 @@ import {
     validateArtifactRecords,
     validateInstallerReceipt,
     validatePlatformReceipt,
+    validateRetainedRuntimeIdentity,
     verifyEvidence,
     producerFiles,
     verifyProducerEvidence,
@@ -444,10 +445,11 @@ if (mode === 'build-setup') {
                 path.join(output, lane.id, item.id + '.json'),
                 64 * 1024,
             );
-            assert.deepEqual(
+            validateRetainedRuntimeIdentity(
                 identity,
-                receipt.applications.find((app) => app.asset === identity.asset),
-                'Native identity summary differs from its actual retained observation.',
+                receipt,
+                { ...selected, lane: lane.id },
+                item.id,
             );
         }
         if (includesWindowsSetup(version)) {

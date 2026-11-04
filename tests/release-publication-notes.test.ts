@@ -93,6 +93,16 @@ async function syntheticStagedEvidence(root: string, version: string, sourceComm
                         .digest('hex'),
                     asarSHA256: createHash('sha256').update('synthetic asar').digest('hex'),
                     versions: { electron: '44.5.1', node: '24.21.0', chrome: 'synthetic' },
+                    executable:
+                        lane.platform === 'win32' ? 'C:\\synthetic\\hub.exe' : '/synthetic/hub',
+                    asar:
+                        lane.platform === 'win32'
+                            ? 'C:\\synthetic\\resources\\app.asar'
+                            : '/synthetic/resources/app.asar',
+                    rendererPID: 123,
+                    contextsSeparated: true,
+                    pageNodeAbsent: true,
+                    osSandboxed: true,
                     sandbox: true,
                 };
                 applications.push(app);

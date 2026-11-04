@@ -320,6 +320,67 @@ export function validateInstallerReceipt(receipt, expected) {
     assert.ok(Number.isFinite(Date.parse(receipt.review.reviewedAt)));
     return receipt;
 }
+/** Fixed consumer cases, never an association selected by an input identity's asset field. */
+export function nativeRuntimeBindings(id) {
+    const lane = laneDefinition(id);
+    if (lane.platform === 'linux')
+        return Object.freeze({
+            'appimage-runtime-identity': LINUX_ASSET,
+            'archive-runtime-identity': LINUX_ARCHIVE,
+        });
+    return Object.freeze(
+        lane.platform === 'win32'
+            ? { 'portable-runtime-identity': 'Diagnostic-Hub.exe' }
+            : { 'installed-runtime-identity': `Diagnostic-Hub-macos-${lane.arch}.zip` },
+    );
+}
+/** Validate observations emitted by staged-artifact-native.mts; no execution/authentication claim. */
+export function validateNativeRuntimeIdentity(actual, expected) {
+    const lane = laneDefinition(expected.lane);
+    const bindings = nativeRuntimeBindings(lane.id);
+    assert.ok(Object.hasOwn(bindings, expected.caseId), 'Unknown native runtime identity case.');
+    assert.equal(
+        actual.asset,
+        bindings[expected.caseId],
+        'Runtime identity belongs to a different staged asset.',
+    );
+    assert.equal(actual.packaged, true, 'Development bundles cannot qualify staged assets.');
+    assert.equal(actual.version, expected.version);
+    assert.equal(actual.platform, lane.platform);
+    assert.equal(actual.arch, lane.arch);
+    const nativePath = lane.platform === 'win32' ? path.win32 : path.posix;
+    for (const field of ['executable', 'asar'])
+        assert.ok(
+            typeof actual[field] === 'string' && nativePath.isAbsolute(actual[field]),
+            'Actual packaged ' + field + ' path is required.',
+        );
+    assert.equal(nativePath.basename(actual.asar), 'app.asar');
+    assert.match(actual.executableSHA256, hashPattern);
+    assert.match(actual.asarSHA256, hashPattern);
+    assert.match(actual.versions.electron, /^44\.5\.1$/);
+    assert.match(actual.versions.node, /^24\./);
+    assert.ok(typeof actual.versions.chrome === 'string' && actual.versions.chrome.length > 0);
+    assert.ok(
+        Number.isSafeInteger(actual.rendererPID) && actual.rendererPID > 0,
+        'An observed renderer PID is required.',
+    );
+    for (const field of ['contextsSeparated', 'pageNodeAbsent', 'osSandboxed', 'sandbox'])
+        assert.equal(actual[field], true, 'Missing or failed native observation: ' + field);
+    return actual;
+}
+/** Retained JSON must match the summary for this fixed case, not whichever asset it claims. */
+export function validateRetainedRuntimeIdentity(actual, receipt, expected, caseId) {
+    validateNativeRuntimeIdentity(actual, { ...expected, caseId });
+    const asset = nativeRuntimeBindings(expected.lane)[caseId];
+    const summaries = receipt.applications.filter((app) => app.asset === asset);
+    assert.equal(summaries.length, 1, 'Require one summary for the staged runtime case.');
+    assert.deepEqual(
+        actual,
+        summaries[0],
+        'Native identity summary differs from its actual retained observation.',
+    );
+    return actual;
+}
 export function validatePlatformReceipt(receipt, expected) {
     assert.equal(receipt.schemaVersion, 1);
     assert.equal(receipt.kind, 'staged-native-consumer');
@@ -351,18 +412,11 @@ export function validatePlatformReceipt(receipt, expected) {
         applicationAssets.sort(),
         'Every staged application must have its own actual runtime identity.',
     );
-    for (const app of receipt.applications) {
-        assert.equal(app.packaged, true, 'Development bundles cannot qualify staged assets.');
-        assert.equal(app.version, expected.version);
-        assert.equal(app.platform, lane.platform);
-        assert.equal(app.arch, lane.arch);
-        assert.match(app.executableSHA256, hashPattern);
-        assert.match(app.asarSHA256, hashPattern);
-        assert.match(app.versions.electron, /^44\.5\.1$/);
-        assert.match(app.versions.node, /^24\./);
-        assert.ok(typeof app.versions.chrome === 'string' && app.versions.chrome.length > 0);
-        assert.equal(app.sandbox, true);
-    }
+    for (const [caseId, asset] of Object.entries(nativeRuntimeBindings(lane.id)))
+        validateNativeRuntimeIdentity(
+            receipt.applications.find((app) => app.asset === asset),
+            { version: expected.version, lane: lane.id, caseId },
+        );
     for (const item of receipt.cases.filter((entry) => entry.id.endsWith('runtime-identity')))
         assert.ok(
             item.evidence.some((entry) => entry.path === `${lane.id}/${item.id}.json`),

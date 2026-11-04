@@ -60,7 +60,14 @@ Node/OS/architecture, exact package/helper/metadata hashes and case logs. Requir
 and checksum sidecars are verified before executing an asset. Native identity records actual
 packaged version, running executable/ASAR hashes, Electron/Node/Chromium versions, separated
 renderer contexts, absence of page Node globals and the actual renderer sandbox (native process
-metrics on Windows/Mac; Linux `/proc`NoNewPrivs/Seccomp). Missing observations fail closed.
+metrics on Windows/Mac; Linux `/proc`NoNewPrivs/Seccomp). Missing observations fail closed. The
+final readback binds each retained identity case to its fixed asset: Linux AppImage and tar
+observations cannot be swapped by choosing another matching summary. The shared validator requires
+all emitted context-separation, page-Node-absence, OS-sandbox and renderer-PID observations as well
+as absolute executable/ASAR paths and their hashes. A `sandbox:true` summary cannot hide missing or
+failed constituent observations. These checks establish consistency of the retained observations;
+they do not authenticate a producer or prove that executable/ASAR bytes came from the outer archive.
+Exact payload/build/runtime provenance and real native observation remain required.
 
 Windows consumes the actual portable EXE. Linux consumes both AppImage and extracted complete tar
 archive. Mac consumes the actual installer-helper result. Existing desktop/native-window tests run
