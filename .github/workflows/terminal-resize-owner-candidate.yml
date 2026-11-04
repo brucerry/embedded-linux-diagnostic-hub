@@ -1,0 +1,215 @@
+name: Candidate terminal resize ownership only
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/terminal-resize-owner-candidate-219]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: terminal-resize-owner-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/terminal-resize-owner-candidate-219
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/tr-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_TERMINAL_RESIZE_OWNER_SCOPE=%s\n' "$scope"
+                      printf 'HUB_TERMINAL_RESIZE_OWNER_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: 66b58d85df6f223bfa076054646a35c23e234457
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = 66b58d85df6f223bfa076054646a35c23e234457
+                  test "$(git -C application rev-parse HEAD)" = 66b58d85df6f223bfa076054646a35c23e234457
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = c8a34f18e092a99092f29f278dab47fd390b6f43
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/terminal-resize-owner-selection.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected terminal resize owner sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/terminal-resize-owner-candidate.config.ts');
+                  if (hash(config) !== '72bf3c765579f96a78057dd109aafee020ba1efa6ab4d324bd0bb75343d60c0b')
+                    throw Error('Changed sandboxed terminal resize owner configuration');
+                  const pins = {"package.json":"77811e04b711dd9e0bf6f781e6b243c9f25219193719d9faa2624d8269657d2c","vite.config.mts":"cfadddb9f251753919be202a8e0c96888fa1a381753c1053b854e0cf408b08a1","shared/types.ts":"fca52a42e06b0582cc103ed63e74610b0eb8fbbc41f123d69e4d030fe8617f88","shared/automation.ts":"5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4","shared/automation-time.ts":"30c10d81a5b9561bb7542fd70ef9742a8f9ae8a80e95280e110a17b1ef13ab6f","shared/automation-result.ts":"7299b32a5232ac8d145ef7dfd2aceeca49c1e1e2996281b150357ae86ad71d17","shared/capture-store.ts":"5cc2fe2ac3027d9c87b4d06d12d14a342f4c160f92961abd43502f3249ff8568","shared/capture-rpc.ts":"255f7434b7bbadda2401f3245902fe2ac40add0dab610f7d154363e655fe9949","shared/capture-report.ts":"68689b44dd4f7077dcd1054553026004aad48e1ee3f516bbf68e28c1b4d6f4bb","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","src/app/App.tsx":"2f3cf67deb14a62cb3fe0c97dfcaddd556ec7d6343e970a1b8428658c577e90a","src/hooks/useDeviceClock.ts":"a1005f5e2554dfd628e2381790bd15e3c324cc2786f6cdbfb48540b5778fb7bf","src/components/DeviceClock.tsx":"bf4aa1734fa4299a251df9458b0cf3d31d04a74f0979b39e8f201a1c32d09ae9","src/features/automation/AutomationPage.tsx":"ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4","src/features/automation/activity-release.ts":"5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b","src/features/automation/runner.ts":"cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a","src/features/automation/capture/repository.ts":"80b7f6c953183287cb4ae7e711d73cfc472ecab9f2abb32ce6be3f2147404a28","src/features/automation/capture/indexeddb-store.ts":"c7e5c7c9b6caa52552b1e566bfdc67d9db5057d4d2385eba18a1ff819bd34fee","tests/ui/terminal-resize-owner.spec.ts":"73012a91eadf65abd3dee3a0f4d5289322ea1460c3c51039eeb74f1b9a789485","tests/ui/fixtures/terminal-resize-owner.ts":"eed4157aa36328ac6f6f95ff31a1e064e2690147d0b4fcabb60d951bc7206767","tests/ui/fixtures/desktop.ts":"a1418e5fc5b9b5849a66fde01439320ed484cf98e7cca609484a5befd90e4329","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","shared/terminal.ts":"5dce5ecced813f9954d37c8540d15748192bc3d1944f4e493d84af8ec3283bcb","src/features/terminal/TerminalPage.tsx":"c67ae2cf6789d84a9dc6f15324faa4616b5585f7b779c323da09f21d2152ff39","src/features/terminal/input.ts":"c01f8901b0cb14a676ea53ee3fe0cba4a76a0de3881a875b0c18c42b694d72ae","src/features/terminal/display.ts":"b9c26a5ef10f4cdc71f3ea93f3501554391455b9cd75102cb8917cbf7e24bd87","tests/terminal-resize-owner.test.ts":"7818226f0731685f2aa5f5575291606c252abaa269443ca4c80c2edadee10328"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected terminal resize owner input: ' + file);
+                  }
+                  fs.mkdirSync('.terminal-resize-owner-ci');
+                  fs.writeFileSync('.terminal-resize-owner-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run only the terminal resize owner outcome case once
+              id: sdk
+              working-directory: application
+              shell: bash
+              run: |
+                  set +e
+                  node node_modules/playwright/cli.js test --config .terminal-resize-owner-ci/config.ts > "$HUB_TERMINAL_RESIZE_OWNER_SCOPE/test.log" 2>&1
+                  sdk_exit=$?
+                  set -e
+                  SDK_EXIT="$sdk_exit" node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const exitCode = Number(process.env.SDK_EXIT);
+                  if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) throw Error('Invalid SDK command outcome');
+                  fs.writeFileSync(path.join(process.env.HUB_TERMINAL_RESIZE_OWNER_SCOPE, 'sdk-outcome.json'),
+                    JSON.stringify({ schema: 1, exitCode }), { flag: 'wx' });
+                  NODE
+                  exit "$sdk_exit"
+            - name: Bound the candidate receipt
+              if: always()
+              id: receipt
+              env:
+                  SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const path = require('node:path');
+                  const scope = process.env.HUB_TERMINAL_RESIZE_OWNER_SCOPE;
+                  if (!scope || !fs.existsSync(path.join(scope, 'report.json'))) process.exit(0);
+                  const file = path.join(scope, 'report.json');
+                  if (fs.statSync(file).size > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  const outcomeFile = path.join(scope, 'sdk-outcome.json');
+                  if (!fs.existsSync(outcomeFile) || fs.statSync(outcomeFile).size > 1024)
+                    throw Error('Missing or oversized SDK command outcome');
+                  const command = JSON.parse(fs.readFileSync(outcomeFile, 'utf8'));
+                  if (command.schema !== 1 || !Number.isInteger(command.exitCode) || command.exitCode < 0 || command.exitCode > 255)
+                    throw Error('Invalid SDK command outcome');
+                  const receipt = JSON.stringify({
+                    command,
+                    sdkStepOutcome: process.env.SDK_STEP_OUTCOME || null,
+                    source: '66b58d85df6f223bfa076054646a35c23e234457',
+                    tooling: process.env.GITHUB_SHA,
+                    run: process.env.GITHUB_RUN_ID,
+                    attempt: process.env.GITHUB_RUN_ATTEMPT,
+                    report: JSON.parse(fs.readFileSync(file, 'utf8'))
+                  });
+                  if (Buffer.byteLength(receipt) > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  fs.writeFileSync(path.join(scope, 'receipt.json'), receipt, { flag: 'wx' });
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n');
+                  NODE
+            - uses: actions/upload-artifact@v4
+              if: always() && steps.receipt.outputs.ready == 'true'
+              with:
+                  name: terminal-resize-owner-candidate-66b58d8-${{ github.run_id }}
+                  path: ${{ env.HUB_TERMINAL_RESIZE_OWNER_SCOPE }}/receipt.json
+                  if-no-files-found: error
+                  retention-days: 3
