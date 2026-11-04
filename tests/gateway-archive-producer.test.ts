@@ -410,3 +410,22 @@ test('file-IO lease blocks command and inventory admission until close is acknow
     assert.equal(stage.snapshot().fileAction, null);
     assert.equal(stage.snapshot().pendingFiles.length, 0);
 });
+
+test('malformed closure without a valid PID cannot retire its command owner', async () => {
+    for (const pid of [null, 0, '123']) {
+        const fs = memoryFilesystem(),
+            stage = new OwnedGatewayStage(fs.fs, '/project', 'invalid-pid');
+        await stage.initialize();
+        const plan = stage.plan('build', syntheticTools());
+        await assert.rejects(
+            stage.execute(plan, async () => ({
+                ...plan,
+                command: [...plan.command],
+                lifecycle: { ...(await observedLifecycle()), pid },
+            })),
+        );
+        assert.equal(stage.snapshot().failed, true);
+        assert.equal(stage.snapshot().command?.id, plan.id);
+        assert.throws(() => stage.assertQuiescent());
+    }
+});

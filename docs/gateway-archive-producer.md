@@ -37,11 +37,12 @@ permission change, user config edit, existing-data deletion or automatic retry i
 Issued build and lock plans are immutable instance capabilities. Owner, operation ID, role, cwd and
 command must match the returned observation. A capability cannot be forged from its JSON fields or
 replayed. A file-IO lease excludes command/inventory/publication admission until acknowledgement.
-Every open/write/sync/read/close is tracked. Failed or unacknowledged close/open retains custody;
-primary errors and close diagnostics remain available. A fully observed nonzero direct-command
-closure fails the stage without falsely claiming that command is still running. Unknown, stale or
-rejected dispatch retains its command owner. A later closure cannot erase an already latched
-failure.
+Every open/write/sync/read/close is tracked. Command retirement requires a valid positive observed
+PID as well as matching spawn, exit and close observations. Failed or unacknowledged close/open
+retains custody; primary errors and close diagnostics remain available. A fully observed nonzero
+direct-command closure fails the stage without falsely claiming that command is still running.
+Unknown, stale or rejected dispatch retains its command owner. A later closure cannot erase an
+already latched failure.
 
 The build plan uses the observed Node/esbuild entries, frozen `gateway/main.ts`, external `ssh2` and
 an output inside the owned build directory. The lock plan uses the observed Node/npm entry, owned

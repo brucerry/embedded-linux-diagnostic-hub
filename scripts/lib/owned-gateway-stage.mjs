@@ -378,7 +378,9 @@ export class OwnedGatewayStage {
                 assert.equal(typeof row[key], 'boolean');
             // Known direct closure can retire a failed command; unknown results retain the owner.
             const closed =
-                row?.spawnObserved === true &&
+                Number.isSafeInteger(row?.pid) &&
+                row.pid > 0 &&
+                row.spawnObserved === true &&
                 row.exitObserved === true &&
                 row.closeObserved === true &&
                 row.code === row.closeCode &&
