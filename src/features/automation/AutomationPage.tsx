@@ -28,6 +28,7 @@ import type { DesktopBridge } from '../../../shared/types';
 import type { DeviceClockResponse } from '../../../shared/diagnostics/device-clock';
 import { SerialSession } from '../serial/session';
 import { FlowRunner, ResultStore, type FlowBackend, type FlowState } from './runner';
+import { ActivityReleaseQueue } from './activity-release';
 import { downloadResults, exportResults, type ExportFormat } from './exports';
 import { draftIssues, type FieldIssue } from './draft-validation';
 import { formatReceivedOutput } from './received-output';
@@ -110,6 +111,9 @@ export default function AutomationPage(props: Props) {
     const [sshMode, setSshMode] = useState<SshExecutionMode>('independent-script'),
         [consolePrompts, setConsolePrompts] = useState('');
     const cleanupActivity = useRef<string | undefined>(undefined);
+    const cleanupActivityRetirement = useRef<(() => Promise<void>) | undefined>(undefined);
+    const activityRetirements = useRef<ActivityReleaseQueue | null>(null);
+    const [activityFailure, setActivityFailure] = useState('');
     const cleanupClock = useRef<(() => void) | undefined>(undefined);
     const manualClockSample = useRef<ManualClockSample | null>(null);
     const pendingClockSamples = useRef(0);
@@ -182,6 +186,14 @@ export default function AutomationPage(props: Props) {
         latest = useRef(props),
         runner = useRef<FlowRunner | null>(null);
     latest.current = props;
+    if (!activityRetirements.current)
+        activityRetirements.current = new ActivityReleaseQueue((message) => {
+            setActivityFailure(message);
+            const active = arming.current || Boolean(runner.current?.busy) ||
+                Boolean(activityRetirements.current?.hasFailures);
+            setRunning(active);
+            latest.current.onBusy(active);
+        });
     if (!runner.current)
         runner.current = new FlowRunner(
             (next) => {
@@ -190,7 +202,8 @@ export default function AutomationPage(props: Props) {
                 setFlowInspection((current) => inspectionState(current, inspected, next));
                 const active =
                     Boolean(next.cleanupPending) ||
-                    ['waiting', 'running', 'delaying'].includes(next.state);
+                    ['waiting', 'running', 'delaying'].includes(next.state) ||
+                    Boolean(activityRetirements.current?.hasFailures);
                 setRunning(active);
                 latest.current.onBusy(active);
             },
@@ -518,26 +531,63 @@ export default function AutomationPage(props: Props) {
                 setSampling(pendingClockSamples.current > 0);
             });
     };
-    const cancel = () => {
-        if (runner.current?.cleanupPending) {
-            void runner.current
-                .retryCleanup()
-                .then(async () => {
-                    const held = cleanupActivity.current;
-                    const resume = cleanupConsoleResults.current;
-                    const resumeClock = cleanupClock.current;
-                    cleanupActivity.current = undefined;
-                    if (held) await window.diagnosticHub?.releaseAutomationActivity?.(held);
+    const retireActivity = (
+        held: string | undefined,
+        desktop: Pick<DesktopBridge, 'releaseAutomationActivity'> | undefined,
+        resume: (() => void) | undefined,
+        resumeClock: (() => void) | undefined,
+        transportRetired: boolean,
+    ) => {
+        let retire!: () => Promise<void>;
+        const owned = activityRetirements.current!.create(
+            async () => {
+                if (!held) return;
+                if (!desktop?.releaseAutomationActivity)
+                    throw Error('Background activity release is unavailable. Keep this window open.');
+                await desktop.releaseAutomationActivity(held);
+            },
+            [
+                () => {
                     if (cleanupConsoleResults.current === resume)
                         cleanupConsoleResults.current = undefined;
                     resume?.();
+                },
+                () => {
                     if (cleanupClock.current === resumeClock) cleanupClock.current = undefined;
                     resumeClock?.();
-                    const active = arming.current || Boolean(runner.current?.busy);
-                    setRunning(active);
-                    latest.current.onBusy(active);
-                })
-                .catch((error) => setError(error instanceof Error ? error.message : String(error)));
+                },
+                () => {
+                    if (cleanupActivityRetirement.current === retire)
+                        cleanupActivityRetirement.current = undefined;
+                },
+            ],
+            transportRetired,
+        );
+        retire = () => {
+            // The attempt closure retains the ID and resumes even after this current-owner slot moves on.
+            if (cleanupActivity.current === held) cleanupActivity.current = undefined;
+            return owned();
+        };
+        return retire;
+    };
+    const cancel = () => {
+        if (runner.current?.cleanupPending) {
+            const retire = cleanupActivityRetirement.current;
+            if (!retire) {
+                setError('The owned cleanup continuation is unavailable. Keep this window open.');
+                return;
+            }
+            void runner.current.retryCleanup()
+                .then(retire)
+                .catch((error) => {
+                    if (!activityRetirements.current?.hasFailures)
+                        setError(error instanceof Error ? error.message : String(error));
+                });
+            return;
+        }
+        if (!runner.current?.busy && activityRetirements.current?.hasFailures) {
+            // Explicit retry joins the same retained IDs; it never repeats a command or starts a run.
+            void activityRetirements.current.retryFailures().catch(() => {});
             return;
         }
         activityEpoch.current++;
@@ -558,7 +608,7 @@ export default function AutomationPage(props: Props) {
         }
     };
     const start = async (once = false) => {
-        if (arming.current || runner.current?.busy) return;
+        if (arming.current || runner.current?.busy || activityRetirements.current?.hasFailures) return;
         if (fieldIssues[0]) {
             focusIssue(fieldIssues[0]);
             return;
@@ -567,7 +617,8 @@ export default function AutomationPage(props: Props) {
         const attempt = Symbol('automation arming');
         armAttempt.current = attempt;
         let inspectionId: string | undefined,
-            flowStarted = false;
+            flowStarted = false,
+            hasFlowFinalizer = false;
         let lease: string | undefined;
         let resumeConsoleResults: (() => void) | undefined;
         let resumeClock: (() => void) | undefined;
@@ -652,6 +703,7 @@ export default function AutomationPage(props: Props) {
                 throw Error(
                     'Automation eligibility changed while arming. Arm explicitly to resume.',
                 );
+            hasFlowFinalizer = Boolean(backend.finishFlow);
             const task = runner.current!.start(snapshot, backend);
             flowStarted = true;
             await task;
@@ -663,21 +715,21 @@ export default function AutomationPage(props: Props) {
                 flowInspectionId.current = null;
                 setFlowInspection(null);
             }
-            // A cancelled pre-arm continuation must not adopt another run's cleanup.
+            // Each host-release attempt retains its own ID/resumes, independently of later arms.
             const pending = flowStarted && Boolean(runner.current?.cleanupPending);
-            if (lease) {
-                if (pending) cleanupActivity.current = lease;
-                else await desktop?.releaseAutomationActivity?.(lease).catch(() => {});
-            }
-            if (pending) cleanupConsoleResults.current = resumeConsoleResults;
-            else resumeConsoleResults?.();
-            if (pending) cleanupClock.current = resumeClock;
-            else resumeClock?.();
+            const retire = retireActivity(lease, desktop, resumeConsoleResults, resumeClock, flowStarted && hasFlowFinalizer);
+            if (pending) {
+                cleanupActivity.current = lease;
+                cleanupConsoleResults.current = resumeConsoleResults;
+                cleanupClock.current = resumeClock;
+                cleanupActivityRetirement.current = retire;
+            } else await retire().catch(() => {});
             if (armAttempt.current === attempt) {
                 armAttempt.current = null;
                 arming.current = false;
-                setRunning(pending);
-                latest.current.onBusy(pending);
+                const active = pending || Boolean(activityRetirements.current?.hasFailures);
+                setRunning(active);
+                latest.current.onBusy(active);
             }
         }
     };
@@ -887,14 +939,14 @@ export default function AutomationPage(props: Props) {
                     style={{ top: running ? headerOffset : undefined }}
                 >
                     <p className="automation-state" role="status">
-                        {state.message}
+                        {activityFailure ? activityFailure + ' Previous flow: ' + state.message : state.message}
                         {running ? ' · Armed snapshot frozen; edits apply next run' : ''}
                     </p>
                     {running && (
                         <div className="automation-run-actions">
                             {' '}
                             <button className="button danger" disabled={!running} onClick={cancel}>
-                                {state.cleanupPending ? 'Retry cleanup' : 'Cancel run'}
+                                {state.cleanupPending || (!runner.current?.busy && activityFailure) ? 'Retry cleanup' : 'Cancel run'}
                             </button>
                         </div>
                     )}

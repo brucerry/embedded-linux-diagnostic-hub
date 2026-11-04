@@ -494,8 +494,8 @@ test('actual Serial cleanup keeps Page leases and stale retry completion cannot 
         assert.equal(header.reservation.current, null);
         assert.ok(header.flight.current);
         assert.equal(headerState.status, 'stale');
-        // Native release was handled; its reply is still pending. The second queued cleanup
-        // continuation resumed only A's clock token after positive Serial retirement.
+        // Native release was handled; its reply is still pending. Local admission resumed
+        // only A's clock token after positive Serial retirement; duplicate retries coalesce.
         await connect(1);
         const armB = track(page().start());
         await jobs();
