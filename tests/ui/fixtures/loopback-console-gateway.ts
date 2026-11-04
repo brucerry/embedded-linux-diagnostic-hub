@@ -13,6 +13,7 @@ import { DEVICE_CLOCK_COMMAND } from '../../../shared/diagnostics/device-clock';
 import { clockOutput } from '../../fixtures/device-clock';
 import { createLoopbackDiagnostics } from './loopback-diagnostics';
 import { createClientRetirement, loopbackListening } from './loopback-client-retirement';
+import { projectProbeObservation } from './loopback-probe-observation';
 
 
 // Test-only owner is published before crypto, listeners or gateway acquisition.
@@ -51,6 +52,7 @@ export function allocateLoopbackGateway() {
     const snapshot = () => {
         const g = gateway?.ownershipSnapshot;
         return { ...state, closing, journalFailed, sshClients: clients.size,
+            commandCounts: projectProbeObservation(g?.allSessionOwners),
             acceptedClients, readyClients, probeExecutions, diagnostic: diagnostics.snapshot(),
             sshListening: loopbackListening(sshServer),
             gateway: g ? { serverListening: g.serverListening, cleanupTimers: g.cleanupTimers,
@@ -315,6 +317,7 @@ export function allocateLoopbackGateway() {
     return { start, close: closeOwned, snapshot, fileOpened, fileClosed, fileCloseFailed,
         stage: diagnostics.stage, modalState: diagnostics.modalState,
         observe: diagnostics.observe, observerFailed: diagnostics.observerFailed,
+        sampleProbeCommands: () => diagnostics.sampleCommands(gateway?.ownershipSnapshot.allSessionOwners),
         observerStopped: diagnostics.observerStopped, observerOverflow: diagnostics.observerOverflow,
         caseFailure: () => diagnostics.caseFailure(snapshot()) };
 }

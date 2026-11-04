@@ -209,6 +209,7 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
     }
     finally {
         owner.stage('finally');
+        owner.sampleProbeCommands();
         try { await owner.close(); } catch (error) { failures.push(error); }
         passive?.stop();
         if (owner.snapshot().listenerError) failures.push(Error('Unexpected loopback listener error was recorded.'));

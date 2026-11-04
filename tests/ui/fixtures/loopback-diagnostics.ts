@@ -1,4 +1,5 @@
 // Pure test evidence projection. Never retain request bodies, error text or credentials.
+import { projectProbeObservation } from './loopback-probe-observation';
 export const passiveStages = [
     'snapshot-status-1xx', 'snapshot-status-2xx', 'snapshot-status-3xx',
     'snapshot-status-4xx', 'snapshot-status-5xx', 'snapshot-status-other',
@@ -30,6 +31,7 @@ const object = (value: unknown): Record<string, unknown> =>
 function resources(input: unknown) {
     const source = object(input), gateway = object(source.gateway);
     return {
+        commandCounts: projectProbeObservation([{probeCommands: source.commandCounts}]),
         owner: Object.fromEntries([
             ...ownerCounters.map(key => [key, counter(source[key])]),
             ...ownerFlags.map(key => [key, flag(source[key])]),
@@ -47,6 +49,7 @@ export function createLoopbackDiagnostics() {
     let modal: { visible: boolean; busy: boolean } | null = null;
     let firstCleanupFailure: Record<string, unknown> | null = null;
     let firstCaseFailure: ReturnType<typeof resources> | null = null;
+    let commands: ReturnType<typeof projectProbeObservation> = null;
     const passive = {counts: Object.fromEntries(passiveStages.map(key => [key, 0])) as Record<PassiveStage, number>, failed: false, stopped: false};
     function stage(value: Stage) {
         if (!stages.includes(value)) return;
@@ -63,9 +66,10 @@ export function createLoopbackDiagnostics() {
     }
     function snapshot() {
         // Detach all returned arrays/objects so callers cannot erase the first failure.
-        return JSON.parse(JSON.stringify({schema: 1, stages: events, overflow, modal, firstCaseFailure, firstCleanupFailure, passive}));
+        return JSON.parse(JSON.stringify({schema: 1, stages: events, overflow, modal, firstCaseFailure, firstCleanupFailure, passive, commands}));
     }
     return { stage, cleanupFailure, snapshot,
+        sampleCommands: (owners: unknown) => { commands = projectProbeObservation(owners); },
         observe: (value: PassiveStage) => {
             if (!passiveStages.includes(value)) { passive.failed = true; return; }
             passive.counts[value] = Math.min(65535, passive.counts[value] + 1);
@@ -91,15 +95,19 @@ export function sanitizeLoopbackDiagnostics(input: unknown) {
         observer.modalState(modal.visible, modal.busy);
     if (source.firstCaseFailure !== null && source.firstCaseFailure !== undefined) {
         const first = object(source.firstCaseFailure);
-        observer.caseFailure({...object(first.owner), gateway: first.gateway});
+        observer.caseFailure({...object(first.owner), gateway: first.gateway, commandCounts: first.commandCounts});
     }
     if (source.firstCleanupFailure !== null && source.firstCleanupFailure !== undefined) {
         const first = object(source.firstCleanupFailure);
         if (!Array.isArray(first.codes) || first.codes.length > 3 ||
             first.codes.some(code => !failureCodes.includes(code as typeof failureCodes[number]))) return null;
-        observer.cleanupFailure({...object(first.owner), gateway: first.gateway}, first.codes);
+        observer.cleanupFailure({...object(first.owner), gateway: first.gateway, commandCounts: first.commandCounts}, first.codes);
     }
     const result = observer.snapshot();
+    if (source.commands !== null) {
+        result.commands = projectProbeObservation([{probeCommands: source.commands}]);
+        if (!result.commands) return null;
+    }
     const passive = object(source.passive), counts = object(passive.counts);
     if (typeof passive.failed !== 'boolean' || typeof passive.stopped !== 'boolean' ||
         passiveStages.some(key => typeof counts[key] !== 'number' || !Number.isSafeInteger(counts[key]) || (counts[key] as number) < 0 || (counts[key] as number) > 65535)) return null;

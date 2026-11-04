@@ -1,6 +1,7 @@
 import { settleCleanup, throwCleanupFailures } from '../../shared/quit-cleanup';
 import { StringDecoder } from 'node:string_decoder';
 import { ExecSlots } from './exec-budget';
+import { ProbeObservation, type ProbeDisposition } from './probe-observation';
 import { NetworkCollector } from './network';
 import { collectOptions, type CollectOptions } from '../../shared/diagnostics/network/evidence';
 import { createHash } from 'node:crypto';
@@ -97,6 +98,7 @@ export class SshSession {
     private terminals = new Set<SshTerminal>();
     private cancelClock?: () => void;
     private slots = new ExecSlots();
+    private probeObservation = new ProbeObservation();
     private network = new NetworkCollector();
     private streams = new SshStreamHost(
         (request, sink, complete, finalized) =>
@@ -177,6 +179,7 @@ export class SshSession {
                 : null,
             terminals: [...this.terminals].map((terminal) => terminal.ownershipSnapshot),
             execSlots: this.slots.ownershipSnapshot,
+            probeCommands: this.probeObservation.snapshot,
             clockRead: this.cancelClock ? 1 : 0,
             cancelledCommandCache: this.cancelledAutomation.size,
         };
@@ -710,6 +713,7 @@ export class SshSession {
         maxBytes: number,
     ): Promise<ProbeResult> {
         const started = performance.now();
+        const observed = this.probeObservation.begin();
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
@@ -719,9 +723,10 @@ export class SshSession {
             let truncated = false;
             let settled = false;
             let channel: import('ssh2').ClientChannel | undefined;
-            const finish = (code: number | null, error?: string) => {
+            const finish = (code: number | null, error?: string, disposition: ProbeDisposition = 'completed') => {
                 if (settled) return;
                 settled = true;
+                observed(disposition);
                 clearTimeout(timer);
                 stdout += outputDecoder.end();
                 stderr += errorDecoder.end();
@@ -748,43 +753,50 @@ export class SshSession {
                 });
             };
             const timer = setTimeout(() => {
-                finish(null, 'Command timed out within its bounded collection deadline.');
+                finish(null, 'Command timed out within its bounded collection deadline.', 'timedOut');
                 channel?.close();
             }, timeoutMs);
             // Non-interactive locale and known utility paths keep output predictable on minimal firmware.
-            client.exec(
-                `export LC_ALL=C; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; ${command}`,
-                (error, stream) => {
-                    if (error) {
-                        finish(null, error.message);
-                        return;
-                    }
-                    channel = stream;
-                    if (settled) {
-                        stream.close();
-                        return;
-                    }
-                    const append = (data: Buffer, isError: boolean) => {
-                        const remaining = Math.max(0, maxBytes - bytes);
-                        const part = (isError ? errorDecoder : outputDecoder).write(
-                            data.subarray(0, remaining),
+            try {
+                client.exec(
+                    `export LC_ALL=C; export PATH=/usr/sbin:/usr/bin:/sbin:/bin; ${command}`,
+                    (error, stream) => {
+                        if (error) {
+                            finish(null, error.message, 'failed');
+                            return;
+                        }
+                        channel = stream;
+                        if (settled) {
+                            stream.close();
+                            return;
+                        }
+                        const append = (data: Buffer, isError: boolean) => {
+                            const remaining = Math.max(0, maxBytes - bytes);
+                            const part = (isError ? errorDecoder : outputDecoder).write(
+                                data.subarray(0, remaining),
+                            );
+                            bytes += Math.min(data.length, remaining);
+                            if (isError) stderr += part;
+                            else stdout += part;
+                            if (data.length > remaining) truncated = true;
+                        };
+                        stream.on('data', (data: Buffer) => append(data, false));
+                        stream.stderr.on('data', (data: Buffer) => append(data, true));
+                        stream.on('error', (err: Error) => finish(null, err.message, 'failed'));
+                        stream.on('close', (code: number | null, signal?: string) =>
+                            finish(
+                                typeof code === 'number' ? code : null,
+                                signal ? `Command ended with signal ${signal}.` : undefined,
+                            ),
                         );
-                        bytes += Math.min(data.length, remaining);
-                        if (isError) stderr += part;
-                        else stdout += part;
-                        if (data.length > remaining) truncated = true;
-                    };
-                    stream.on('data', (data: Buffer) => append(data, false));
-                    stream.stderr.on('data', (data: Buffer) => append(data, true));
-                    stream.on('error', (err: Error) => finish(null, err.message));
-                    stream.on('close', (code: number | null, signal?: string) =>
-                        finish(
-                            typeof code === 'number' ? code : null,
-                            signal ? `Command ended with signal ${signal}.` : undefined,
-                        ),
-                    );
-                },
-            );
+                    },
+                );
+            } catch (error) {
+                // A synchronous library throw leaves start disposition unproved; preserve its error.
+                observed('failed');
+                this.probeObservation.unprove();
+                throw error;
+            }
         });
     }
 }
