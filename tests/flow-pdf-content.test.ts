@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import { imagePdf } from '../src/features/automation/flow/pdf';
-import { inspectFlowPdf } from './fixtures/flow-pdf-content';
+import { inspectFlowPdf, inspectFlowPdfExport } from './fixtures/flow-pdf-content';
 
 // Synthetic JPEG header/scan envelopes, deliberately not decoded images. This
 // exercises PDF framing and byte preservation without canvas/browser/codec use.
@@ -30,7 +31,10 @@ test('PDF reader checks actual serializer multipage references, exact binary str
     const bytes = imagePdf(images), before = Buffer.from(bytes);
     assert.deepEqual(inspectFlowPdf(bytes), {
         pages: 2, objects: 8,
-        images: images.map(i => ({ width: i.width, height: i.height, bytes: i.bytes.length })),
+        images: images.map(i => ({
+            width: i.width, height: i.height, bytes: i.bytes.length,
+            sha256: createHash('sha256').update(i.bytes).digest('hex'),
+        })),
     });
     assert(Buffer.from(bytes).equals(before), 'Verification cannot mutate the export');
 });
@@ -75,4 +79,36 @@ test('PDF reader admits the serializer page maximum and enforces its existing fi
     const image = { bytes: jpeg(), width: 2, height: 3 };
     assert.equal(inspectFlowPdf(imagePdf(Array.from({ length: 128 }, () => image))).pages, 128);
     assert.throws(() => inspectFlowPdf(new Uint8Array(8 * 1024 * 1024 + 1)), /read budget/);
+});
+
+test('PDF reader rejects same-length high-bit dictionary mutations without ASCII normalization', () => {
+    for (const token of ['/Width ', '/Height ', '/Length ']) {
+        const bytes = pdf(), at = bytes.indexOf(token);
+        assert(at >= 0); assert.equal(bytes[at], 0x2f);
+        const before = Buffer.from(bytes);
+        bytes[at] = 0xaf;
+        assert.equal(bytes.length, before.length, 'Offsets and all object lengths stay unchanged');
+        assert.throws(() => inspectFlowPdf(bytes), /dictionary contains non-ASCII/);
+    }
+});
+
+test('PDF export check rejects three duplicate page images that pass structural count/dimension checks', () => {
+    const image = { bytes: jpeg(1684, 1190), width: 1684, height: 1190 };
+    const bytes = imagePdf([image, image, image]);
+    const structural = inspectFlowPdf(bytes);
+    assert.equal(structural.pages, 3);
+    assert(structural.images.every(i => i.width === 1684 && i.height === 1190));
+    assert.throws(() => inspectFlowPdfExport(bytes), /duplicate page image payloads/);
+});
+
+test('PDF export check accepts distinct envelopes but does not classify their content roles', () => {
+    const images = [0xc0, 0xc1, 0xc2].map(marker => ({
+        bytes: jpeg(1684, 1190, marker), width: 1684, height: 1190,
+    }));
+    const result = inspectFlowPdfExport(imagePdf(images));
+    assert.equal(result.pages, 3);
+    assert.equal(new Set(result.images.map(i => i.sha256)).size, 3);
+    assert(!('roles' in result), 'Synthetic distinct envelopes are not semantic-page evidence');
+    assert.throws(() => inspectFlowPdfExport(imagePdf(images.slice(0, 2))), /at least three/);
+    assert.throws(() => inspectFlowPdfExport(imagePdf(images.map(i => ({ ...i, bytes: jpeg(), width: 2, height: 3 })))), /canvas width/);
 });

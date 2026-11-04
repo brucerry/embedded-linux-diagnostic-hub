@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFlowDownload, FLOW_COHORT_READ_BYTES } from './fixtures/flow-download';
-import { inspectFlowPdf } from '../fixtures/flow-pdf-content';
+import { inspectFlowPdfExport } from '../fixtures/flow-pdf-content';
 import { setTimeout as delay } from 'node:timers/promises';
 import { installDesktop } from './fixtures/desktop';
 
@@ -167,14 +167,9 @@ test('Flow export files preserve measured wide Unicode and XML-invalid content a
             .replaceAll('\n', '');
         expect(rendered.appendix.join('')).toContain(presentation);
         expect(rendered.visibleEscape).toBe(true);
-        const pdf = inspectFlowPdf(files.PDF);
-        // The current exporter emits an overview, at least one graph tile and
-        // at least one details page, all from its 2x landscape page canvas.
-        expect(pdf.pages).toBeGreaterThanOrEqual(3);
-        for (const image of pdf.images) {
-            expect(image.width).toBe(1684);
-            expect(image.height).toBe(1190);
-        }
+        // Structure, canvas dimensions and distinct image payloads only. These
+        // checks do not classify overview/tile/details content or legibility.
+        const pdf = inspectFlowPdfExport(files.PDF);
         await page.keyboard.press('Escape');
         await expect(flow.getByLabel('Command 1 script')).toHaveValue(entry.command);
         evidence.push({ case: entry.name, ...rendered, pdf });

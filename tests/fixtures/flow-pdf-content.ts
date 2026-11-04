@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 
 // A test reader for imagePdf's deliberately small PDF subset, not a general PDF
 // validator or a JPEG decoder. Binary streams are sliced by byte offsets/lengths;
@@ -43,7 +44,9 @@ export function inspectFlowPdf(input: Uint8Array) {
         const block = object(id), marker = Buffer.from('\nstream\n');
         const split = block.indexOf(marker);
         assert(split > 0, 'PDF stream dictionary');
-        const dictionary = block.subarray(0, split).toString('ascii');
+        const dictionaryBytes = block.subarray(0, split);
+        assert(dictionaryBytes.every(byte => byte < 128), 'PDF dictionary contains non-ASCII bytes');
+        const dictionary = dictionaryBytes.toString('latin1');
         const length = /\/Length (\d+) >>$/.exec(dictionary);
         assert(length, 'PDF stream length');
         const size = Number(length[1]), begin = split + marker.length, finish = begin + size;
@@ -69,9 +72,28 @@ export function inspectFlowPdf(input: Uint8Array) {
         const content = stream(page + 2);
         assert.equal(content.dictionary, `<< /Length ${content.data.length} >>`, 'PDF content dictionary');
         assert.equal(content.data.toString(), 'q\n842 0 0 595 0 0 cm\n/Im0 Do\nQ', 'PDF image painting instructions');
-        images.push({ width, height, bytes: image.data.length });
+        images.push({
+            width, height, bytes: image.data.length,
+            sha256: createHash('sha256').update(image.data).digest('hex'),
+        });
     }
     return { pages, objects: count - 1, images };
+}
+
+// The current browser cohort expects multiple distinct 2x landscape canvas
+// pages. This rejects repeated image payloads, including three copied overview
+// pages. Neither distinct bytes nor page count establishes semantic page roles;
+// overview/tile/details content and legibility still require decoded inspection.
+export function inspectFlowPdfExport(input: Uint8Array) {
+    const pdf = inspectFlowPdf(input);
+    assert(pdf.pages >= 3, 'PDF export requires at least three pages');
+    for (const image of pdf.images) {
+        assert.equal(image.width, 1684, 'PDF export page canvas width');
+        assert.equal(image.height, 1190, 'PDF export page canvas height');
+    }
+    assert.equal(new Set(pdf.images.map(image => image.sha256)).size, pdf.pages,
+        'PDF export contains duplicate page image payloads');
+    return pdf;
 }
 
 // Check the JPEG header's frame dimensions and a bounded scan envelope. Entropy
