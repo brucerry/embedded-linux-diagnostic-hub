@@ -40,6 +40,10 @@ remove another owner's marker; release one's own marker only after every owned c
 not run lanes concurrently or dispatch CI from this packet. Put generated evidence, staged policies
 and driver profiles under excluded `validation/`; do not change source during a run.
 
+The soak supervisor now retains a nonce-bound, non-qualifying lifecycle/evidence sidecar under that
+output directory. See [supervisor evidence](memory-product-supervisor-evidence.md) for its ordering,
+storage bounds and remaining qualification obligations. No new execution authorization is implied.
+
 ## Calibrate the Node component lanes
 
 In primary's window, run each profile separately on the final candidate/runtime:

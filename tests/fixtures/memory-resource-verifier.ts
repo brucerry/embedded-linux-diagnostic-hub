@@ -41,6 +41,24 @@ export async function verifySoak(options: Options = {}) {
     const virtualTimers = new Map<number, () => void>();
     let evidenceSynced = false,
         evidenceClosed = false;
+    let virtualOutput = '';
+    const virtualFiles = new Map<string, Buffer>();
+    const virtualInfo = (file: string) => {
+        const directory = file === virtualOutput;
+        const bytes = virtualFiles.get(file);
+        if (!directory && !bytes) throw Error('Missing virtual evidence: ' + file);
+        return {
+            isFile: () => !directory,
+            isDirectory: () => directory,
+            isSymbolicLink: () => false,
+            nlink: 1,
+            dev: 1,
+            ino: directory ? 1 : [...virtualFiles.keys()].indexOf(file) + 2,
+            size: bytes?.length ?? 0,
+            mtimeMs: 1,
+            ctimeMs: 1,
+        };
+    };
     const virtualProcess = Object.assign(new EventEmitter(), {
         argv: [] as string[],
         exitCode: 0,
@@ -145,6 +163,12 @@ export async function verifySoak(options: Options = {}) {
         async assertDescendantsExited() {},
     };
     const fakeFs = {
+        async lstat(file: string) {
+            return virtualInfo(file);
+        },
+        async realpath(file: string) {
+            return file;
+        },
         async readFile(file: string) {
             if (String(file).endsWith('reviewed-policy.json')) {
                 const budget = {
@@ -168,9 +192,31 @@ export async function verifySoak(options: Options = {}) {
         async mkdtemp() {
             return 'C:/virtual-output';
         },
-        async open() {
+        async open(file: string, flags: string) {
+            if (flags === 'wx') {
+                if (virtualFiles.has(file)) throw Error('Virtual evidence already exists.');
+                virtualFiles.set(file, Buffer.alloc(0));
+            } else virtualInfo(file);
+            let offset = 0;
             return {
+                async stat() {
+                    return virtualInfo(file);
+                },
+                async read(buffer: Buffer, start: number, length: number) {
+                    const bytes = virtualFiles.get(file)!;
+                    const bytesRead = Math.min(length, bytes.length - offset);
+                    bytes.copy(buffer, start, offset, offset + bytesRead);
+                    offset += bytesRead;
+                    return { bytesRead };
+                },
+                async writeFile(bytes: string) {
+                    virtualFiles.set(file, Buffer.from(bytes));
+                },
                 async write(line: string) {
+                    virtualFiles.set(
+                        file,
+                        Buffer.concat([virtualFiles.get(file)!, Buffer.from(line)]),
+                    );
                     const item = JSON.parse(line);
                     if (item.stage === 'receipt') receipt = item.data;
                     if (item.stage === 'assessment-context') assessmentContext = item.data;
@@ -181,11 +227,13 @@ export async function verifySoak(options: Options = {}) {
                     }
                 },
                 async sync() {
-                    evidenceSynced = true;
+                    if (path.basename(file) === 'timeline.jsonl') evidenceSynced = true;
                 },
                 async close() {
-                    evidenceClosed = true;
-                    if (!receipt) reject(Error('Verifier closed without a receipt.'));
+                    if (path.basename(file) === 'timeline.jsonl') {
+                        evidenceClosed = true;
+                        if (!receipt) reject(Error('Verifier closed without a receipt.'));
+                    }
                 },
             };
         },
@@ -198,7 +246,8 @@ export async function verifySoak(options: Options = {}) {
         cache.set(file, module);
         const source = fs
             .readFileSync(file, 'utf8')
-            .replaceAll('import.meta.url', JSON.stringify(pathToFileURL(file).href));
+            .replaceAll('import.meta.url', JSON.stringify(pathToFileURL(file).href))
+            .replaceAll('import.meta.dirname', JSON.stringify(path.dirname(file)));
         const compiled = ts.transpileModule(source, {
             compilerOptions: {
                 module: ts.ModuleKind.CommonJS,
@@ -245,18 +294,19 @@ export async function verifySoak(options: Options = {}) {
         ...core.soakCoverage,
         ...(options.attachedViewer ? core.viewerCoverage : []),
     ];
+    const virtualJob = load(path.join(root, 'tests/fixtures/memory-product-owner.ts')).productJob();
+    const virtualDestination = path.join(root, 'validation', 'virtual-evidence');
+    virtualOutput = path.join(virtualDestination, `gateway-normal-${virtualJob.nonce}-ABC123`);
     context.process.argv = [
         'node',
         path.join(root, 'tests/fixtures/memory-resource-soak.ts'),
         '--child=1',
-        '--product-job=' +
-            JSON.stringify(
-                load(path.join(root, 'tests/fixtures/memory-product-owner.ts')).productJob(),
-            ),
+        '--product-job=' + JSON.stringify(virtualJob),
+        '--supervisor-output=' + virtualOutput,
         '--lane=gateway',
         '--gc=normal',
         '--driver=C:/virtual-driver.ts',
-        '--out=C:/virtual-output',
+        '--out=' + virtualDestination,
         '--source-sha256=' + 'a'.repeat(64),
         '--no-sampler=1',
         ...(options.component ? ['--component=1'] : []),

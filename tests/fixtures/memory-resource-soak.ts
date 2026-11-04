@@ -7,6 +7,15 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { productJob, ProductRunOwner, observeProductOwner } from './memory-product-owner';
 import { syncCloseEvidence } from './memory-resource-evidence';
+import {
+    supervisorEvidenceIO,
+    supervisorOutput,
+    supervisorArguments,
+    supervisorDestination,
+    assertSupervisorDirectory,
+    finishProductEvidence,
+    writeSupervisorEvidence,
+} from './memory-product-supervisor-evidence';
 import { fileURLToPath } from 'node:url';
 import {
     soakCoverage,
@@ -69,8 +78,10 @@ async function main(owner: ProductRunOwner) {
         await sourceFingerprint(fileURLToPath(new URL('../..', import.meta.url))),
         'Composed source fingerprint mismatch.',
     );
-    await fs.mkdir(destination, { recursive: true });
-    const output = await fs.mkdtemp(path.join(path.resolve(destination), `${lane}-${gcMode}-`));
+    const output = supervisorOutput(
+        destination!, args.get('supervisor-output') ?? '', lane!, gcMode, owner.job,
+    );
+    await assertSupervisorDirectory(output);
     const timeline = await fs.open(path.join(output, 'timeline.jsonl'), 'wx');
     let writes = Promise.resolve();
     const emit = async (stage: string, data: unknown) => {
@@ -446,23 +457,51 @@ async function main(owner: ProductRunOwner) {
                 throw new AggregateError(errors, 'Product timeline sync/close failed.');
             }
         }
-        if (ownershipJoined) owner.finish(true);
+        if (ownershipJoined) await finishProductEvidence(owner, supervisorEvidenceIO(output));
     }
     if (failure) throw failure;
 }
 async function supervise() {
     const job = productJob();
-    const child = spawn(
-        process.execPath,
-        [
-            ...process.execArgv,
-            fileURLToPath(import.meta.url),
-            ...process.argv.slice(2),
-            '--child=1',
-            '--product-job=' + JSON.stringify(job),
-        ],
-        { windowsHide: true, stdio: ['inherit', 'inherit', 'inherit', 'ipc'] },
+    supervisorArguments(process.argv.slice(2), false);
+    const args = argumentsOf(process.argv.slice(2));
+    const destination = args.get('out'),
+        lane = args.get('lane'),
+        gcMode = args.get('gc') ?? 'normal';
+    assert.ok(destination && lane && ['desktop', 'browser', 'gateway'].includes(lane));
+    assert.ok(['normal', 'forced'].includes(gcMode));
+    const directory = supervisorDestination(path.resolve(import.meta.dirname, '../..'), destination);
+    await fs.mkdir(directory, { recursive: true });
+    assert.equal(await fs.realpath(directory), directory, 'Supervisor output must not use path aliases.');
+    const output = await fs.mkdtemp(
+        path.join(directory, `${lane}-${gcMode}-${job.nonce}-`),
     );
+    let child;
+    try {
+        child = spawn(
+            process.execPath,
+            [
+                ...process.execArgv,
+                fileURLToPath(import.meta.url),
+                ...process.argv.slice(2),
+                '--child=1',
+                '--product-job=' + JSON.stringify(job),
+                '--supervisor-output=' + output,
+            ],
+            { windowsHide: true, stdio: ['inherit', 'inherit', 'inherit', 'ipc'] },
+        );
+    } catch (error) {
+        try {
+            await writeSupervisorEvidence(job, null, supervisorEvidenceIO(output), error);
+        } catch (evidenceError) {
+            throw new AggregateError(
+                [error, evidenceError],
+                'Product spawn and supervisor evidence failed.',
+                { cause: error },
+            );
+        }
+        throw error;
+    }
     const observed = observeProductOwner(child, job);
     const cancel = (reason: string) => observed.abort(reason);
     const term = () => cancel('Product supervisor received SIGTERM.');
@@ -475,6 +514,7 @@ async function supervise() {
     };
     child.once('close', release);
     const row = await observed.outcome;
+    const evidence = await writeSupervisorEvidence(job, row, supervisorEvidenceIO(output));
     // An exit does not establish inherited-stream closure. Unknown retains the child/IPC/listeners.
     if (
         !row.spawnObserved ||
@@ -485,7 +525,8 @@ async function supervise() {
         row.code !== row.closeCode ||
         row.signal !== row.closeSignal ||
         row.code !== 0 ||
-        row.signal !== null
+        row.signal !== null ||
+        evidence.status !== 'collected-non-qualifying-supervisor-evidence'
     )
         process.exitCode = 1;
     if (!row.closeObserved)
@@ -493,11 +534,13 @@ async function supervise() {
 }
 async function runChild() {
     assert.equal(process.connected, true, 'Direct product child requires its reviewed IPC owner.');
+    supervisorArguments(process.argv.slice(2), true);
     const raw = argumentsOf(process.argv.slice(2)).get('product-job');
     assert.ok(raw, 'Direct product child requires the shared product job identity.');
     const owner = new ProductRunOwner(productJob(raw));
     try {
         await main(owner);
+        assert.equal(owner.snapshot().completed, true, 'Product owner completion remains unverified.');
     } catch (error) {
         if (!owner.snapshot().completed) owner.hold(error);
         throw error;
