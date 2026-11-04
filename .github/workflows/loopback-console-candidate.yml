@@ -6,7 +6,7 @@ name: Candidate loopback SSH console bounded diagnostic only
 
 on:
     push:
-        branches: [ci/loopback-diagnostic-candidate-220]
+        branches: [ci/loopback-diagnostic-candidate-221]
 
 permissions:
     contents: read
@@ -31,7 +31,7 @@ jobs:
                   set -euo pipefail
                   test "${RUNNER_ENVIRONMENT:-}" = github-hosted
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/loopback-diagnostic-candidate-220
+                  test "$GITHUB_REF" = refs/heads/ci/loopback-diagnostic-candidate-221
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$(id -u)" != 0
                   for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_USE_ENV_PROXY SSH_AUTH_SOCK SSH_ASKPASS NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
@@ -99,7 +99,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = e7815d8cc95acb6ffb044e83614be2c9177779d3
+                  test "$(git -C tooling rev-parse HEAD^)" = fa7557742234980c9139e4283c63c1b917805caa
                   test "$(git -C application rev-parse HEAD)" = e7815d8cc95acb6ffb044e83614be2c9177779d3
                   test "$(git -C application rev-parse 'HEAD^{tree}')" = b83e34cf6d04366a9a9771f520d51f42ba5f1bb5
                   test ! -e application/node_modules
@@ -205,6 +205,7 @@ jobs:
                   import path from 'node:path';
                   import crypto from 'node:crypto';
                   import { assessLoopbackOutcome } from './tooling/.github/loopback-console-outcome.mjs';
+                  import { assessLoopbackDiagnostic } from './tooling/.github/loopback-console-diagnostic.mjs';
                   import { sanitizeLoopbackDiagnostics } from './application/tests/ui/fixtures/loopback-diagnostics.ts';
                   const scope = process.env.HUB_LOOPBACK_CONSOLE_SCOPE;
                   if (!scope || !fs.existsSync(scope)) process.exit(0);
@@ -235,10 +236,9 @@ jobs:
                   if (!summary || summary.blockedRequests !== 0 || summary.shellModel !== 'synthetic' || summary.realOsShell !== false) issues.push('fixture-scope-unproved');
                   const closed = journal && journal.phase === 'closed' && journal.cleanupAcknowledged === true && journal.sshCloseAcknowledged === true && journal.gatewayCloseAcknowledged === true && journal.journalFailed === false && journal.fileHandles === 0 && journal.failedFileCloses === 0 && journal.sshClients === 0 && journal.sshListening === false && journal.gateway && Object.entries(journal.gateway).every(([k,v]) => k === 'serverListening' ? v === false : v === 0);
                   if (!closed) issues.push('retirement-unproved');
-                  let diagnostic = sanitizeLoopbackDiagnostics(journal?.diagnostic ?? summary?.ownership?.diagnostic);
-                  if (!diagnostic || Buffer.byteLength(JSON.stringify(diagnostic)) > 8192) {
-                    diagnostic = null; issues.push('diagnostic-evidence-unproved');
-                  }
+                  const diagnosticEvidence = assessLoopbackDiagnostic(journal?.diagnostic, summary?.ownership?.diagnostic, sanitizeLoopbackDiagnostics);
+                  const diagnostic = diagnosticEvidence.diagnostic;
+                  issues.push(...diagnosticEvidence.issues);
                   const owner = journal ? Object.fromEntries(Object.entries(journal).filter(([k,v]) => ['phase','closing','journalFailed','sshClients','sshListening','cleanupAcknowledged','sshCloseAcknowledged','gatewayCloseAcknowledged','fileHandles','failedFileCloses','listenerError'].includes(k) && (typeof v==='boolean' || typeof v==='number' || k==='phase' && ['allocated','starting','ready','start-failed','closing','closed','blocked'].includes(v)))) : null;
                   const outcome = assessLoopbackOutcome({result,globalErrors:report && report.errors,command,stepOutcome:process.env.SDK_STEP_OUTCOME,issues});
                   const {passed} = outcome;
@@ -256,7 +256,7 @@ jobs:
             - uses: actions/upload-artifact@v4
               if: always() && steps.receipt.outputs.ready == 'true'
               with:
-                  name: loopback-console-diagnostic220-${{ github.run_id }}
+                  name: loopback-console-diagnostic221-${{ github.run_id }}
                   path: ${{ env.HUB_LOOPBACK_CONSOLE_SCOPE }}/receipt.json
                   if-no-files-found: error
                   retention-days: 3
