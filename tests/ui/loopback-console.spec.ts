@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { consoleFixture } from '../fixtures/ssh-console';
 import { allocateLoopbackGateway } from './fixtures/loopback-console-gateway';
 import { installLoopbackPassiveObserver } from './fixtures/loopback-passive-observer';
+import { snapshotCompletion, SNAPSHOT_WAIT_MS } from './fixtures/loopback-snapshot-completion';
 let currentOwner: ReturnType<typeof allocateLoopbackGateway> | undefined;
 test.afterEach(async () => { await currentOwner?.close(); });
 async function readOwnedDownload(download: Download, owner: ReturnType<typeof allocateLoopbackGateway>, budget: { remaining: number }) {
@@ -80,6 +81,12 @@ async function connect(page: Page, gateway: Awaited<ReturnType<ReturnType<typeof
     await modal.getByLabel('I verified this fingerprint with a trusted source.').check();
     owner.stage('connect-requested');
     await modal.getByRole('button', { name: 'Connect via SSH' }).click();
+    let completion: ReturnType<typeof snapshotCompletion> = 'pending';
+    await expect.poll(() => {
+        completion = snapshotCompletion(owner.snapshot());
+        return completion;
+    }, {timeout: SNAPSHOT_WAIT_MS, intervals: [100, 250, 500]}).not.toBe('pending');
+    expect(completion).toBe('complete');
     await expect(modal).not.toBeVisible();
     owner.stage('dialog-closed');
 }
