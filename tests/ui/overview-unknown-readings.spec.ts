@@ -55,6 +55,8 @@ test('Overview renders unknown uptime and memory without false zero and recovers
     await modal.getByRole('button', { name: 'Connect via SSH', exact: true }).click();
     await expect(modal).not.toBeVisible();
     await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
+    // SSH also mounts its persistent terminal while Overview remains visible.
+    await expect.poll(() => page.evaluate(() => window.desktopTest.terminal!.opens)).toBe(1);
     await readings(page, '0h 1m', '50%', '50 MiB available of 100 MiB');
     const phases = ['valid'];
 
@@ -86,6 +88,10 @@ test('Overview renders unknown uptime and memory without false zero and recovers
 
     await page.getByRole('button', { name: 'Disconnect device', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Connect device', exact: true }).first()).toBeEnabled();
+    await expect.poll(() => page.evaluate(() => ({
+        opens: window.desktopTest.terminal!.opens, closes: window.desktopTest.terminal!.closes,
+        ownerEmpty: window.desktopTest.terminal!.id === '',
+    }))).toEqual({ opens: 1, closes: 1, ownerEmpty: true });
     const observation = await page.evaluate(() => ({
         schema: 1, boundary: 'mock-desktop-overview',
         connects: window.desktopTest.connects, disconnects: window.desktopTest.disconnects,
@@ -93,6 +99,7 @@ test('Overview renders unknown uptime and memory without false zero and recovers
         terminalOpens: window.desktopTest.terminal!.opens,
         terminalCloses: window.desktopTest.terminal!.closes,
         terminalInputs: window.desktopTest.terminal!.inputs.length,
+        terminalOwnerEmpty: window.desktopTest.terminal!.id === '',
         captureExports: window.desktopTest.captureExports.length,
         updateRequests: window.desktopTest.requests.length,
         clockHeld: window.desktopTest.clock.hold,
@@ -100,7 +107,7 @@ test('Overview renders unknown uptime and memory without false zero and recovers
     }));
     expect(observation).toEqual({
         schema: 1, boundary: 'mock-desktop-overview', connects: 1, disconnects: 1,
-        collects: 7, terminalOpens: 0, terminalCloses: 0, terminalInputs: 0,
+        collects: 7, terminalOpens: 1, terminalCloses: 1, terminalInputs: 0, terminalOwnerEmpty: true,
         captureExports: 0, updateRequests: 0, clockHeld: false, collectionHeld: false,
     });
     const body = Buffer.from(JSON.stringify({ ...observation, phases }));
