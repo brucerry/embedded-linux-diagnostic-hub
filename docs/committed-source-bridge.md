@@ -32,9 +32,10 @@ The inventory retains path, canonical Git mode, blob ID, bytes, SHA256 and finge
 Its own SHA256 and the derived fingerprint are rechecked by `validateSourceBridge`, which checks
 schema/self-consistency only. **Semantic verification requires** `verifySourceBridge` to re-read the
 independent Git/worktree provider. A self-consistent forged JSON record is insufficient.
-`verifyAndBindDiagnosticSource` also compares a supplied supervisor binding's source hash with that
-verified bridge. It does not verify the binding's timeline/observer/run itself; that requires the
-separate supervisor verifier and independent expected context. No source label is a trust anchor.
+`verifyAndBindDiagnosticSource` also compares a supplied supervisor binding's source hash, frozen
+commit/tree and canonical bridge digest with that verified bridge. It does not verify the binding's
+timeline/observer/run itself; that requires the separate supervisor verifier and independent
+expected context. No source label is a trust anchor.
 
 The real provider uses local read-only Git, disables replacements, lazy fetch, pager, hooks,
 fsmonitor, optional index locks and prompts, refuses effective partial/promisor configuration and
@@ -68,3 +69,9 @@ Final composition must be frozen and rechecked before later runs; any source cha
 bridge. Actual package/runtime/loader identities, reviewed per-GC policies and calibration,
 full-product metrics/coverage, 30 minutes and 100 measured cycles per mode, and real cleanup remain
 separate held obligations. Neither synthetic fixtures nor an isolated source bridge closes them.
+
+The v4 diagnostic supervisor graph now retains `source-bridge.json` and its exact name/length/hash
+reference in the child, parent and third timeline record. Parent retention, child preflight and
+closed handoff, parent collection and readback independently reverify the source closure. Source
+binding v3 couples its digest and frozen pins to the run nonce and harness observer; a static bridge
+itself is not a run receipt. See [the diagnostic contract](product-supervisor-contract.md).

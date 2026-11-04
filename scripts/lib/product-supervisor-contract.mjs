@@ -7,7 +7,10 @@ import { requireObservedClosure } from './owned-child.mjs';
 export const SUPERVISOR_TIMELINE_LIMIT = 512 * 1024 ** 2;
 export const SUPERVISOR_METADATA_LIMIT = 32 * 1024;
 export const SUPERVISOR_LINE_LIMIT = 1024 ** 2;
+// Matches the source inventory metadata bound without introducing a circular import.
+export const SUPERVISOR_SOURCE_BRIDGE_LIMIT = 4 * 1024 ** 2;
 const hash = /^[a-f0-9]{64}$/;
+const gitOID = /^[a-f0-9]{40}$/;
 export const HARNESS_OBSERVER_LIMIT = 16 * 1024;
 function text(value, maximum, empty = false) {
     assert.ok(
@@ -118,6 +121,9 @@ const bindingKeys = [
     'observerSHA256',
     'schemaVersion',
     'sourceSHA256',
+    'sourceCommit',
+    'sourceTree',
+    'sourceBridgeSHA256',
     'viewer',
 ];
 /** Producer JSON.stringify bytes only: reject duplicate keys, lossy UTF8 and alternate encodings. */
@@ -141,11 +147,14 @@ function keys(value, expected) {
 }
 export function validateSourceBinding(value, expected = value) {
     keys(value, bindingKeys);
-    assert.equal(value.schemaVersion, 2);
+    assert.equal(value.schemaVersion, 3);
     assert.equal(value.kind, 'product-supervisor-source-binding');
     assert.equal(value.qualification, false);
     assert.match(value.jobNonce, /^[a-f0-9-]{36}$/);
     assert.match(value.sourceSHA256, hash);
+    assert.match(value.sourceCommit, gitOID);
+    assert.match(value.sourceTree, gitOID);
+    assert.match(value.sourceBridgeSHA256, hash);
     assert.match(value.adapterSHA256, hash);
     assert.match(value.observerSHA256, hash);
     assert.ok(['desktop', 'browser', 'gateway'].includes(value.lane));
@@ -159,6 +168,9 @@ export function validateSourceBinding(value, expected = value) {
 /** Inputs must be derived by the caller's own static reads, never from a supplied manifest. */
 export function createSourceBinding({
     sourceSHA256,
+    sourceCommit,
+    sourceTree,
+    sourceBridgeSHA256,
     jobNonce,
     adapterSHA256,
     observerSHA256,
@@ -172,10 +184,13 @@ export function createSourceBinding({
     assert.ok(!(component && calibration), 'Calibration cannot request component scope.');
     return Object.freeze(
         validateSourceBinding({
-            schemaVersion: 2,
+            schemaVersion: 3,
             kind: 'product-supervisor-source-binding',
             qualification: false,
             sourceSHA256,
+            sourceCommit,
+            sourceTree,
+            sourceBridgeSHA256,
             jobNonce,
             adapterSHA256,
             observerSHA256,
@@ -186,8 +201,60 @@ export function createSourceBinding({
         }),
     );
 }
+/** Raw argv pins cannot rely on argumentsOf's last-value-wins parsing. */
+export function sourceBridgePinsFromArguments(raw, args) {
+    assert.ok(Array.isArray(raw));
+    for (const [field, pattern] of [
+        ['source-commit', gitOID],
+        ['source-tree', gitOID],
+        ['source-sha256', hash],
+    ]) {
+        const values = raw.filter((item) => {
+            if (typeof item !== 'string') return false;
+            // argumentsOf also accepts unprefixed aliases; count and reject those too.
+            const candidate = item.startsWith('--') ? item.slice(2) : item;
+            return candidate === field || candidate.startsWith(field + '=');
+        });
+        assert.equal(values.length, 1, 'Require exactly one explicit --' + field + '= pin.');
+        assert.ok(values[0].startsWith('--' + field + '='), 'Bare source pin is unsupported.');
+        const value = values[0].slice(field.length + 3);
+        assert.match(value, pattern);
+        assert.equal(args.get(field), value, 'Parsed source pin differs from raw argument.');
+    }
+    return Object.freeze({
+        sourceCommit: args.get('source-commit'),
+        sourceTree: args.get('source-tree'),
+    });
+}
 /** Preserve existing argumentsOf presence semantics, including --viewer=0 meaning present. */
-export function sourceBindingFromArguments(args, sourceSHA256, adapterSHA256, jobNonce, observer) {
+export function sourceBindingFromArguments(
+    args,
+    sourceSHA256,
+    adapterSHA256,
+    jobNonce,
+    observer,
+    sourceContext,
+) {
+    assert.ok(sourceContext && typeof sourceContext === 'object');
+    keys(sourceContext.expected, ['sourceCommit', 'sourceTree']);
+    assert.match(sourceContext.expected.sourceCommit, gitOID);
+    assert.match(sourceContext.expected.sourceTree, gitOID);
+    validateEvidenceReference(
+        sourceContext.reference,
+        'source-bridge.json',
+        SUPERVISOR_SOURCE_BRIDGE_LIMIT,
+    );
+    assert.equal(
+        args.get('source-commit'),
+        sourceContext.expected.sourceCommit,
+        'Foreign explicit source commit.',
+    );
+    assert.equal(
+        args.get('source-tree'),
+        sourceContext.expected.sourceTree,
+        'Foreign explicit source tree.',
+    );
+    assert.equal(args.get('source-sha256'), sourceSHA256, 'Foreign explicit source fingerprint.');
     if (args.has('calibration')) {
         assert.equal(args.get('calibration'), '1');
         assert.ok(
@@ -197,6 +264,9 @@ export function sourceBindingFromArguments(args, sourceSHA256, adapterSHA256, jo
     }
     return createSourceBinding({
         sourceSHA256,
+        sourceCommit: sourceContext.expected.sourceCommit,
+        sourceTree: sourceContext.expected.sourceTree,
+        sourceBridgeSHA256: sourceContext.reference.sha256,
         jobNonce,
         adapterSHA256,
         observerSHA256: harnessObserverSHA256(observer),
@@ -231,6 +301,13 @@ function sameReference(actual, expected, name, maximum) {
     assert.equal(actual.bytes, expected.bytes, 'Supervisor retained evidence length differs.');
     assert.equal(actual.sha256, expected.sha256, 'Supervisor retained evidence hash differs.');
 }
+/** Structural binding only; callers must independently verify retained source bridge bytes. */
+export function validateSupervisorSourceBridge(binding, reference) {
+    validateSourceBinding(binding);
+    validateEvidenceReference(reference, 'source-bridge.json', SUPERVISOR_SOURCE_BRIDGE_LIMIT);
+    assert.equal(reference.sha256, binding.sourceBridgeSHA256, 'Foreign supervisor source bridge.');
+    return reference;
+}
 export function validateNormalSupervisorLifecycle(value) {
     keys(value, [
         'pid',
@@ -256,7 +333,7 @@ export function validateNormalSupervisorLifecycle(value) {
     assert.ok(Number.isFinite(value.elapsedMs) && value.elapsedMs >= 0);
     return value;
 }
-export function validateClosedChild(value, { job, binding, observer, timeline }) {
+export function validateClosedChild(value, { job, binding, observer, timeline, sourceBridge }) {
     keys(value, [
         'schemaVersion',
         'kind',
@@ -265,12 +342,13 @@ export function validateClosedChild(value, { job, binding, observer, timeline })
         'binding',
         'observer',
         'timeline',
+        'sourceBridge',
         'ownerCompletion',
     ]);
     assert.equal(
         value.schemaVersion,
-        3,
-        'Only observer-bound supervisor v3 evidence is supported.',
+        4,
+        'Only committed-source-bound supervisor v4 evidence is supported.',
     );
     assert.equal(value.kind, 'product-child-closed-timeline');
     assert.equal(value.qualification, false);
@@ -289,11 +367,18 @@ export function validateClosedChild(value, { job, binding, observer, timeline })
         'Foreign expected harness observer.',
     );
     assert.equal(value.ownerCompletion, 'not-asserted');
+    validateSupervisorSourceBridge(binding, sourceBridge);
+    sameReference(
+        value.sourceBridge,
+        sourceBridge,
+        'source-bridge.json',
+        SUPERVISOR_SOURCE_BRIDGE_LIMIT,
+    );
     sameReference(value.timeline, timeline, 'timeline.jsonl', SUPERVISOR_TIMELINE_LIMIT);
     return value;
 }
 /** A semantic byte/reference/context check, never product or release qualification. */
-export function validateCollectedSupervisorHeader(value, { job, binding, observer }) {
+export function validateCollectedSupervisorHeader(value, { job, binding, observer, sourceBridge }) {
     validateSupervisorJob(job);
     validateSourceBinding(binding);
     validateHarnessObserver(observer);
@@ -319,13 +404,14 @@ export function validateCollectedSupervisorHeader(value, { job, binding, observe
         'lifecycle',
         'childEvidence',
         'timeline',
+        'sourceBridge',
         'failures',
         'scope',
     ]);
     assert.equal(
         value.schemaVersion,
-        3,
-        'Only observer-bound supervisor v3 evidence is supported.',
+        4,
+        'Only committed-source-bound supervisor v4 evidence is supported.',
     );
     assert.equal(value.kind, 'product-supervisor-observation');
     assert.equal(value.qualification, false);
@@ -346,15 +432,22 @@ export function validateCollectedSupervisorHeader(value, { job, binding, observe
         SUPERVISOR_METADATA_LIMIT,
     );
     validateEvidenceReference(value.timeline, 'timeline.jsonl', SUPERVISOR_TIMELINE_LIMIT);
+    validateSupervisorSourceBridge(binding, sourceBridge);
+    sameReference(
+        value.sourceBridge,
+        sourceBridge,
+        'source-bridge.json',
+        SUPERVISOR_SOURCE_BRIDGE_LIMIT,
+    );
     return value;
 }
 export function validateCollectedSupervisor(
     value,
     child,
-    { job, binding, observer, childReference, timeline },
+    { job, binding, observer, childReference, timeline, sourceBridge },
 ) {
-    validateCollectedSupervisorHeader(value, { job, binding, observer });
-    validateClosedChild(child, { job, binding, observer, timeline });
+    validateCollectedSupervisorHeader(value, { job, binding, observer, sourceBridge });
+    validateClosedChild(child, { job, binding, observer, timeline, sourceBridge });
     sameReference(
         value.childEvidence,
         childReference,
@@ -365,8 +458,9 @@ export function validateCollectedSupervisor(
     return value;
 }
 /** Streaming JSONL check: one exact source/mode binding, with no metric/pass interpretation. */
-export function sourceBindingTimeline(binding, observer) {
+export function sourceBindingTimeline(binding, observer, sourceBridge) {
     validateSourceBinding(binding);
+    validateSupervisorSourceBridge(binding, sourceBridge);
     validateHarnessObserver(observer);
     assert.equal(
         binding.observerSHA256,
@@ -377,6 +471,7 @@ export function sourceBindingTimeline(binding, observer) {
         matches = 0,
         identities = 0,
         observers = 0,
+        bridges = 0,
         records = 0,
         ended = false;
     const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
@@ -399,11 +494,17 @@ export function sourceBindingTimeline(binding, observer) {
                 'supervisor-source-binding',
                 'Timeline must begin with its source binding.',
             );
-        if (records++ === 1)
+        if (records === 1)
             assert.equal(
                 value.stage,
                 'supervisor-harness-observer',
                 'Timeline must retain its harness observer second.',
+            );
+        if (records++ === 2)
+            assert.equal(
+                value.stage,
+                'supervisor-source-bridge',
+                'Timeline must retain its source bridge third.',
             );
         if (value.stage === 'supervisor-source-binding') {
             matches++;
@@ -436,6 +537,27 @@ export function sourceBindingTimeline(binding, observer) {
             assert.equal(++observers, 1, 'Duplicate timeline harness observer.');
             validateHarnessObserver(value.data, observer);
         }
+        if (value.stage === 'supervisor-source-bridge') {
+            assert.equal(++bridges, 1, 'Duplicate timeline source bridge.');
+            keys(value.data, ['sourceCommit', 'sourceTree', 'reference']);
+            assert.equal(
+                value.data.sourceCommit,
+                binding.sourceCommit,
+                'Foreign timeline source commit.',
+            );
+            assert.equal(
+                value.data.sourceTree,
+                binding.sourceTree,
+                'Foreign timeline source tree.',
+            );
+            validateSupervisorSourceBridge(binding, value.data.reference);
+            sameReference(
+                value.data.reference,
+                sourceBridge,
+                'source-bridge.json',
+                SUPERVISOR_SOURCE_BRIDGE_LIMIT,
+            );
+        }
     }
     return {
         push(chunk) {
@@ -465,6 +587,7 @@ export function sourceBindingTimeline(binding, observer) {
             );
             assert.equal(matches, 1, 'Missing supervisor timeline binding.');
             assert.equal(observers, 1, 'Missing timeline harness observer.');
+            assert.equal(bridges, 1, 'Missing timeline source bridge.');
         },
     };
 }

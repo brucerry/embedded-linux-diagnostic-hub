@@ -22,12 +22,12 @@ or publisher-authentication claim. `scripts/lib/windows-setup-release.mjs` remai
 authority. The Windows build invokes the existing packager and uploads those exact outputs.
 
 The package verifiers and standalone Windows setup producer require matching local
-`dist-electron/main.cjs` and `dist-electron/preload.cjs` outputs in the repository checkout.
-Run them from the repository root and retain or reproduce the build outputs for the selected
-package. Missing or mismatched outputs fail the setup preflight before descriptor publication or
-compiler submission; it does not rebuild automatically. This scoped byte comparison does not
-authenticate the publisher or replace the native and exact-artifact gates below. Retained external
-cloud build outputs are evidence, not files at those conventional local paths.
+`dist-electron/main.cjs` and `dist-electron/preload.cjs` outputs in the repository checkout. Run
+them from the repository root and retain or reproduce the build outputs for the selected package.
+Missing or mismatched outputs fail the setup preflight before descriptor publication or compiler
+submission; it does not rebuild automatically. This scoped byte comparison does not authenticate the
+publisher or replace the native and exact-artifact gates below. Retained external cloud build
+outputs are evidence, not files at those conventional local paths.
 
 Four native staged-consumer jobs follow the existing website, Windows, Linux and two-architecture
 Mac qualification workflows. They download the existing Actions assets; Mac ZIPs are read directly
@@ -151,10 +151,11 @@ the harness runtime-inspection and JSONL soak formats do not establish final art
 identity or durable parent exit/cleanup. They must not be promoted into release evidence by
 relabeling. The single `reviewedPolicySHA256` summary field is not a contract for both GC policies.
 
-The [observer-bound supervisor v3 contract](product-supervisor-contract.md) now supplies diagnostic
-source/run/observer/byte/lifecycle graph checks, shared with the actual source emitter. Its verifier always
-returns non-qualifying evidence. It does not authenticate a real producer, bind shipping artifacts
-or interpret memory/policy results, and it is not an acceptance path around this release block.
+The [observer/source-bridge-bound supervisor v4 contract](product-supervisor-contract.md) now
+supplies diagnostic source/run/observer/byte/lifecycle graph checks, shared with the actual source
+emitter. Its verifier always returns non-qualifying evidence. It does not authenticate a real
+producer, bind shipping artifacts or interpret memory/policy results, and it is not an acceptance
+path around this release block.
 
 Before removing this block, supply and independently review the real producer schemas, then consume
 the exact retained payloads against final source/artifacts/runtime/profile, separately reviewed GC
@@ -163,6 +164,6 @@ mode), required retention, normal exit and cleanup. No accepting replacement sch
 qualification data is introduced here. Synthetic positive summary fixtures remain schema checks
 only.
 
-This patch has run only
-synthetic gate/catalog regressions and static checks locally: no current-source platform installer,
-packaged consumer, native resource lane, calibration, public CI or published-URL check is claimed.
+This patch has run only synthetic gate/catalog regressions and static checks locally: no
+current-source platform installer, packaged consumer, native resource lane, calibration, public CI
+or published-URL check is claimed.

@@ -6,9 +6,10 @@ are always false. The final staged-artifact consumer remains blocked on missing 
 producer contracts. No product, calibration, threshold or measurement result is supplied by this
 source change.
 
-The current emitted graph uses strict observer-bound v3 parent/child schemas. The shared schema and
-semantic readback API are documented in [the diagnostic contract](product-supervisor-contract.md).
-V1/v2 data cannot be relabeled into v3; all release gates remain held.
+The current emitted graph uses strict observer/source-bridge-bound v4 parent/child schemas. The
+shared schema and semantic readback API are documented in
+[the diagnostic contract](product-supervisor-contract.md). V1/v2/v3 data cannot be relabeled into
+v4; all release gates remain held.
 
 The supervisor creates a new nonce-prefixed directory under the requested `--out`, which must be
 under the repository's excluded `validation/`. This allocation precedes the child's source
@@ -16,25 +17,32 @@ fingerprint; keeping it under `validation/` avoids contaminating that identity. 
 required. `--child`, `--product-job` and `--supervisor-output` are reserved internal arguments;
 external or duplicate occurrences are refused. No source-fingerprint exclusion was added.
 
-The child uses the supervisor's directory and fixed `timeline.jsonl` path. After the existing owner
-join and timeline sync/close succeed, it hashes the closed timeline and exclusively writes, syncs
-and closes `child-evidence.json`. That manifest binds the job nonce and exact timeline
-name/bytes/SHA256, source/adapter hashes and requested scope. The timeline starts with one exact
-source/run binding record and a second full harness-observer snapshot. Parent and child
-independently call `nodeRuntimeIdentity()` and retain exact immutable observer envelopes; their
-digest is part of the source binding. This never claims shipping runtime identity. It explicitly
-makes no owner-completion claim. Only then does the existing `ProductRunOwner.finish(true)` validate
-custody and disconnect IPC. A manifest/hash/I/O failure holds the owner and prevents `finish`; the
-unchanged total deadline is checked before and after the evidence handoff. There is no new IPC
-evidence message or acknowledgement protocol.
+The parent retains a canonical `source-bridge.json` in that run directory before spawn, using
+independently supplied exact commit/tree pins. The child verifies its bytes and complete source
+closure against its own provider before opening its fixed `timeline.jsonl` path. The source binding
+retains commit/tree and bridge digest as well as the exact job nonce. Missing, duplicate or foreign
+source pins and bridge evidence fail before adapter import. Source observation time cannot extend
+work admission. After the existing owner join and timeline sync/close succeed, it hashes the closed
+timeline and exclusively writes, syncs and closes `child-evidence.json`. That manifest binds the job
+nonce and exact timeline name/bytes/SHA256, source/adapter hashes and requested scope. The timeline
+starts with one exact source/run binding record, a second full harness-observer snapshot and a third
+exact source-bridge reference record. The child and parent retain that same bridge reference. Parent
+and child independently call `nodeRuntimeIdentity()` and retain exact immutable observer envelopes;
+their digest is part of the source binding. This never claims shipping runtime identity. It
+explicitly makes no owner-completion claim. After independently re-verifying the retained bridge and
+source, the existing `ProductRunOwner.finish(true)` validates custody and disconnect IPC. A
+manifest/hash/I/O failure holds the owner and prevents `finish`; the unchanged total deadline is
+checked before and after the evidence handoff. There is no new IPC evidence message or
+acknowledgement protocol.
 
 The supervisor waits for the existing observed lifecycle outcome. Only actual normal code-zero
 spawn/exit/close, with no error, timeout, cancellation request or inconsistent exit/close values,
 permits reading the closed child evidence. It verifies the manifest's exact format and nonce and
-rehashes the fixed timeline. Missing, malformed, foreign or mismatched evidence produces an invalid
-sidecar. Unknown or abnormal closure never reads or claims a closed timeline; its references remain
-null. A late close cannot upgrade the recorded snapshot, and unknown-child ownership stays attached
-through the existing lifecycle observer.
+rehashes the fixed timeline and independently re-verifies retained source bridge bytes against the
+expected source context. Source changes cannot be hidden by rehashing manifests. Missing, malformed,
+foreign or mismatched evidence produces an invalid sidecar. Unknown or abnormal closure never reads
+or claims a closed timeline; its references remain null. A late close cannot upgrade the recorded
+snapshot, and unknown-child ownership stays attached through the existing lifecycle observer.
 
 The parent exclusively writes, syncs and closes the sidecar. Its status is either
 `collected-non-qualifying-supervisor-evidence` or `invalid-non-qualifying-supervisor-evidence`.
@@ -43,14 +51,14 @@ when later sync/close operations also fail. Existing or partial evidence is reta
 overwritten or deleted. A synchronous spawn request failure records a null lifecycle, without
 asserting that no process exists.
 
-Timeline hashing streams at most 512 MiB; JSON metadata reads/writes are bounded to 32 KiB. JSONL
-lines are bounded to 1 MiB. Only canonical producer JSON/JSONL bytes are accepted, with strict
-UTF-8, no BOMs or duplicate members and complete newlines. Exceeding these evidence storage bounds
-fails without truncating retained bytes. Reads refuse symlinks, hardlinks, special files,
-noncanonical directories and files whose identity/size/timestamps change during the read. File
-sync/close follows the existing harness evidence convention; it is not a claim of directory-entry
-durability through a host crash or an immutable filesystem. Future consumers must still reverify
-retained bytes.
+Timeline hashing streams at most 512 MiB; parent/child JSON reads/writes are bounded to 32 KiB and
+the separate source bridge to 4 MiB. JSONL lines are bounded to 1 MiB. Only canonical producer
+JSON/JSONL bytes are accepted, with strict UTF-8, no BOMs or duplicate members and complete
+newlines. Exceeding these evidence storage bounds fails without truncating retained bytes. Reads
+refuse symlinks, hardlinks, special files, noncanonical directories and files whose
+identity/size/timestamps change during the read. File sync/close follows the existing harness
+evidence convention; it is not a claim of directory-entry durability through a host crash or an
+immutable filesystem. Future consumers must still reverify retained bytes.
 
 Pure tests inject an in-memory filesystem, fake clocks and EventEmitter lifecycle objects. They
 exercise normal ordering, withheld joins, every I/O failure, multiple retained failures, reserved

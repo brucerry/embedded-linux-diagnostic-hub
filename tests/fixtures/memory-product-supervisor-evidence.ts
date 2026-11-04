@@ -16,7 +16,15 @@ import {
     parseSupervisorJSON,
     validateHarnessObserver,
     harnessObserverSHA256,
+    validateSupervisorSourceBridge,
 } from '../../scripts/lib/product-supervisor-contract.mjs';
+import {
+    SOURCE_LIMITS,
+    observeSourceBridge,
+    verifySourceBridge,
+    verifyAndBindDiagnosticSource,
+    parseSourceBridge,
+} from '../../scripts/lib/committed-source-bridge.mjs';
 import {
     productClock,
     type ProductClock,
@@ -29,9 +37,18 @@ export const metadataLimit = SUPERVISOR_METADATA_LIMIT;
 export type SourceBinding = ReturnType<typeof validateSourceBinding>;
 export type HarnessObserver = ReturnType<typeof validateHarnessObserver>;
 export type EvidenceReference = { name: string; bytes: number; sha256: string };
+export type SupervisorSourceContext = {
+    expected: { sourceCommit: string; sourceTree: string };
+    provider: Parameters<typeof observeSourceBridge>[1];
+    reference: EvidenceReference;
+};
 export interface SupervisorEvidenceIO {
     hash(name: string, maximum: number): Promise<EvidenceReference>;
-    timeline(binding: SourceBinding, observer: HarnessObserver): Promise<EvidenceReference>;
+    timeline(
+        binding: SourceBinding,
+        observer: HarnessObserver,
+        sourceBridge: EvidenceReference,
+    ): Promise<EvidenceReference>;
     json(name: string, maximum: number): Promise<{ reference: EvidenceReference; value: unknown }>;
     write(name: string, value: unknown): Promise<void>;
 }
@@ -63,7 +80,12 @@ export type EvidenceFileSystem = {
     realpath(file: string): Promise<string>;
     open(file: string, flags: string): Promise<Handle>;
 };
-const filenames = ['timeline.jsonl', 'child-evidence.json', 'supervisor-evidence.json'];
+const filenames = [
+    'timeline.jsonl',
+    'child-evidence.json',
+    'supervisor-evidence.json',
+    'source-bridge.json',
+];
 export async function assertSupervisorDirectory(
     directory: string,
     filesystem: EvidenceFileSystem = fs,
@@ -170,22 +192,27 @@ export function supervisorEvidenceIO(
         async hash(name, maximum) {
             return (await read(name, maximum, false)).reference;
         },
-        async timeline(binding, observer) {
+        async timeline(binding, observer, sourceBridge) {
             return (
                 await read(
                     'timeline.jsonl',
                     timelineLimit,
                     false,
-                    sourceBindingTimeline(binding, observer),
+                    sourceBindingTimeline(binding, observer, sourceBridge),
                 )
             ).reference;
         },
         async json(name, maximum) {
-            assert.ok(maximum <= metadataLimit);
+            assert.ok(
+                maximum <= (name === 'source-bridge.json' ? SOURCE_LIMITS.metadata : metadataLimit),
+            );
             const result = await read(name, maximum, true);
             return {
                 reference: result.reference,
-                value: parseSupervisorJSON(result.contents),
+                value:
+                    name === 'source-bridge.json'
+                        ? parseSourceBridge(result.contents)
+                        : parseSupervisorJSON(result.contents),
             };
         },
         async write(name, value) {
@@ -193,7 +220,8 @@ export function supervisorEvidenceIO(
             assert.ok(name !== 'timeline.jsonl');
             const bytes = JSON.stringify(value) + '\n';
             assert.ok(
-                Buffer.byteLength(bytes) <= metadataLimit,
+                Buffer.byteLength(bytes) <=
+                    (name === 'source-bridge.json' ? SOURCE_LIMITS.metadata : metadataLimit),
                 'Supervisor metadata size bound exceeded.',
             );
             const handle = await filesystem.open(file(name), 'wx');
@@ -261,12 +289,81 @@ export function supervisorOutput(
     return directory;
 }
 
+function sourceContext(
+    expected: SupervisorSourceContext['expected'],
+    provider: SupervisorSourceContext['provider'],
+    reference: EvidenceReference,
+): SupervisorSourceContext {
+    assert.ok(expected && typeof expected === 'object');
+    assert.deepEqual(Object.keys(expected).sort(), ['sourceCommit', 'sourceTree']);
+    assert.match(expected.sourceCommit, /^[a-f0-9]{40}$/);
+    assert.match(expected.sourceTree, /^[a-f0-9]{40}$/);
+    assert.ok(provider && typeof provider === 'object');
+    for (const method of ['state', 'objects', 'entries', 'file'])
+        assert.equal(typeof provider[method], 'function', 'Missing independent source provider.');
+    validateEvidenceReference(reference, 'source-bridge.json', SOURCE_LIMITS.metadata);
+    return Object.freeze({
+        expected: Object.freeze({ ...expected }),
+        provider,
+        reference: Object.freeze({ ...reference }),
+    });
+}
+
+/** Retain new static evidence; no supplied JSON can replace independent source observation. */
+export async function retainSupervisorSourceBridge(
+    io: SupervisorEvidenceIO,
+    expected: SupervisorSourceContext['expected'],
+    provider: SupervisorSourceContext['provider'],
+) {
+    const record = await observeSourceBridge(expected, provider);
+    await io.write('source-bridge.json', record);
+    return readSupervisorSourceBridge(io, expected, provider);
+}
+
+/** Child/readback obtains its own verified reference from exact retained canonical bytes. */
+export async function readSupervisorSourceBridge(
+    io: SupervisorEvidenceIO,
+    expected: SupervisorSourceContext['expected'],
+    provider: SupervisorSourceContext['provider'],
+) {
+    const retained = await io.json('source-bridge.json', SOURCE_LIMITS.metadata);
+    await verifySourceBridge(retained.value, expected, provider);
+    return sourceContext(expected, provider, retained.reference);
+}
+
+function boundSourceContext(binding: SourceBinding, source: SupervisorSourceContext) {
+    assert.ok(source && typeof source === 'object', 'Independent source context is required.');
+    const actual = sourceContext(source.expected, source.provider, source.reference);
+    assert.equal(binding.sourceCommit, actual.expected.sourceCommit, 'Foreign source commit.');
+    assert.equal(binding.sourceTree, actual.expected.sourceTree, 'Foreign source tree.');
+    validateSupervisorSourceBridge(binding, actual.reference);
+    return actual;
+}
+
+export async function verifyBoundSupervisorSourceBridge(
+    io: SupervisorEvidenceIO,
+    binding: SourceBinding,
+    source: SupervisorSourceContext,
+) {
+    const context = boundSourceContext(binding, source);
+    const retained = await io.json('source-bridge.json', SOURCE_LIMITS.metadata);
+    assert.deepEqual(retained.reference, context.reference, 'Retained source bridge bytes differ.');
+    await verifyAndBindDiagnosticSource(
+        retained.value,
+        binding,
+        context.expected,
+        context.provider,
+    );
+    return retained.reference;
+}
+
 /** Called only after the child timeline sync/close and actual descendant joins. */
 export async function finishProductEvidence(
     owner: ProductRunOwner,
     binding: SourceBinding,
     observer: HarnessObserver,
     io: SupervisorEvidenceIO,
+    source: SupervisorSourceContext,
     clock: ProductClock = productClock,
 ) {
     try {
@@ -278,14 +375,16 @@ export async function finishProductEvidence(
             clock.now() < owner.job.deadlineMs,
             'Child evidence handoff exceeded the existing total deadline.',
         );
-        const timeline = await io.timeline(binding, observer);
+        const sourceBridge = await verifyBoundSupervisorSourceBridge(io, binding, source);
+        const timeline = await io.timeline(binding, observer, sourceBridge);
         await io.write('child-evidence.json', {
-            schemaVersion: 3,
+            schemaVersion: 4,
             kind: 'product-child-closed-timeline',
             qualification: false,
             nonce: owner.job.nonce,
             binding,
             observer,
+            sourceBridge,
             timeline,
             ownerCompletion: 'not-asserted',
         });
@@ -323,6 +422,7 @@ export async function writeSupervisorEvidence(
     observer: HarnessObserver,
     lifecycle: SupervisorLifecycle | null,
     io: SupervisorEvidenceIO,
+    source: SupervisorSourceContext,
     initialFailure?: unknown,
 ) {
     validateSupervisorJob(job);
@@ -334,7 +434,8 @@ export async function writeSupervisorEvidence(
     const retain = (error: unknown) => failures.push(String(error).slice(0, 1024));
     if (initialFailure !== undefined) retain(initialFailure);
     let childEvidence: EvidenceReference | null = null,
-        timeline: EvidenceReference | null = null;
+        timeline: EvidenceReference | null = null,
+        sourceBridge: EvidenceReference | null = null;
     let lifecycleValid = false;
     const snapshot = lifecycle ? { ...lifecycle, killErrors: [...lifecycle.killErrors] } : null;
     try {
@@ -345,16 +446,24 @@ export async function writeSupervisorEvidence(
     }
     if (lifecycleValid)
         try {
+            const retainedSource = await verifyBoundSupervisorSourceBridge(io, binding, source);
             const observed = await io.json('child-evidence.json', metadataLimit);
-            const actual = await io.timeline(binding, observer);
-            validateClosedChild(observed.value, { job, binding, observer, timeline: actual });
+            const actual = await io.timeline(binding, observer, retainedSource);
+            validateClosedChild(observed.value, {
+                job,
+                binding,
+                observer,
+                sourceBridge: retainedSource,
+                timeline: actual,
+            });
             childEvidence = observed.reference;
             timeline = actual;
+            sourceBridge = retainedSource;
         } catch (error) {
             retain(error);
         }
     const record = {
-        schemaVersion: 3,
+        schemaVersion: 4,
         kind: 'product-supervisor-observation',
         qualification: false,
         releaseAcceptance: false,
@@ -364,6 +473,7 @@ export async function writeSupervisorEvidence(
         job,
         binding,
         observer,
+        sourceBridge,
         lifecycle: snapshot,
         childEvidence,
         timeline,
@@ -380,31 +490,41 @@ export async function verifySupervisorEvidence(
     binding: SourceBinding,
     observer: HarnessObserver,
     io: SupervisorEvidenceIO,
+    source: SupervisorSourceContext,
 ) {
     validateSupervisorJob(job);
     validateSourceBinding(binding);
     validateHarnessObserver(observer);
     assert.equal(binding.observerSHA256, harnessObserverSHA256(observer));
+    const context = boundSourceContext(binding, source);
     const parent = await io.json('supervisor-evidence.json', metadataLimit);
-    validateCollectedSupervisorHeader(parent.value, { job, binding, observer });
+    validateCollectedSupervisorHeader(parent.value, {
+        job,
+        binding,
+        observer,
+        sourceBridge: context.reference,
+    });
+    const sourceBridge = await verifyBoundSupervisorSourceBridge(io, binding, context);
     const child = await io.json('child-evidence.json', metadataLimit);
-    const timeline = await io.timeline(binding, observer);
+    const timeline = await io.timeline(binding, observer, sourceBridge);
     validateCollectedSupervisor(parent.value, child.value, {
         job,
         binding,
         observer,
+        sourceBridge,
         childReference: child.reference,
         timeline,
     });
     validateEvidenceReference(parent.reference, 'supervisor-evidence.json', metadataLimit);
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         kind: 'verified-non-qualifying-supervisor-graph',
         qualification: false,
         releaseAcceptance: false,
         binding,
         job,
         observer,
+        sourceBridge,
         supervisor: parent.reference,
         child: child.reference,
         timeline,

@@ -5,11 +5,18 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { productJob, ProductRunOwner, observeProductOwner, productClock } from './memory-product-owner';
+import {
+    productJob,
+    ProductRunOwner,
+    observeProductOwner,
+    productClock,
+} from './memory-product-owner';
 import {
     sourceBindingFromArguments,
     createHarnessObserver,
+    sourceBridgePinsFromArguments,
 } from '../../scripts/lib/product-supervisor-contract.mjs';
+import { localSourceProvider } from '../../scripts/lib/committed-source-provider.mjs';
 import { syncCloseEvidence } from './memory-resource-evidence';
 import {
     supervisorEvidenceIO,
@@ -19,6 +26,9 @@ import {
     assertSupervisorDirectory,
     finishProductEvidence,
     writeSupervisorEvidence,
+    readSupervisorSourceBridge,
+    retainSupervisorSourceBridge,
+    verifyBoundSupervisorSourceBridge,
 } from './memory-product-supervisor-evidence';
 import { fileURLToPath } from 'node:url';
 import {
@@ -44,6 +54,8 @@ import {
 async function main(owner: ProductRunOwner) {
     owner.assertAdmissible();
     const args = argumentsOf(process.argv.slice(2));
+    const expectedSource = sourceBridgePinsFromArguments(process.argv.slice(2), args);
+    const repository = fileURLToPath(new URL('../..', import.meta.url));
     const calibrating = args.has('calibration');
     if (calibrating) {
         assert.equal(args.get('calibration'), '1', 'Use --calibration=1 explicitly.');
@@ -79,18 +91,34 @@ async function main(owner: ProductRunOwner) {
     assert.match(sourceSHA256 ?? '', /^[a-f0-9]{64}$/, 'Pin the composed source manifest hash.');
     assert.equal(
         sourceSHA256,
-        await sourceFingerprint(fileURLToPath(new URL('../..', import.meta.url))),
+        await sourceFingerprint(repository),
         'Composed source fingerprint mismatch.',
     );
     const observer = createHarnessObserver(await nodeRuntimeIdentity());
-    const binding = sourceBindingFromArguments(
-        args, sourceSHA256, adapterHash, owner.job.nonce, observer,
-    );
-    owner.assertAdmissible();
     const output = supervisorOutput(
-        destination!, args.get('supervisor-output') ?? '', lane!, gcMode, owner.job,
+        destination!,
+        args.get('supervisor-output') ?? '',
+        lane!,
+        gcMode,
+        owner.job,
     );
     await assertSupervisorDirectory(output);
+    const io = supervisorEvidenceIO(output);
+    const sourceContext = await readSupervisorSourceBridge(
+        io,
+        expectedSource,
+        await localSourceProvider(repository),
+    );
+    const binding = sourceBindingFromArguments(
+        args,
+        sourceSHA256,
+        adapterHash,
+        owner.job.nonce,
+        observer,
+        sourceContext,
+    );
+    await verifyBoundSupervisorSourceBridge(io, binding, sourceContext);
+    owner.assertAdmissible();
     const timeline = await fs.open(path.join(output, 'timeline.jsonl'), 'wx');
     let writes = Promise.resolve();
     const emit = async (stage: string, data: unknown) => {
@@ -102,6 +130,10 @@ async function main(owner: ProductRunOwner) {
     };
     await emit('supervisor-source-binding', binding);
     await emit('supervisor-harness-observer', observer);
+    await emit('supervisor-source-bridge', {
+        ...expectedSource,
+        reference: sourceContext.reference,
+    });
     owner.assertAdmissible();
     const { createQualificationDriver } = await import(pathToFileURL(adapterPath).href);
     let driver: QualificationDriver;
@@ -469,9 +501,8 @@ async function main(owner: ProductRunOwner) {
                 throw new AggregateError(errors, 'Product timeline sync/close failed.');
             }
         }
-        if (ownershipJoined) await finishProductEvidence(
-            owner, binding, observer, supervisorEvidenceIO(output),
-        );
+        if (ownershipJoined)
+            await finishProductEvidence(owner, binding, observer, io, sourceContext);
     }
     if (failure) throw failure;
 }
@@ -479,6 +510,7 @@ async function supervise() {
     const job = productJob();
     supervisorArguments(process.argv.slice(2), false);
     const args = argumentsOf(process.argv.slice(2));
+    const expectedSource = sourceBridgePinsFromArguments(process.argv.slice(2), args);
     const destination = args.get('out'),
         lane = args.get('lane'),
         gcMode = args.get('gc') ?? 'normal';
@@ -487,27 +519,40 @@ async function supervise() {
     const repository = path.resolve(import.meta.dirname, '../..');
     const sourceSHA256 = await sourceFingerprint(repository);
     assert.equal(
-        args.get('source-sha256'), sourceSHA256,
+        args.get('source-sha256'),
+        sourceSHA256,
         'Supervisor composed source fingerprint mismatch.',
     );
     const adapterPath = path.resolve(
-        args.get('driver') ?? fileURLToPath(new URL('./memory-resource-platform.ts', import.meta.url)),
+        args.get('driver') ??
+            fileURLToPath(new URL('./memory-resource-platform.ts', import.meta.url)),
     );
     const adapterSHA256 = sha256(await fs.readFile(adapterPath));
     const observer = createHarnessObserver(await nodeRuntimeIdentity());
-    const binding = sourceBindingFromArguments(
-        args, sourceSHA256, adapterSHA256, job.nonce, observer,
-    );
+    const sourceProvider = await localSourceProvider(repository);
     assert.ok(
         productClock.now() < job.deadlineMs - job.reserveMs,
         'Supervisor source preflight exhausted work admission.',
     );
     const directory = supervisorDestination(repository, destination);
     await fs.mkdir(directory, { recursive: true });
-    assert.equal(await fs.realpath(directory), directory, 'Supervisor output must not use path aliases.');
-    const output = await fs.mkdtemp(
-        path.join(directory, `${lane}-${gcMode}-${job.nonce}-`),
+    assert.equal(
+        await fs.realpath(directory),
+        directory,
+        'Supervisor output must not use path aliases.',
     );
+    const output = await fs.mkdtemp(path.join(directory, `${lane}-${gcMode}-${job.nonce}-`));
+    const io = supervisorEvidenceIO(output);
+    const sourceContext = await retainSupervisorSourceBridge(io, expectedSource, sourceProvider);
+    const binding = sourceBindingFromArguments(
+        args,
+        sourceSHA256,
+        adapterSHA256,
+        job.nonce,
+        observer,
+        sourceContext,
+    );
+    await verifyBoundSupervisorSourceBridge(io, binding, sourceContext);
     let child;
     try {
         assert.ok(
@@ -528,9 +573,7 @@ async function supervise() {
         );
     } catch (error) {
         try {
-            await writeSupervisorEvidence(
-                job, binding, observer, null, supervisorEvidenceIO(output), error,
-            );
+            await writeSupervisorEvidence(job, binding, observer, null, io, sourceContext, error);
         } catch (evidenceError) {
             throw new AggregateError(
                 [error, evidenceError],
@@ -552,9 +595,7 @@ async function supervise() {
     };
     child.once('close', release);
     const row = await observed.outcome;
-    const evidence = await writeSupervisorEvidence(
-        job, binding, observer, row, supervisorEvidenceIO(output),
-    );
+    const evidence = await writeSupervisorEvidence(job, binding, observer, row, io, sourceContext);
     // An exit does not establish inherited-stream closure. Unknown retains the child/IPC/listeners.
     if (
         !row.spawnObserved ||
@@ -580,7 +621,11 @@ async function runChild() {
     const owner = new ProductRunOwner(productJob(raw));
     try {
         await main(owner);
-        assert.equal(owner.snapshot().completed, true, 'Product owner completion remains unverified.');
+        assert.equal(
+            owner.snapshot().completed,
+            true,
+            'Product owner completion remains unverified.',
+        );
     } catch (error) {
         if (!owner.snapshot().completed) owner.hold(error);
         throw error;

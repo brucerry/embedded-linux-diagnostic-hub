@@ -205,6 +205,8 @@ test('immutable Git closure, exact index and two worktree passes produce only a 
     assert.equal(record.sourceFingerprint, await legacyFingerprint(f));
     await verifySourceBridge(record, f.expected, f.provider);
     const binding = createSourceBinding({
+        ...f.expected,
+        sourceBridgeSHA256: sourceDigest(JSON.stringify(record) + '\n'),
         sourceSHA256: record.sourceFingerprint,
         jobNonce: '11111111-1111-1111-1111-111111111111',
         adapterSHA256: 'a'.repeat(64),

@@ -454,6 +454,13 @@ export async function verifySourceBridge(value, expected, provider) {
 export async function verifyAndBindDiagnosticSource(value, binding, expected, provider) {
     const bridge = await verifySourceBridge(value, expected, provider);
     validateSourceBinding(binding);
+    assert.equal(binding.sourceCommit, expected.sourceCommit, 'Supervisor frozen commit differs.');
+    assert.equal(binding.sourceTree, expected.sourceTree, 'Supervisor frozen tree differs.');
+    assert.equal(
+        binding.sourceBridgeSHA256,
+        sourceDigest(JSON.stringify(bridge) + '\n'),
+        'Supervisor retained source bridge differs.',
+    );
     assert.equal(
         binding.sourceSHA256,
         bridge.sourceFingerprint,

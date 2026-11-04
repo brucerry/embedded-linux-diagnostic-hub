@@ -8,6 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import ts from 'typescript';
 import { mockLife } from './memory-fast-test-input';
+import { syntheticSourceFixture } from './memory-source-bridge-input';
+import { observeSourceBridge } from '../../scripts/lib/committed-source-bridge.mjs';
 const root = path.resolve(import.meta.dirname, '../..');
 const realRequire = createRequire(import.meta.url);
 type Options = {
@@ -23,8 +25,21 @@ type Options = {
     observerDelayMs?: number;
     initialEmitDelayMs?: number;
     observerFailure?: 'missing' | 'read';
+    sourceBridgeDelayMs?: number;
+    sourceBridgeFailure?: 'missing' | 'malformed' | 'foreign' | 'read';
+    sourcePinFailure?: 'missing' | 'duplicate' | 'foreign';
+    sourceMutationAfterReceipt?: boolean;
+    mismatchedSourceFingerprint?: boolean;
 };
 export async function verifySoak(options: Options = {}) {
+    const syntheticSource = syntheticSourceFixture();
+    const sourceBridge = await observeSourceBridge(
+        syntheticSource.expected,
+        syntheticSource.provider,
+    );
+    const fingerprint = options.mismatchedSourceFingerprint
+        ? 'a'.repeat(64)
+        : syntheticSource.fingerprint;
     let clock = 0,
         running = true,
         samples = 0,
@@ -224,7 +239,12 @@ export async function verifySoak(options: Options = {}) {
                     const item = JSON.parse(line);
                     if (item.stage === 'supervisor-harness-observer')
                         clock += options.initialEmitDelayMs ?? 0;
-                    if (item.stage === 'receipt') receipt = item.data;
+                    if (item.stage === 'receipt') {
+                        receipt = item.data;
+                        if (options.sourceMutationAfterReceipt)
+                            syntheticSource.files.get('source.txt')!.bytes =
+                                Buffer.from('changed after work');
+                    }
                     if (item.stage === 'assessment-context') assessmentContext = item.data;
                     if (item.stage === 'quiescent-checkpoint') checkpoints++;
                     if (item.stage === 'shutdown-processes') {
@@ -269,9 +289,18 @@ export async function verifySoak(options: Options = {}) {
                         throw Error('Verifier attempted a child process.');
                     },
                 };
+            if (id.endsWith('/committed-source-provider.mjs'))
+                return {
+                    localSourceProvider: async () => {
+                        clock += options.sourceBridgeDelayMs ?? 0;
+                        if (options.sourceBridgeFailure === 'read')
+                            throw Error('Synthetic source provider read failure.');
+                        return syntheticSource.provider;
+                    },
+                };
             if (id === './memory-resource-identity')
                 return {
-                    sourceFingerprint: async () => 'a'.repeat(64),
+                    sourceFingerprint: async () => fingerprint,
                     nodeRuntimeIdentity: async () => {
                         clock += options.observerDelayMs ?? 0;
                         if (options.observerFailure === 'read')
@@ -318,6 +347,20 @@ export async function verifySoak(options: Options = {}) {
     const virtualJob = load(path.join(root, 'tests/fixtures/memory-product-owner.ts')).productJob();
     const virtualDestination = path.join(root, 'validation', 'virtual-evidence');
     virtualOutput = path.join(virtualDestination, `gateway-normal-${virtualJob.nonce}-ABC123`);
+    if (options.sourceBridgeFailure !== 'missing') {
+        const record =
+            options.sourceBridgeFailure === 'foreign'
+                ? { ...sourceBridge, sourceCommit: 'f'.repeat(40) }
+                : sourceBridge;
+        virtualFiles.set(
+            path.join(virtualOutput, 'source-bridge.json'),
+            Buffer.from(
+                options.sourceBridgeFailure === 'malformed'
+                    ? '{broken'
+                    : JSON.stringify(record) + '\n',
+            ),
+        );
+    }
     context.process.argv = [
         'node',
         path.join(root, 'tests/fixtures/memory-resource-soak.ts'),
@@ -328,7 +371,19 @@ export async function verifySoak(options: Options = {}) {
         '--gc=normal',
         '--driver=C:/virtual-driver.ts',
         '--out=' + virtualDestination,
-        '--source-sha256=' + 'a'.repeat(64),
+        '--source-sha256=' + fingerprint,
+        ...(options.sourcePinFailure === 'missing'
+            ? []
+            : [
+                  '--source-commit=' +
+                      (options.sourcePinFailure === 'foreign'
+                          ? 'f'.repeat(40)
+                          : syntheticSource.expected.sourceCommit),
+              ]),
+        ...(options.sourcePinFailure === 'duplicate'
+            ? ['--source-commit=' + syntheticSource.expected.sourceCommit]
+            : []),
+        '--source-tree=' + syntheticSource.expected.sourceTree,
         '--no-sampler=1',
         ...(options.component ? ['--component=1'] : []),
         ...(options.calibration ? ['--calibration=1'] : []),
@@ -339,12 +394,14 @@ export async function verifySoak(options: Options = {}) {
     try {
         await done;
     } catch (error) {
-        if (driverImports !== 0)
-            throw new AggregateError(
-                [error],
-                'Virtual preflight failure admitted an adapter import.',
-            );
-        throw error;
+        // Test-only diagnostics make zero-import negative controls observable, even on rejection.
+        throw Object.assign(new Error(String(error), { cause: error }), {
+            driverImports,
+            childEvidenceRetained: virtualFiles.has(
+                path.join(virtualOutput, 'child-evidence.json'),
+            ),
+            virtualIPCClosed: !virtualProcess.connected,
+        });
     }
     return {
         receipt,
@@ -359,6 +416,8 @@ export async function verifySoak(options: Options = {}) {
         virtualTimersRemaining: virtualTimers.size,
         evidenceSynced,
         evidenceClosed,
+        childEvidenceRetained: virtualFiles.has(path.join(virtualOutput, 'child-evidence.json')),
+        sourceProviderReads: syntheticSource.calls.file,
         realProcessesQueried: 0,
         realCycles: 0,
         realGrowthAllocated: 0,
