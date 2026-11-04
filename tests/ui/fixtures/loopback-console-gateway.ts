@@ -302,5 +302,6 @@ export function allocateLoopbackGateway() {
         return startTask;
     };
     return { start, close: closeOwned, snapshot, fileOpened, fileClosed, fileCloseFailed,
-        stage: diagnostics.stage, modalState: diagnostics.modalState };
+        stage: diagnostics.stage, modalState: diagnostics.modalState,
+        caseFailure: () => diagnostics.caseFailure(snapshot()) };
 }

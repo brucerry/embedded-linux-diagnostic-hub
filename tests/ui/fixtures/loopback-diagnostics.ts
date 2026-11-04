@@ -19,12 +19,26 @@ const flag = (value: unknown) => typeof value === 'boolean' ? value : null;
 const object = (value: unknown): Record<string, unknown> =>
     value !== null && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown> : {};
+function resources(input: unknown) {
+    const source = object(input), gateway = object(source.gateway);
+    return {
+        owner: Object.fromEntries([
+            ...ownerCounters.map(key => [key, counter(source[key])]),
+            ...ownerFlags.map(key => [key, flag(source[key])]),
+        ]),
+        gateway: Object.fromEntries([
+            ['serverListening', flag(gateway.serverListening)],
+            ...gatewayCounters.map(key => [key, counter(gateway[key])]),
+        ]),
+    };
+}
 
 export function createLoopbackDiagnostics() {
     const events: Stage[] = [];
     let overflow = false;
     let modal: { visible: boolean; busy: boolean } | null = null;
     let firstCleanupFailure: Record<string, unknown> | null = null;
+    let firstCaseFailure: ReturnType<typeof resources> | null = null;
     function stage(value: Stage) {
         if (!stages.includes(value)) return;
         if (events.length === 32) { overflow = true; return; }
@@ -32,25 +46,18 @@ export function createLoopbackDiagnostics() {
     }
     function cleanupFailure(input: unknown, codes: readonly string[]) {
         if (firstCleanupFailure) return;
-        const source = object(input), gateway = object(source.gateway);
         firstCleanupFailure = {
             codes: failureCodes.filter(code => codes.includes(code)),
-            owner: Object.fromEntries([
-                ...ownerCounters.map(key => [key, counter(source[key])]),
-                ...ownerFlags.map(key => [key, flag(source[key])]),
-            ]),
-            gateway: Object.fromEntries([
-                ['serverListening', flag(gateway.serverListening)],
-                ...gatewayCounters.map(key => [key, counter(gateway[key])]),
-            ]),
+            ...resources(input),
         };
         stage('cleanup-failed');
     }
     function snapshot() {
         // Detach all returned arrays/objects so callers cannot erase the first failure.
-        return JSON.parse(JSON.stringify({schema: 1, stages: events, overflow, modal, firstCleanupFailure}));
+        return JSON.parse(JSON.stringify({schema: 1, stages: events, overflow, modal, firstCaseFailure, firstCleanupFailure}));
     }
     return { stage, cleanupFailure, snapshot,
+        caseFailure: (input: unknown) => { firstCaseFailure ??= resources(input); },
         modalState: (visible: boolean, busy: boolean) => { modal = {visible, busy}; } };
 }
 
@@ -65,6 +72,10 @@ export function sanitizeLoopbackDiagnostics(input: unknown) {
     const modal = object(source.modal);
     if (typeof modal.visible === 'boolean' && typeof modal.busy === 'boolean')
         observer.modalState(modal.visible, modal.busy);
+    if (source.firstCaseFailure !== null && source.firstCaseFailure !== undefined) {
+        const first = object(source.firstCaseFailure);
+        observer.caseFailure({...object(first.owner), gateway: first.gateway});
+    }
     if (source.firstCleanupFailure !== null && source.firstCleanupFailure !== undefined) {
         const first = object(source.firstCleanupFailure);
         if (!Array.isArray(first.codes) || first.codes.length > 3 ||

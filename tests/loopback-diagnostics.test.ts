@@ -10,6 +10,9 @@ for (let i=0;i<40;i++) owner.stage('page-ready');
 assert.equal(owner.snapshot().stages.length,32); assert.equal(owner.snapshot().overflow,true);
 checks.push('32 stage cap');
 const failure = createLoopbackDiagnostics();
+failure.caseFailure({sshClients:2,acceptedClients:2,readyClients:1,probeExecutions:7,gateway:{sessions:1},password:'SECRET_SENTINEL'});
+failure.caseFailure({sshClients:0,probeExecutions:0});
+assert.equal(failure.snapshot().firstCaseFailure.owner.probeExecutions,7);
 failure.cleanupFailure({sshClients:1,readyClients:0,acceptedClients:2,probeExecutions:5,
     fileHandles:0,failedFileCloses:0,sshListening:false,sshCloseAcknowledged:true,
     gatewayCloseAcknowledged:true,journalFailed:false,gateway:{httpSockets:3},

@@ -198,6 +198,7 @@ test('actual authenticated gateway and browser journal keep Script/Enter/Enter/S
     } catch (error) {
         failures.push(error);
         owner.stage('case-failure');
+        owner.caseFailure();
         try {
             const modal = page.getByRole('dialog', { name: 'Connect a Linux device' });
             owner.modalState(await modal.isVisible(), await modal.getByRole('button', { name: 'Connecting & collecting…', exact: true }).isVisible());
