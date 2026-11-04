@@ -1,0 +1,262 @@
+name: Candidate loopback SSH console probe completion diagnostic only
+
+# Push starts the job: the controller must first verify existing authorized
+# runner capacity/billing and repository permissions. Unknown or unapproved
+# payment/permission requirements mean STOP BEFORE PUSH. No upgrade is authorized.
+
+on:
+    push:
+        branches: [ci/loopback-probes-candidate-226]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: loopback-console-${{ github.run_id }}
+    cancel-in-progress: false
+
+jobs:
+    files:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 15
+        env:
+            CI: 'true'
+            ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        steps:
+            - name: Require a fresh non-root runner scope
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/loopback-probes-candidate-226
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_USE_ENV_PROXY SSH_AUTH_SOCK SSH_ASKPASS NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
+                      if [[ -v "$key" && -n "${!key}" ]]; then
+                          printf 'Unexpected injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  for slot in application tooling; do
+                      test ! -e "$GITHUB_WORKSPACE/$slot"
+                      test ! -L "$GITHUB_WORKSPACE/$slot"
+                  done
+                  scope="$RUNNER_TEMP/lc-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+                  # Chromium 1243 uses this six-character directory suffix. Linux
+                  # sun_path is 108 bytes including NUL; refuse before creating scratch.
+                  export LC_ALL=C
+                  socket_probe="$scope/tmp/org.chromium.Chromium.XXXXXX/SingletonSocket"
+                  socket_bytes=${#socket_probe}
+                  if (( socket_bytes > 107 )); then
+                      printf 'Owned Chromium socket path needs %s bytes; maximum is 107.\n' "$socket_bytes"
+                      exit 1
+                  fi
+                  test ! -e "$scope"
+                  test ! -L "$scope"
+                  mkdir "$scope"
+                  mkdir "$scope/tmp" "$scope/npm-cache" "$scope/browsers"
+                  mkdir "$scope/tmp/downloads"
+                  : > "$scope/npm-user.npmrc"
+                  : > "$scope/npm-global.npmrc"
+                  {
+                      printf 'HUB_LOOPBACK_CONSOLE_SCOPE=%s\n' "$scope"
+                      printf 'HUB_LOOPBACK_CONSOLE_APPLICATION=%s/application\n' "$GITHUB_WORKSPACE"
+                      printf 'TMPDIR=%s/tmp\n' "$scope"
+                      printf 'PLAYWRIGHT_BROWSERS_PATH=%s/browsers\n' "$scope"
+                      printf 'NPM_CONFIG_CACHE=%s/npm-cache\n' "$scope"
+                      printf 'NPM_CONFIG_USERCONFIG=%s/npm-user.npmrc\n' "$scope"
+                      printf 'NPM_CONFIG_GLOBALCONFIG=%s/npm-global.npmrc\n' "$scope"
+                  } >> "$GITHUB_ENV"
+            - uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.sha }}
+                  path: tooling
+                  fetch-depth: 2
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/checkout@v6
+              with:
+                  ref: 47e17c5ac15dcb192ab7930bef5c44911ce637e5
+                  path: application
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Bind tooling, source and registry inputs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git -C tooling rev-parse HEAD^)" = 47e17c5ac15dcb192ab7930bef5c44911ce637e5
+                  test "$(git -C application rev-parse HEAD)" = 47e17c5ac15dcb192ab7930bef5c44911ce637e5
+                  test "$(git -C application rev-parse 'HEAD^{tree}')" = 216f43e58f93465c4d3f4468715573510e62adc7
+                  test ! -e application/node_modules
+                  test ! -L application/node_modules
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const lock = JSON.parse(fs.readFileSync('application/package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages)) {
+                    if (p.resolved && !p.resolved.startsWith('https://registry.npmjs.org/'))
+                      throw Error('Unexpected package source');
+                  }
+                  NODE
+                  node tooling/.github/loopback-console-selection.test.mjs
+                  node tooling/.github/loopback-console-outcome.test.mjs
+            - name: Install only locked dependencies without lifecycle scripts
+              working-directory: application
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+            - name: Verify SDK pins and install its Chromium without privileged repair
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const sdkPins = {"node_modules/playwright/lib/runner/index.js":"7a2e4e1114d3237d61b87723b4d86a37944c9143f3ce2fb0b2e8867e0c612a5e","node_modules/playwright/lib/worker/workerProcessEntry.js":"3d6676ca271c075b1e7c8e2cd6ad5331430cf29a3332d1f621054ff7d8e06478","node_modules/playwright/lib/index.js":"54bf5935cf339938408c656bde958047a1217bf77434acdf75a0c717cddaaeae","node_modules/playwright-core/lib/coreBundle.js":"549070af3acabb3efcc4f55bfe6210f9f7c2fcf633cf7eaa59bfe60719969171"};
+                  for (const [file, expected] of Object.entries(sdkPins))
+                    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected)
+                      throw Error('Changed reviewed SDK serializer: ' + file);
+                  if (require('./node_modules/playwright-core/package.json').version !== '1.63.0')
+                    throw Error('Unexpected Playwright');
+                  const b = JSON.parse(fs.readFileSync('node_modules/playwright-core/browsers.json', 'utf8'));
+                  if (!b.browsers.some(x => x.name === 'chromium' && x.revision === '1243' && x.browserVersion === '153.0.8010.12'))
+                    throw Error('Unexpected Chromium');
+                  NODE
+                  node - <<'NODE'
+                  const fs = require('node:fs'), crypto = require('node:crypto');
+                  const bytes = fs.readFileSync('../tooling/.github/loopback-console-dependencies.json');
+                  if (crypto.createHash('sha256').update(bytes).digest('hex') !== '959bb2976b9eabefc7437875868101ee6268d27769be25e35c9b07b01c726c77') throw Error('Changed dependency review');
+                  const d = JSON.parse(bytes);
+                  for (const [file, sha] of Object.entries(d.installedDependencyFilePins)) {
+                    if (!/^[a-zA-Z0-9_./-]+$/.test(file) || file.split('/').includes('..')) throw Error('Unsafe dependency path');
+                    if (crypto.createHash('sha256').update(fs.readFileSync('node_modules/' + file)).digest('hex') !== sha) throw Error('Changed reviewed SSH dependency');
+                  }
+                  for (const dir of d.nestedDependencyDirectoriesMustBeAbsent) {
+                    try { fs.lstatSync('node_modules/' + dir); throw Error('Unexpected nested dependency resolution'); }
+                    catch (e) { if (e.code !== 'ENOENT') throw e; }
+                  }
+                  for (const file of d.optionalAddonPathsMustBeAbsent) {
+                    try { fs.lstatSync('node_modules/' + file); throw Error('Unexpected optional native addon'); }
+                    catch (e) { if (e.code !== 'ENOENT') throw e; }
+                  }
+                  NODE
+                  node node_modules/playwright/cli.js install chromium --no-shell --no-remove
+            - name: Verify only the selected loopback SSH console sources and fresh configuration
+              working-directory: application
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node - <<'NODE'
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+                  const config = fs.readFileSync('../tooling/.github/loopback-console-candidate.config.ts');
+                  if (hash(config) !== '33e6b7934b7b2e6b64fa1e5b5e0949c9c78c317314b346251d551d3388ba8efb')
+                    throw Error('Changed sandboxed loopback SSH console configuration');
+                  const pins = {"backend/ssh/automation-stream.ts":"f94e6af2a467500fc415372e8fe7aeb621eabea4111d5d7a36bcf138c564cf31","backend/ssh/automation.ts":"8707acd757c415c85993179f7c2b720e60a5a13007641a6cd016747bca650f96","backend/ssh/console-host.ts":"3fa5b3d0d9d1e52931deacc0e5106f6e504d591b4a3ff70d9c47f472af072413","backend/ssh/console-port.ts":"e35c7380bbdb03fd06f99ce493f2afc6c6a5800fd143628ac8cc1072b1c7445b","backend/ssh/exec-budget.ts":"57fdf1f9120e3a5ac05574d4103313f70a7ded5ae3f3cd736281bd2039b5aec3","backend/ssh/gateway-console-repository.ts":"ed6b95b854317084af2102b783bbfc7ca05e5371c166c56a0790dba74f5487c3","backend/ssh/network.ts":"1e67d9d8dfb10f91fbae61e2b9d4a10b339bb434712e0bb50ee1f2fc3faf4391","backend/ssh/owned-client.ts":"92faf08cd984cefc118132c162ff7e12349fdc2f40c82b81cf29f562e261fd37","backend/ssh/persistent-console.ts":"208ae29b6419d248553ffee82079880b1cef8bec976f85b3c02add1c99fc5003","backend/ssh/session.ts":"f3429bc65d539abc8977ab287517ba05f42cff6a9de081eced3f63f1f868411e","backend/ssh/stream-host.ts":"54ce749492ee2ff26ecc83ea146af8ed6b02e8ed15a9d5d3a25615439d5bfbec","backend/ssh/terminal.ts":"28372e3bdf133fac94fcc04431c0a626e9871dc9d5ac1fefeddd76d3833748b4","gateway/server.ts":"5b3eac41a69a6e33c0761453618bf31dcb46d2a92294295f46026efecffd3fba","gateway/terminal.ts":"5ae15b5b325dd74e720841f8d628467ff57101643dcc70fd832d27ea9d1c40f9","package-lock.json":"19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3","package.json":"77811e04b711dd9e0bf6f781e6b243c9f25219193719d9faa2624d8269657d2c","shared/automation-stream.ts":"ec7f5d5817e6ce1ab75f584adf91d023cc0118bb06b5fcafc8ebd96c7430269f","shared/automation-time.ts":"30c10d81a5b9561bb7542fd70ef9742a8f9ae8a80e95280e110a17b1ef13ab6f","shared/automation.ts":"5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4","shared/capture-store.ts":"5cc2fe2ac3027d9c87b4d06d12d14a342f4c160f92961abd43502f3249ff8568","shared/connection.ts":"1c1fc88b4397b230f705175d5f9ac0f160667c8e42b15c45f5e8a2fda85f2524","shared/console-journal.ts":"e07f9d57c27478eda40b9818d0a04b8b17ab6068747ff988b1e4d53565c8cbf9","shared/console-rpc.ts":"b24c43ddd12bea7d73591d45d6e9ad764c42284051d84ebd17f82170fd75c843","shared/console-storage.ts":"8f4c67a9f6b934e4c2e7981fa4a3334e553b4de32671edb504847100a7b84788","shared/diagnostics/device-clock.ts":"a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed","shared/diagnostics/network/evidence.ts":"9791c9cc25cd426b5b30eec0cc599e4ccf3dd24a11d8c019373a93a6c40594ef","shared/diagnostics/network/json.ts":"8375d3449f7579c069de2b3d65937f64839b5add473f44e89d6cd34a5b4ff037","shared/diagnostics/probes.ts":"45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b","shared/diagnostics/processes.ts":"65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4","shared/project.ts":"68ba5fcb24d8dd6675d7525001642d75acef3f79fe72b1946dcc627a7198d110","shared/quit-cleanup.ts":"4561dc9bf71cae68807ff65524bb301b295839bb07825e3aad31fe115fdc8ee7","shared/report-time.ts":"7b67b37d77a865bed490fb08f74cd5516c0a2d5c2b28a9c6144916a45e9be10e","shared/ssh-console.ts":"59a78da3e3d3942cdd0d044d2208436d50a6e7cff8f07e58f3c0871bebaa0e9c","shared/ssh-stream-rpc.ts":"f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2","shared/terminal.ts":"5dce5ecced813f9954d37c8540d15748192bc3d1944f4e493d84af8ec3283bcb","src/app/App.tsx":"2f3cf67deb14a62cb3fe0c97dfcaddd556ec7d6343e970a1b8428658c577e90a","src/features/automation/AutomationPage.tsx":"ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4","src/features/automation/capture/StoredConsoleResults.tsx":"8685e66e5e27c8bf53298a3fbda12a765742cdd61df2fa9e4b47a819472284cb","src/features/automation/capture/browser-export.ts":"c7122f17851177d7eebc1dd9cdca4978812756f7ab5881fb9d6428507de8de6b","src/features/automation/capture/capture-download-worker.ts":"cf0b105ac581dbedc881fa3579467738aecca3772b622b4d02ee9251410c2424","src/features/automation/capture/console-backend.ts":"f833c7e1d15f402a5cebdb4c8bcfa7229ef00126c213266452dacdb60ae0be52","src/features/automation/capture/console-export.ts":"bf849b70149fc76d9f24a515abacf6fe8f93288f828a710481070c5d2c51978b","src/features/automation/capture/export-broker.ts":"4f9bc9db03aafc3ebc2d41fad81ec462b8fdbfe93a4d0812d2a4ee84fc30eb94","src/features/automation/capture/indexeddb-console.ts":"9d80bd2305f7427331a95c4783ce7f5c18a5c2e96e6b44f67e99b9f214e46450","src/features/automation/capture/ssh-console-client.ts":"ab045092c0e34678684e4db48e9493ad66166d3e393c39965c044b6cd1c6f801","src/features/automation/capture/use-console-results.ts":"cafb9d2cd56d3da00b4968d1e7436fb7872268758cb23c108671e6072b27da48","src/features/automation/flow/FlowViewer.tsx":"d3c6cfd35911e6a865a6c59e3b2d1896dd5cd3b836afefd320008872e350532d","src/features/automation/flow/export.worker.ts":"4ed04a744b3beda250d5f5faf9511074b1ccc333d819f31907f7e358a53b0ff3","src/features/automation/serial-completion.ts":"8fb33ca76ec356aa4cfd5cb22ebd87ab43ee0e03c6aaa4272bb412c0ee8afcfb","tests/fixtures/device-clock.ts":"bff45e6f2fbe907325679accaf9bf252e008a6a62cb22d835b1994a19af393dd","tests/fixtures/snapshots.ts":"ed3f230c0da8d4ca7ab0e85f509bd764665c4ce8dfd737f575e3351ef651d6c9","tests/fixtures/ssh-console.ts":"e2be4ec63857f3da27ec0531b0bb2592bc02daa1f60eec96b583270bf28e904a","tests/fixtures/terminal.ts":"6f9fbc153a94400c17d60bc95ce7afe79db0aed71f3842086dc03eca2835135d","tests/ui/fixtures/loopback-console-gateway.ts":"d0eb00ff69e48dfee39dde6b552258476b08059cfef7c32b6cc8f789772e3d82","tests/ui/loopback-console.spec.ts":"8515e0c6e038d9c10b53ed59d48f8bfd3e4196bdc00c9c426a082cac7e99ca30","shared/diagnostics/network/model.ts":"0960cb63e750bf6a5da03065b0eca8bfd49cdd4ba785550027047725ae5c5c9d","src/features/network/NetworkSummary.tsx":"af532e419359591b5547a597c678f451f8bdad4f3d6f5fd771dd22c60fffd8f6","src/features/automation/runner.ts":"cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a","src/features/automation/activity-release.ts":"5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b","tests/ui/fixtures/loopback-diagnostics.ts":"d0c7223d312fdd8f0a535e3b84aac9e3177ba94de6a5ad2d7c59e2e8c24aa587","tests/ui/fixtures/loopback-client-retirement.ts":"daf9aba924c632b440cad7ab0f99ce36c919057fe75d170e21da988a5fdebebe","tests/ui/fixtures/loopback-passive-observer.ts":"de2398c176f8f311e97a2bd069f86cd091d21c68cba5118a1fcf2355b6b00bdf","backend/ssh/probe-observation.ts":"294b1bc0da699519316c76c477dc24faac36776c3998803fc54aa1f0a2191037","tests/ui/fixtures/loopback-probe-observation.ts":"c1889375a0ed3e0f6d7e79e2a4b2b40dd7970886d3d20f6402ae79f332140ac7"};
+                  for (const [file, expected] of Object.entries(pins)) {
+                    if (hash(fs.readFileSync(file)) !== expected)
+                      throw Error('Changed selected loopback SSH console input: ' + file);
+                  }
+                  fs.mkdirSync('.loopback-console-ci');
+                  fs.writeFileSync('.loopback-console-ci/config.ts', config, { flag: 'wx' });
+                  NODE
+            - name: Run the single loopback SSH console case once
+              id: sdk
+              working-directory: application
+              shell: bash
+              run: |
+                  # Persist an exit code only after the admitted SDK command returns.
+                  # Cancellation/termination can leave this absent; the receipt fails closed.
+                  set +e
+                  node node_modules/playwright/cli.js test --config .loopback-console-ci/config.ts > "$HUB_LOOPBACK_CONSOLE_SCOPE/test.log" 2>&1
+                  sdk_exit=$?
+                  set -e
+                  SDK_EXIT_CODE="$sdk_exit" node - <<'NODE'
+                  const fs = require('node:fs'), path = require('node:path');
+                  const exitCode = Number(process.env.SDK_EXIT_CODE);
+                  if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255) throw Error('Invalid SDK exit');
+                  fs.writeFileSync(path.join(process.env.HUB_LOOPBACK_CONSOLE_SCOPE, 'sdk-outcome.json'), JSON.stringify({schema:1,exitCode}), {flag:'wx'});
+                  NODE
+                  exit "$sdk_exit"
+            - name: Bound and sanitize loopback receipt; refuse false cleanup success
+              if: always()
+              id: receipt
+              env:
+                  SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node --input-type=module - <<'NODE'
+                  import fs from 'node:fs';
+                  import path from 'node:path';
+                  import crypto from 'node:crypto';
+                  import { assessLoopbackOutcome } from './tooling/.github/loopback-console-outcome.mjs';
+                  import { assessLoopbackDiagnostic } from './tooling/.github/loopback-console-diagnostic.mjs';
+                  import { sanitizeLoopbackDiagnostics } from './application/tests/ui/fixtures/loopback-diagnostics.ts';
+                  const scope = process.env.HUB_LOOPBACK_CONSOLE_SCOPE;
+                  if (!scope || !fs.existsSync(scope)) process.exit(0);
+                  const digest = value => crypto.createHash('sha256').update(String(value)).digest('hex');
+                  const issues = [];
+                  function read(name, cap) {
+                    const file = path.join(scope, name);
+                    if (!fs.existsSync(file)) { issues.push('missing-' + name); return null; }
+                    if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink() || fs.statSync(file).size > cap) { issues.push('invalid-size-' + name); return null; }
+                    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { issues.push('invalid-json-' + name); return null; }
+                  }
+                  const report = read('report.json', 1048576), journal = read('ownership.json', 8192);
+                  const command = read('sdk-outcome.json', 1024);
+                  const specs = [];
+                  function collect(s) { for (const x of s || []) { specs.push(...x.specs || []); collect(x.suites); } }
+                  collect(report && report.suites);
+                  if (specs.length !== 1 || specs[0].title !== 'actual authenticated gateway and browser journal keep Script/Enter/Enter/Script in one owned console') issues.push('wrong-case-selection');
+                  const test = specs[0] && specs[0].tests && specs[0].tests[0], results = test && test.results || [];
+                  const result = results[0];
+                  if (results.length !== 1 || result.retry !== 0) issues.push('wrong-result-count-or-retry');
+                  let summary = null;
+                  for (const a of result && result.attachments || []) {
+                    if (a.name !== 'loopback-owned-summary' || typeof a.body !== 'string' || Buffer.byteLength(a.body) > 12000) continue;
+                    try { const bytes = Buffer.from(a.body, 'base64'); if (bytes.length <= 8192) summary = JSON.parse(bytes); } catch {}
+                  }
+                  const files = (summary && summary.exports || []).map(f => ({format:f.format,bytes:f.bytes,sha256:f.sha256}));
+                  if (files.length !== 2 || !files.every(f => ['svg','json'].includes(f.format) && Number.isSafeInteger(f.bytes) && f.bytes >= 0 && f.bytes <= 4194304 && /^[a-f0-9]{64}$/.test(f.sha256)) || files.reduce((n,f)=>n+f.bytes,0)>8388608) issues.push('export-evidence-missing-or-invalid');
+                  if (!summary || summary.blockedRequests !== 0 || summary.shellModel !== 'synthetic' || summary.realOsShell !== false) issues.push('fixture-scope-unproved');
+                  const closed = journal && journal.phase === 'closed' && journal.cleanupAcknowledged === true && journal.sshCloseAcknowledged === true && journal.gatewayCloseAcknowledged === true && journal.journalFailed === false && journal.fileHandles === 0 && journal.failedFileCloses === 0 && journal.sshClients === 0 && journal.sshListening === false && journal.gateway && Object.entries(journal.gateway).every(([k,v]) => k === 'serverListening' ? v === false : v === 0);
+                  if (!closed) issues.push('retirement-unproved');
+                  const diagnosticEvidence = assessLoopbackDiagnostic(journal?.diagnostic, summary?.ownership?.diagnostic, sanitizeLoopbackDiagnostics);
+                  const diagnostic = diagnosticEvidence.diagnostic;
+                  issues.push(...diagnosticEvidence.issues);
+                  const owner = journal ? Object.fromEntries(Object.entries(journal).filter(([k,v]) => ['phase','closing','journalFailed','sshClients','sshListening','cleanupAcknowledged','sshCloseAcknowledged','gatewayCloseAcknowledged','fileHandles','failedFileCloses','listenerError'].includes(k) && (typeof v==='boolean' || typeof v==='number' || k==='phase' && ['allocated','starting','ready','start-failed','closing','closed','blocked'].includes(v)))) : null;
+                  const outcome = assessLoopbackOutcome({result,globalErrors:report && report.errors,command,stepOutcome:process.env.SDK_STEP_OUTCOME,issues});
+                  const {passed} = outcome;
+                  const errors = outcome.errors.slice(0, 8).map(e => ({
+                    messageSha256: digest(e?.message || e?.value || ''),
+                    location: e?.location ? { file: path.basename(e.location.file || ''), line: e.location.line, column: e.location.column } : null
+                  }));
+                  const receipt = {schema:2,source:'47e17c5ac15dcb192ab7930bef5c44911ce637e5',tooling:process.env.GITHUB_SHA,run:process.env.GITHUB_RUN_ID,attempt:process.env.GITHUB_RUN_ATTEMPT,selected:1,status:passed?'passed':'failed-or-unproved',sdkStatus:result && result.status || 'not-run',errors,issues:outcome.issues,sdkCommand:outcome.command,testErrorCount:outcome.testErrorCount,globalErrorCount:outcome.globalErrorCount,ownership:owner,diagnostic,exports:files,qualification:'Fixture gateway/SSH/read-handle acknowledgements only; SDK/runner disposal separate. Real loopback with synthetic shell; no DUT/OS-shell/native/process-exit qualification.'};
+                  const text = JSON.stringify(receipt);
+                  if (Buffer.byteLength(text) > 1048576) throw Error('Receipt exceeds 1 MiB');
+                  fs.writeFileSync(path.join(scope,'receipt.json'),text,{flag:'wx'});
+                  fs.appendFileSync(process.env.GITHUB_OUTPUT,'ready=true\n');
+                  if (!passed) process.exitCode = 1;
+                  NODE
+            - uses: actions/upload-artifact@v4
+              if: always() && steps.receipt.outputs.ready == 'true'
+              with:
+                  name: loopback-console-diagnostic226-${{ github.run_id }}
+                  path: ${{ env.HUB_LOOPBACK_CONSOLE_SCOPE }}/receipt.json
+                  if-no-files-found: error
+                  retention-days: 3
