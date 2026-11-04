@@ -1,5 +1,5 @@
 // Pure test evidence projection. Never retain request bodies, error text or credentials.
-import { projectProbeObservation } from './loopback-probe-observation';
+import { projectProbeObservation } from './loopback-probe-observation.ts';
 export const passiveStages = [
     'snapshot-status-1xx', 'snapshot-status-2xx', 'snapshot-status-3xx',
     'snapshot-status-4xx', 'snapshot-status-5xx', 'snapshot-status-other',
