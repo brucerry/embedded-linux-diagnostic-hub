@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 // A test reader for imagePdf's deliberately small PDF subset, not a general PDF
 // validator or a JPEG decoder. Binary streams are sliced by byte offsets/lengths;
 // delimiter-looking bytes inside an image must not affect object parsing.
-export function inspectFlowPdf(input: Uint8Array) {
+function parseFlowPdf(input: Uint8Array, captureImages = false) {
     assert(input.byteLength > 0 && input.byteLength <= 8 * 1024 * 1024, 'PDF read budget');
     const bytes = Buffer.from(input), text = bytes.toString('latin1');
     assert(text.startsWith('%PDF-1.4\n'), 'PDF header');
@@ -60,6 +60,7 @@ export function inspectFlowPdf(input: Uint8Array) {
     const kids = Array.from({ length: pages }, (_, i) => `${3 + i * 3} 0 R`).join(' ');
     assert.equal(object(2).toString(), `<< /Type /Pages /Count ${pages} /Kids [${kids}] >>`, 'PDF page tree');
     const images = [];
+    const payloads: Buffer[] = [];
     for (let i = 0; i < pages; i++) {
         const page = 3 + i * 3;
         assert.equal(object(page).toString(), `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /XObject << /Im0 ${page + 1} 0 R >> >> /Contents ${page + 2} 0 R >>`, 'PDF page references and bounds');
@@ -72,12 +73,25 @@ export function inspectFlowPdf(input: Uint8Array) {
         const content = stream(page + 2);
         assert.equal(content.dictionary, `<< /Length ${content.data.length} >>`, 'PDF content dictionary');
         assert.equal(content.data.toString(), 'q\n842 0 0 595 0 0 cm\n/Im0 Do\nQ', 'PDF image painting instructions');
+        if (captureImages) payloads.push(Buffer.from(image.data));
         images.push({
             width, height, bytes: image.data.length,
             sha256: createHash('sha256').update(image.data).digest('hex'),
         });
     }
-    return { pages, objects: count - 1, images };
+    return { pages, objects: count - 1, images, payloads };
+}
+
+export function inspectFlowPdf(input: Uint8Array) {
+    const { payloads: _payloads, ...report } = parseFlowPdf(input);
+    return report;
+}
+
+// Copy payloads only after the complete structure has passed validation. Callers
+// can decode the real JPEGs without searching for delimiters inside binary data.
+export function readFlowPdfImages(input: Uint8Array) {
+    const parsed = parseFlowPdf(input, true);
+    return parsed.images.map((image, index) => ({ ...image, data: parsed.payloads[index] }));
 }
 
 // The current browser cohort expects multiple distinct 2x landscape canvas

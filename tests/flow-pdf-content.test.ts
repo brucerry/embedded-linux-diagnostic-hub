@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { imagePdf } from '../src/features/automation/flow/pdf';
-import { inspectFlowPdf, inspectFlowPdfExport } from './fixtures/flow-pdf-content';
+import { inspectFlowPdf, inspectFlowPdfExport, readFlowPdfImages } from './fixtures/flow-pdf-content';
 
 // Synthetic JPEG header/scan envelopes, deliberately not decoded images. This
 // exercises PDF framing and byte preservation without canvas/browser/codec use.
@@ -111,4 +111,16 @@ test('PDF export check accepts distinct envelopes but does not classify their co
     assert(!('roles' in result), 'Synthetic distinct envelopes are not semantic-page evidence');
     assert.throws(() => inspectFlowPdfExport(imagePdf(images.slice(0, 2))), /at least three/);
     assert.throws(() => inspectFlowPdfExport(imagePdf(images.map(i => ({ ...i, bytes: jpeg(), width: 2, height: 3 })))), /canvas width/);
+});
+
+
+test('PDF decoder inputs preserve page order, exact stream bytes and input ownership', () => {
+    const source = [jpeg(1684, 1190), jpeg(1684, 1190, 0xc2)];
+    const bytes = Buffer.from(imagePdf(source.map(data => ({ bytes: data, width: 1684, height: 1190 }))));
+    const before = Buffer.from(bytes);
+    const images = readFlowPdfImages(bytes);
+    assert.deepEqual(images.map(image => image.data), source);
+    images[0].data.fill(0);
+    assert(bytes.equals(before), 'Decoded input copies cannot mutate the PDF');
+    assert.throws(() => readFlowPdfImages(bytes.subarray(0, -6)), /final trailer/);
 });
