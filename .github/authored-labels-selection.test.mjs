@@ -1,0 +1,27 @@
+// Source data only: no SDK, config, fixture or app execution.
+import assert from 'node:assert/strict';
+import {readFileSync,readdirSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const read=p=>readFileSync(new URL(p,import.meta.url),'utf8'),hash=b=>createHash('sha256').update(b).digest('hex');
+const config=read('./authored-labels-candidate.config.ts'),workflow=read('./workflows/authored-labels-candidate.yml');
+const file='flow-authored-labels.spec.ts',title='SVG and decoded PDF graph labels match independent authored literals';
+const grep=new RegExp(config.match(/^    grep: \/(.*)\/,$/m)[1]);assert(config.includes("testMatch: ['"+file+"']"));let accepted=0,rejected=0;
+for(const prefix of ['','  ','chromium ']){assert(grep.test(prefix+file+' '+title));accepted++;}
+for(const value of [title,file+' extra '+title,file+' '+title+' extra','network.spec.ts '+title,'automation.spec.ts '+title,'ssh-console-gateway.spec.ts '+title,'stored-serial-results.spec.ts '+title,'stored-console-results.spec.ts '+title]){assert(!grep.test(value));rejected++;}
+const specs=readdirSync(new URL('../tests/ui/',import.meta.url)).filter(n=>n.endsWith('.spec.ts'));
+for(const name of specs){for(const m of read('../tests/ui/'+name).matchAll(/\btest\(\s*['"\x60]([^'"\x60\n]+)/g)){const selected=name===file&&m[1]===title;assert.equal(grep.test(name+' '+m[1]),selected);if(!selected)rejected++;}if(name!==file){assert(!grep.test(name+' '+title));rejected++;}}
+const source=read('../tests/ui/flow-authored-labels.spec.ts'),fixture=read('../tests/fixtures/flow-authored-labels.ts'),oracle=read('../tests/ui/fixtures/flow-authored-labels.ts');
+assert.deepEqual([...source.matchAll(/\btest\(\s*'([^']+)'/g)].map(m=>m[1]),[title]);
+for(const fact of ['inspectFlowPdfExport(pdf)','readFlowPdfImages(pdf)',"'swapped'","'wrong'","'missing'",'svgError','pdfError','rejects.toThrow',"info.attach('authored-label-observation'",'body.length > 4096'])assert(source.includes(fact),fact);
+for(const fact of ['Alpha & link','Bravo <skip>','printf ALPHA_17','echo BRAVO_29','Delay 1 s before send','Delay 3 s before send','Recorded: Exit 0 · run proofA01','Disabled · skipped'])assert(fixture.includes(fact),fact);
+const body=oracle.slice(oracle.indexOf('export async function inspectAuthoredPdf'),oracle.indexOf('export async function mutateAuthoredPdf'));
+assert(body.includes('authoredLabels'));assert(!body.includes('querySelector')&&!body.includes('inspectAuthoredSvg'));assert(body.includes('ref.setTransform(1.556'));assert(body.includes('ratio <= 0.22'));
+for(const bad of ['page.clock.','page.request.','screenshot(','.saveAs(','waitForTimeout(','dispatchEvent('])assert(!source.includes(bad),bad);
+const pins=JSON.parse(workflow.match(/const pins = (\{[^\r\n]+\});/)[1]);assert.equal(Object.keys(pins).length,15);for(const[p,h]of Object.entries(pins)){assert(!p.split('/').includes('..'));assert.equal(hash(read('../'+p)),h,p);}
+assert.equal(hash(config),workflow.match(/if \(hash\(config\) !== '([a-f0-9]{64})'\)/)[1]);assert.equal(hash(read('./authored-labels-log-receipt.mjs')),workflow.match(/if \(createHash\('sha256'\).update\(fs.readFileSync\(helper\)\).digest\('hex'\) !== '([a-f0-9]{64})'/)[1]);
+for(const fact of ['chromiumSandbox: true','workers: 1','retries: 0','repeatEach: 1','maxFailures: 1','timeout: 90_000','globalTimeout: 300_000',"trace: 'off'","screenshot: 'off'","video: 'off'",'reuseExistingServer: false','--host 127.0.0.1 --port 5200 --strictPort','gracefulShutdown:'])assert(config.includes(fact),fact);
+for(const fact of ['branches: [ci/flow-authored-labels-candidate-242-20261104]','timeout-minutes: 15','contents: read','1048576','socket_bytes > 107','receipt-only:','needs: files','timeout-minutes: 2','permissions: {}','RECEIPT_BYTES > 32768','HUB_LABELS242_V1','test "$PRODUCER_RESULT" = success','npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org','sdk_exit=$?','exit "$sdk_exit"','SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}'])assert(workflow.includes(fact),fact);
+for(const bad of ['workflow_dispatch:','workflow_call:','secrets.','--no-sandbox','sudo ','rm -','kill ','continue-on-error:','actions/upload-artifact','actions/cache','retention-days:'])assert(!workflow.includes(bad),bad);
+assert.equal((workflow.match(/node node_modules\/playwright\/cli\.js test/g)??[]).length,1);
+const sourceSHA=read('./authored-labels-log-receipt.mjs').match(/export const SOURCE = '([a-f0-9]{40})'/)[1];assert.deepEqual([...workflow.matchAll(/^                  ref: (.+)$/gm)].map(m=>m[1]),['${{ github.sha }}',sourceSHA]);assert(workflow.includes('test "$(git -C tooling rev-parse HEAD^)" = '+sourceSHA));assert(workflow.includes('test "$(git -C application rev-parse HEAD)" = '+sourceSHA));
+console.log(JSON.stringify({selectedScenarios:1,authoredLabels:10,pairedNegativeMutations:3,positiveFullNames:accepted,negativeControls:rejected,unrelatedSpecs:specs.length-1,sourcePins:Object.keys(pins).length,caseTimeoutMs:90000,sdkGlobalMs:300000,workers:1,retries:0,sourceDataOnly:true,mountedOrSDKDiscoveryExecuted:false}));
