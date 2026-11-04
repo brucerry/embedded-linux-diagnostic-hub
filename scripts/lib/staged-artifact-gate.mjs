@@ -182,6 +182,47 @@ export function validateProducerReceipt(receipt, expected) {
         );
     return receipt;
 }
+/**
+ * Publication boundary, unlike the summary-only schema validator above.
+ * Retention authenticates bytes, not the claims made about those bytes. There is
+ * currently no authoritative final-artifact product evidence contract to consume:
+ * the harness policy/JSONL soak formats do not bind final artifacts/run/profile or
+ * durable parent closure, and a policy's assessment identity is GC-specific.
+ * Keep publication blocked until real producers and their reviewed schemas exist.
+ */
+export async function verifyProducerEvidence(root, receipt, expected) {
+    validateProducerReceipt(receipt, expected);
+    await verifyEvidence(root, receipt.cases);
+    const references = [
+        ['reviewed policy', receipt.reviewedPolicySHA256],
+        ['runtime profile', receipt.runtimeProfileSHA256],
+        ['normal GC receipt', receipt.normalGC.receiptSHA256],
+        ['forced GC receipt', receipt.forcedGC.receiptSHA256],
+        ...(expected.scope === 'web'
+            ? []
+            : [['loader provenance', receipt.loaderProvenanceSHA256]]),
+    ];
+    assert.equal(
+        new Set(references.map(([, hash]) => hash)).size,
+        references.length,
+        'Policy/runtime/GC/loader evidence roles must not reuse the same payload.',
+    );
+    for (const [role, hash] of references) {
+        const paths = new Set(
+            receipt.cases
+                .flatMap((item) => item.evidence)
+                .filter((entry) => entry.sha256 === hash)
+                .map((entry) => entry.path),
+        );
+        assert.equal(paths.size, 1, 'Missing or ambiguous retained ' + role + ' evidence.');
+    }
+    throw Error(
+        'Full-product evidence blocked: authoritative final-artifact policy/runtime/soak/loader ' +
+            'receipt schemas and producers are not implemented. Retained hashes and summary passes ' +
+            'cannot establish reviewed policies for both GC modes, exact source/artifact/runtime/profile ' +
+            'identity, measured results, normal exit or cleanup.',
+    );
+}
 function sameContext(actual, expected) {
     for (const key of ['version', 'sourceCommit', 'sourceTree'])
         assert.equal(

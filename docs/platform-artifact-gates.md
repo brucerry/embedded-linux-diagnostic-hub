@@ -139,6 +139,25 @@ Case IDs:
 
 The same command/evidence schema applies. `producerFiles` and `producerCases` export exact scopes.
 Component passes do not qualify full product. The producer must bind underlying policy/runtime/soak
-receipts into the retained case evidence; their review remains required. This patch has run only
+receipts into the retained case evidence; their review remains required.
+
+`validateProducerReceipt` validates the summary schema only. Every publication consumer also calls
+`verifyProducerEvidence`, which rehashes the retained bytes, requires an unambiguous file for each
+reference and refuses payload reuse across evidence roles. It then **blocks**: this source has no
+authoritative final-artifact policy/runtime/soak/loader evidence contract or real producers for it.
+Hash membership and passed summary labels cannot supply that missing semantic contract. In
+particular, the existing harness `MemoryPolicy` is bound to a GC-specific assessment identity, and
+the harness runtime-inspection and JSONL soak formats do not establish final artifact/run/profile
+identity or durable parent exit/cleanup. They must not be promoted into release evidence by
+relabeling. The single `reviewedPolicySHA256` summary field is not a contract for both GC policies.
+
+Before removing this block, supply and independently review the real producer schemas, then consume
+the exact retained payloads against final source/artifacts/runtime/profile, separately reviewed GC
+policies, passed full-product measured results (at least 30 minutes and 100 measured cycles per GC
+mode), required retention, normal exit and cleanup. No accepting replacement schema, thresholds or
+qualification data is introduced here. Synthetic positive summary fixtures remain schema checks
+only.
+
+This patch has run only
 synthetic gate/catalog regressions and static checks locally: no current-source platform installer,
 packaged consumer, native resource lane, calibration, public CI or published-URL check is claimed.

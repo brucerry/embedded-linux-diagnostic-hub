@@ -156,7 +156,11 @@ async function syntheticStagedEvidence(root: string, version: string, sourceComm
     return output;
 }
 
-async function fixture(version: string, existing = false) {
+async function fixture(
+    version: string,
+    existing = false,
+    options: { noteOnlyGuardStub?: boolean } = {},
+) {
     const root = await mkdtemp(path.join(tmpdir(), 'hub-publication-notes-'));
     const git = (...args: string[]) =>
         execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -423,7 +427,13 @@ async function fixture(version: string, existing = false) {
             'if(draft.assets.some(asset=>asset.browser_download_url===url))return response({},404);',
             "throw Error('Unexpected URL; real network forbidden: '+url); };",
             'const original=cp.execFileSync;',
-            String.raw`cp.execFileSync=function(command,args,options){ const result=original(command,args,options); if(command===process.execPath&&args[0]==='scripts/release-notes.mjs'&&process.env.HUB_BAD_NOTES){ let notes=fs.readFileSync('release/notes.md','utf8'); const type=process.env.HUB_BAD_NOTES; if(type==='missing')notes=notes.replace(/^(?:🔗 )?Links:\n/m,''); else if(type==='duplicate')notes+='\n'+(draft.tag_name==='v0.5.1'?'🔧 ':'')+'Changes:\n- Duplicate.\n'; else if(type==='wrong-order')notes=notes.replace(/^(?:🔧 )?Changes:/m,'TEMP-HEADING:').replace(/^(?:🔖 )?Commits:/m,draft.tag_name==='v0.5.1'?'🔧 Changes:':'Changes:').replace('TEMP-HEADING:',draft.tag_name==='v0.5.1'?'🔖 Commits:':'Commits:'); else if(type==='wrong-emoji')notes=notes.replace('🔧 Changes:','📋 Changes:'); else if(type==='hidden-space'||type==='hidden-markdown')notes=notes.replace(/\n\n(?=(?:🔧 )?Changes:)/,'\n'+(type==='hidden-space'?'Changes:   ':'## Changes:')+'\n\n'); else if(type==='bad-url')notes=notes.replace('[Setup](https://example.invalid/setup)','[Setup](https://?)'); else if(type==='legacy-new')notes=notes.replace(/(?:📋|🔧|🔖|🔗) /g,''); fs.writeFileSync('release/notes.md',notes); } return result; };`,
+            // Note-specific unit tests isolate only the qualification guard. Other tests use
+            // the real verifier; this stub never represents staged evidence acceptance.
+            // Bake the source-owned fixture choice into this injected test bootstrap.
+            // No CLI argument, environment variable or evidence field can enable it.
+            `cp.execFileSync=function(command,args,options){ if(${options.noteOnlyGuardStub === true}&&command===process.execPath&&args.length===2&&args[0]==='scripts/staged-artifact-gate.mjs'&&args[1]==='verify'){ fs.appendFileSync('notes-only-guard-calls.jsonl',JSON.stringify({notesExist:fs.existsSync('release/notes.md')})+'\\n'); return Buffer.alloc(0); } return original(command,args,options); };`,
+            'const notesGuard=cp.execFileSync;',
+            String.raw`cp.execFileSync=function(command,args,options){ const result=notesGuard(command,args,options); if(command===process.execPath&&args[0]==='scripts/release-notes.mjs'&&process.env.HUB_BAD_NOTES){ let notes=fs.readFileSync('release/notes.md','utf8'); const type=process.env.HUB_BAD_NOTES; if(type==='missing')notes=notes.replace(/^(?:🔗 )?Links:\n/m,''); else if(type==='duplicate')notes+='\n'+(draft.tag_name==='v0.5.1'?'🔧 ':'')+'Changes:\n- Duplicate.\n'; else if(type==='wrong-order')notes=notes.replace(/^(?:🔧 )?Changes:/m,'TEMP-HEADING:').replace(/^(?:🔖 )?Commits:/m,draft.tag_name==='v0.5.1'?'🔧 Changes:':'Changes:').replace('TEMP-HEADING:',draft.tag_name==='v0.5.1'?'🔖 Commits:':'Commits:'); else if(type==='wrong-emoji')notes=notes.replace('🔧 Changes:','📋 Changes:'); else if(type==='hidden-space'||type==='hidden-markdown')notes=notes.replace(/\n\n(?=(?:🔧 )?Changes:)/,'\n'+(type==='hidden-space'?'Changes:   ':'## Changes:')+'\n\n'); else if(type==='bad-url')notes=notes.replace('[Setup](https://example.invalid/setup)','[Setup](https://?)'); else if(type==='legacy-new')notes=notes.replace(/(?:📋|🔧|🔖|🔗) /g,''); fs.writeFileSync('release/notes.md',notes); } return result; };`,
             'syncBuiltinESMExports();',
         ].join('\n'),
     );
@@ -471,13 +481,19 @@ async function fixture(version: string, existing = false) {
 }
 for (const version of ['0.5.0', '0.5.1']) {
     test(
-        'actual publication CLI accepts the generated final note contract for ' + version,
+        'note-only publication CLI contract with mocked qualification guard for ' + version,
         async () => {
-            const f = await fixture(version);
+            const f = await fixture(version, false, { noteOnlyGuardStub: true });
             try {
                 const result = f.run();
                 assert.equal(result.status, 0, result.stderr);
-                assert.match(result.stdout, /All four native staged-consumer receipts bind/);
+                const guards = (
+                    await readFile(path.join(f.root, 'notes-only-guard-calls.jsonl'), 'utf8')
+                )
+                    .trim()
+                    .split('\n')
+                    .map((line) => JSON.parse(line));
+                assert.deepEqual(guards, [{ notesExist: false }, { notesExist: true }]);
                 const request = JSON.parse(
                     await readFile(path.join(f.root, 'publication-request.json'), 'utf8'),
                 );
@@ -492,7 +508,7 @@ for (const version of ['0.5.0', '0.5.1']) {
                 );
                 assert.ok(notes.includes('/commit/' + f.commit));
                 assert.match(result.stdout, /Release version verified/);
-                assert.match(result.stdout, /All four native staged-consumer receipts bind/);
+                assert.doesNotMatch(result.stdout, /All four native staged-consumer receipts bind/);
             } finally {
                 await f.close();
             }
@@ -503,12 +519,29 @@ test('actual publication CLI keeps staged evidence mandatory before any server w
     const f = await fixture('0.5.1');
     try {
         assert.ok(f.stagedOutput);
-        const refuses = async (name: string, env: Record<string, string> = {}) => {
+        // A runtime environment value cannot enable the source-injected note-only stub.
+        const baseline = f.run('', '', { HUB_NOTES_ONLY_GUARD_STUB: '1' });
+        assert.notEqual(baseline.status, 0);
+        assert.match(
+            baseline.stderr,
+            /authoritative final-artifact.*schemas and producers are not implemented/,
+        );
+        for (const file of [
+            'server-write-attempt.json',
+            'publication-request.json',
+            'notes-only-guard-calls.jsonl',
+        ])
+            await assert.rejects(() => readFile(path.join(f.root, file)), { code: 'ENOENT' });
+        const refuses = async (
+            name: string,
+            env: Record<string, string> = {},
+            expectedFailure = /AssertionError|ENOENT/,
+        ) => {
             const result = f.run('', '', env);
             assert.equal(result.error, undefined, name);
             assert.equal(result.signal, null, name);
             assert.notEqual(result.status, 0, name);
-            assert.match(result.stderr, /AssertionError|ENOENT/, name);
+            assert.match(result.stderr, expectedFailure, name);
             for (const file of ['server-write-attempt.json', 'publication-request.json'])
                 await assert.rejects(() => readFile(path.join(f.root, file)), { code: 'ENOENT' });
         };
@@ -519,7 +552,13 @@ test('actual publication CLI keeps staged evidence mandatory before any server w
             const original = await readFile(file);
             try {
                 await rm(file);
-                await refuses('required receipt missing: ' + name);
+                // Web verification comes first: its missing contract blocks before reading
+                // gateway.json. This assertion proves no write, not gateway-missing detection.
+                await refuses(
+                    'required receipt missing: ' + name,
+                    {},
+                    name === 'gateway.json' ? /Full-product evidence blocked/ : /ENOENT/,
+                );
             } finally {
                 await writeFile(file, original, { flag: 'wx' });
             }
@@ -541,7 +580,7 @@ test('actual publication CLI keeps staged evidence mandatory before any server w
     }
 });
 
-test('actual publication CLI rejects malformed final notes before PATCH for old and new formats', async () => {
+test('note-only publication CLI with mocked qualification guard rejects malformed final notes', async () => {
     for (const version of ['0.5.0', '0.5.1']) {
         const invalids =
             version === '0.5.1'
@@ -563,13 +602,20 @@ test('actual publication CLI rejects malformed final notes before PATCH for old 
                       'hidden-markdown',
                       'bad-url',
                   ];
-        const f = await fixture(version);
+        const f = await fixture(version, false, { noteOnlyGuardStub: true });
         try {
             for (const invalid of invalids) {
+                await rm(path.join(f.root, 'notes-only-guard-calls.jsonl'), { force: true });
                 const result = f.run(invalid);
                 assert.notEqual(result.status, 0, version + ' ' + invalid + ' must reject');
                 assert.match(result.stdout, /Release version verified/);
                 assert.match(result.stderr, /Final release (?:note|link)|Release links/);
+                assert.equal(
+                    (await readFile(path.join(f.root, 'notes-only-guard-calls.jsonl'), 'utf8'))
+                        .trim()
+                        .split('\n').length,
+                    1,
+                );
                 await assert.rejects(
                     () => readFile(path.join(f.root, 'publication-request.json'), 'utf8'),
                     { code: 'ENOENT' },

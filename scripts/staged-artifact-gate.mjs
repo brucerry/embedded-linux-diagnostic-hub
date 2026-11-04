@@ -20,7 +20,7 @@ import {
     validatePlatformReceipt,
     verifyEvidence,
     producerFiles,
-    validateProducerReceipt,
+    verifyProducerEvidence,
 } from './lib/staged-artifact-gate.mjs';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -182,8 +182,7 @@ async function verifyProducers(selected) {
         const expected = await Promise.all(
             producerFiles(version, scope).map((name) => hashFile(path.join(release, name), name)),
         );
-        validateProducerReceipt(receipt, { ...selected, scope, artifacts: expected });
-        await verifyEvidence(output, receipt.cases);
+        await verifyProducerEvidence(output, receipt, { ...selected, scope, artifacts: expected });
     }
 }
 const tsx = path.resolve('node_modules/tsx/dist/cli.mjs');
@@ -398,12 +397,11 @@ if (mode === 'build-setup') {
                     path.join('validation/products', lane.id + '.json'),
             );
             const product = await readBoundedJSON(productInput);
-            validateProducerReceipt(product, {
+            await verifyProducerEvidence(path.dirname(productInput), product, {
                 ...selected,
                 scope: 'desktop-' + lane.id,
                 artifacts: receipt.artifacts,
             });
-            await verifyEvidence(path.dirname(productInput), product.cases);
             const productDestination = path.join(directory, 'product');
             await mkdir(productDestination, { recursive: true });
             for (const item of product.cases)
@@ -462,7 +460,11 @@ if (mode === 'build-setup') {
             const productBytes = await readFile(path.join(productRoot, 'receipt.json'));
             assert.equal(digest(productBytes), receipt.productReceiptSHA256);
             assert.deepEqual(JSON.parse(productBytes), receipt.product);
-            await verifyEvidence(productRoot, receipt.product.cases);
+            await verifyProducerEvidence(productRoot, receipt.product, {
+                ...selected,
+                scope: 'desktop-' + lane.id,
+                artifacts: receipt.artifacts,
+            });
         }
     }
     await verifyProducers(selected);
