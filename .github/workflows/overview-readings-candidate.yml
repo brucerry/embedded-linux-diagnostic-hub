@@ -6,7 +6,7 @@ name: Candidate Overview readings without artifact storage
 
 on:
     push:
-        branches: [ci/overview-readings-candidate-239]
+        branches: [ci/overview-readings-candidate-239-debug1]
 
 permissions:
     contents: read
@@ -35,7 +35,7 @@ jobs:
                   set -euo pipefail
                   test "${RUNNER_ENVIRONMENT:-}" = github-hosted
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/overview-readings-candidate-239
+                  test "$GITHUB_REF" = refs/heads/ci/overview-readings-candidate-239-debug1
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$(id -u)" != 0
                   for key in NODE_OPTIONS NODE_PATH NODE_DEBUG NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS PWDEBUG PW_TEST_CONNECT_WS_ENDPOINT PW_TEST_CONNECT_HEADERS PW_TEST_REUSE_CONTEXT PW_TEST_REUSE_BROWSER PLAYWRIGHT_DOWNLOAD_HOST PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS PW_TEST_CDN_THAT_SHOULD_WORK; do
@@ -102,7 +102,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git -C tooling rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git -C tooling rev-parse HEAD^)" = 0e68215f271df7bce66e12241025d7795b8bde63
+                  test "$(git -C tooling rev-parse HEAD^)" = dd49f9b4d4ab2123c8eb87b6bf4578d85273a352
                   test "$(git -C application rev-parse HEAD)" = 0e68215f271df7bce66e12241025d7795b8bde63
                   test "$(git -C application rev-parse 'HEAD^{tree}')" = 1cccec0daf07ac7540d297db841c936c3ca63d65
                   test ! -e application/node_modules
@@ -203,7 +203,7 @@ jobs:
                       run: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT,
                       report: JSON.parse(fs.readFileSync(file, 'utf8')) };
                     const helper = path.join(process.env.GITHUB_WORKSPACE, 'tooling/.github/overview-log-receipt.mjs');
-                    if (createHash('sha256').update(fs.readFileSync(helper)).digest('hex') !== 'bc6952e2ee180e12788a4147c9b2f9e805bb0d8de1f90947ee2151192259dd84') throw Error('HELPER_CHANGED');
+                    if (createHash('sha256').update(fs.readFileSync(helper)).digest('hex') !== '1f1543762ea2c6c5a0bef6593048606ac20d833dd772c1b2480de07b3f8617df') throw Error('HELPER_CHANGED');
                     const { encode } = await import(pathToFileURL(helper).href);
                     const result = encode(raw);
                     fs.appendFileSync(process.env.GITHUB_OUTPUT, 'payload=' + result.payload + '\n' +
@@ -229,7 +229,7 @@ jobs:
                   export LC_ALL=C
                   test "${RUNNER_ENVIRONMENT:-}" = github-hosted
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/overview-readings-candidate-239
+                  test "$GITHUB_REF" = refs/heads/ci/overview-readings-candidate-239-debug1
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$EUID" -ne 0
                   if [[ ! "$RECEIPT_BYTES" =~ ^[1-9][0-9]{0,4}$ ]] ||

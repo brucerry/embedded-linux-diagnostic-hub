@@ -89,4 +89,42 @@ check('bad duplicate oversized or absent log frame fails', () => {
  assert.throws(() => parseLog('no receipt'), /FRAME_COUNT/);
  assert.throws(() => parseLog(f.replace(/ [a-f0-9]{64} /, ' ' + 'f'.repeat(64) + ' ')), /FRAME_INTEGRITY/);
 });
+check('SDK error-context metadata no longer suppresses original failure facts', () => {
+ for (const keepObservation of [false, true]) {
+  const r = raw(); r.command.exitCode = 1; r.sdkStepOutcome = 'failure';
+  r.report.stats.expected = 0; r.report.stats.unexpected = 1;
+  const spec = r.report.suites[0].specs[0]; spec.ok = false;
+  spec.tests[0].status = 'unexpected'; const x = result(r); x.status = 'failed';
+  x.error = { message: 'synthetic primary assertion failure' };
+  x.errors = [{ message: 'synthetic primary assertion failure' }];
+  if (!keepObservation) x.attachments = [];
+  x.attachments.push({ name: 'error-context', contentType: 'text/markdown',
+   path: '/owned/synthetic/context-file.md', body: Buffer.from('synthetic context document').toString('base64') });
+  const before = JSON.stringify(r), v = project(r), projected = v.report.suites[0].specs[0].tests[0].results[0];
+  assert.deepEqual(projected.errors, x.errors); assert.deepEqual(projected.error, x.error);
+  assert.deepEqual(v.command, r.command); assert.equal(v.sdkStepOutcome, 'failure');
+  assert.deepEqual(projected.attachments.at(-1), { name: 'error-context', contentType: 'text/markdown',
+   bodyOmitted: true, pathOmitted: true, policy: 'sdk-failure-context-metadata-only' });
+  assert.equal(JSON.stringify(v).includes('/owned/synthetic/context-file.md'), false);
+  assert.equal(JSON.stringify(v).includes(Buffer.from('synthetic context document').toString('base64')), false);
+  assert.equal(JSON.stringify(r), before);
+  assert.throws(() => validateSuccess(v, expected, service), /SDK/);
+  assert.deepEqual(parseLog(frame(encode(r))).receipt, v);
+ }
+});
+check('SDK context marker cannot qualify a supposedly passed receipt', () => {
+ const r = raw(); result(r).attachments.push({ name: 'error-context', contentType: 'text/markdown', path: '/owned/context.md' });
+ assert.throws(() => validateSuccess(project(r), expected, service), /OBSERVATION/);
+});
+check('unrecognized attachments and malformed SDK context still fail closed', () => {
+ for (const attachment of [
+  { name: 'unknown', contentType: 'text/markdown', path: '/owned/context.md' },
+  { name: 'error-context', contentType: 'text/html', path: '/owned/context.md' },
+  { name: 'error-context', contentType: 'text/markdown' },
+  { name: 'error-context', contentType: 'text/markdown', path: 'x'.repeat(4097) },
+ ]) {
+  const r = raw(); result(r).attachments.push(attachment);
+  assert.throws(() => project(r), /ATTACHMENT|SDK_CONTEXT/);
+ }
+});
 console.log(JSON.stringify({ pureChecks: checks, sdkOrBrowserExecuted: false }));

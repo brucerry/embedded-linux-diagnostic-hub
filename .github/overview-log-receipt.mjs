@@ -23,7 +23,7 @@ function errorFields(v) {
  need(Array.isArray(v.errors ?? []), 'ERRORS');
  return { errors: structuredClone(v.errors ?? []), ...(v.error === undefined ? {} : { error: structuredClone(v.error) }) };
 }
-/** Preserve all selected result/error facts; omit only SDK config/timing/stdout/stderr/location metadata.
+/** Preserve all selected result/error facts; omit SDK config/timing/stdout/stderr/location metadata and explicitly mark the SDK failure-context document as metadata-only.
  * Oversized projections fail; no field, error or attachment is truncated to make it fit. */
 export function project(raw) {
  need(object(raw) && Buffer.byteLength(JSON.stringify(raw)) <= MAX_RAW, 'RAW_CAP');
@@ -34,12 +34,24 @@ export function project(raw) {
    need(object(t) && Array.isArray(t.results), 'TEST');
    return { expectedStatus: t.expectedStatus, status: t.status, results: t.results.map(v => {
     need(object(v) && Array.isArray(v.attachments ?? []), 'RESULT');
-    for (const a of v.attachments ?? []) {
-     need(object(a) && ['overview-readings-observation'].includes(a.name) &&
+    const attachments = (v.attachments ?? []).map(a => {
+     need(object(a), 'ATTACHMENT');
+     // Playwright can attach error-context.md even with trace/screenshot/video off.
+     // Preserve failure facts without reading or emitting that separate document,
+     // its path, or its body. This explicit metadata marker cannot qualify success.
+     if (a.name === 'error-context') {
+      need(a.contentType === 'text/markdown' &&
+       ((typeof a.path === 'string' && a.path.length > 0 && a.path.length <= 4096) ||
+        typeof a.body === 'string'), 'SDK_CONTEXT');
+      return { name: 'error-context', contentType: 'text/markdown',
+       bodyOmitted: true, pathOmitted: true, policy: 'sdk-failure-context-metadata-only' };
+     }
+     need(['overview-readings-observation'].includes(a.name) &&
       a.contentType === 'application/json' && typeof a.body === 'string' && a.body.length <= 5464, 'ATTACHMENT');
      const b = Buffer.from(a.body, 'base64'); need(b.length <= 4096 && b.toString('base64') === a.body, 'ATTACHMENT_CAP');
-    }
-    return { status: v.status, retry: v.retry, ...errorFields(v), attachments: structuredClone(v.attachments ?? []) };
+     return structuredClone(a);
+    });
+    return { status: v.status, retry: v.retry, ...errorFields(v), attachments };
    }) };
   }) };
  });

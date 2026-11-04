@@ -46,7 +46,7 @@ assert.equal(hash(read('./overview-log-receipt.mjs')), workflow.match(/if \(crea
 for (const fact of ['chromiumSandbox: true', 'workers: 1', 'retries: 0', 'repeatEach: 1', 'maxFailures: 1',
  'timeout: 90_000', 'globalTimeout: 300_000', "trace: 'off'", "screenshot: 'off'", "video: 'off'",
  'reuseExistingServer: false', '--host 127.0.0.1 --port 5200 --strictPort', 'gracefulShutdown:']) assert(config.includes(fact), fact);
-for (const fact of ['branches: [ci/overview-readings-candidate-239]', 'timeout-minutes: 15', 'contents: read',
+for (const fact of ['branches: [ci/overview-readings-candidate-239-debug1]', 'timeout-minutes: 15', 'contents: read',
  '1048576', 'socket_bytes > 107', 'receipt-only:', 'needs: files', 'timeout-minutes: 2', 'permissions: {}',
  'RECEIPT_BYTES > 32768', 'HUB_OVERVIEW239_V1', 'test "$PRODUCER_RESULT" = success',
  'npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org',
@@ -56,7 +56,7 @@ for (const bad of ['workflow_dispatch:', 'workflow_call:', 'secrets.', '--no-san
 assert.equal((workflow.match(/node node_modules\/playwright\/cli\.js test/g) ?? []).length, 1);
 const sourceSHA = read('./overview-log-receipt.mjs').match(/export const SOURCE = '([a-f0-9]{40})'/)[1];
 assert.deepEqual([...workflow.matchAll(/^                  ref: (.+)$/gm)].map(m => m[1]), ['${{ github.sha }}', sourceSHA]);
-assert(workflow.includes('test "$(git -C tooling rev-parse HEAD^)" = ' + sourceSHA));
+assert(workflow.includes('test "$(git -C tooling rev-parse HEAD^)" = dd49f9b4d4ab2123c8eb87b6bf4578d85273a352'));
 assert(workflow.includes('test "$(git -C application rev-parse HEAD)" = ' + sourceSHA));
 console.log(JSON.stringify({ selectedScenarios: 1, positiveFullNames: accepted, negativeControls: rejected,
  unrelatedSpecs: specs.length - 1, sourcePins: Object.keys(pins).length, states: 7, manualRefreshes: 6,
