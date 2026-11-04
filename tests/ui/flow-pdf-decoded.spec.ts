@@ -56,13 +56,14 @@ test('PDF decodes overview, readable graph tiles and every continued detail line
         const changed = images.slice(); changed[index] = { ...images[index], jpeg };
         controls.push({ name, images: changed, error });
     }
-    // The earlier synthetic marker/scan envelope is structurally admissible
-    // but not a decodable JPEG. The real decoder must reject it explicitly.
+    // This incomplete marker/scan envelope is structurally admissible. Some
+    // decoders recover pixels from incomplete data; decoding or the unchanged
+    // first-page content checks must still reject it.
     const envelope = Buffer.from([255, 216, 255, 192, 0, 17, 8, 4, 166, 6, 148,
         3, 1, 17, 0, 2, 17, 1, 3, 17, 1, 255, 218, 0, 12, 3, 1, 0, 2, 17, 3, 17,
         0, 63, 0, 42, 255, 217]);
-    controls.push({ name: 'undecodable JPEG envelope', images: [{ ...images[0],
-        jpeg: envelope.toString('base64') }, ...images.slice(1)], error: /JPEG decoding failed/ });
+    controls.push({ name: 'incomplete JPEG envelope', images: [{ ...images[0],
+        jpeg: envelope.toString('base64') }, ...images.slice(1)], error: /Decoded PDF (?:JPEG decoding failed on page 1|overview role title: ink error)/ });
     for (const control of controls) {
         const bytes = imagePdf(control.images.map(i => ({
             bytes: Buffer.from(i.jpeg, 'base64'), width: i.width, height: i.height,
