@@ -1,7 +1,11 @@
 /** Private qualification build only. Never imported by the shipping entry. */
 export type ProductKind =
-    'serial' | 'runner' | 'repository' | 'native-repository' | 'console-journal' | 'gateway';
+    'serial' | 'runner' | 'repository' | 'native-repository' | 'console-journal' | 'gateway' |
+    'ssh-stream-client' | 'ssh-stream-host' | 'activity-release';
 import { CaptureStorageError } from '../../shared/capture-store';
+import { serialAutomationCustody, runnerCustody, sshClientCustody, sshHostCustody,
+    activityReleaseCustody, browserExportCustody, probeFields } from './memory-product-ownership';
+import { readProductPageCustody } from './memory-product-page-refs';
 type Fields = Record<string, unknown>;
 type Tracked = { id: number; kind: ProductKind; value: WeakRef<object> };
 const tracked: Tracked[] = [];
@@ -181,33 +185,45 @@ export function productOwnership() {
             ]);
             owners.channel += has(row.port || row.opened);
             owners.reader += has(row.reader) + has(row.reading);
-            owners.writer += has(row.writer) + has(row.writing);
-            owners.producer += has(row.capture) + has(row.automationOwner) + has(row.receiveBusy);
+            const custody = serialAutomationCustody(row.automationOwner);
+            if (row.closing !== undefined) {
+                const close = probeFields(row.closing, ['task', 'intent']);
+                if (!close.task || typeof (close.task as Promise<unknown>).then !== 'function')
+                    throw Error('Private Serial close transaction changed.');
+                const intent = probeFields(close.intent, ['deselect', 'selected', 'generation']);
+                if (typeof intent.deselect !== 'boolean' || !Number.isSafeInteger(intent.generation) ||
+                    (intent.generation as number) < 0)
+                    throw Error('Private Serial close intent changed.');
+            }
+            owners.writer += has(row.writer) + has(row.writing) + custody.writer;
+            owners.producer += has(row.capture) + has(row.receiveBusy) + custody.producer;
             owners.queuedInput += size(row.queue, 'serial.queue');
-            owners.cleanup += has(row.opening) + has(row.closing);
+            owners.cleanup += has(row.opening) + has(row.closing) + custody.cleanup;
             retained.push({
                 id: entry.id,
                 kind: entry.kind,
                 details: {
                     listeners: size(row.listeners, 'serial.listeners'),
                     queuedBytes: Number(row.queuedBytes),
+                    ...custody.details,
                 },
             });
         } else if (entry.kind === 'runner') {
-            const row = fields(value, [
-                'active',
-                'controller',
-                'cleanup',
-                'cleanupRetry',
-                'executing',
-            ]);
-            owners.producer += has(row.active) + has(row.executing);
-            owners.cleanup += has(row.cleanup) + has(row.cleanupRetry);
+            const custody = runnerCustody(value);
+            owners.producer += custody.producer;
+            owners.cleanup += custody.cleanup;
             retained.push({
                 id: entry.id,
                 kind: entry.kind,
-                details: { controller: has(row.controller) },
+                details: custody.details,
             });
+        } else if (entry.kind === 'ssh-stream-client' || entry.kind === 'ssh-stream-host' ||
+            entry.kind === 'activity-release') {
+            const custody = entry.kind === 'ssh-stream-client' ? sshClientCustody(value) :
+                entry.kind === 'ssh-stream-host' ? sshHostCustody(value) : activityReleaseCustody(value);
+            for (const key of ['producer', 'writer', 'reader', 'ack', 'cleanup'] as const)
+                owners[key] += custody[key];
+            retained.push({ id: entry.id, kind: entry.kind, details: custody.details });
         } else if (entry.kind === 'repository') {
             const row = fields(value, [
                 'active',
@@ -290,16 +306,18 @@ export function productOwnership() {
             throw Error(`Unsupported private product owner probe: ${entry.kind}`);
         }
     }
-    const browserExports =
-        typeof (globalThis as any).__memoryBrowserExports === 'function'
-            ? (globalThis as any).__memoryBrowserExports()
-            : null;
-    if (browserExports) {
-        for (const field of ['active', 'rpc', 'helpers', 'busyHelpers', 'connectedHelpers'])
-            if (!Number.isSafeInteger(browserExports[field]) || browserExports[field] < 0)
-                throw Error('Browser export probe count missing: ' + field);
-        owners.export += browserExports.active;
-        owners.rpc += browserExports.rpc;
+    const browserProbe = (globalThis as any).__memoryBrowserExports;
+    if (browserProbe !== undefined && typeof browserProbe !== 'function')
+        throw Error('Private browser export observer changed.');
+    const browserExports = typeof browserProbe === 'function' ? browserProbe() : null;
+    if (typeof browserProbe === 'function') {
+        const custody = browserExportCustody(browserExports);
+        owners.export += custody.export;
+        owners.rpc += custody.rpc;
     }
-    return { owners, retained, modules: { browserExports } };
+    const pageCustody = readProductPageCustody();
+    owners.cleanup += pageCustody.pendingRuns + pageCustody.arming + pageCustody.armAttempts +
+        pageCustody.hostLeases + pageCustody.retirementContinuations + pageCustody.clockSuspensions +
+        pageCustody.consoleSuspensions + pageCustody.pendingClockSamples;
+    return { owners, retained, modules: { browserExports, pageCustody } };
 }

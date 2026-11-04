@@ -130,6 +130,9 @@ const api = {
             'native-repository',
             'gateway',
             'console-journal',
+            'ssh-stream-client',
+            'ssh-stream-host',
+            'activity-release',
         ] as const;
         const instances = Object.fromEntries(
             kinds.map((kind) => [kind, productInstances(kind).length]),

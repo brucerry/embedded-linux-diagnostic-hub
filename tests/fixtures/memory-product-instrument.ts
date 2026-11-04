@@ -7,13 +7,13 @@ export const productProbePreimages = [
         'src/features/serial/session.ts',
         'SerialSession',
         'serial',
-        '3484cb5a071f82822a2fd26d46bbf38748ebdd267c759f910f7f50b9e7a8db51',
+        '979ef0a9175fa9d96f6f916599e17282d2271723ca843b3431e626b53e70d464',
     ],
     [
         'src/features/automation/runner.ts',
         'FlowRunner',
         'runner',
-        'd51a8e73d6aa319cb8acfe88bd13f31fbb24d25017df3af946c90d80f168c5ce',
+        'cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a',
     ],
     [
         'src/features/automation/capture/indexeddb-store.ts',
@@ -39,6 +39,9 @@ export const productProbePreimages = [
         'gateway',
         'ecb2333ff9d63f281d13585ac24839be9b2c520107717d7dd7b1ba82dd990ced',
     ],
+    ['src/features/automation/capture/ssh-stream-client.ts', 'SshStreamClient', 'ssh-stream-client', 'a1b81822296844c8ae3abe5a97a486ff5eb5d9ad53f6520594f6d9ecf15599a3'],
+    ['backend/ssh/stream-host.ts', 'SshStreamHost', 'ssh-stream-host', '224f9914811347f2b01de205b7c8d2664fdb5596a2524a38047109d1f7043e5c'],
+    ['src/features/automation/activity-release.ts', 'ActivityReleaseQueue', 'activity-release', '5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b'],
 ] as const;
 
 export function instrumentProductSource(source: string, id: string) {
@@ -46,26 +49,31 @@ export function instrumentProductSource(source: string, id: string) {
     if (normalized.endsWith('/src/features/automation/AutomationPage.tsx')) {
         if (
             createHash('sha256').update(source).digest('hex') !==
-            'e9629c89f18c26bc015018f6206fd152363e055364b63eb15cd6efc322f61be3'
+            'ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4'
         )
             throw Error('Actual Automation Page ref preimage changed.');
-        const needle = '    const flowInspectionId = useRef<string | null>(null);';
+        const needle = '    latest.current = props;';
+        const begin = '    const start = async (once = false) => {',
+            end = '    };\n    const edit = (id: string, patch: Partial<CommandStep>) =>';
+        if (source.split(begin).length !== 2 || source.split(end).length !== 2)
+            throw Error('Actual Page Start continuation boundary changed.');
         if (source.split(needle).length !== 2)
             throw Error('Actual Page inspection ref boundary changed.');
         return {
             code:
-                "import {trackProductPageRefs as __observeProductPageRefs} from '/tests/fixtures/memory-product-page-refs';\n" +
+                "import {trackProductPageRefs as __observeProductPageRefs,trackProductPageRun as __trackProductPageRun} from '/tests/fixtures/memory-product-page-refs';\n" +
                 source.replace(
                     needle,
-                    needle + '\n    __observeProductPageRefs(flowInspectionId, activityEpoch);',
-                ),
+                    needle + '\n    __observeProductPageRefs(flowInspectionId, activityEpoch, {arming, armAttempt, cleanupActivity, cleanupActivityRetirement, cleanupClock, cleanupConsoleResults, pendingClockSamples});',
+                ).replace(begin, '    const start = __trackProductPageRun(async (once = false) => {')
+                 .replace(end, '    });\n    const edit = (id: string, patch: Partial<CommandStep>) =>'),
             map: null,
         };
     }
     if (normalized.endsWith('/src/features/automation/capture/browser-export.ts')) {
         if (
             createHash('sha256').update(source).digest('hex') !==
-            '79de398abcccca1b18d274ff5302b01b7eb7220e8c64a87d30ef2de4083b9996'
+            'c7122f17851177d7eebc1dd9cdca4978812756f7ab5881fb9d6428507de8de6b'
         )
             throw Error('Browser export ownership preimage changed.');
         const newline = source.includes('\r\n') ? '\r\n' : '\n';
