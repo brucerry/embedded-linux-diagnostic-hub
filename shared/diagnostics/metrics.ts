@@ -60,9 +60,26 @@ export function parseRelease(text: string): string {
     );
 }
 
+// The uptime probe reads /proc/uptime. Its first field is non-negative decimal
+// seconds; missing/malformed evidence must not become a zero/boot observation.
+export function parseUptimeSeconds(text: string): number | null {
+    const token = text.trim().split(/\s+/)[0];
+    if (!/^\d+(?:\.\d+)?$/.test(token)) return null;
+    const seconds = Number(token);
+    const [whole, fraction = ''] = token.split('.');
+    if (
+        !Number.isFinite(seconds) ||
+        seconds > Number.MAX_SAFE_INTEGER ||
+        (Number(whole) === Number.MAX_SAFE_INTEGER && /[1-9]/.test(fraction)) ||
+        (seconds === 0 && /[1-9]/.test(token))
+    )
+        return null;
+    return seconds;
+}
+
 export function formatUptime(text: string): string {
-    const seconds = Number(text.trim().split(/\s+/)[0]);
-    if (!text || !Number.isFinite(seconds) || seconds < 0) return 'Unavailable';
+    const seconds = parseUptimeSeconds(text);
+    if (seconds === null) return 'Unavailable';
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);

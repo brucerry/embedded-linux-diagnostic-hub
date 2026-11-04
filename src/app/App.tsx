@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useState, useRef, useLayoutEffect } from 'react';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
+import { parseUptimeSeconds } from '../../shared/diagnostics/metrics';
 import { APP_VERSION, REPOSITORY_URL } from '../../shared/project';
 import type { Category, Probe } from '../../shared/types';
 import { RoundedIcon } from '../components/RoundedIcon';
@@ -114,14 +115,14 @@ function App() {
     const uptimeResult = snapshot?.results.find((result) => result.id === 'uptime');
     const uptimeValue =
         uptimeResult?.status === 'collected'
-            ? Number(uptimeResult.stdout.trim().split(/\s+/)[0])
-            : NaN;
+            ? parseUptimeSeconds(uptimeResult.stdout)
+            : null;
     const clock = useDeviceClock({
         transport,
         generation: connected ? activeDevice?.generation : undefined,
         reset: clockReset,
         blocked: resetting || disconnecting,
-        uptime: Number.isFinite(uptimeValue) && uptimeValue >= 0 && !imported ? uptimeValue : null,
+        uptime: !imported ? uptimeValue : null,
     });
     const selectedResult = snapshot?.results.find((item) => item.id === selectedProbe?.id);
     async function inspectProbe(probe: Probe) {
