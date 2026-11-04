@@ -1,0 +1,27 @@
+// Source data only: no SDK/config/application/fixture execution.
+import assert from 'node:assert/strict';
+import {readFileSync,readdirSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const read=p=>readFileSync(new URL(p,import.meta.url),'utf8'),hash=b=>createHash('sha256').update(b).digest('hex');
+const config=read('./pdf-decoded-candidate.config.ts'),workflow=read('./workflows/pdf-decoded-candidate.yml');
+const file='flow-pdf-decoded.spec.ts',title='PDF decodes overview, readable graph tiles and every continued detail line';
+const grep=new RegExp(config.match(/^    grep: \/(.*)\/,$/m)[1]);assert(config.includes("testMatch: ['"+file+"']"));let accepted=0,rejected=0;
+for(const prefix of ['','  ','chromium ']){assert(grep.test(prefix+file+' '+title));accepted++;}
+for(const value of [title,file+' extra '+title,file+' '+title+' extra','automation.spec.ts '+title,'ssh-console-gateway.spec.ts '+title,'stored-serial-results.spec.ts '+title,'stored-console-results.spec.ts '+title]){assert(!grep.test(value));rejected++;}
+const specs=readdirSync(new URL('../tests/ui/',import.meta.url)).filter(n=>n.endsWith('.spec.ts'));
+for(const name of specs){for(const m of read('../tests/ui/'+name).matchAll(/\btest\(['"\x60]([^'"\x60\n]+)/g)){const selected=name===file&&m[1]===title;assert.equal(grep.test(name+' '+m[1]),selected);if(!selected)rejected++;}if(name!==file){assert(!grep.test(name+' '+title));rejected++;}}
+const source=read('../tests/ui/'+file),fixture=read('../tests/ui/fixtures/flow-pdf-decoded.ts'),visual=read('../tests/fixtures/flow-pdf-visual-case.ts');
+assert.deepEqual([...source.matchAll(/^test\('([^']+)'/gm)].map(m=>m[1]),[title]);
+for(const fact of ['inspectFlowPdfExport(pdf)','readFlowPdfImages(pdf)','decodedJpegs','detailLines','maxInkError','reordered graph/details','empty overview body','empty graph body','missing connecting edge','empty details body','missing continued details','incomplete JPEG envelope','ctx.fillRect(rectangle[0], rectangle[1], rectangle[2], rectangle[3])',"info.attach('decoded-pdf-content'",'control.error'])assert((source+fixture).includes(fact),fact);
+for(const bad of ['page.clock.','page.request.','screenshot(','.saveAs(','waitForTimeout(','dispatchEvent('])assert(!source.includes(bad),bad);
+for(const fact of ['input.images.length <= 8','input.svg.length <= 256 * 1024','<= 12 * 1024 * 1024','await graph.decode()','await bitmap.decode()','finally','canvas.width = 1; canvas.height = 1'])assert(fixture.includes(fact),fact);
+assert(source.includes('expect(report.detailPageCount).toBeGreaterThanOrEqual(2)'));assert(source.includes('expect(report.detailPageCount).toBeLessThanOrEqual(4)'));assert(source.includes('expect(structure.pages).toBe(3 + report.detailPageCount)'));assert(source.includes("['missing continued details', images.length - 1"));assert(source.includes('error: /Decoded PDF (?:JPEG decoding failed on page 1|overview role title: ink error)/')); assert(fixture.includes('detailPageCount: detailPages.length'));
+assert(visual.includes("/src/features/automation/flow/raster.ts"));assert(visual.includes("exportRaster(scene, 'pdf', false)"));assert(visual.includes('PDF/SVG exports mutated their source'));
+const pins=JSON.parse(workflow.match(/const pins = (\{[^\r\n]+\});/)[1]);assert.equal(Object.keys(pins).length,14);for(const[p,h]of Object.entries(pins)){assert(!p.split('/').includes('..'));assert.equal(hash(read('../'+p)),h,p);}
+assert.equal(hash(config),workflow.match(/if \(hash\(config\) !== '([a-f0-9]{64})'\)/)[1]);assert.equal(hash(read('./pdf-decoded-log-receipt.mjs')),workflow.match(/if \(createHash\('sha256'\).update\(fs.readFileSync\(helper\)\).digest\('hex'\) !== '([a-f0-9]{64})'/)[1]);
+for(const fact of ['chromiumSandbox: true','workers: 1','retries: 0','repeatEach: 1','maxFailures: 1','timeout: 90_000','globalTimeout: 300_000',"trace: 'off'","screenshot: 'off'","video: 'off'",'reuseExistingServer: false','--host 127.0.0.1 --port 5200 --strictPort','gracefulShutdown:'])assert(config.includes(fact),fact);
+for(const fact of ['branches: [ci/pdf-decoded-candidate-240-envelope-20261104]','timeout-minutes: 15','contents: read','1048576','socket_bytes > 107','receipt-only:','needs: files','timeout-minutes: 2','permissions: {}','RECEIPT_BYTES > 32768','HUB_PDF240_V1','test "$PRODUCER_RESULT" = success','npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org','sdk_exit=$?','exit "$sdk_exit"','SDK_STEP_OUTCOME: ${{ steps.sdk.outcome }}'])assert(workflow.includes(fact),fact);
+for(const bad of ['workflow_dispatch:','workflow_call:','secrets.','--no-sandbox','sudo ','rm -','kill ','continue-on-error:','actions/upload-artifact','actions/cache','retention-days:'])assert(!workflow.includes(bad),bad);
+assert.equal((workflow.match(/node node_modules\/playwright\/cli\.js test/g)??[]).length,1);
+const sourceSHA=read('./pdf-decoded-log-receipt.mjs').match(/export const SOURCE = '([a-f0-9]{40})'/)[1];assert.deepEqual([...workflow.matchAll(/^                  ref: (.+)$/gm)].map(m=>m[1]),['${{ github.sha }}',sourceSHA]);assert(workflow.includes('test "$(git -C tooling rev-parse HEAD^)" = '+sourceSHA));assert(workflow.includes('test "$(git -C application rev-parse HEAD)" = '+sourceSHA));
+console.log(JSON.stringify({selectedScenarios:1,positiveFullNames:accepted,negativeControls:rejected,unrelatedSpecs:specs.length-1,sourcePins:Object.keys(pins).length,caseTimeoutMs:90000,sdkGlobalMs:300000,workers:1,retries:0,sourceDataOnly:true,mountedOrSDKDiscoveryExecuted:false}));
