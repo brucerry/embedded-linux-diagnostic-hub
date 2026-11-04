@@ -13,6 +13,7 @@ export type GatewayHostMetrics = {
     resources: Record<string, number>;
     productOwnership?:
         ReturnType<typeof import('../../gateway/server').createGateway>['ownershipSnapshot'] | null;
+    productStreamOwnership?: unknown;
     activeResources: string[];
     fixtureOwnership?: unknown;
 };

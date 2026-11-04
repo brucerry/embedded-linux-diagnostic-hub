@@ -1,3 +1,4 @@
+import { verifyProductHostObservation, assertHostStreamsRetired } from './memory-product-host-ownership';
 /** Private qualification verdict. This validates observed state, never performs cleanup. */
 const ownerNames = ['writer', 'reader', 'pin', 'export', 'rpc', 'cleanup'] as const;
 const serviceNames = ['rpcTimer', 'storeOpen', 'catalogOpen'] as const;
@@ -43,6 +44,9 @@ export function assertProductNativeShutdown(
     if (typeof own(input, 'captureExpected', 'options') !== 'boolean')
         throw Error('Native shutdown capture expectation must be an observed boolean.');
     falseValue(own(snapshot, 'sshHasResources', 'snapshot'), 'sshHasResources');
+    const streamObservation = verifyProductHostObservation(own(snapshot, 'streamOwnership', 'snapshot'),
+        own(snapshot, 'ssh', 'snapshot'), 'native');
+    const streamRetirement = assertHostStreamsRetired(streamObservation);
     falseValue(own(snapshot, 'consoleHasResources', 'snapshot'), 'consoleHasResources');
     const activity = object(own(snapshot, 'activity', 'snapshot'), 'activity');
     falseValue(own(activity, 'lease', 'activity'), 'activity.lease');
@@ -88,6 +92,7 @@ export function assertProductNativeShutdown(
         verified: true as const,
         scope: 'native-owner-snapshot-and-terminal-downloads' as const,
         capturePresent: captureValue !== null,
+        streamRetirement,
         cachedMetadata,
         downloadStates,
     };

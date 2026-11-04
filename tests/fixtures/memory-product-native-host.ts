@@ -1,3 +1,4 @@
+import { verifyProductHostSources } from './memory-product-host-source';
 import { productStartup } from './memory-product-startup';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -45,7 +46,8 @@ const mainProbe = String.raw`
             capture={owners:{writer:Number(Boolean(s.writer))+Number(Boolean(s.beginning))+Number(Boolean(d.active))+Number(d.modifying),reader:s.readers.size+[...d.readers.values()].reduce((a:number,b:number)=>a+b,0),pin:s.pins.size+s.pinReservations+d.pins,export:h.exports.size,rpc:s.calls,cleanup:s.mutations.size+d.deleting.size+d.resultWriting.size+Number(Boolean(d.operation))+d.listing+d.metadataQueues.size+d.metadataUncertain.size+d.jsonOperations.size+Number(d.closing)},services:{rpcTimer:!s.disposed,storeOpen:!d.closed,catalogOpen:Boolean(d.catalog)},cache:{completed:s.completed.size,expiredPins:s.expiredPins.size}};
         }
         const activity=(globalThis as any).__memoryProductActivity;
-        return {ssh:ssh.ownershipSnapshot,sshHasResources:ssh.hasResources,console:consoleService.snapshot,consoleHasResources:consoleService.hasResources,capture,activity:activity?{lease:Boolean(activity.lease),suspended:activity.suspended}:null,memory:process.memoryUsage(),versions:process.versions};
+        const sshSnapshot=ssh.ownershipSnapshot;
+        return {ssh:sshSnapshot,streamOwnership:__memoryObserveHost(sshSnapshot,__memoryHostBinding,'native'),sshHasResources:ssh.hasResources,console:consoleService.snapshot,consoleHasResources:consoleService.hasResources,capture,activity:activity?{lease:Boolean(activity.lease),suspended:activity.suspended}:null,memory:process.memoryUsage(),versions:process.versions};
     };
     (globalThis as any).__memoryNativeQualification={snapshot:__memoryNativeSnapshot,
     prepareReport(file:string){const host=(globalThis as any).__memoryProductCapture;if(!host||__memoryNativeReport)throw Error('Native report boundary unavailable/busy.');const directory=process.env.HUB_PRODUCT_NATIVE_DOWNLOADS;if(!directory||path.dirname(file)!==directory)throw Error('Native test destination escaped its private directory.');const original=host.destination;__memoryNativeReport={file,original,invoked:false,format:null};host.destination=async(format:any)=>{if(__memoryNativeReport.invoked)throw Error('Duplicate native Save destination.');__memoryNativeReport.invoked=true;__memoryNativeReport.format=format;return file;};},
@@ -79,6 +81,17 @@ export async function createProductNative(options: {
         throw Error('Unsupported product native GC mode.');
     const sourceRoot = path.resolve(import.meta.dirname, '../..'),
         require = createRequire(import.meta.url);
+    // Verify the ownership snapshot producers before creating output or starting a build.
+    const hostBinding = await verifyProductHostSources(sourceRoot, 'native');
+    const guarded = async (file: string, expected: string) => {
+        const source = await fs.readFile(file, 'utf8');
+        if (createHash('sha256').update(source).digest('hex') !== expected)
+            throw Error('Native probe preimage changed: ' + file);
+        return source;
+    };
+    // Keep the existing main-probe boundary closed: do not blindly refresh its stale pin.
+    await guarded(path.join(sourceRoot, 'electron/main.ts'),
+        '005de35d840bcc87567c4530677359986886137c293eb79327305bd6b25c1a9d');
     const root = path.resolve(options.profile, '..', 'native-app'),
         renderer = path.join(root, 'dist'),
         desktop = path.join(root, 'dist-electron');
@@ -132,12 +145,6 @@ export async function createProductNative(options: {
     admit();
     const profile = await sshQualificationProfile();
     admit();
-    const guarded = async (file: string, expected: string) => {
-        const source = await fs.readFile(file, 'utf8');
-        if (createHash('sha256').update(source).digest('hex') !== expected)
-            throw Error('Native probe preimage changed: ' + file);
-        return source;
-    };
     admit();
     await build({
         absWorkingDir: sourceRoot,
@@ -152,6 +159,12 @@ export async function createProductNative(options: {
             {
                 name: 'private-native-product-observers',
                 setup(b) {
+                    b.onLoad({ filter: /[\\/]backend[\\/]ssh[\\/](stream-host|session)\.ts$/ }, async args => {
+                        const file = Object.keys(hostBinding.pins).find(file =>
+                            path.resolve(sourceRoot, file) === path.resolve(args.path));
+                        if (!file) throw Error('Unsupported private native SSH source resolution.');
+                        return { contents: await guarded(args.path, hostBinding.pins[file]), loader: 'ts' };
+                    });
                     b.onResolve({ filter: /^ssh2$/ }, () => ({
                         path: profile.sshEntry,
                         external: true,
@@ -167,6 +180,8 @@ export async function createProductNative(options: {
                         source = source.replace(needle, mainProbe + '\n' + needle);
                         return {
                             contents:
+                                "import {observeProductHost as __memoryObserveHost} from '../tests/fixtures/memory-product-host-ownership';\n" +
+                                "const __memoryHostBinding=" + JSON.stringify(hostBinding) + ";\n" +
                                 "import {writeFileSync as __memoryWriteSnapshot} from 'node:fs';\nimport {workerReadFault as __memoryNativeReadFault} from '../tests/fixtures/memory-product-worker-faults';\n" +
                                 source,
                             loader: 'ts',

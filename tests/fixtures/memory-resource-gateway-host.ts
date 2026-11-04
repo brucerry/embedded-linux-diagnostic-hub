@@ -15,6 +15,9 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 export type GatewayTargetExtension = {
+    beforeInit?(): Promise<void>;
+    /** Private IPC metadata only; absent observers never imply zero stream owners. */
+    observeProductOwnership?(snapshot: unknown): unknown;
     createTarget(resources: {
         assertAdmissible?(): void;
         clients: Set<Connection>;
@@ -164,7 +167,7 @@ export async function runGatewayHost(extension?: GatewayTargetExtension) {
             startupController.abort(Error('Product supervisor cancelled host startup.'));
             return;
         }
-        if (!validHostRequest(input, nonce, Boolean(extension)) || busy || input.id <= lastId) {
+        if (!validHostRequest(input, nonce, role === 'ssh-fixture-node' && Boolean(extension)) || busy || input.id <= lastId) {
             process.exitCode = 1;
             onDisconnect();
             process.disconnect?.();
@@ -177,6 +180,8 @@ export async function runGatewayHost(extension?: GatewayTargetExtension) {
             if (input.action === 'init') {
                 admit();
                 assert.ok(!initialized && !stopped);
+                await extension?.beforeInit?.();
+                admit();
                 const payload = input.payload as {
                     origin: string;
                     target?: { host: string; port: number; fingerprint: string };
@@ -350,11 +355,14 @@ export async function runGatewayHost(extension?: GatewayTargetExtension) {
                     process.removeListener('message', onMessage);
                     process.removeListener('disconnect', onDisconnect);
                 }
+                const productOwnership = gateway?.ownershipSnapshot ?? null;
                 value = {
                     runtimeTimerClosure,
                     memory: process.memoryUsage(),
                     resources: resources(),
-                    productOwnership: gateway?.ownershipSnapshot ?? null,
+                    productOwnership,
+                    productStreamOwnership: gateway && extension?.observeProductOwnership
+                        ? extension.observeProductOwnership(productOwnership) : null,
                     fixtureOwnership: extendedTarget?.snapshot() ?? null,
                     activeResources: process.getActiveResourcesInfo(),
                     ...(process.env.HUB_MEMORY_HOST_TIMER_STACKS === '1'

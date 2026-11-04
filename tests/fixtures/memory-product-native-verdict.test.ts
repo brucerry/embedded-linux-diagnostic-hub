@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { observeProductHost, hostPins } from './memory-product-host-ownership';
 import { assertProductNativeShutdown } from './memory-product-native-verdict';
 
+const streams = () => ({ currentStates: 0, retiringStates: 0, producers: 0, readers: 0,
+    pendingAcks: 0, pendingDataBytes: 0, shutdownWaiters: 0 });
 const valid = () => ({
+    ssh: { streams: streams() },
+    streamOwnership: observeProductHost({ streams: streams() }, { protocol: 1,
+        production: '96a56cdbb462320c54fe74022d7436e665a31d31', realm: 'native', pins: hostPins('native') }, 'native'),
     sshHasResources: false,
     consoleHasResources: false,
     activity: { lease: false, suspended: false },
@@ -167,4 +173,19 @@ test('old parse-only shutdown receipt accepted failed shutdown snapshots; new ve
     const pending = [{ state: 'started' }];
     assert.ok(oldParseOnly(valid()));
     rejects(valid(), { captureExpected: true, downloads: pending });
+});
+
+
+test('native false resource boolean cannot mask pending streams or absent source binding', () => {
+    for (const name of Object.keys(streams())) {
+        const snapshot = valid();
+        Object.assign(snapshot.ssh.streams, { [name]: 1 });
+        snapshot.streamOwnership = observeProductHost(snapshot.ssh, snapshot.streamOwnership.binding, 'native');
+        rejects(snapshot);
+    }
+    rejects({ ...valid(), streamOwnership: undefined });
+    rejects({ ...valid(), ssh: undefined });
+    const value = valid();
+    value.streamOwnership.binding.pins['backend/ssh/session.ts'] = '0'.repeat(64);
+    rejects(value);
 });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { isolatedGateway } from './memory-resource-gateway-process';
+import { verifyProductHostObservation } from './memory-product-host-ownership';
 import type { ProductTargetControl, ProductTargetSnapshot } from './memory-product-gateway-target';
 
 /** Real product gateway in its own process plus a private synthetic authenticated SSH target. */
@@ -17,6 +18,9 @@ export async function createProductGateway(context: {
         signal: context.signal,
         workDeadlineMs: context.workDeadlineMs,
         hostFiles: {
+            'gateway-node': fileURLToPath(
+                new URL('./memory-product-gateway-host.ts', import.meta.url),
+            ),
             'ssh-fixture-node': fileURLToPath(
                 new URL('./memory-product-gateway-host.ts', import.meta.url),
             ),
@@ -73,6 +77,7 @@ export async function createProductGateway(context: {
             assert.ok(target.fixtureOwnership, 'Actual synthetic target snapshot is missing.');
             return {
                 product: host.productOwnership,
+                streams: verifyProductHostObservation(host.productStreamOwnership, host.productOwnership, 'gateway'),
                 target: target.fixtureOwnership as ProductTargetSnapshot,
                 services: { gateway: host.resources, target: target.resources },
                 caches: {
