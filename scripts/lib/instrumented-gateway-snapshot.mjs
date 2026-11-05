@@ -8,7 +8,11 @@ import {isExactInstrumentedText} from './instrumented-gateway-files.mjs';
 const absolute=p=>assert.ok(typeof p==='string'&&p.length<=4096&&Buffer.byteLength(p)<=4096&&p.startsWith('/')&&path.posix.normalize(p)===p&&!/[\\\x00-\x20\x7f]/.test(p));
 export function snapshotPreparedInstrumentedGateway(prepared) {
     const binding = structuredClone(prepared.binding), selection = { ...prepared.selection }, scripts = new Map();
-    assert.equal(binding.kind, 'separate-instrumented-gateway-build-byte-binding-v4');
+    assert.ok(['separate-instrumented-gateway-build-byte-binding-v4','separate-preimport-gateway-build-byte-binding-v5'].includes(binding.kind));
+    if(binding.kind==='separate-preimport-gateway-build-byte-binding-v5'){
+        const p=binding.preimport;assert.deepEqual(Object.keys(p).sort(),['schema','earlyArtifactSHA256','earlyEntrySHA256','earlyGraphSHA256','earlyMetafileSHA256','earlyAcknowledgementSHA256','targetGraphSHA256','targetMetafileSHA256','targetAcknowledgementSHA256'].sort());assert.equal(p.schema,'source-acknowledged-preimport-pair-v1');for(const key of Object.keys(p).filter(k=>k!=='schema'))assert.match(p[key],/^[a-f0-9]{64}$/);
+        assert.equal(sourceDigest(prepared.scripts.get(path.dirname(selection.artifactPath)+'/preimport.mjs')),p.earlyArtifactSHA256);
+    }
     assert.deepEqual(selection, { ...binding.source, artifactPath: binding.artifactPath, artifactSHA256: binding.artifactSHA256, observerSHA256: binding.observerSHA256 });
     assert.equal(binding.releaseAcceptance, false); assert.equal(binding.buildProvenanceVerified, false);
     assert.deepEqual(binding.rawCLIReference, RAW_CLI_REFERENCE);

@@ -23,7 +23,7 @@ function fakeActivation(){
  };require.main=module;
  vm.runInNewContext(transformed,{require,module,process:fakeProcess,__filename:root+'/activate.cjs',__dirname:root,
   setInterval(_fn:Function,ms:number){assert.equal(ms,1000);const h={cleared:false};holds.push(h);events.push('hold');return h;},clearInterval(h:any){h.cleared=true;events.push('clear-hold');},
-  setTimeout(fn:Function,ms:number){assert.equal(ms,60000);const t={fn,cleared:false};timers.push(t);events.push('deadline');return t;},clearTimeout(t:any){t.cleared=true;events.push('clear-deadline');},
+  setTimeout(fn:Function,ms:number){assert.equal(ms,55000);const t={fn,cleared:false};timers.push(t);events.push('deadline');return t;},clearTimeout(t:any){t.cleared=true;events.push('clear-deadline');},
   ownedImport(url:string){imports++;assert.equal(url,pathToFileURL(root+'/preimport.mjs').href);events.push('early-import');return pending;},
  });
  const activate=()=>resolve({runPreimportCompatibilityFromFile(_input:string,_guard:any,ports:any){called++;holdPorts=ports;return{result:Promise.resolve()};}});

@@ -1,48 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
-import {sourceFixture,observedLifecycle} from './fixtures/gateway-producer-memory';
-import {sourceDigest} from '../scripts/lib/committed-source-bridge.mjs';
-import {EARLY_ENTRY,inspectEarlyArtifact,prepareEarlyArtifact} from '../scripts/lib/instrumented-gateway-early-emission.mjs';
-
-// Authored compiler-output stand-in. Parsed as data only, NEVER evaluated or claimed emitted.
-const synthetic=Buffer.from(`import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';
-import {Session} from 'node:inspector';
-const sourceObservers=new WeakMap();
-function createNativePreimportPorts(guard){
- const root='/synthetic',require=createRequire(import.meta.url);
- return {sessionFactory(){return new Session();},importTarget(file){
- assert.equal(file,root+'/ownership.cjs');guard.assertActive(root);assertPreimportCacheEmpty(require.cache,root);
- const target=require(file);assert.equal(typeof target.createGateway,'function');return Object.freeze({createGateway:target.createGateway});
- }};
-}
-export function runPreimportCompatibilityFromFile(){return createNativePreimportPorts;}
-`);
-function fixture(){
- const reference=JSON.parse(readFileSync(new URL('./fixtures/gateway-ownership-production.json',import.meta.url),'utf8'));
- const files=new Map<string,Buffer>(reference.inventory.map((row:any)=>[row.path,readFileSync(new URL('../'+row.path,import.meta.url))])),graph=new Map<string,any>();
- function load(file:string){
-  if(graph.has(file))return;const bytes=readFileSync(new URL('../'+file,import.meta.url));files.set(file,bytes);const imports:any[]=[];graph.set(file,{bytes:bytes.length,imports});
-  const tree=ts.createSourceFile(file,bytes.toString(),ts.ScriptTarget.Latest,true);
-  for(const row of tree.statements)if((ts.isImportDeclaration(row)||ts.isExportDeclaration(row))&&row.moduleSpecifier){const spec=(row.moduleSpecifier as any).text;
-   if(spec.startsWith('node:'))imports.push({path:spec,kind:'import-statement',external:true});
-   else {assert.ok(spec.startsWith('.'));const next=path.posix.normalize(path.posix.join(path.posix.dirname(file),spec));imports.push({path:next,kind:'import-statement'});load(next);}
-  }
- }
- load(EARLY_ENTRY);const source=sourceFixture(files),controls:any={},calls:any[]=[],root='/project';
- const compiler=Buffer.from('#!/usr/bin/env node\n// synthetic compiler, never executed\n');
- const selection={root,sourceCommit:source.context.sourceCommit,sourceTree:source.context.sourceTree},tools={nodePath:'/tools/node',nodeSHA256:'a'.repeat(64),esbuildPath:'/project/node_modules/esbuild/bin/esbuild',esbuildSHA256:sourceDigest(compiler),esbuildEntryFormat:'node-script',esbuildEntryBytes:compiler};
- let output=Buffer.from(synthetic);
- const meta:any={inputs:Object.fromEntries(graph),outputs:{'validation/gateway-ownership/instrumented/preimport.mjs':{bytes:output.length,entryPoint:EARLY_ENTRY,imports:['node:assert/strict','node:module','node:inspector'].map(p=>({path:p,kind:'import-statement',external:true})),exports:['runPreimportCompatibilityFromFile'],inputs:Object.fromEntries([...graph.keys()].map(p=>[p,{bytesInOutput:1}]))}}};
- const ports:any={sourceProvider:source.provider,async observeToolchain(){return {...tools,...(controls.badCompiler?{esbuildEntryBytes:Buffer.from(controls.badCompiler),...(controls.matchBadHash?{esbuildSHA256:sourceDigest(Buffer.from(controls.badCompiler))}:{})}:{}),...(controls.badFormat?{esbuildEntryFormat:'native'}:{}),...(controls.changedTool?{nodeSHA256:'0'.repeat(64)}:{})};},
-  async execute(plan:any){calls.push(plan);if(controls.onExecute)controls.onExecute(plan);const life=await observedLifecycle(controls.nonzero?'nonzero':'normal');if(controls.missingClose)life.closeObserved=false;if(controls.lifecycleField)life[controls.lifecycleField]=controls.lifecycleValue;return{...plan,lifecycle:life};},
-  async read(file:string,max:number){assert.ok(max===32*1024**2||max===4*1024**2);if(file.endsWith('preimport-meta.json'))return controls.duplicateMeta?Buffer.from('{"inputs":{},"inputs":{},"outputs":{}}'):Buffer.from(JSON.stringify(meta));assert.ok(file.endsWith('/preimport.mjs'));return output;},assertFilesSettled(){if(controls.unsettled)throw Error('authored unretired file');},
- };
- return {selection,ports,controls,meta,calls,files,graph,source,replaceOutput(fn:(s:string)=>string){output=Buffer.from(fn(output.toString()));meta.outputs['validation/gateway-ownership/instrumented/preimport.mjs'].bytes=output.length;}};
-}
+import {earlyMemory as fixture,syntheticEarly as synthetic} from './fixtures/gateway-early-memory';
+import {inspectEarlyArtifact,prepareEarlyArtifact} from '../scripts/lib/instrumented-gateway-early-emission.mjs';
+const EARLY_ENTRY='tests/fixtures/instrumented-gateway-preimport-entry.mjs';
 test('actual frozen source graph is builtins-only, one observer registry and one guarded target import; fake acknowledgement is not runtime proof',async()=>{
  const f=fixture(),r=await prepareEarlyArtifact(f.selection,f.ports);assert.ok(f.graph.size>10);assert.equal([...f.graph.keys()].some(p=>p.startsWith('gateway/')||p.startsWith('backend/')),false);assert.equal(r.singlePrivateSessionFactory,true);assert.equal(r.singleObserverRegistry,true);assert.equal(r.fixedGuardedTargetImport,true);assert.equal(r.releaseAcceptance,false);assert.equal(r.actualRuntime,null);assert.equal(f.calls.length,1);assert.ok(f.calls[0].command.includes('--format=esm'));assert.ok(f.calls[0].command.includes('--tree-shaking=false'));
 });

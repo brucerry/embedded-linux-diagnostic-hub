@@ -18,7 +18,7 @@ function ast(file,bytes,json=false){
     assert.equal(tree.parseDiagnostics.length,0);return tree;
 }
 function walk(node,visit){visit(node);ts.forEachChild(node,child=>{walk(child,visit);});}
-function metadata(bytes){
+export function readInstrumentedMetafile(bytes){
     const tree=ast('metafile.json',bytes,true);
     walk(tree,node=>{if(ts.isObjectLiteralExpression(node)){const keys=new Set();for(const row of node.properties){assert.ok(ts.isPropertyAssignment(row)&&ts.isStringLiteral(row.name));assert.ok(!keys.has(row.name.text));keys.add(row.name.text);}}});
     return JSON.parse(bytes.toString('utf8'));
@@ -96,14 +96,7 @@ export async function prepareEarlyArtifact(selected,ports){
         });edges.set(file,imports);
     }
     await load(EARLY_ENTRY);
-    async function toolIdentity(){
-        const raw=await ports.observeToolchain();assert.deepEqual(Object.keys(raw).sort(),['esbuildEntryBytes','esbuildEntryFormat','esbuildPath','esbuildSHA256','nodePath','nodeSHA256']);
-        for(const key of ['nodeSHA256','esbuildSHA256'])assert.match(raw[key],/^[a-f0-9]{64}$/);
-        assert.equal(raw.esbuildPath,root+'/node_modules/esbuild/bin/esbuild');assert.ok(raw.nodePath.startsWith('/')&&path.posix.normalize(raw.nodePath)===raw.nodePath&&!/[\\\x00-\x20\x7f]/.test(raw.nodePath));
-        assert.equal(raw.esbuildEntryFormat,'node-script');const entry=raw.esbuildEntryBytes;assert.ok(Buffer.isBuffer(entry)&&entry.length>0&&entry.length<=65536);assert.equal(sourceDigest(entry),raw.esbuildSHA256);
-        assert.ok(['#!/usr/bin/env node\n','#!/usr/bin/env node\r\n','#!/usr/bin/node\n','#!/usr/bin/node\r\n'].some(prefix=>entry.subarray(0,Buffer.byteLength(prefix)).equals(Buffer.from(prefix))));
-        const {esbuildEntryBytes:_bytes,...observed}=raw;return structuredClone(observed);
-    }
+    const toolIdentity=async()=>instrumentedCompilerIdentity(await ports.observeToolchain(),root);
     const before=await toolIdentity();
     const output='validation/gateway-ownership/instrumented/preimport.mjs',meta='validation/gateway-ownership/preimport-meta.json';
     const plan=Object.freeze({owner:randomBytes(16).toString('hex'),id:1,role:'build',cwd:root,command:Object.freeze([before.nodePath,before.esbuildPath,root+'/'+EARLY_ENTRY,'--bundle','--platform=node','--format=esm','--tree-shaking=false','--outfile='+root+'/'+output,'--metafile='+root+'/'+meta])});
@@ -112,16 +105,24 @@ export async function prepareEarlyArtifact(selected,ports){
     requireObservedClosure(acknowledgement.lifecycle);const life=acknowledgement.lifecycle;for(const key of ['spawnObserved','exitObserved','closeObserved'])assert.equal(life[key],true);
     assert.equal(life.code,0);assert.equal(life.closeCode,0);assert.equal(life.error,null);assert.equal(life.timedOut,false);assert.equal(life.terminationRequested,false);assert.deepEqual(life.killErrors,[]);assert.ok(Number.isFinite(life.elapsedMs)&&life.elapsedMs>=0&&life.elapsedMs<=480000);
     assert.deepEqual(await observeSourceBridge(source,ports.sourceProvider),bridge);assert.deepEqual(await toolIdentity(),before);
-    const bytes=Buffer.from(await ports.read(root+'/'+output,MAX)),metaBytes=Buffer.from(await ports.read(root+'/'+meta,4*1024**2)),parsed=metadata(metaBytes);
+    const bytes=Buffer.from(await ports.read(root+'/'+output,MAX)),metaBytes=Buffer.from(await ports.read(root+'/'+meta,4*1024**2)),parsed=readInstrumentedMetafile(metaBytes);
     assert.deepEqual(Object.keys(parsed).sort(),['inputs','outputs']);assert.deepEqual(Object.keys(parsed.inputs).sort(),[...files.keys()].sort());assert.deepEqual(Object.keys(parsed.outputs),[output]);
     for(const [file,row]of Object.entries(parsed.inputs)){
         assert.equal(row.bytes,files.get(file).length);assert.deepEqual(row.imports.map(item=>({path:item.path,external:item.external===true,kind:item.kind})),edges.get(file));
     }
     const emitted=parsed.outputs[output];assert.equal(emitted.entryPoint,EARLY_ENTRY);assert.deepEqual(emitted.exports,['runPreimportCompatibilityFromFile']);assert.equal(emitted.bytes,bytes.length);assert.deepEqual(Object.keys(emitted.inputs).sort(),[...files.keys()].sort());
     for(const row of Object.values(emitted.inputs))assert.ok(Number.isSafeInteger(row.bytesInOutput)&&row.bytesInOutput>0&&row.bytesInOutput<=bytes.length);
-    const inspected=inspectEarlyArtifact(bytes);for(const row of emitted.imports)assert.ok(row.external===true&&row.kind==='import-statement'&&builtin(row.path));assert.deepEqual([...new Set(emitted.imports.map(row=>row.path))].sort(),inspected.externalImports);
+    const inspected=inspectEarlyArtifact(bytes);assert.deepEqual(inspected.externalImports,[...new Set([...edges.values()].flat().filter(v=>v.external).map(v=>v.path))].sort());for(const row of emitted.imports)assert.ok(row.external===true&&row.kind==='import-statement'&&builtin(row.path));assert.deepEqual([...new Set(emitted.imports.map(row=>row.path))].sort(),inspected.externalImports);
     assert.deepEqual(await observeSourceBridge(source,ports.sourceProvider),bridge);assert.deepEqual(await toolIdentity(),before);assert.equal(ports.assertFilesSettled(),undefined);
     const graph=[...files].map(([file,b])=>({path:file,bytes:b.length,sha256:sourceDigest(b)})).sort((a,b)=>a.path.localeCompare(b.path));
     return Object.freeze({schema:'source-acknowledged-preimport-early-artifact-v1',source,sourceBridgeSHA256:sourceDigest(JSON.stringify(bridge)+'\n'),artifactSHA256:sourceDigest(bytes),metafileSHA256:sourceDigest(metaBytes),graphSHA256:sourceDigest(JSON.stringify(graph)),graph,toolchain:before,commandAcknowledgementSHA256:sourceDigest(JSON.stringify(acknowledgement)),...inspected,
         compilerTrust:'pinned-acknowledged-compiler-transformation-not-independent-uploader-proof',actualRuntime:null,wholeGroupRetirement:null,releaseAcceptance:false});
 }
+
+export function instrumentedCompilerIdentity(raw,root){assert.deepEqual(Object.keys(raw).sort(),['esbuildEntryBytes','esbuildEntryFormat','esbuildPath','esbuildSHA256','nodePath','nodeSHA256']);
+    for(const key of ['nodeSHA256','esbuildSHA256'])assert.match(raw[key],/^[a-f0-9]{64}$/);
+    assert.equal(raw.esbuildPath,root+'/node_modules/esbuild/bin/esbuild');assert.ok(raw.nodePath.startsWith('/')&&path.posix.normalize(raw.nodePath)===raw.nodePath&&!/[\\\x00-\x20\x7f]/.test(raw.nodePath));
+    assert.equal(raw.esbuildEntryFormat,'node-script');const entry=raw.esbuildEntryBytes;assert.ok(Buffer.isBuffer(entry)&&entry.length>0&&entry.length<=65536);assert.equal(sourceDigest(entry),raw.esbuildSHA256);
+    assert.ok(['#!/usr/bin/env node\n','#!/usr/bin/env node\r\n','#!/usr/bin/node\n','#!/usr/bin/node\r\n'].some(prefix=>entry.subarray(0,Buffer.byteLength(prefix)).equals(Buffer.from(prefix))));
+    const {esbuildEntryBytes:_bytes,...observed}=raw;return structuredClone(observed);
+    }

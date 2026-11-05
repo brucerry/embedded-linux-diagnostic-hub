@@ -4,7 +4,7 @@ import {sourceDigest} from './committed-source-bridge.mjs';
 import {admitPreimportObserver,createPreimportObserverBoundary,PREIMPORT_INPUT_LIMIT} from './instrumented-gateway-preimport.mjs';
 import {preimportReceiptIdentity,PREIMPORT_RECEIPT_MARKER} from './instrumented-gateway-preimport-receipt.mjs';
 export {PREIMPORT_RECEIPT_MARKER} from './instrumented-gateway-preimport-receipt.mjs';
-import {INSPECTOR_FAILURE_CODES} from './instrumented-gateway-failure.mjs';
+import {INSPECTOR_FAILURE_CODES,projectInstrumentedChildFailure} from './instrumented-gateway-failure.mjs';
 
 export const PREIMPORT_DEADLINE_MS=60000;
 const retained=new Set();
@@ -39,7 +39,7 @@ export function startPreimportCompatibility(inputPath,ports){
         let state;try{state=boundary?.snapshot();}catch{}
         const collector=state?.collector,count=n=>Number.isSafeInteger(n)&&n>=0&&n<=4096?n:null;
         return {stage,stopped,unknown,localRetired,code:INSPECTOR_FAILURE_CODES.includes(collector?.failureCode)?collector.failureCode:null,
-            pendingCallbacks:count(collector?.pendingCallbacks),pendingSources:count(collector?.pendingSourceClassifications),targetUncertain:state?.targetUncertain===true};
+            observer:projectInstrumentedChildFailure('workload',unknown,Boolean(consumer),{collector}),pendingCallbacks:count(collector?.pendingCallbacks),pendingSources:count(collector?.pendingSourceClassifications),targetUncertain:state?.targetUncertain===true};
     }
     function publish(success,completed){
         if(writeIssued)return output?.task??Promise.resolve();writeIssued=true;

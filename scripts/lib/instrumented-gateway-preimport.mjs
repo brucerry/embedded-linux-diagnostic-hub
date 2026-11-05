@@ -37,6 +37,7 @@ export async function admitPreimportObserver(inputPath,ports){
     const actualNode=node(await ports.observeNode());assert.deepEqual(actualNode,input.node);
     const census=await censusInstrumentedGateway(root,ports.uid,ports.filesystem,'preimport-v1');
     const prepared=snapshotPreparedInstrumentedGateway({binding:input.binding,selection:input.selection,scripts:census.scripts});sameCensus(prepared,census);
+    if(prepared.binding.kind==='separate-preimport-gateway-build-byte-binding-v5')assert.equal(outer.earlyArtifactSHA256,prepared.binding.preimport.earlyArtifactSHA256);
     const self=await ports.observeSelf();assert.deepEqual(Object.keys(self).sort(),['path','sha256']);assert.equal(self.path,root+'/preimport.mjs');assert.equal(self.sha256,outer.earlyArtifactSHA256);assert.equal(sourceDigest(census.scripts.get(self.path)),self.sha256);
     sync(ports.assertTargetUnloaded());sync(ports.prepareTarget(new Map([...prepared.scripts].map(([file,bytes])=>[file,Buffer.from(bytes)])),root));sync(ports.assertGuardActive());sync(ports.assertFilesSettled());
     const identity=Object.freeze({mode:input.mode,nonce:input.nonce,inputSHA256:sourceDigest(bytes),source:structuredClone(input.binding.source),bindingSHA256:sourceDigest(JSON.stringify(input.binding)+'\n'),node:actualNode,censusSHA256:census.censusSHA256,guardSHA256:input.binding.guardSHA256,earlyArtifactPath:self.path,earlyArtifactSHA256:self.sha256,targetPath:input.selection.artifactPath,targetSHA256:input.selection.artifactSHA256});
