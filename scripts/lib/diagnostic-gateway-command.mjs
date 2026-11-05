@@ -28,6 +28,7 @@ const deferred = () => {
  */
 export function startDiagnosticGatewayCommand(plan, environment, ports) {
     ports = Object.freeze({ ...ports });
+    assert.ok(ports.requireSpawnIdentity === undefined || ports.requireSpawnIdentity === true);
     assert.ok(['build', 'lock', 'install', 'ownership'].includes(plan.role));
     assert.ok(Array.isArray(plan.command) && plan.command.length > 1);
     assert.ok(plan.command.every((s) => typeof s === 'string' && s && !s.includes('\0')));
@@ -190,7 +191,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             }
             spawned = true;
             pid = child.pid;
-            if (selected.role === 'ownership') {
+            if (selected.role === 'ownership' || ports.requireSpawnIdentity === true) {
                 try { assert.equal(child.spawnfile,selected.command[0]); assert.deepEqual(child.spawnargs,selected.command); }
                 catch(error) { fail(error); }
             }

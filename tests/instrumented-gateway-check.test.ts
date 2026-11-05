@@ -11,7 +11,7 @@ import { sourceDigest } from '../scripts/lib/committed-source-bridge.mjs';
 
 const reference = JSON.parse(readFileSync(new URL('./fixtures/gateway-ownership-production.json', import.meta.url),'utf8'));
 const sourceFiles = new Map<string,Buffer>(reference.inventory.map((r:any) => [r.path,readFileSync(new URL('../'+r.path,import.meta.url))]));
-for (const p of [INSTRUMENTED_ENTRY,INSTRUMENTED_ACTIVATION,'tests/fixtures/instrumented-gateway-entry.ts','scripts/lib/instrumented-gateway-observer.mjs','scripts/lib/instrumented-gateway-check.mjs'])
+for (const p of [INSTRUMENTED_ENTRY,INSTRUMENTED_ACTIVATION,'tests/fixtures/instrumented-gateway-entry.ts','scripts/lib/instrumented-gateway-observer.mjs','scripts/lib/instrumented-gateway-check.mjs','scripts/lib/instrumented-gateway-source.mjs'])
     sourceFiles.set(p,readFileSync(new URL('../'+p,import.meta.url)));
 const pulse=async()=>{for(let i=0;i<100;i++)await Promise.resolve();};
 const deferred=()=>{let resolve!:(v?:any)=>void;const promise=new Promise<any>(r=>{resolve=r;});return{promise,resolve};};

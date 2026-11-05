@@ -1,0 +1,71 @@
+name: Separate instrumented Gateway diagnostic
+on:
+    push:
+        branches: [ci/gateway-ownership-diagnostic-96a56cd-20261105]
+permissions:
+    contents: read
+concurrency:
+    group: instrumented-gateway-${{ github.ref }}
+    cancel-in-progress: false
+jobs:
+    instrumented_gateway:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.run_attempt == 1
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        steps:
+            - name: Admit only the new public standard-runner push
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "${{ github.event.repository.private }}" = false
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/gateway-ownership-diagnostic-96a56cd-20261105
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$GITHUB_JOB" = instrumented_gateway
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH ESBUILD_BINARY_PATH; do
+                      if [[ -v "$key" ]]; then exit 1; fi
+                  done
+                  test -d "$GITHUB_WORKSPACE"
+                  test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 0
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Pin source before staging or dependency writes
+              id: selected
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git rev-parse HEAD^)" = f920b356eecd2482c952f6c73d9476fc4d6eb98e
+                  git --no-pager diff --no-ext-diff --no-textconv --exit-code 96a56cdbb462320c54fe74022d7436e665a31d31 HEAD -- src shared electron backend gateway public package.json package-lock.json vite.config.mts index.html tsconfig.json LICENSE .env.gateway.example docs/gateway.md
+                  test ! -e validation
+                  test ! -L validation
+                  test ! -e node_modules
+                  test ! -L node_modules
+                  test "$(df -Pk . | awk 'NR==2 {print $4}')" -ge 4194304
+                  test "$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)" -ge 2097152
+                  printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: One source-bound build install and sequential instrumented pair
+              env:
+                  SELECTED_TREE: ${{ steps.selected.outputs.tree }}
+                  HUB_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+                  HUB_DIAGNOSTIC_GATEWAY_POLICY: github-hosted-diagnostic-teardown-unproved-group-v1
+              run: node .github/instrumented-gateway-entry.mjs
+# No artifact/cache upload, secrets, permissions changes, browser, SSH/device, package, raw CLI or release.
+# No retries/signals/deletion. Post-admission failure may remain held until the 20-minute job timeout.
+# Timeout/cancellation relies on disposable runner teardown; graceful whole-group retirement is unproved.

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createOwnedWebFiles } from './owned-web-files.mjs';
 import { startOwnedGitRead, validateOwnedGitRequest } from './owned-git-read.mjs';
 import path from 'node:path';
-import { readStableArtifactFile } from './web-archive-producer.mjs';
+import { readStableArtifactFile } from './stable-artifact-file.mjs';
 const admitted = new WeakSet();
 /** Explicit complete child profile. It never reads ambient environment or redirects HOME. */
 export function webChildEnvironments(value) {
