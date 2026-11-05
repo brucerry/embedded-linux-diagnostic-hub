@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 const DIAGNOSTIC_GATEWAY_POLICY = 'github-hosted-diagnostic-teardown-unproved-group-v1';
-export const INSTRUMENTED_GATEWAY_BRANCH = 'ci/gateway-ownership-diagnostic-96a56cd-20261105';
+export const INSTRUMENTED_GATEWAY_BRANCH = 'ci/gateway-ownership-census293-96a56cd-20261105';
 export function validateInstrumentedGatewayContext(v) {
     assert.deepEqual(Object.keys(v).sort(),['arch','attempt','event','job','policy','private','ref','repository','run','runner','sha','system','tree']);
     assert.equal(v.repository,'brucerry/embedded-linux-diagnostic-hub');assert.equal(v.private,false);

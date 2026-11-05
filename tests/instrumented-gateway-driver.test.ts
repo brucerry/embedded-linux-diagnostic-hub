@@ -63,7 +63,7 @@ test('failure summary omits arbitrary commands, inputs, paths and errors',()=>{
 });
 test('workflow has one narrow original job, no uploads/cache/secrets or broader triggers',()=>{
     const s=readFileSync(new URL('../.github/workflows/instrumented-gateway-diagnostic.yml',import.meta.url),'utf8');
-    assert.ok(s.includes('branches: [ci/gateway-ownership-diagnostic-96a56cd-20261105]')&&s.includes('timeout-minutes: 20')&&s.includes("node-version: '24.22.0'"));
+    assert.ok(s.includes('branches: [ci/gateway-ownership-census293-96a56cd-20261105]')&&s.includes('timeout-minutes: 20')&&s.includes("node-version: '24.22.0'"));
     assert.equal((s.match(/^    instrumented_gateway:/gm)||[]).length,1);assert.ok(s.includes('contents: read')&&s.includes('cancel-in-progress: false'));
     assert.ok(!/workflow_dispatch:|workflow_run:|pull_request:|upload-artifact@|actions\/cache@|secrets\.|write-all|continue-on-error|npm ci/.test(s));
     assert.ok(s.includes('node .github/instrumented-gateway-entry.mjs'));
