@@ -1,7 +1,7 @@
 name: Preimport compatibility diagnostic
 on:
     push:
-        branches: [ci/gateway-preimport305-96a56cd-20261105]
+        branches: [ci/gateway-preimport306-96a56cd-20261105]
 permissions:
     contents: read
 concurrency:
@@ -21,7 +21,7 @@ jobs:
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "${{ github.event.repository.private }}" = false
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/gateway-preimport305-96a56cd-20261105
+                  test "$GITHUB_REF" = refs/heads/ci/gateway-preimport306-96a56cd-20261105
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$GITHUB_JOB" = preimport_compatibility
                   test "${RUNNER_ENVIRONMENT:-}" = github-hosted
@@ -48,7 +48,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git rev-parse HEAD^)" = 030df564ec8ff0b0803c84ad3ff998865498bb3f
+                  test "$(git rev-parse HEAD^)" = 0d67cf2bd7129e169d820300d7b8209099c5debe
                   git --no-pager diff --no-ext-diff --no-textconv --exit-code 96a56cdbb462320c54fe74022d7436e665a31d31 HEAD -- src shared electron backend gateway public package.json package-lock.json vite.config.mts index.html tsconfig.json LICENSE .env.gateway.example docs/gateway.md
                   test ! -e validation
                   test ! -L validation

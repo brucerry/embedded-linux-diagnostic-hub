@@ -79,6 +79,21 @@ export async function preimportTargetGraph(sourceFile,hasFile){
 }
 const normalizedEdges=rows=>[...new Set(rows.map(v=>{assert.ok(v&&typeof v.path==='string'&&['import-statement','require-call','dynamic-import'].includes(v.kind));assert.ok(v.external===undefined||typeof v.external==='boolean');return JSON.stringify({path:v.path,kind:v.kind,external:v.external===true});}))].sort();
 
+/** Failure-only bounded data projection. Hashes never authorize a path read or an edge.
+ * The original strict normalized comparison remains the admission boundary below. */
+export function preimportEdgeDisagreement(file,files,expectedRows,observedRows){
+    assert.ok(files instanceof Map&&files.has(file)&&Buffer.isBuffer(files.get(file)));const source=files.get(file);
+    /** @typedef {{pathSHA256:string,sourceSHA256:string|null,knownSource:boolean,kind:string,external:boolean}} EdgeFingerprint */
+    const base={schema:'preimport-edge-disagreement-v1',inputPathSHA256:sourceDigest(file),inputSourceSHA256:sourceDigest(source),shape:'invalid',expectedCount:null,observedCount:null,expectedSHA256:null,observedSHA256:null,missingCount:null,unexpectedCount:null,overflow:false,missing:/** @type {EdgeFingerprint[]} */([]),unexpected:/** @type {EdgeFingerprint[]} */([])};
+    const bounded=rows=>Array.isArray(rows)&&rows.length<=256&&rows.every(row=>row&&typeof row==='object'&&typeof row.path==='string'&&Buffer.byteLength(row.path)<=4096&&['import-statement','require-call','dynamic-import'].includes(row.kind)&&(row.external===undefined||typeof row.external==='boolean'));
+    if(!bounded(expectedRows)||!bounded(observedRows)){base.overflow=(Array.isArray(expectedRows)&&expectedRows.length>256)||(Array.isArray(observedRows)&&observedRows.length>256);return base;}
+    const expected=normalizedEdges(expectedRows),observed=normalizedEdges(observedRows);if(JSON.stringify(expected)===JSON.stringify(observed))return null;
+    const a=new Set(expected),b=new Set(observed),missing=expected.filter(x=>!b.has(x)),unexpected=observed.filter(x=>!a.has(x));
+    base.shape='valid';base.expectedCount=expected.length;base.observedCount=observed.length;base.expectedSHA256=sourceDigest(JSON.stringify(expected));base.observedSHA256=sourceDigest(JSON.stringify(observed));base.missingCount=missing.length;base.unexpectedCount=unexpected.length;base.overflow=missing.length+unexpected.length>8;
+    const project=text=>{const row=JSON.parse(text),known=files.has(row.path);return{pathSHA256:sourceDigest(row.path),sourceSHA256:known?sourceDigest(files.get(row.path)):null,knownSource:known,kind:row.kind,external:row.external};};
+    const take=Math.min(missing.length,8);base.missing=missing.slice(0,take).map(project);base.unexpected=unexpected.slice(0,8-take).map(project);return base;
+}
+
 /** Two acknowledged compiler commands, no installer, namespace adoption, launch or defaults.
  * The caller must already own the trusted staging/install namespace. Absence checks do not
  * defend against malicious same-privilege namespace mutation; no such guarantee is claimed. */
@@ -87,7 +102,7 @@ export async function preparePreimportCompatibilityBuild(input,ports){
     for(const key of ['sourceCommit','sourceTree'])assert.match(input[key],/^[a-f0-9]{40}$/);
     ports=Object.freeze({...ports,filesystem:Object.freeze({...ports.filesystem})});for(const key of ['observeToolchain','execute','read','assertFilesSettled','queryAbsence'])assert.equal(typeof ports[key],'function');
     const source={sourceCommit:input.sourceCommit,sourceTree:input.sourceTree},selected={root:input.root,...source},stage=input.root+'/validation/gateway-ownership',root=stage+'/instrumented';
-    const owner={phase:'source',checkpoint:'source-admission',failed:false,pendingAbsence:0,targetAcknowledged:false,earlyPrepared:false,inputOrdinal:null,expectedInputs:null,observedInputs:null};retained.add(owner);
+    const owner={phase:'source',checkpoint:'source-admission',failed:false,pendingAbsence:0,targetAcknowledged:false,earlyPrepared:false,inputOrdinal:null,expectedInputs:null,observedInputs:null,edgeDisagreement:null};retained.add(owner);
     try{
         const bridge=await observeSourceBridge(source,ports.sourceProvider);assertInstrumentedProductionBridge(bridge);
         const row=p=>{const r=bridge.inventory.find(v=>v.path===p);assert.ok(r);return r;};
@@ -106,7 +121,7 @@ export async function preparePreimportCompatibilityBuild(input,ports){
         owner.checkpoint='target-inspect-js';const external=inspectPreimportTarget(target);owner.checkpoint='target-external-imports';assert.deepEqual(external,[...new Set([...targetGraph.edges.values()].flat().filter(v=>v.external).map(v=>v.path))].sort());const output='validation/gateway-ownership/instrumented/ownership.cjs';
         owner.checkpoint='target-input-inventory';owner.expectedInputs=targetGraph.files.size;owner.observedInputs=meta.inputs&&typeof meta.inputs==='object'?Object.keys(meta.inputs).length:null;assert.deepEqual(Object.keys(meta).sort(),['inputs','outputs']);assert.deepEqual(Object.keys(meta.outputs),[output]);assert.deepEqual(Object.keys(meta.inputs).sort(),[...targetGraph.files.keys()].sort());
         let ordinal=0;for(const [file,v]of Object.entries(meta.inputs)){owner.inputOrdinal=++ordinal;owner.checkpoint='target-input-edges';
-            assert.ok(targetGraph.files.has(file),'Unbound target input.');assert.deepEqual(normalizedEdges(v.imports),normalizedEdges(targetGraph.edges.get(file)));
+            assert.ok(targetGraph.files.has(file),'Unbound target input.');owner.edgeDisagreement=preimportEdgeDisagreement(file,targetGraph.files,targetGraph.edges.get(file),v.imports);assert.deepEqual(normalizedEdges(v.imports),normalizedEdges(targetGraph.edges.get(file)));owner.edgeDisagreement=null;
             owner.checkpoint='target-input-bytes';assert.equal(v.bytes,row(file).bytes);assert.ok(Array.isArray(v.imports));
             owner.checkpoint='target-input-members';for(const edge of v.imports){if(edge.external)assert.ok(edge.path==='ssh2'||(edge.path.startsWith('node:')&&isBuiltin(edge.path)&&edge.path!=='node:inspector'));else assert.ok(Object.hasOwn(meta.inputs,edge.path));}
         }
@@ -131,6 +146,6 @@ export async function preparePreimportCompatibilityBuild(input,ports){
         owner.checkpoint='final-binding';const copied=snapshotPreparedInstrumentedGateway({binding,selection,scripts:census.scripts});await stable();
         owner.phase='prepared';retained.delete(owner);const capability=Object.freeze({snapshot:()=>({source:{...source},targetSHA256:selection.artifactSHA256,earlySHA256:early.artifactSHA256,buildCommands:2,wholeGroupRetirement:null,releaseAcceptance:false})});
         preparedBuilds.set(capability,{prepared:copied,uid:input.uid,census:census.census,used:false});return capability;
-    }catch(cause){owner.failed=true;const error=Object.assign(Error('Preimport pair preparation failed; no launch or retry.',{cause}),{owner});const count=n=>Number.isSafeInteger(n)&&n>=0&&n<=100000?n:null;failures.set(error,{phase:owner.phase,checkpoint:owner.checkpoint,targetAcknowledged:owner.targetAcknowledged,earlyPrepared:owner.earlyPrepared,inputOrdinal:count(owner.inputOrdinal),expectedInputs:count(owner.expectedInputs),observedInputs:count(owner.observedInputs)});throw error;}
+    }catch(cause){owner.failed=true;const error=Object.assign(Error('Preimport pair preparation failed; no launch or retry.',{cause}),{owner});const count=n=>Number.isSafeInteger(n)&&n>=0&&n<=100000?n:null;failures.set(error,{phase:owner.phase,checkpoint:owner.checkpoint,targetAcknowledged:owner.targetAcknowledged,earlyPrepared:owner.earlyPrepared,inputOrdinal:count(owner.inputOrdinal),expectedInputs:count(owner.expectedInputs),observedInputs:count(owner.observedInputs),edgeDisagreement:structuredClone(owner.edgeDisagreement)});throw error;}
 }
 export function claimPreimportCompatibilityBuild(value){const record=preparedBuilds.get(value);assert.ok(record&&!record.used,'Actual one-use two-artifact preparation required.');record.used=true;return{prepared:snapshotPreparedInstrumentedGateway(record.prepared),uid:record.uid,census:structuredClone(record.census)};}
