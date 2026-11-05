@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { constants } from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const digest = /^[a-f0-9]{64}$/;
@@ -271,18 +269,34 @@ function validate(request) {
     assert.equal(new Set(paths).size, paths.length, 'Verifier paths overlap.');
 }
 /**
- * Future offline cryptographic verification. Only fresh successful pinned-gh stdout is parsed.
- * Dependencies are a source-owned unit-test seam; production callers pass only the request.
+ * Inert verifier-port model. Live binary/root admission and process retirement are unavailable.
+ * Dependencies are a direct source-owned unit-test seam; production callers pass only the request
+ * and are blocked before filesystem/process access. No JSON request can enable execution.
  * Path pre/post observations detect drift, but do not confine a malicious same-UID process.
  * @param {any} request
  * @param {{filesystem?: any, execute?: Function, uid?: number, platform?: string}} dependencies
  */
 export async function verifyLocalAttestation(request, dependencies = {}) {
+    if (
+        !dependencies ||
+        typeof dependencies !== 'object' ||
+        !Object.hasOwn(dependencies, 'filesystem') ||
+        !Object.hasOwn(dependencies, 'execute') ||
+        !dependencies.filesystem ||
+        typeof dependencies.filesystem !== 'object' ||
+        !['realpath', 'lstat', 'open', 'readdir'].every(
+            (method) => typeof dependencies.filesystem[method] === 'function',
+        ) ||
+        typeof dependencies.execute !== 'function'
+    )
+        throw new Error(
+            'Live verifier blocked: independent binary/root admission and owned process retirement unavailable.',
+        );
     request = structuredClone(request);
     validate(request);
     const {
-        filesystem = fs,
-        execute = execFileSync,
+        filesystem,
+        execute,
         uid = process.getuid?.(),
         platform = process.platform,
     } = dependencies;

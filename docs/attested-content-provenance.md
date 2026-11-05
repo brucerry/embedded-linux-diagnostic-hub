@@ -7,6 +7,13 @@ actual archive and the exact canonical content record. Its qualification/release
 compiled-source, runtime and retirement flags remain false. No existing consumer invokes this API.
 There is no JSON-result import, environment bypass, CLI mock flag or fallback to unsigned integrity.
 
+The [verifier/root admission plan](verifier-trust-root-admission.md) adds a stricter live-path
+block: the real executor/filesystem fallbacks are removed. Production verification now refuses
+before filesystem or process access until independent binary/root admission and an owned retirement
+implementation exist. Complete plan JSON cannot enable it. Source-owned synthetic ports exercise
+only the model. The former 30-second sync timeout was not a hard retirement guarantee; the current
+plan records that correction and the required no-signal custody design.
+
 The trust request is selected independently by the operator/reviewer. Never load its trust anchors
 or expected digests from the artifact, producer record, bundle or a producer-supplied verifier
 transcript. The request contains four closed objects:
@@ -31,16 +38,17 @@ identifies its trigger context B; it does not establish that A was checked out, 
 executed. Source bridge, independent source/package association and all later qualification checks
 remain necessary.
 
-## What is verified
+## Proposed verification behavior (source model only)
 
-The backend hashes actual single-link regular files with bounded stable descriptor/path/identity
-checks, invokes the exact pinned native `gh`, and rehashes inputs after version check and
-verification. Archive bodies are streamed (at most 2 GiB); canonical record bytes are captured only
-up to 1 MiB. Bundles/output are bounded to 16 MiB, roots to 4 MiB and the executable to 256 MiB.
-Commands have 30-second timeouts and bounded diagnostics. Selected config must be empty/private and
-unchanged. The child environment is an explicit allowlist with isolated config/home/cache paths; no
-caller GitHub token, agent socket, plugin/config setting or PATH is inherited. There is no signing
-command.
+The source model requires stable single-link regular file hashes, a pinned native verifier and input
+rechecks after version/verification. A future admitted owner must perform these observations; the
+default live entry currently refuses before access. Synthetic ports exercise this behavior. Archive
+bodies are streamed (at most 2 GiB); canonical record bytes are captured only up to 1 MiB.
+Bundles/output are bounded to 16 MiB, roots to 4 MiB and the executable to 256 MiB. The model has a
+nominal 30-second parameter and bounded diagnostics; it supplies no live wall-clock or retirement
+guarantee. Selected config must be empty/private and unchanged. The child environment is an explicit
+allowlist with isolated config/home/cache paths; no caller GitHub token, agent socket, plugin/config
+setting or PATH is inherited. There is no signing command.
 
 Fixed verification arguments include local `--bundle`, `--custom-trusted-root`, exact `--repo` and
 `--cert-identity`, fixed issuer/host, pinned signer/source digests/ref,
@@ -152,11 +160,11 @@ Pre/post observations do not establish an atomic snapshot or confinement against
 same-UID process that swaps and restores paths. Signer isolation is therefore an operational
 prerequisite to review in the pinned workflow, not a certificate inference. Local verification
 presently supports Linux only. Real crypto integration remains unperformed here: installed `gh`
-2.46.0 lacks attestation support; a reviewed pinned `gh` 2.x (minor 102 or newer) and selected trust
-roots/bundles are still missing. No new cryptographic implementation, credential, signature or
-attestation was fabricated to replace them. Tests exercise actual hashes/schema/policy logic and
-fixed verifier behavior with source-owned fake filesystem/executor or a VM backend seam; synthetic
-positives are not genuine release evidence.
+2.46.0 lacks attestation support; the exact reviewed candidate, authenticated roots/bundles and an
+owned process-retirement implementation under the admission plan are still missing. No new
+cryptographic implementation, credential, signature or attestation was fabricated to replace them.
+Tests exercise actual hashes/schema/policy logic and fixed verifier behavior with source-owned fake
+filesystem/executor or a VM backend seam; synthetic positives are not genuine release evidence.
 
 ## Authoritative references reviewed
 

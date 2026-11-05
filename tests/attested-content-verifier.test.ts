@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
     ATTESTATION_VERIFIER_LIMITS,
@@ -8,6 +9,8 @@ import {
 } from '../scripts/lib/attested-content-verifier.mjs';
 
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+const liveBlocked =
+    'Live verifier blocked: independent binary/root admission and owned process retirement unavailable.';
 function fixture(kind: 'archive' | 'record' = 'archive') {
     const files = new Map<string, { bytes: Buffer; stat: any }>();
     const calls: { operation: string; path: string; args?: any; options?: any }[] = [];
@@ -641,4 +644,88 @@ test('short descriptor reads cannot admit malformed or truncated executable magi
             );
         }
     }
+});
+
+test('default verifier remains blocked before any selected filesystem or executor access', async () => {
+    const f = fixture();
+    await assert.rejects(verifyLocalAttestation(f.request), { message: liveBlocked });
+    assert.equal(f.calls.length, 0);
+});
+
+for (const mode of [
+    'filesystem-only',
+    'executor-only',
+    'inherited-filesystem',
+    'inherited-executor',
+    'missing-filesystem-method',
+    'null-filesystem',
+    'nonfunction-executor',
+    'null-dependencies',
+])
+    test('incomplete direct fixture ports cannot activate fallback: ' + mode, async () => {
+        const f = fixture();
+        let dependencies: any;
+        switch (mode) {
+            case 'filesystem-only':
+                dependencies = { filesystem: f.dependencies.filesystem };
+                break;
+            case 'executor-only':
+                dependencies = { execute: f.dependencies.execute };
+                break;
+            case 'inherited-filesystem':
+                dependencies = Object.assign(
+                    Object.create({ filesystem: f.dependencies.filesystem }),
+                    { execute: f.dependencies.execute },
+                );
+                break;
+            case 'inherited-executor':
+                dependencies = Object.assign(Object.create({ execute: f.dependencies.execute }), {
+                    filesystem: f.dependencies.filesystem,
+                });
+                break;
+            case 'missing-filesystem-method':
+                dependencies = {
+                    ...f.dependencies,
+                    filesystem: { ...f.dependencies.filesystem, open: undefined },
+                };
+                break;
+            case 'null-filesystem':
+                dependencies = { ...f.dependencies, filesystem: null };
+                break;
+            case 'nonfunction-executor':
+                dependencies = { ...f.dependencies, execute: {} };
+                break;
+            default:
+                dependencies = null;
+        }
+        await assert.rejects(verifyLocalAttestation(f.request, dependencies), {
+            message: liveBlocked,
+        });
+        assert.equal(f.calls.length, 0);
+    });
+
+test('payload admission booleans and embedded ports cannot activate the live boundary', async () => {
+    const f = fixture();
+    const request = {
+        ...f.request,
+        verified: true,
+        executionAllowed: true,
+        filesystem: f.dependencies.filesystem,
+        execute: f.dependencies.execute,
+    };
+    await assert.rejects(verifyLocalAttestation(request), { message: liveBlocked });
+    assert.equal(f.calls.length, 0);
+});
+
+test('verifier model has no real filesystem or child-process fallback import', async () => {
+    const source = await readFile(
+        new URL('../scripts/lib/attested-content-verifier.mjs', import.meta.url),
+        'utf8',
+    );
+    assert.doesNotMatch(
+        source,
+        /node:(?:child_process|fs\/promises)|\b(?:execFileSync|spawn|execSync|process\.env)\b/,
+    );
+    assert.match(source, /import\s*\{\s*constants\s*\}\s*from ['"]node:fs['"]/);
+    assert.doesNotMatch(source, /\b(?:filesystem|execute)\s*=\s*(?![=>])/);
 });

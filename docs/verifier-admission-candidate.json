@@ -1,0 +1,49 @@
+{
+    "schemaVersion": 1,
+    "kind": "diagnostic-hub-verifier-admission-selection",
+    "binary": {
+        "platform": "linux",
+        "arch": "x64",
+        "version": "2.103.3",
+        "sourceCommit": "63837fb778d6a39f02be0ce76ff89f2bc8d74bdc",
+        "packageName": "gh_2.103.3_linux_amd64.deb",
+        "packageSHA256": "e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d",
+        "executableSHA256": null,
+        "provenanceReceiptSHA256": null
+    },
+    "root": {
+        "instance": "sigstore-public-good",
+        "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+        "bootstrapSHA256": null,
+        "exportSHA256": null,
+        "targetSHA256": null,
+        "targetBytes": null,
+        "metadata": { "root": null, "timestamp": null, "snapshot": null, "targets": null },
+        "exportedAtMs": null,
+        "tufReceiptSHA256": null,
+        "exportBindingReceiptSHA256": null
+    },
+    "freshness": {
+        "checkedAtMs": null,
+        "leaseUntilMs": null,
+        "advisorySnapshotSHA256": null,
+        "denylistSHA256": null,
+        "deniedDigests": [],
+        "versionFloors": { "root": 0, "timestamp": 0, "snapshot": 0, "targets": 0 }
+    },
+    "process": {
+        "ownerImplementationSHA256": null,
+        "requestBindingSHA256": null,
+        "mode": "owned-no-signals",
+        "commands": 4,
+        "maxAttempts": 1,
+        "workMs": 30000,
+        "closeReserveMs": 5000,
+        "totalMs": 180000,
+        "stdoutLimit": 16777216,
+        "stderrLimit": 1048576,
+        "signals": [],
+        "onUncertain": "retain-custody-no-retry",
+        "descendants": "independent-retirement-required"
+    }
+}
