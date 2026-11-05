@@ -3,12 +3,14 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { observeSourceBridge, sourceDigest } from './committed-source-bridge.mjs';
 import { requireObservedClosure } from './owned-child.mjs';
+import { projectGatewayLock, validatePreparedGatewayLock } from './gateway-lock-plan.mjs';
 import { startDiagnosticGatewayHealth } from './diagnostic-gateway-http.mjs';
 
 export const RAW_CLI_REFERENCE = Object.freeze({ sourceCommit: '760dba0c7ab9f44b8eb7e00a4b53923272ea488a',
     sourceTree: '596e7f87fd8ef697e2f5b1509b342c0edddce7ec', runId: '41990160342', jobId: '127120220376', attempt: '1',
     receiptSHA256: '93c09e75f5f719a3ede713eadf6014d75a892979fe8e171b8e822790f50ecd9c',
     productionInventorySHA256: '14c3f8cb832fc751c0676ccdb16cecc747e2c3eac0d0ef31d0182b462f9d9325', productionFiles: 213 });
+export const INSTRUMENTED_ACTIVATION = 'tests/fixtures/instrumented-gateway-activate.cjs';
 export const INSTRUMENTED_ENTRY = 'tests/fixtures/instrumented-gateway-check-entry.ts';
 const observerPath = 'scripts/lib/instrumented-gateway-observer.mjs', retained = new Set();
 const directories = ['src/', 'shared/', 'electron/', 'backend/', 'gateway/', 'public/'];
@@ -44,7 +46,7 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
         assert.equal(production.length, RAW_CLI_REFERENCE.productionFiles);
         assert.equal(sourceDigest(JSON.stringify(production)), RAW_CLI_REFERENCE.productionInventorySHA256,
             'Production bytes differ from the independently frozen raw-CLI source.');
-        for (const p of [INSTRUMENTED_ENTRY, observerPath, 'tests/fixtures/instrumented-gateway-entry.ts'])
+        for (const p of [INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION, observerPath, 'tests/fixtures/instrumented-gateway-entry.ts'])
             assert.ok(bridge.inventory.some((r) => r.path === p));
         const toolchain = tools(await ports.observeToolchain());
         assert.equal(toolchain.esbuildPath, input.root + '/node_modules/esbuild/bin/esbuild');
@@ -83,6 +85,20 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
         }
         inventory.sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
         assert.ok(scripts.get(artifactPath)?.equals(artifact), 'Artifact differs from the prelaunch script snapshot.');
+        const directory = path.dirname(artifactPath), activation = scripts.get(directory + '/activate.cjs');
+        assert.ok(activation && sourceDigest(activation) === bridge.inventory.find(r=>r.path===INSTRUMENTED_ACTIVATION).sha256);
+        const sourceInputs = {};
+        for (const file of ['package.json','package-lock.json']) {
+            const actual = await ports.sourceProvider.file(file), row = bridge.inventory.find(r=>r.path===file);
+            assert.equal(actual.mode,row.mode);assert.equal(actual.bytes.length,row.bytes);assert.equal(sourceDigest(actual.bytes),row.sha256);
+            sourceInputs[file] = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(actual.bytes));
+        }
+        const projected = projectGatewayLock(sourceInputs['package.json'],sourceInputs['package-lock.json']);
+        const packageBytes = scripts.get(directory+'/package.json'), lockBytes=scripts.get(directory+'/package-lock.json');
+        assert.ok(packageBytes && lockBytes && packageBytes.length<=1024**2 && lockBytes.length<=1024**2);
+        assert.deepEqual(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(packageBytes)),projected.manifest);
+        validatePreparedGatewayLock(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(lockBytes)),projected.manifest,sourceInputs['package-lock.json']);
+
         assert.deepEqual(await observeSourceBridge(selected, ports.sourceProvider), bridge);
         assert.deepEqual(tools(await ports.observeToolchain()), toolchain);
         const selection = Object.freeze({ ...selected, artifactPath, artifactSHA256: sourceDigest(artifact),
@@ -92,7 +108,7 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
             productionComparison: '213-source-files-match-frozen-raw-CLI-inventory', toolchain,
             entrySHA256: bridge.inventory.find((r) => r.path === INSTRUMENTED_ENTRY).sha256,
             observerSHA256: selection.observerSHA256, artifactPath, artifactSHA256: selection.artifactSHA256,
-            artifactBytes: artifact.length, scriptInventory: inventory, scriptInventorySHA256: sourceDigest(JSON.stringify(inventory)),
+            artifactBytes: artifact.length, activationSHA256: sourceDigest(activation), installationPackageSHA256: sourceDigest(packageBytes), installationLockSHA256: sourceDigest(lockBytes), scriptInventory: inventory, scriptInventorySHA256: sourceDigest(JSON.stringify(inventory)),
             commandAcknowledgementSHA256: sourceDigest(JSON.stringify(acknowledgement)),
             provenance: 'local-source-command-and-byte-consistency-not-service-attestation', buildProvenanceVerified: false,
             wholeGroupRetirement: null, releaseAcceptance: false });
@@ -104,21 +120,31 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
 /** One instrumented ownership workload, no process/listener/session defaults. Native ports are
  * supplied by the separate non-shipping entry. Does not qualify the unmodified CLI by transfer.
  */
-export function startInstrumentedGatewayCheck(prepared, token, ports) {
-    assert.match(token, /^[a-f0-9]{64}$/);
-    for (const k of ['prepare', 'request', 'setTimer', 'clearTimer', 'now']) assert.equal(typeof ports[k], 'function');
-    ports = Object.freeze({ ...ports });
+export function snapshotPreparedInstrumentedGateway(prepared) {
     const binding = structuredClone(prepared.binding), selection = { ...prepared.selection }, scripts = new Map();
     assert.equal(binding.kind, 'separate-instrumented-gateway-build-byte-binding-v1');
     assert.deepEqual(selection, { ...binding.source, artifactPath: binding.artifactPath, artifactSHA256: binding.artifactSHA256, observerSHA256: binding.observerSHA256 });
     assert.equal(binding.releaseAcceptance, false); assert.equal(binding.buildProvenanceVerified, false);
     assert.deepEqual(binding.rawCLIReference, RAW_CLI_REFERENCE);
     assert.equal(sourceDigest(JSON.stringify(binding.scriptInventory)), binding.scriptInventorySHA256);
+    assert.ok(Array.isArray(binding.scriptInventory) && binding.scriptInventory.length>0 && binding.scriptInventory.length<=512);
+    const seen=new Set();let total=0;
     for (const row of binding.scriptInventory) {
+        assert.deepEqual(Object.keys(row).sort(),['bytes','path','sha256']);absolute(row.path);assert.ok(row.path.startsWith(path.dirname(selection.artifactPath)+'/')&&!seen.has(row.path));seen.add(row.path);
+        assert.ok(Number.isSafeInteger(row.bytes)&&row.bytes>=0&&row.bytes<=32*1024**2);total+=row.bytes;assert.ok(total<=64*1024**2);assert.match(row.sha256,/^[a-f0-9]{64}$/);
         const b = prepared.scripts.get(row.path); assert.ok(Buffer.isBuffer(b) && b.length === row.bytes && sourceDigest(b) === row.sha256);
         scripts.set(row.path, Buffer.from(b));
     }
+    assert.deepEqual(binding.scriptInventory.map(r=>r.path),[...seen].sort());
     assert.equal(scripts.size, prepared.scripts.size); assert.equal(sourceDigest(scripts.get(selection.artifactPath)), selection.artifactSHA256);
+    return { binding, selection, scripts };
+}
+
+export function startInstrumentedGatewayCheck(prepared, token, ports) {
+    assert.match(token, /^[a-f0-9]{64}$/);
+    for (const k of ['prepare', 'request', 'setTimer', 'clearTimer', 'now']) assert.equal(typeof ports[k], 'function');
+    ports = Object.freeze({ ...ports });
+    const { binding, selection, scripts } = snapshotPreparedInstrumentedGateway(prepared);
     let resolveResult, rejectResult, resolveClosed;
     const result = new Promise((yes,no) => { resolveResult = yes; rejectResult = no; }); result.catch(() => {});
     const closed = new Promise((yes) => { resolveClosed = yes; });

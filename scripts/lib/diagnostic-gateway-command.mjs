@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 const retained = new Set();
 export const GATEWAY_COMMAND_BOUNDS = Object.freeze({
+    ownership: Object.freeze({ deadlineMs: 60000, stdout: 32768, stderr: 65536, chunks: 1024 }),
     build: Object.freeze({ deadlineMs: 480000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
     install: Object.freeze({ deadlineMs: 180000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
     lock: Object.freeze({ deadlineMs: 120000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
@@ -27,7 +28,7 @@ const deferred = () => {
  */
 export function startDiagnosticGatewayCommand(plan, environment, ports) {
     ports = Object.freeze({ ...ports });
-    assert.ok(['build', 'lock', 'install'].includes(plan.role));
+    assert.ok(['build', 'lock', 'install', 'ownership'].includes(plan.role));
     assert.ok(Array.isArray(plan.command) && plan.command.length > 1);
     assert.ok(plan.command.every((s) => typeof s === 'string' && s && !s.includes('\0')));
     assert.ok(plan.cwd?.startsWith('/'));
@@ -87,6 +88,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
         closed: closure.promise,
         snapshot,
         diagnostics: () => [...diagnostics],
+        output: () => ({ stdout: Buffer.concat(outputs.stdout.chunks), stderr: Buffer.concat(outputs.stderr.chunks) }),
     });
     retained.add(owner);
     const fail = (error) => {

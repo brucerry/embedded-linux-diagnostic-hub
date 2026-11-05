@@ -1,5 +1,7 @@
 # Separate instrumented Gateway ownership check
 
+Historical candidate 289 preparation is described below. The subsequent owned child, complete prelaunch census and compatibility prerequisite are documented in [instrumented-gateway-child-preparation.md](instrumented-gateway-child-preparation.md); its explicit activation supersedes the earlier missing-child prerequisites without claiming execution.
+
 Preparation only. No compiler, inspector, Gateway, socket, package install, product process, push
 or hosted job ran. This adds an explicit-port source/byte producer, an ownership workload driver,
 an inert native-port entry and synthetic controls. It adds no active workflow, default launcher,
