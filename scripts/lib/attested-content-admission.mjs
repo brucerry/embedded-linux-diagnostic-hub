@@ -26,6 +26,17 @@ export const VERIFIER_CANDIDATE = Object.freeze({
     metadataURL: 'https://github.com/cli/cli/releases/expanded_assets/v2.103.3',
 });
 export const ADMISSION_REVIEW_LEASE_MS = 24 * 60 * 60 * 1000;
+/** These require independently admitted action-time evidence, not selection JSON or this inspector. */
+export const VERIFIER_UNVERIFIED_REQUIREMENTS = Object.freeze([
+    'authenticated-root-refresh-for-this-intake',
+    'authenticated-persisted-tuf-history',
+    'independently-selected-numeric-repository-identity',
+    'current-security-and-revocation-review',
+    'explicit-bounded-admission-lease',
+    'identity-preserving-native-file-and-process-custody',
+    'independently-observed-process-retirement',
+    'exact-request-and-explicit-execution-grant',
+]);
 const sha = /^[a-f0-9]{64}$/;
 const roles = ['root', 'timestamp', 'snapshot', 'targets'];
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -269,6 +280,7 @@ export function inspectVerifierAdmission(input, context) {
         binaryProvenanceProven: false,
         retirementProven: false,
         revocationStatus: 'not-established',
+        unverifiedRequirements: VERIFIER_UNVERIFIED_REQUIREMENTS,
         selectionSHA256: hash(JSON.stringify(plan)),
         missing: Object.freeze(missing),
         reviewLeaseCapMs: ADMISSION_REVIEW_LEASE_MS,

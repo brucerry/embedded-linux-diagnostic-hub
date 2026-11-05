@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import {
     ADMISSION_REVIEW_LEASE_MS,
     VERIFIER_CANDIDATE,
+    VERIFIER_UNVERIFIED_REQUIREMENTS,
     inspectVerifierAdmission,
 } from '../scripts/lib/attested-content-admission.mjs';
 import { verifyLocalAttestation } from '../scripts/lib/attested-content-verifier.mjs';
@@ -115,6 +116,9 @@ function remainsBlocked(value: any) {
     ])
         assert.equal(value[field], false, field);
     assert.equal(value.revocationStatus, 'not-established');
+    assert.deepEqual(value.unverifiedRequirements, VERIFIER_UNVERIFIED_REQUIREMENTS);
+    assert.equal(value.unverifiedRequirements.length, 8);
+    assert.equal(Object.isFrozen(value.unverifiedRequirements), true);
     assert.equal(value.reviewLeaseCapMs, 24 * 60 * 60 * 1000);
     assert.equal(Object.isFrozen(value), true);
     assert.equal(Object.isFrozen(value.missing), true);
@@ -511,4 +515,35 @@ test('acquired identity and invented retirement flags cannot enable default file
             return true;
         },
     );
+});
+
+test('an age-zero export and full local lease cannot establish this-intake refresh or persisted TUF history', () => {
+    const plan = complete();
+    plan.root.exportedAtMs = nowMs;
+    plan.freshness.checkedAtMs = nowMs;
+    plan.freshness.leaseUntilMs = nowMs + ADMISSION_REVIEW_LEASE_MS;
+    const expected = [
+        'authenticated-root-refresh-for-this-intake',
+        'authenticated-persisted-tuf-history',
+        'independently-selected-numeric-repository-identity',
+        'current-security-and-revocation-review',
+        'explicit-bounded-admission-lease',
+        'identity-preserving-native-file-and-process-custody',
+        'independently-observed-process-retirement',
+        'exact-request-and-explicit-execution-grant',
+    ];
+    for (let intake = 0; intake < 2; intake++) {
+        const result = inspect(plan);
+        assert.deepEqual(result.missing, []);
+        assert.deepEqual(result.unverifiedRequirements, expected);
+        remainsBlocked(result);
+    }
+});
+test('selection claims and output mutation cannot erase independently required admission evidence', () => {
+    const plan = complete();
+    plan.unverifiedRequirements = [];
+    assert.throws(() => inspect(plan), /Unknown or missing admission field/);
+    const result = inspect(complete());
+    assert.throws(() => (result.unverifiedRequirements as unknown as string[]).splice(0));
+    remainsBlocked(result);
 });

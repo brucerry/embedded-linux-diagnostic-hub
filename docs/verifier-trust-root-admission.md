@@ -1,10 +1,13 @@
 # Verifier and trust-root admission for attested content
 
-Research snapshot: 2026-11-05. This prepares an admission decision; it does not install, execute or
-admit software. No binary, package, attestation bundle, TUF metadata, trust-root target or product
-artifact was accessed. Public release metadata, documentation and pinned source were inspected. The
-new pure inspector always returns `executionAllowed:false` and `artifactAccessAllowed:false`,
-including when every selected field is present. A JSON plan is never an execution capability.
+Original source-only research snapshot: 2026-11-05; later acquisition reconciliation is recorded in
+[verifier-custody.md](verifier-custody.md). Statements below about unobserved bytes describe that
+original research step, not the later quarantined acquisition. This prepares an admission decision;
+it does not install, execute or admit software. No binary, package, attestation bundle, TUF
+metadata, trust-root target or product artifact was accessed. Public release metadata, documentation
+and pinned source were inspected. The new pure inspector always returns `executionAllowed:false` and
+`artifactAccessAllowed:false`, including when every selected field is present. A JSON plan is never
+an execution capability.
 
 ## Concrete verifier candidate
 
@@ -87,8 +90,8 @@ hashes remain **unknown**: this task did not access live trust material. Do not 
 sample or documentation schedule. The original checked-in example retained `null` for these facts.
 It now records the historical acquired observations described in
 [verifier-custody.md](verifier-custody.md), with six remaining fields still null; this does not
-establish current admission. Its zero version floors denote unestablished rollback history, not
-observed remembered versions; its public-good instance is a proposal pending independent
+establish current admission. Its selected floors (root14, others0) do not establish authenticated
+persisted rollback history; its public-good instance is a proposal pending independent
 repository-visibility selection.
 
 ## Update, expiry and revocation decision
@@ -179,3 +182,44 @@ Offline verification needs no GitHub credential, signing permission or CI dispat
 OIDC/attestation grants remain a different decision under the prior permission specification; no
 such grant is bundled here. All source/archive/runtime/retirement/product-measurement/publication
 obligations remain held. No executable or root has been admitted by this plan.
+
+## Action-time requirements, distinct from selection completeness
+
+`inspectVerifierAdmission` now reports eight fixed `unverifiedRequirements` even when all nineteen
+selection observations are present. This inspector does not authenticate those requirements and
+cannot clear them through JSON claims. Live execution remains disabled. Six selection fields remain
+null in the acquired record; these implementation blockers are separate from that field count.
+
+GitHub recommends fresh trust material for each intake; an export has no global expiry or knowledge
+of later revocations. A local 24-hour ceiling neither establishes refresh for this intake nor
+promises a safe reuse interval. With a custom-root file, the pinned CLI reads that file instead of
+refreshing TUF; verification success cannot refresh its own trust input.
+[GitHub offline guidance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline),
+[pinned CLI implementation](https://raw.githubusercontent.com/cli/cli/63837fb778d6a39f02be0ce76ff89f2bc8d74bdc/pkg/cmd/attestation/verification/sigstore.go).
+
+TUF requires sequential root updates authenticated under old/new thresholds, rollback and expiry
+checks, and durable trusted metadata. Persist the authenticated state, not merely user-selected
+version floors. The acquired chain does not establish subsequent persisted update history. This
+change implements no TUF client, metadata deletion, cache writing or automatic trust update.
+[TUF client workflow](https://theupdateframework.github.io/specification/latest/#detailed-client-workflow).
+
+Offline name matching cannot distinguish a replacement repository reusing the same name. Existing
+`attested-content-policy.mjs` already compares the verified certificate's numeric repository and
+owner IDs to independently selected expectations; its existing missing/foreign-certificate cases
+cover both fields. The inspector cannot authenticate that selection, so numeric repository identity
+remains an explicit prerequisite rather than a new claimed result.
+[Numeric identity guidance](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/verify-attestations-offline#confirming-the-repository-in-an-offline-environment).
+
+The selected 2.103.3 is newer than the published fixes for signer-workflow prefix matching
+(2.102.0), source-ref case matching (2.102.0), and predicate-mismatch exit status (2.67.0). This
+limited advisory comparison is not a universal security clearance, revocation snapshot or new
+admission lease. The last advisory's affected-version display is open-ended; its explicit fixed
+version supplies the resolution rather than an invented upper bound.
+[Workflow advisory](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g),
+[source-ref advisory](https://github.com/cli/cli/security/advisories/GHSA-4mq3-hpgx-9cx8),
+[exit-status advisory](https://github.com/cli/cli/security/advisories/GHSA-fgw4-v983-mgp8).
+
+The remaining fixed prerequisites are current security/revocation review, an explicit bounded
+admission lease, identity-preserving native custody, independently observed process retirement, and
+exact request/explicit execution authority. Existing package/storage, artifact-access, native/DUT,
+spending and publication holds are unchanged. No fixed byte/age/version alone satisfies them.
