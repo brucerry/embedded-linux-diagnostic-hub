@@ -69,7 +69,7 @@ function inflate(bytes, size) {
     assert.equal(result.buffer.length, size, 'Expanded length differs.');
     return result.buffer;
 }
-function inspectZip(raw, payload) {
+function inspectZip(raw, payload, members) {
     const end = raw.length - 22;
     assert.ok(end >= 0);
     assert.equal(raw.readUInt32LE(end), 0x06054b50);
@@ -152,6 +152,7 @@ function inspectZip(raw, payload) {
         if (row.method === 0) assert.equal(row.compressed, row.size);
         const bytes = row.method === 0 ? encoded : inflate(encoded, row.size);
         assert.equal(crc32(bytes), row.crc, 'ZIP CRC differs.');
+        if (members) members.set(row.filename, Buffer.from(bytes));
         observed.push({ path: row.filename, bytes: bytes.length, sha256: sha(bytes) });
     }
     return { payload: observed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) };
@@ -262,7 +263,7 @@ function inspectGateway(raw, payload, expected) {
 }
 /** Byte consistency only. The caller must validate the producer record separately.
  * Does not authenticate producer declarations, extract files, execute payloads or authorize release. */
-export function inspectInnerArchive(raw, record, scope) {
+function inspect(raw, record, scope, members) {
     assert.ok(['web', 'gateway'].includes(scope));
     assert.ok(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= limits.archive);
     inventory(record.payload);
@@ -270,7 +271,7 @@ export function inspectInnerArchive(raw, record, scope) {
     assert.equal(sha(raw), record.archive.sha256);
     const observed =
         scope === 'web'
-            ? inspectZip(raw, record.payload)
+            ? inspectZip(raw, record.payload, members)
             : inspectGateway(raw, record.payload, record.tarInventory);
     assert.deepEqual(
         observed.payload,
@@ -287,4 +288,25 @@ export function inspectInnerArchive(raw, record, scope) {
         sourceProvenance: 'not-established',
         releaseAcceptance: false,
     };
+}
+
+export function inspectInnerArchive(raw, record, scope) {
+    return inspect(raw, record, scope);
+}
+/** Retain only fully checked web member bytes in memory; no extraction/execution/provenance grant.
+ * Reads return copies so neither the archive caller nor a response consumer can mutate later use.
+ */
+export function openWebArchiveBytes(raw, record) {
+    const members = new Map();
+    const facts = inspect(raw, record, 'web', members);
+    return Object.freeze({
+        inspection: () => structuredClone(facts),
+        releaseBytes() {
+            members.clear();
+        },
+        read(name) {
+            assert.ok(members.has(name), 'Unknown inspected web member.');
+            return Buffer.from(members.get(name));
+        },
+    });
 }
