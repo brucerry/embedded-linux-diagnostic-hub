@@ -30,10 +30,10 @@ async function prepared(f:ReturnType<typeof installation>){
     const c=await censusInstrumentedGateway(root,1000,f.filesystem),artifactPath=root+'/ownership.cjs';
     const source={sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)},artifactSHA256=sourceDigest(c.scripts.get(artifactPath));
     const selection={...source,artifactPath,artifactSHA256,observerSHA256:'c'.repeat(64)};
-    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v1',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
+    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v2',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
         rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,
         toolchain:{nodePath:'/tools/node',nodeSHA256:'d'.repeat(64)},activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),
-        installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,scriptInventory:c.inventory,scriptInventorySHA256:c.inventorySHA256};
+        installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,fileInventory:c.inventory,fileInventorySHA256:c.inventorySHA256,scriptInventory:c.scriptInventory,scriptInventorySHA256:c.scriptInventorySHA256};
     return{binding,selection,scripts:c.scripts};
 }
 const node=()=>({path:'/tools/node',sha256:'d'.repeat(64),version:'v24.22.0',execArgv:[],nodeOptions:null});
@@ -69,11 +69,11 @@ function parent(f:any,p:any,mode='compatibility'){
 test('complete two-pass census includes extensionless files and lock/package identities',async()=>{
     const f=installation(),c=await censusInstrumentedGateway(root,1000,f.filesystem);assert.equal(c.inventory.length,6);assert.ok(c.scripts.has(root+'/node_modules/dep/extensionless'));assert.equal(f.handles.size,0);
 });
-for(const kind of ['symlink','hardlink','binary','foreign','extra','optional','wrongVersion','missingActivation','alias','nestedOverride'])test('prelaunch census rejects '+kind,async()=>{
+for(const kind of ['symlink','hardlink','binaryActivation','foreign','extra','optional','wrongVersion','missingActivation','alias','nestedOverride'])test('prelaunch census rejects '+kind,async()=>{
     const f=installation(),file=root+'/node_modules/dep/extensionless';
     if(kind==='symlink')f.records.get(file).kind='link';
     if(kind==='hardlink')f.records.get(file).nlink=2;
-    if(kind==='binary')f.write(file,Buffer.from([0xff]));
+    if(kind==='binaryActivation')f.write(root+'/activate.cjs',Buffer.from([0xff]));
     if(kind==='foreign')f.controls.foreign=file;
     if(kind==='extra')f.write(root+'/.env',Buffer.from('synthetic-only'));
     if(kind==='optional')f.write(root+'/node_modules/unexpected/x',Buffer.from('x'));
@@ -137,7 +137,7 @@ function inspector(p:any){
     const controls:any={},events:string[]=[],source=deferred();let timer:Function=()=>{},clock=0;
     class Session extends EventEmitter{
         connect(){events.push('connect');}disconnect(){events.push('disconnect');}
-        post(method:string,_params:any,cb:Function){events.push(method);if(method==='Debugger.enable'){this.emit('Debugger.scriptParsed',{params:{scriptId:'1',url:pathToFileURL(p.selection.artifactPath).href}});cb(null,{});}
+        post(method:string,_params:any,cb:Function){events.push(method);if(method==='Debugger.enable'){this.emit('Debugger.scriptParsed',{params:{scriptId:'1',url:pathToFileURL(controls.discoveredPath??p.selection.artifactPath).href}});cb(null,{});}
             else if(method==='Debugger.getScriptSource'){const bytes=p.scripts.get(p.selection.artifactPath).toString();if(controls.hold)source.promise.then(()=>cb(null,{scriptSource:bytes}));else cb(null,{scriptSource:controls.wrapper?'(function(){'+bytes+'})':bytes});}
             else {assert.equal(method,'Debugger.disable');cb(null,{});}}
     }
@@ -225,4 +225,45 @@ test('fixed CJS activation calls only the copied owner export and rejects unsupp
         const run=()=>runInNewContext(source,{require,module,process,__dirname:root,__filename:root+'/activate.cjs'},{timeout:1000});
         if(mode==='invalid'){assert.throws(run);assert.equal(calls,0);}else{run();assert.equal(calls,1);pending.reject(Error('authored owner failure'));await pulse();assert.equal(process.exitCode,1);}
     }
+});
+
+const binaryPath=root+'/node_modules/dep/pagent.exe';
+const binaryBytes=()=>Buffer.concat([Buffer.from([0x4d,0x5a,0x90,0x00]),Buffer.alloc(50684)]);
+test('binary package bytes stay fully inventoried while exact UTF-8 extensionless and BOM candidates remain unchanged',async()=>{
+    const f=installation(),binary=binaryBytes(),bom=Buffer.from('\uFEFFmodule.exports=1;\r\n');
+    assert.throws(()=>new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(binary));
+    f.write(binaryPath,binary);f.write(root+'/node_modules/dep/bom.cjs',bom);
+    const c=await censusInstrumentedGateway(root,1000,f.filesystem);
+    assert.ok(c.files.get(binaryPath)!.equals(binary));assert.equal(c.scripts.has(binaryPath),false);
+    assert.deepEqual(c.inventory.find(v=>v.path===binaryPath),{path:binaryPath,bytes:50688,sha256:sourceDigest(binary)});
+    assert.ok(c.scripts.get(root+'/node_modules/dep/bom.cjs')!.equals(bom));
+    assert.equal(c.inventory.length,c.scriptInventory.length+1);assert.equal(f.handles.size,0);
+});
+test('binary mutation between census passes is rejected even when script candidates are unchanged',async()=>{
+    const f=installation();f.write(binaryPath,binaryBytes());let reads=0;
+    f.hooks.read=async(p:string)=>{if(p===binaryPath&&++reads===3){const b=binaryBytes();b[b.length-1]=1;f.write(p,b);}};
+    await assert.rejects(censusInstrumentedGateway(root,1000,f.filesystem));
+});
+for(const timing of ['beforeLaunch','afterLaunch'])test('binary identity mutation '+timing+' rejects parent admission or closure',async()=>{
+    const f=installation();f.write(binaryPath,binaryBytes());const p=await prepared(f),h=parent(f,p);
+    if(timing==='beforeLaunch')f.write(binaryPath,Buffer.from([0xff]));
+    const task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports),rejected=assert.rejects(task);
+    await pulse();
+    if(timing==='afterLaunch'){assert.equal(h.launches,1);h.emit();f.write(binaryPath,Buffer.from([0xff]));h.close();}
+    await rejected;assert.equal(h.launches,timing==='beforeLaunch'?0:1);
+});
+test('complete binary-inclusive binding permits the normal fake child lifecycle without claiming release qualification',async()=>{
+    const f=installation();f.write(binaryPath,binaryBytes());const p=await prepared(f),h=parent(f,p);
+    const task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports);await pulse();assert.equal(h.launches,1);h.emit();h.close();
+    const r=await task;assert.equal(r.receipt.postCensusUnchanged,true);assert.equal(r.receipt.releaseAcceptance,false);
+});
+test('an Inspector event naming an excluded binary is rejected rather than silently ignored',async()=>{
+    const f=installation();f.write(binaryPath,binaryBytes());const p=await prepared(f),h=inspector(p);h.controls.discoveredPath=binaryPath;
+    const o=startInstrumentedInspectorCompatibility(p,h.ports);await assert.rejects(o.result);await o.closed;
+    assert.equal(o.snapshot().failed,true);
+});
+test('dropping a binary from the bound inventory cannot authorize parent launch',async()=>{
+    const f=installation();f.write(binaryPath,binaryBytes());const p=await prepared(f);
+    p.binding.fileInventory=p.binding.fileInventory.filter(v=>v.path!==binaryPath);p.binding.fileInventorySHA256=sourceDigest(JSON.stringify(p.binding.fileInventory));
+    const h=parent(f,p);await assert.rejects(runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports));assert.equal(h.launches,0);
 });

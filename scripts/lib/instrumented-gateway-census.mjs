@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { readStableArtifactFile } from './web-archive-producer.mjs';
+import { readStableArtifactFile } from './stable-artifact-file.mjs';
+import { isExactInstrumentedText } from './instrumented-gateway-files.mjs';
 import { sourceDigest } from './committed-source-bridge.mjs';
 
 export const INSTRUMENTED_CENSUS_BOUNDS = Object.freeze({ files: 512, entries: 4096, depth: 32, fileBytes: 32 * 1024 ** 2, totalBytes: 64 * 1024 ** 2 });
+const failures = new WeakMap();
+export function instrumentedCensusFailure(error) { return failures.get(error) ?? null; }
 const rootFiles = ['activate.cjs', 'ownership.cjs', 'package.json', 'package-lock.json'];
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 function identity(s, kind, uid) {
@@ -16,17 +19,20 @@ function identity(s, kind, uid) {
     return row;
 }
 /** Complete, prelaunch two-pass byte census, not a report of files actually compiled. Every regular
- * file is copied as exact UTF-8 input, including extensionless/JSON files; binary or oversized
- * package content fails rather than silently shrinking the Inspector allowlist. Native ports only.
+ * file remains in the byte/metadata inventory, including binary package data. Only exact UTF-8
+ * candidates enter the Inspector map; an observed URL outside that map still fails. Native ports only.
  */
 export async function censusInstrumentedGateway(root, uid, filesystem) {
+    let phase='root';
+    try {
     assert.ok(typeof root === 'string' && root.startsWith('/') && path.posix.normalize(root) === root && Buffer.byteLength(root) <= 4096 && !/[\\\x00-\x20\x7f]/.test(root));
     assert.ok(Number.isSafeInteger(uid) && uid >= 0);
-    const scripts = new Map();
+    const files = new Map(), scripts = new Map();
     async function pass(retain) {
         const inventory = [], directories = [], inodes = new Set(); let total = 0, entries = 0;
         async function walk(relative = '', depth = 0) {
             assert.ok(depth <= INSTRUMENTED_CENSUS_BOUNDS.depth);
+            phase='directory';
             const at = relative ? root + '/' + relative : root; assert.ok(Buffer.byteLength(at) <= 4096);
             assert.equal(await filesystem.realpath(at),at);
             const before=identity(await filesystem.lstat(at),'directory',uid), rows=await filesystem.readdir(at,{withFileTypes:true});
@@ -41,19 +47,21 @@ export async function censusInstrumentedGateway(root, uid, filesystem) {
                 if(!relative) assert.ok(row.isDirectory()?row.name==='node_modules':rootFiles.includes(row.name),'Unexpected or credential-bearing root path.');
                 if(row.isDirectory()) await walk(name,depth+1);
                 else {
+                    phase='file-identity';
                     assert.ok(row.isFile() && !name.endsWith('.node') && inventory.length<INSTRUMENTED_CENSUS_BOUNDS.files);
                     assert.equal(await filesystem.realpath(full),full);
                     const beforeFile=identity(await filesystem.lstat(full),'file',uid);
                     assert.ok(beforeFile.size<=INSTRUMENTED_CENSUS_BOUNDS.fileBytes && total+beforeFile.size<=INSTRUMENTED_CENSUS_BOUNDS.totalBytes);
                     const inode=beforeFile.dev+':'+beforeFile.ino;assert.ok(!inodes.has(inode));inodes.add(inode);
+                    phase='file-read';
                     const bytes=(await readStableArtifactFile(root,name,INSTRUMENTED_CENSUS_BOUNDS.fileBytes,filesystem)).bytes;
                     assert.deepEqual(identity(await filesystem.lstat(full),'file',uid),beforeFile);
-                    const text=decoder.decode(bytes);assert.ok(Buffer.from(text).equals(bytes));
                     total+=bytes.length;
                     inventory.push({path:full,bytes:bytes.length,sha256:sourceDigest(bytes),identity:beforeFile});
-                    if(retain) scripts.set(full,Buffer.from(bytes));
+                    if(retain) { const copy=Buffer.from(bytes);files.set(full,copy);if(isExactInstrumentedText(copy)) scripts.set(full,copy); }
                 }
             }
+            phase='directory-verification';
             assert.deepEqual(identity(await filesystem.lstat(at),'directory',uid),before);
             const after=await filesystem.readdir(at,{withFileTypes:true});assert.ok(Array.isArray(after));
             assert.deepEqual(after.map(r=>r.name).sort(),[...names].sort());
@@ -62,7 +70,8 @@ export async function censusInstrumentedGateway(root, uid, filesystem) {
         await walk();inventory.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);directories.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
         return {inventory,directories,totalBytes:total};
     }
-    const first=await pass(true), second=await pass(false);assert.deepEqual(second,first,'Instrumented installation changed during prelaunch census.');
+    const first=await pass(true), second=await pass(false);phase='two-pass-verification';assert.deepEqual(second,first,'Instrumented installation changed during prelaunch census.');
+    phase='layout';
     for(const name of rootFiles)assert.ok(scripts.has(root+'/'+name),'Missing instrumented layout entry.');
     const lockBytes=scripts.get(root+'/package-lock.json'), packageBytes=scripts.get(root+'/package.json');
     assert.ok(lockBytes.length<=1024**2 && packageBytes.length<=1024**2);
@@ -83,6 +92,8 @@ export async function censusInstrumentedGateway(root, uid, filesystem) {
         assert.ok(directory===root||name==='node_modules'||required.some(p=>name===p||(p.startsWith(name+'/')&&name.startsWith('node_modules/@'))||(name.startsWith(p+'/')&&!name.slice(p.length+1).split('/').includes('node_modules'))),'Unexpected installed directory.');}
     assert.equal(lock.packages[''].name,manifest.name);assert.equal(lock.packages[''].version,manifest.version);
     const inventory=first.inventory.map(({path,bytes,sha256})=>({path,bytes,sha256}));
-    return Object.freeze({scripts,inventory,inventorySHA256:sourceDigest(JSON.stringify(inventory)),
+    const scriptInventory=inventory.filter(row=>scripts.has(row.path));
+    return Object.freeze({files,scripts,inventory,inventorySHA256:sourceDigest(JSON.stringify(inventory)),scriptInventory,scriptInventorySHA256:sourceDigest(JSON.stringify(scriptInventory)),
         census: first,censusSHA256:sourceDigest(JSON.stringify(first)),lockSHA256:sourceDigest(lockBytes),packageSHA256:sourceDigest(packageBytes)});
+    } catch(cause) { const error=Error('Instrumented census failed; no path or content in diagnostic code.',{cause});failures.set(error,phase);throw error; }
 }

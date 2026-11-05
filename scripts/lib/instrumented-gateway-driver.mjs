@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { sourceDigest } from './committed-source-bridge.mjs';
 import { projectGatewayLock } from './gateway-lock-plan.mjs';
 import { prepareInstrumentedGatewayCheck, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION } from './instrumented-gateway-check.mjs';
-import { censusInstrumentedGateway } from './instrumented-gateway-census.mjs';
+import { censusInstrumentedGateway, instrumentedCensusFailure } from './instrumented-gateway-census.mjs';
 import { createInstrumentedGatewayParent } from './instrumented-gateway-parent.mjs';
 
 const retained = new Set();
@@ -16,8 +16,8 @@ import { instrumentedSetupCommand } from './instrumented-gateway-policy.mjs';
 export function createInstrumentedGatewayDriver(admission) {
     const b=requireInstrumentedGatewayBootstrap(admission);
     const {s,context,root,esbuildPath,environment,ports,cap,filesystem,read,verifyTools:toolIdentity,command,acks,sourceFile,stableSource,provider,selected,npmVersion}=b;
-    let phase='prepared',admitted=false,failed=false,done=false,buildUsed=false,parentOwner;
-    const snapshot=()=>({phase,admitted,failed,done,bootstrap:b.snapshot(),parent:parentOwner?.snapshot()??null,processGroupRetirement:null,releaseAcceptance:false});
+    let phase='prepared',failedAt=null,preparationPhase=null,censusPhase=null,admitted=false,failed=false,done=false,buildUsed=false,parentOwner;
+    const snapshot=()=>({phase,failedAt,preparationPhase,censusPhase,admitted,failed,done,bootstrap:b.snapshot(),parent:parentOwner?.snapshot()??null,processGroupRetirement:null,releaseAcceptance:false});
     const owner=Object.freeze({snapshot,async run(){
         assert.equal(admitted,false);admitted=true;phase='source';retained.add(owner);
         try {
@@ -36,7 +36,7 @@ export function createInstrumentedGatewayDriver(admission) {
                 async execute(plan){assert.equal(buildUsed,false);buildUsed=true;assert.equal(plan.role,'build');assert.equal(plan.id,1);assert.match(plan.owner,/^[a-f0-9]{32}$/);
                     return command(plan,{...environment,NODE_ENV:'production'},[s.nodePath,esbuildPath,s.root+'/'+INSTRUMENTED_ENTRY,'--bundle','--platform=node','--format=cjs','--outfile='+root+'/ownership.cjs','--external:ssh2']);},
                 async readArtifact(file,maximum){assert.equal(file,root+'/ownership.cjs');assert.equal(maximum,32*1024**2);return read(file,maximum);},
-                async scriptSnapshot(){return(await censusInstrumentedGateway(root,s.runtime.uid,filesystem)).scripts;},
+                async fileSnapshot(){phase='census';try{const c=await censusInstrumentedGateway(root,s.runtime.uid,filesystem);phase='build';return c.files;}catch(error){censusPhase=instrumentedCensusFailure(error);throw error;}},
             });
             assert.equal(buildUsed,true);await stableSource();phase='pair';
             parentOwner=createInstrumentedGatewayParent(prepared,{runtime:s.runtime,filesystem:ports.filesystem,launch:ports.launch,setTimer:ports.setTimer,clearTimer:ports.clearTimer,now:ports.now});
@@ -45,6 +45,6 @@ export function createInstrumentedGatewayDriver(admission) {
                 sourceBridgeSHA256:prepared.binding.sourceBridgeSHA256,artifactSHA256:prepared.binding.artifactSHA256,activationSHA256:prepared.binding.activationSHA256,nodeSHA256:s.nodeSHA256,npmSHA256:s.npmSHA256,npmPackageSHA256:s.npmPackageSHA256,npmVersion,
                 commands:acks,gitReads:b.snapshot().gitReads,pair:pair.receipt,timeoutCancellation:'may-use-runner-teardown-no-graceful-group-proof',rawCLIBehavior:null,processGroupRetirement:null,releaseAcceptance:false};
             const bytes=Buffer.from(JSON.stringify(receipt)+'\n');assert.ok(bytes.length<=16384);phase='completed';done=true;prepared.scripts.clear();retained.delete(owner);return Object.freeze({receipt,bytes});
-        }catch(error){failed=true;phase='failed';throw Object.assign(Error('Instrumented Gateway diagnostic failed or remains held; no retry or forced cleanup.',{cause:error}),{owner});}
+        }catch(error){failedAt=phase;preparationPhase=error?.owner?.failedAt??null;failed=true;phase='failed';throw Object.assign(Error('Instrumented Gateway diagnostic failed or remains held; no retry or forced cleanup.',{cause:error}),{owner});}
     }});return owner;
 }

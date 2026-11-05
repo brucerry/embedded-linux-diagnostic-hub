@@ -61,6 +61,8 @@ export function driverMemory(options:any={}){
                 if(role==='dependencies'){
                     const lock=JSON.parse(f.bytes(installed+'/package-lock.json').toString());
                     for(const [name,value]of Object.entries<any>(lock.packages)){if(!name||value.optional)continue;f.write(installed+'/'+name+'/package.json',Buffer.from(JSON.stringify({name:name.slice('node_modules/'.length),version:value.version})));f.write(installed+'/'+name+'/index.js',Buffer.from('module.exports={};\n'));}
+                    if(controls.binary)f.write(installed+'/node_modules/ssh2/util/pagent.exe',Buffer.from([0x4d,0x5a,0xff]));
+                    if(controls.badCensus){const rec=f.records.get(installed+'/node_modules/ssh2/package.json');assert.ok(rec);rec.nlink=2;}
                     if(controls.nested)f.write(installed+'/node_modules/ssh2/node_modules/evil/index.js',Buffer.from('not admitted'));
                 }
                 if(role==='build')f.write(installed+'/ownership.cjs',Buffer.from('// synthetic compiled artifact; never executed\n'));

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { isExactInstrumentedText } from './instrumented-gateway-files.mjs';
 import { randomBytes } from 'node:crypto';
 import { observeSourceBridge, sourceDigest } from './committed-source-bridge.mjs';
 import { requireObservedClosure } from './owned-child.mjs';
@@ -28,8 +29,8 @@ const tools = (v) => {
 export async function prepareInstrumentedGatewayCheck(input, ports) {
     assert.deepEqual(Object.keys(input).sort(), ['root', 'sourceCommit', 'sourceTree']); absolute(input.root);
     const selected = { sourceCommit: input.sourceCommit, sourceTree: input.sourceTree };
-    for (const k of ['execute', 'readArtifact', 'scriptSnapshot', 'observeToolchain']) assert.equal(typeof ports[k], 'function');
-    const owner = { phase: 'source', pending: null, failed: false, wholeGroupRetirement: null }; retained.add(owner);
+    for (const k of ['execute', 'readArtifact', 'fileSnapshot', 'observeToolchain']) assert.equal(typeof ports[k], 'function');
+    const owner = { phase: 'source', failedAt: null, pending: null, failed: false, wholeGroupRetirement: null }; retained.add(owner);
     try {
         const bridge = await observeSourceBridge(selected, ports.sourceProvider);
         assertInstrumentedProductionBridge(bridge);
@@ -62,13 +63,14 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
         assert.ok(observedArtifact.length > 0 && observedArtifact.length <= 32 * 1024 ** 2);
         const artifact = Buffer.from(observedArtifact);
         assert.ok(artifact.length > 0 && artifact.length <= 32 * 1024 ** 2);
-        const supplied = await ports.scriptSnapshot();
+        owner.phase='snapshot';
+        const supplied = await ports.fileSnapshot();
         assert.ok(supplied instanceof Map && supplied.size > 0 && supplied.size <= 512);
         const scripts = new Map(), inventory = []; let total = 0;
         for (const [file, bytes] of supplied) {
             absolute(file); assert.ok(file.startsWith(path.dirname(artifactPath) + '/'));
             assert.ok(Buffer.isBuffer(bytes) && bytes.length <= 32 * 1024 ** 2); total += bytes.length; assert.ok(total <= 64 * 1024 ** 2);
-            const copy = Buffer.from(bytes); scripts.set(file, copy); inventory.push({ path: file, bytes: copy.length, sha256: sourceDigest(copy) });
+            const copy = Buffer.from(bytes); if(isExactInstrumentedText(copy)) scripts.set(file, copy); inventory.push({ path: file, bytes: copy.length, sha256: sourceDigest(copy) });
         }
         inventory.sort((a,b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
         assert.ok(scripts.get(artifactPath)?.equals(artifact), 'Artifact differs from the prelaunch script snapshot.');
@@ -90,18 +92,20 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
         assert.deepEqual(tools(await ports.observeToolchain()), toolchain);
         const selection = Object.freeze({ ...selected, artifactPath, artifactSHA256: sourceDigest(artifact),
             observerSHA256: bridge.inventory.find((r) => r.path === observerPath).sha256 });
-        const binding = Object.freeze({ kind: 'separate-instrumented-gateway-build-byte-binding-v1', source: selected,
+        const scriptInventory=inventory.filter(row=>scripts.has(row.path));
+        owner.phase='binding';
+        const binding = Object.freeze({ kind: 'separate-instrumented-gateway-build-byte-binding-v2', source: selected,
             sourceBridgeSHA256: sourceDigest(JSON.stringify(bridge) + '\n'), rawCLIReference: { ...RAW_CLI_REFERENCE },
             productionComparison: '213-source-files-match-frozen-raw-CLI-inventory', toolchain,
             entrySHA256: bridge.inventory.find((r) => r.path === INSTRUMENTED_ENTRY).sha256,
             observerSHA256: selection.observerSHA256, artifactPath, artifactSHA256: selection.artifactSHA256,
-            artifactBytes: artifact.length, activationSHA256: sourceDigest(activation), installationPackageSHA256: sourceDigest(packageBytes), installationLockSHA256: sourceDigest(lockBytes), scriptInventory: inventory, scriptInventorySHA256: sourceDigest(JSON.stringify(inventory)),
+            artifactBytes: artifact.length, activationSHA256: sourceDigest(activation), installationPackageSHA256: sourceDigest(packageBytes), installationLockSHA256: sourceDigest(lockBytes), fileInventory: inventory, fileInventorySHA256: sourceDigest(JSON.stringify(inventory)), scriptInventory, scriptInventorySHA256: sourceDigest(JSON.stringify(scriptInventory)),
             commandAcknowledgementSHA256: sourceDigest(JSON.stringify(acknowledgement)),
             provenance: 'local-source-command-and-byte-consistency-not-service-attestation', buildProvenanceVerified: false,
             wholeGroupRetirement: null, releaseAcceptance: false });
         owner.phase = 'prepared'; retained.delete(owner);
         return Object.freeze({ binding, selection, scripts });
-    } catch (error) { owner.failed = true; owner.phase = 'failed'; throw Object.assign(Error('Instrumented build preparation failed; uncertain custody retained.', { cause: error }), { owner }); }
+    } catch (error) { owner.failedAt = owner.phase; owner.failed = true; owner.phase = 'failed'; throw Object.assign(Error('Instrumented build preparation failed; uncertain custody retained.', { cause: error }), { owner }); }
 }
 
 /** One instrumented ownership workload, no process/listener/session defaults. Native ports are
@@ -109,18 +113,27 @@ export async function prepareInstrumentedGatewayCheck(input, ports) {
  */
 export function snapshotPreparedInstrumentedGateway(prepared) {
     const binding = structuredClone(prepared.binding), selection = { ...prepared.selection }, scripts = new Map();
-    assert.equal(binding.kind, 'separate-instrumented-gateway-build-byte-binding-v1');
+    assert.equal(binding.kind, 'separate-instrumented-gateway-build-byte-binding-v2');
     assert.deepEqual(selection, { ...binding.source, artifactPath: binding.artifactPath, artifactSHA256: binding.artifactSHA256, observerSHA256: binding.observerSHA256 });
     assert.equal(binding.releaseAcceptance, false); assert.equal(binding.buildProvenanceVerified, false);
     assert.deepEqual(binding.rawCLIReference, RAW_CLI_REFERENCE);
     assert.equal(sourceDigest(JSON.stringify(binding.scriptInventory)), binding.scriptInventorySHA256);
     assert.ok(Array.isArray(binding.scriptInventory) && binding.scriptInventory.length>0 && binding.scriptInventory.length<=512);
+    assert.equal(sourceDigest(JSON.stringify(binding.fileInventory)),binding.fileInventorySHA256);
+    assert.ok(Array.isArray(binding.fileInventory)&&binding.fileInventory.length>0&&binding.fileInventory.length<=512);
+    const all=new Map();let fileTotal=0;
+    for(const row of binding.fileInventory){
+        assert.deepEqual(Object.keys(row).sort(),['bytes','path','sha256']);absolute(row.path);assert.ok(row.path.startsWith(path.dirname(selection.artifactPath)+'/')&&!all.has(row.path));
+        assert.ok(Number.isSafeInteger(row.bytes)&&row.bytes>=0&&row.bytes<=32*1024**2);fileTotal+=row.bytes;assert.ok(fileTotal<=64*1024**2);assert.match(row.sha256,/^[a-f0-9]{64}$/);all.set(row.path,row);
+    }
+    assert.deepEqual(binding.fileInventory.map(r=>r.path),[...all.keys()].sort());
     const seen=new Set();let total=0;
     for (const row of binding.scriptInventory) {
         assert.deepEqual(Object.keys(row).sort(),['bytes','path','sha256']);absolute(row.path);assert.ok(row.path.startsWith(path.dirname(selection.artifactPath)+'/')&&!seen.has(row.path));seen.add(row.path);
         assert.ok(Number.isSafeInteger(row.bytes)&&row.bytes>=0&&row.bytes<=32*1024**2);total+=row.bytes;assert.ok(total<=64*1024**2);assert.match(row.sha256,/^[a-f0-9]{64}$/);
+        assert.deepEqual(row,all.get(row.path));
         const b = prepared.scripts.get(row.path); assert.ok(Buffer.isBuffer(b) && b.length === row.bytes && sourceDigest(b) === row.sha256);
-        scripts.set(row.path, Buffer.from(b));
+        assert.ok(isExactInstrumentedText(b));scripts.set(row.path, Buffer.from(b));
     }
     assert.deepEqual(binding.scriptInventory.map(r=>r.path),[...seen].sort());
     assert.equal(scripts.size, prepared.scripts.size); assert.equal(sourceDigest(scripts.get(selection.artifactPath)), selection.artifactSHA256);

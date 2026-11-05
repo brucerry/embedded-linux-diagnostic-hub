@@ -18,8 +18,10 @@ function nodeIdentity(v){
     assert.equal(v.version,'v24.22.0');assert.deepEqual(v.execArgv,[]);assert.equal(v.nodeOptions,null);return structuredClone(v);
 }
 function assertSnapshot(prepared,census){
-    assert.deepEqual(census.inventory,prepared.binding.scriptInventory);
-    assert.equal(census.inventorySHA256,prepared.binding.scriptInventorySHA256);
+    assert.deepEqual(census.inventory,prepared.binding.fileInventory);
+    assert.equal(census.inventorySHA256,prepared.binding.fileInventorySHA256);
+    assert.deepEqual(census.scriptInventory,prepared.binding.scriptInventory);
+    assert.equal(census.scriptInventorySHA256,prepared.binding.scriptInventorySHA256);
     assert.equal(census.lockSHA256,prepared.binding.installationLockSHA256);assert.equal(census.packageSHA256,prepared.binding.installationPackageSHA256);
     const root=path.dirname(prepared.selection.artifactPath);
     assert.equal(sourceDigest(census.scripts.get(root+'/activate.cjs')),prepared.binding.activationSHA256);

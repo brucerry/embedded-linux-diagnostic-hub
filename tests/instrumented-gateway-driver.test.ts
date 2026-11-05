@@ -96,3 +96,22 @@ test('actual asynchronous source provider with fake Git covers all eleven full s
     assert.equal(f.gitCalls.filter(v=>v.tail.join(' ')==='rev-parse --verify HEAD').length,33);
     assert.deepEqual(f.calls.map(v=>v.role),['toolchain','dependencies','build','compatibility','ownership']);assert.equal(f.handles.size,0);assert.equal(f.directories.size,0);
 });
+
+test('binary-inclusive driver pipeline reaches both fake children without broadening Inspector admission',async()=>{
+    const f=driverMemory();f.controls.binary=true;const b=await createInstrumentedGatewayBootstrap(f.selection,f.ports).run();const d=createInstrumentedGatewayDriver(b);
+    const result=await d.run();assert.deepEqual(f.calls.map(v=>v.role),['toolchain','dependencies','build','compatibility','ownership']);assert.equal(result.receipt.releaseAcceptance,false);
+});
+for(const kind of ['census','build','dependencies'])test('bounded failure codes distinguish '+kind+' without losing original cause or custody',async()=>{
+    const f=driverMemory();if(kind==='census')f.controls.badCensus=true;else f.controls.fail=kind;
+    const b=createInstrumentedGatewayBootstrap(f.selection,f.ports),d=createInstrumentedGatewayDriver(await b.run());
+    await assert.rejects(d.run(),(e:any)=>{assert.ok(e.cause);return true;});
+    const r=instrumentedFailureSummary('driver',b.snapshot(),d.snapshot());
+    assert.equal(r.schema,'instrumented-gateway-failure-counters-v2');assert.equal(r.driverPhase,kind);assert.equal(r.releaseAcceptance,false);assert.equal(r.processGroupRetirement,null);
+    assert.equal(r.censusPhase,kind==='census'?'file-identity':null);assert.equal(r.preparationPhase,kind==='census'?'snapshot':kind==='build'?'building':null);
+    assert.equal(r.parentLaunches,null);assert.ok(Buffer.byteLength(JSON.stringify(r))<1024);assert.equal(f.calls.some(v=>v.role==='compatibility'),false);
+});
+test('failure phase codes are closed enums, never arbitrary paths or error strings',()=>{
+    const r=instrumentedFailureSummary('driver',null,{failedAt:'/private/path',preparationPhase:'sensitive error',censusPhase:'command output'});
+    assert.equal(r.driverPhase,null);assert.equal(r.preparationPhase,null);assert.equal(r.censusPhase,null);
+    assert.ok(!JSON.stringify(r).includes('private')&&!JSON.stringify(r).includes('sensitive')&&!JSON.stringify(r).includes('command output'));
+});

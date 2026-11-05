@@ -41,9 +41,9 @@ function installation(){
 async function prepared(f:ReturnType<typeof installation>){
     const c=await censusInstrumentedGateway(root,1000,f.filesystem),artifactPath=root+'/ownership.cjs',source={sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)},artifactSHA256=sourceDigest(c.scripts.get(artifactPath));
     const selection={...source,artifactPath,artifactSHA256,observerSHA256:'c'.repeat(64)};
-    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v1',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
+    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v2',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
         rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,toolchain:{nodePath:'/tools/node',nodeSHA256:sourceDigest(nodeBytes)},
-        activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,scriptInventory:c.inventory,scriptInventorySHA256:c.inventorySHA256};
+        activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,fileInventory:c.inventory,fileInventorySHA256:c.inventorySHA256,scriptInventory:c.scriptInventory,scriptInventorySHA256:c.scriptInventorySHA256};
     return{binding,selection,scripts:c.scripts};
 }
 function childReceipt(p:any,mode:string){

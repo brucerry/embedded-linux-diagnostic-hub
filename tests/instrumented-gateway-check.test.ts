@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { pathToFileURL } from 'node:url';
-import { prepareInstrumentedGatewayCheck, startInstrumentedGatewayCheck, RAW_CLI_REFERENCE, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION } from '../scripts/lib/instrumented-gateway-check.mjs';
+import { prepareInstrumentedGatewayCheck, snapshotPreparedInstrumentedGateway, startInstrumentedGatewayCheck, RAW_CLI_REFERENCE, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION } from '../scripts/lib/instrumented-gateway-check.mjs';
 import { createInstrumentedGatewayBootstrap } from '../scripts/lib/instrumented-gateway-observer.mjs';
 import { sourceFixture, observedLifecycle } from './fixtures/gateway-producer-memory';
 import { projectGatewayLock } from '../scripts/lib/gateway-lock-plan.mjs';
@@ -30,7 +30,7 @@ function producer() {
             if(controls.numberFlags)(lifecycle as any).spawnObserved=1;
             return{...plan,command:[...plan.command],owner:controls.foreign?'f'.repeat(32):plan.owner,lifecycle};},
         async readArtifact(file:string,maximum:number){assert.equal(file,artifactPath);assert.equal(maximum,32*1024**2);return controls.stringArtifact?artifact.toString():Buffer.from(artifact);},
-        async scriptSnapshot(){const projected=projectGatewayLock(JSON.parse(sourceFiles.get('package.json')!.toString()),JSON.parse(sourceFiles.get('package-lock.json')!.toString()));
+        async fileSnapshot(){const projected=projectGatewayLock(JSON.parse(sourceFiles.get('package.json')!.toString()),JSON.parse(sourceFiles.get('package-lock.json')!.toString()));
             const directory=artifactPath.slice(0,artifactPath.lastIndexOf('/'));return new Map([[artifactPath,controls.scriptChange?Buffer.from('different'):Buffer.from(artifact)],
             [directory+'/activate.cjs',sourceFiles.get(INSTRUMENTED_ACTIVATION)!],[directory+'/package.json',Buffer.from(JSON.stringify(projected.manifest))],[directory+'/package-lock.json',Buffer.from(JSON.stringify(projected.lock))]]);},
     };
@@ -173,6 +173,21 @@ test('existing path bound rejects oversized derived command paths before dispatc
     await assert.rejects(prepareInstrumentedGatewayCheck({...f.input,root},f.ports));assert.equal(f.calls.length,0);
 });
 test('script snapshot paths obey the existing inspector/filesystem bound',async()=>{
-    const f=producer();f.ports.scriptSnapshot=async()=>new Map([[f.artifactPath,Buffer.from(f.artifact)],[f.artifactPath+'a'.repeat(4097),Buffer.from('small')]]);
+    const f=producer();f.ports.fileSnapshot=async()=>new Map([[f.artifactPath,Buffer.from(f.artifact)],[f.artifactPath+'a'.repeat(4097),Buffer.from('small')]]);
     await assert.rejects(prepareInstrumentedGatewayCheck(f.input,f.ports));assert.equal(f.calls.length,1);
+});
+
+test('preparation binds binary data separately from exact script candidates and refuses corrupt subset bindings',async()=>{
+    const f=producer(),snapshot=f.ports.fileSnapshot,binary=f.artifactPath.replace('ownership.cjs','binary.dat');
+    f.ports.fileSnapshot=async()=>{const files=await snapshot();files.set(binary,Buffer.from([0x4d,0x5a,0xff]));return files;};
+    const p=await prepareInstrumentedGatewayCheck(f.input,f.ports);
+    assert.ok(p.binding.fileInventory.some(v=>v.path===binary));assert.equal(p.binding.scriptInventory.some(v=>v.path===binary),false);assert.equal(p.scripts.has(binary),false);
+    assert.equal(snapshotPreparedInstrumentedGateway(p).scripts.has(binary),false);
+    for(const kind of ['missingInventory','changedFileHash','binaryScript']){
+        const q:any={...p,binding:structuredClone(p.binding),scripts:new Map(p.scripts)};
+        if(kind==='missingInventory')delete q.binding.fileInventory;
+        if(kind==='changedFileHash'){q.binding.fileInventory.find((v:any)=>v.path===binary)!.sha256='0'.repeat(64);}
+        if(kind==='binaryScript'){const row=q.binding.fileInventory.find((v:any)=>v.path===binary)!;q.binding.scriptInventory.push(row);q.binding.scriptInventory.sort((a:any,b:any)=>a.path<b.path?-1:1);q.binding.scriptInventorySHA256=sourceDigest(JSON.stringify(q.binding.scriptInventory));q.scripts.set(binary,Buffer.from([0x4d,0x5a,0xff]));}
+        assert.throws(()=>snapshotPreparedInstrumentedGateway(q));
+    }
 });

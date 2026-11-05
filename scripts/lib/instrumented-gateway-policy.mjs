@@ -22,7 +22,11 @@ export function instrumentedSetupCommand(selected,role) {
 export function instrumentedFailureSummary(stage,bootstrap,driver,preliminary=null){
     const count=n=>Number.isSafeInteger(n)&&n>=0&&n<=10000?n:null;
     const b=driver?.bootstrap??bootstrap,files=b?.files?.files??preliminary,p=driver?.parent;
-    return{schema:'instrumented-gateway-failure-counters-v1',status:'failed-or-held',stage:['admission','initial-files','bootstrap','driver-import','driver','receipt'].includes(stage)?stage:'unknown',
+    const code=(value,allowed)=>allowed.includes(value)?value:null;
+    return{schema:'instrumented-gateway-failure-counters-v2',status:'failed-or-held',stage:['admission','initial-files','bootstrap','driver-import','driver','receipt'].includes(stage)?stage:'unknown',
+        driverPhase:code(driver?.failedAt,['source','staging','dependencies','build','census','pair','completed']),
+        preparationPhase:code(driver?.preparationPhase,['source','building','readback','snapshot','binding']),
+        censusPhase:code(driver?.censusPhase,['root','directory','file-identity','file-read','directory-verification','two-pass-verification','layout']),
         gitReads:count(b?.gitReads),pendingAbsence:count(b?.pendingAbsence),commands:count(b?.commands?.length),
         directCommandsRetired:Array.isArray(b?.commands)?count(b.commands.filter(v=>v.directRetired===true).length):null,
         filePending:count(files?.pending),fileHandles:count(files?.handles),uncertainPublications:count(files?.uncertainPublications),
