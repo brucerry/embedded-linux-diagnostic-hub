@@ -1,6 +1,8 @@
 # Web native IO preparation and external retirement boundary
 
-No Git/build child, file destination, package, server, workflow or permission change was executed.
+The original candidate 280 preparation executed no Git/build child, file destination, package,
+server, workflow or permission change. The separately approved diagnostic-only executor is described
+in diagnostic-web-execution.md; it does not supply the independent retirement primitive below.
 The actual CLI now requires an in-memory source-owned capability before parsing native inputs or
 reading environment/filesystem state. Serialized objects and the inactive template cannot grant it.
 Default command-line invocation has no capability and fails through the caught boundary. No active
@@ -17,8 +19,9 @@ The web path opts into async `localSourceProvider`; other callers retain the old
 read-only Git argv is enforced, including the intended literal-dot configuration query. Git's
 selected on-disk SHA256 is checked through owned descriptors before and after each command. This is
 not kernel executable mapping or protection from malicious same-user swap/restore. Existing
-command-local fsmonitor/untracked-cache/hook-path flags remain prepared, not executed or accepted as
-a security grant. Admission must explicitly cover them before real use.
+command-local fsmonitor/untracked-cache flags remain read-only profile selections, not a security
+grant. The unnecessary hook-path override was removed before diagnostic execution; no hook or
+Git setting is changed. The supported commands do not invoke hooks.
 
 The Git owner registers child, timer, listeners and batch input before dispatch. Input needs write
 callback acknowledgement and close; success also needs finish. Normal child/pipe closures precede

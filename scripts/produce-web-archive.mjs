@@ -146,7 +146,7 @@ export async function main(raw, capability) {
         jobKey: args.get('job-key'),
     };
     const result = await produceWebArchive(selected, provider, {
-        packageJSON: async () => (await readStableSourceFile(root, 'package.json')).bytes,
+        packageJSON: async () => (await readStableSourceFile(root, 'package.json', undefined, fs)).bytes,
         builder: async () => ({
             runtime: await runtime(),
             viteEntryPath: vite,

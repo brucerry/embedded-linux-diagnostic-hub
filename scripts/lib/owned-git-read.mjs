@@ -24,10 +24,8 @@ const prefix = [
     'core.fsmonitor=false',
     '-c',
     'core.untrackedCache=false',
-    '-c',
-    'core.hooksPath=/dev/null',
 ];
-export function validateOwnedGitRequest(args, input) {
+export function ownedGitRequestKind(args) {
     assert.deepEqual(args.slice(0, prefix.length), prefix);
     const tail = args.slice(prefix.length),
         fixed = [
@@ -52,6 +50,10 @@ export function validateOwnedGitRequest(args, input) {
         batch || fixed.some((v) => JSON.stringify(v) === JSON.stringify(tail)),
         'Unadmitted Git command.',
     );
+    return batch ? 'batch' : 'fixed';
+}
+export function validateOwnedGitRequest(args, input) {
+    const batch = ownedGitRequestKind(args) === 'batch';
     if (batch) assert.ok(typeof input === 'string' && /^(?:[a-f0-9]{40}\n){1,64}$/.test(input));
     else assert.equal(input, undefined);
 }

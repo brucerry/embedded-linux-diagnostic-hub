@@ -41,8 +41,6 @@ const prefix = [
     'core.fsmonitor=false',
     '-c',
     'core.untrackedCache=false',
-    '-c',
-    'core.hooksPath=/dev/null',
 ];
 const environment = { PATH: '/tools:/usr/bin:/bin', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TZ: 'UTC' };
 function gitFixture(input?: string) {

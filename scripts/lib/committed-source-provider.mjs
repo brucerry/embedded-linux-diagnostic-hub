@@ -132,8 +132,6 @@ export async function localSourceProvider(
                     'core.fsmonitor=false',
                     '-c',
                     'core.untrackedCache=false',
-                    '-c',
-                    'core.hooksPath=/dev/null',
                     ...args,
                 ],
                 {

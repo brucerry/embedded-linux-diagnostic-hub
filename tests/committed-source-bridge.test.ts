@@ -656,8 +656,9 @@ test('local Git seam disables helpers/network and checks effective configuration
     for (const { args, options } of f.calls) {
         assert.ok(args.includes('--no-replace-objects') && args.includes('--no-pager'));
         assert.ok(
-            args.includes('core.fsmonitor=false') && args.includes('core.hooksPath=/dev/null'),
+            args.includes('core.fsmonitor=false') && args.includes('core.untrackedCache=false'),
         );
+        assert.ok(!args.some((arg) => arg.startsWith('core.hooksPath')));
         assert.equal(options.env.GIT_NO_LAZY_FETCH, '1');
         assert.equal(options.env.GIT_OPTIONAL_LOCKS, '0');
         assert.equal(options.env.GIT_TERMINAL_PROMPT, '0');
