@@ -1,10 +1,11 @@
 # INERT REVIEW CANDIDATE: outside workflows/, non-YAML suffix, and job-level false guard.
-# Copying/renaming or removing the guard requires separate execution/storage admission.
+# Copying/renaming or removing the guard requires diagnostic execution admission.
 # Vite custody does not admit the existing default Git timeout or file/publication adapters.
 # The CLI has no default native capability: enabling this template alone cannot admit execution.
-name: Held source-bound web archive producer
+name: Held diagnostic web build and same-run inspection
 on:
-    workflow_call:
+    push:
+        branches: [ci/web-build-diagnostic-96a56cd-20261105]
 permissions:
     contents: read
 jobs:
@@ -13,15 +14,34 @@ jobs:
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         steps:
+            - name: Refuse an unsupported runner, rerun, source branch or event before any setup
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "${{ github.event.repository.private }}" = false
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/web-build-diagnostic-96a56cd-20261105
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(id -u)" != 0
             - uses: actions/checkout@v6
               with:
+                  ref: ${{ github.sha }}
                   fetch-depth: 0
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
             - uses: actions/setup-node@v7
               with:
-                  node-version: '24'
+                  node-version: '24.22.0'
                   package-manager-cache: false
             - name: Prepare the separately admitted installed toolchain
-              run: npm ci --ignore-scripts
+              run: npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
               env:
                   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
             - name: Select exact source and fresh producer directory
@@ -51,19 +71,32 @@ jobs:
                     --run-attempt="$GITHUB_RUN_ATTEMPT" \
                     --job-key="$GITHUB_JOB" \
                     --output=validation/web-source
-            - name: Retain only the exact readback carrier members after producer success
-              id: upload
+            - name: Inspect the archive in this same run and emit only the bounded diagnostic receipt
               if: ${{ success() && steps.producer.outcome == 'success' }}
-              uses: actions/upload-artifact@v4
-              with:
-                  name: web-archive-${{ github.run_id }}-${{ github.run_attempt }}
-                  compression-level: 0
-                  retention-days: 1
-                  if-no-files-found: error
-                  overwrite: false
-                  path: |
-                      validation/web-source/Diagnostic-Hub-Web-${{ steps.selected.outputs.version }}.zip
-                      validation/web-source/Diagnostic-Hub-Web-${{ steps.selected.outputs.version }}.zip.sha256
-                      validation/web-source/web-build.json
-# No release consumer needs this candidate; no attestation/signing grant or accepting readback job.
-# Service artifact ID/digest from upload outputs do not establish terminal run/job provenance.
+              env:
+                  SELECTED_VERSION: ${{ steps.selected.outputs.version }}
+                  SELECTED_TREE: ${{ steps.selected.outputs.tree }}
+              run: |
+                  node --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import * as fs from 'node:fs/promises';
+                  import { readStableArtifactFile } from './scripts/lib/web-archive-producer.mjs';
+                  import { inspectDiagnosticWebBuild } from './scripts/lib/diagnostic-web-inspection.mjs';
+                  assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted');
+                  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+                  const root = await fs.realpath('validation/web-source');
+                  const name = 'Diagnostic-Hub-Web-' + process.env.SELECTED_VERSION + '.zip';
+                  const record = (await readStableArtifactFile(root, 'web-build.json', 16 * 1024 ** 2, fs)).bytes;
+                  const archive = (await readStableArtifactFile(root, name, 128 * 1024 ** 2, fs)).bytes;
+                  const checksum = (await readStableArtifactFile(root, name + '.sha256', 1024, fs)).bytes;
+                  const expected = { scope: 'web', version: process.env.SELECTED_VERSION,
+                    sourceCommit: process.env.GITHUB_SHA, sourceTree: process.env.SELECTED_TREE,
+                    runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+                    jobKey: process.env.GITHUB_JOB };
+                  const { bytes } = inspectDiagnosticWebBuild(record, archive, checksum, expected,
+                    { completed: true, exitCode: 0, signal: null, timedOut: false });
+                  process.stdout.write('HUB_DIAGNOSTIC_WEB_RECEIPT=' + bytes.toString('utf8'));
+                  NODE
+# No artifact/cache upload, browser/server launch, attestation/signing, release consumer or release.
+# Default producer remains intentionally blocked: source-owned native capability is not supplied.
+# Do not treat this inactive template as execution-ready by just removing its false guard.
