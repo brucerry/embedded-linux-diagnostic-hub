@@ -313,6 +313,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
     const owner = Object.freeze({
         snapshot,
         failure: () => primary,
+        rejectAdmission() {fail(Error('Preimport admission was stopped.'),'observer-admission');},
         diagnostics: () => Object.freeze([...diagnostics]),
         retirement: retirement.promise,
         async enableBeforeImport() {

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {types} from 'node:util';
 import {sourceDigest} from './committed-source-bridge.mjs';
-import {parseInstrumentedChildInput,INSTRUMENTED_CHILD_INPUT_LIMIT} from './instrumented-gateway-child.mjs';
-import {snapshotPreparedInstrumentedGateway} from './instrumented-gateway-check.mjs';
+import {parseInstrumentedChildInput,INSTRUMENTED_CHILD_INPUT_LIMIT} from './instrumented-gateway-input.mjs';
+import {snapshotPreparedInstrumentedGateway} from './instrumented-gateway-snapshot.mjs';
 import {censusInstrumentedGateway} from './instrumented-gateway-census.mjs';
 import {startPreimportInspectorCompatibility} from './instrumented-gateway-compatibility.mjs';
 import {createInstrumentedGatewayBootstrapFromObserver,createCompiledSourceObserver} from './instrumented-gateway-observer.mjs';
@@ -58,6 +58,7 @@ export function createPreimportObserverBoundary(admission){
     }
     const owner={
         retirement,
+        stop(reason){assert.ok(['deadline','cancelled'].includes(reason));primary??=Error('Preimport admission stopped: '+reason);closingRequested=true;collector.rejectAdmission();phase='failed';},
         binding:()=>structuredClone(identity),
         snapshot:()=>Object.freeze({phase,enableIssued,importIssued,offered,claimIssued,consumed,readyAcknowledged,targetUncertain,failed:Boolean(primary),collector:collector.snapshot(),wholeGroupRetirement:null,releaseAcceptance:false}),
         enable(){

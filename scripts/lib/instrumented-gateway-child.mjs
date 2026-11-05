@@ -1,3 +1,5 @@
+import {parseInstrumentedChildInput,INSTRUMENTED_CHILD_INPUT_LIMIT} from './instrumented-gateway-input.mjs';
+export {parseInstrumentedChildInput,INSTRUMENTED_CHILD_INPUT_LIMIT} from './instrumented-gateway-input.mjs';
 import assert from 'node:assert/strict';
 import { validateContainment } from './instrumented-gateway-containment.mjs';
 import { generatedReceiptRowsMatch } from './instrumented-gateway-generated.mjs';
@@ -10,7 +12,7 @@ import { censusInstrumentedGateway } from './instrumented-gateway-census.mjs';
 import { startDiagnosticGatewayCommand } from './diagnostic-gateway-command.mjs';
 
 const retained=new Set(), compatibilityAdmissions=new WeakMap();
-export const INSTRUMENTED_CHILD_INPUT_LIMIT=4*1024**2;
+
 export const INSTRUMENTED_CHILD_MARKER='HUB_INSTRUMENTED_GATEWAY_CHILD=';
 const modes=['compatibility','ownership'];
 function synchronousUndefined(value){if(typeof value?.then==='function')Promise.resolve(value).catch(()=>{});assert.equal(value,undefined);}
@@ -30,16 +32,7 @@ function assertSnapshot(prepared,census){
     assert.equal(sourceDigest(census.scripts.get(root+'/activate.cjs')),prepared.binding.activationSHA256);
     assert.equal(sourceDigest(census.scripts.get(root+'/resolution-guard.cjs')),prepared.binding.guardSHA256);
 }
-export function parseInstrumentedChildInput(bytes,root){
-    rootPath(root);assert.ok(Buffer.isBuffer(bytes)&&bytes.length>0&&bytes.length<=INSTRUMENTED_CHILD_INPUT_LIMIT);
-    const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes),v=JSON.parse(text);
-    assert.equal(text,JSON.stringify(v)+'\n');
-    assert.deepEqual(Object.keys(v).sort(),['binding','mode','node','nonce','root','schema','selection','token','uid']);
-    assert.equal(v.schema,'owned-instrumented-gateway-child-input-v1');assert.equal(v.root,root);assert.ok(modes.includes(v.mode));
-    assert.match(v.nonce,/^[a-f0-9]{32}$/);assert.match(v.token,/^[a-f0-9]{64}$/);assert.ok(Number.isSafeInteger(v.uid)&&v.uid>=0);
-    nodeIdentity(v.node);assert.equal(v.node.path,v.binding.toolchain.nodePath);assert.equal(v.node.sha256,v.binding.toolchain.nodeSHA256);
-    assert.equal(path.dirname(v.selection.artifactPath),root);return v;
-}
+
 
 const failedChildren=new WeakMap();
 export async function joinInstrumentedChildFailure(error){

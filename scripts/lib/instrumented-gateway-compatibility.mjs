@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { generatedReceiptRowsMatch } from './instrumented-gateway-generated.mjs';
 import { createCompiledSourceObserver,adoptPreimportObserver } from './instrumented-gateway-observer.mjs';
-import { snapshotPreparedInstrumentedGateway } from './instrumented-gateway-check.mjs';
+import { snapshotPreparedInstrumentedGateway } from './instrumented-gateway-snapshot.mjs';
 import { sourceDigest } from './committed-source-bridge.mjs';
 
 const retained=new Set();
