@@ -4,6 +4,7 @@ import { sourceDigest } from './committed-source-bridge.mjs';
 import { parseWebArchiveBuildRecord, WEB_ARCHIVE_LIMITS } from './web-archive-producer.mjs';
 import { parseGatewayArchiveBuildRecord } from './gateway-build-record.mjs';
 import { inspectArtifactCarrier, CARRIER_LIMIT } from './artifact-carrier-zip.mjs';
+import { inspectInnerArchive } from './inner-archive-inspection.mjs';
 
 const retained = new Set(),
     issued = new WeakMap(),
@@ -331,6 +332,7 @@ export async function observeArchiveReadback(selection, ports) {
         assert.ok(checksum.equals(Buffer.from(`${record.archive.sha256}  ${name}\n`)));
         assert.equal(checksum.length, record.checksum.bytes);
         assert.equal(sourceDigest(checksum), record.checksum.sha256);
+        const innerArchiveInspection = inspectInnerArchive(archive, record, scope);
         const afterBytes = await owner.read(
                 'service',
                 'selected-service-observation',
@@ -363,7 +365,7 @@ export async function observeArchiveReadback(selection, ports) {
             serviceAuthentication: null,
             artifactJobAttribution: null,
             workflowJobKeyAssociation: null,
-            innerArchiveInspection: null,
+            innerArchiveInspection,
             readerTerminalStatus: null,
             productRuntime: null,
             releaseAcceptance: false,
@@ -390,6 +392,6 @@ export function archiveReadbackSnapshot(capability) {
 export function requireArchiveReleaseProvenance(capability) {
     archiveReadbackSnapshot(capability);
     throw Error(
-        'Authenticated service transport, artifact-to-job attribution, inner archive inspection and terminal reader evidence are not implemented; release remains blocked.',
+        'Authenticated service transport, artifact-to-job attribution and terminal reader evidence are not implemented; producer-inventory byte consistency does not establish provenance and release remains blocked.',
     );
 }

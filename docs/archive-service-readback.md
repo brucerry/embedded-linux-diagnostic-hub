@@ -54,7 +54,7 @@ source/build record, shipping archive bytes and canonical checksum correlated. S
 malformed/duplicate-key/noncanonical records, source/run substitution, qualification relabeling,
 inconsistent Gateway command ownership, lock references or tar census declarations.
 
-## Bounded carrier, not inner-archive qualification
+## Bounded carrier and independent inner-byte inspection
 
 The outer ZIP must contain exactly the selected shipping archive, its checksum and the scope's build
 record. No path extraction is performed. Names are byte-checked; links, aliases, extra members,
@@ -71,21 +71,40 @@ and 1 MiB envelope reserve. Per-file archive/record/checksum bounds remain 128 M
 These are inspection limits, not disk quotas, storage allowance, runtime memory thresholds or
 evidence cap reductions. Actual jobs must admit peak buffers/codec/build resources separately.
 
-The exact inner shipping archive hash is matched to the producer record. Its payload is not
-independently decoded here. The previously required inner archive inspection and shipping runtime
-binding remain separate. The current `verify-website.yml` artifacts contain broader file sets and do
-not include these prepared records; they cannot be silently used as this carrier. A future reviewed
-uploader must construct the exact carrier and retain its authoritative upload provenance. No
-workflow/upload or compression-setting change is made here.
+The exact inner shipping archive hash is matched to the producer record. The already captured
+archive bytes are then independently decoded by `inner-archive-inspection.mjs`, without file
+extraction, network, subprocesses or payload execution. Actual member names, sizes and hashes must
+match the complete producer-declared payload. Gateway also requires the actual directory/mode/tar
+census to match its declared inventory. Missing/extra/aliased members, links, special files, invalid
+CRC, truncated compression, compressed suffixes, layout gaps and inconsistent declarations fail.
+
+The reader supports the producers' conventional single-disk web ZIP profile (stored or DEFLATE, no
+descriptors/extras/comments/ZIP64) and gzip with a plain ten-byte header containing canonical
+Gateway USTAR. Unsupported profiles fail, rather than silently changing archive semantics. ZIP
+directory/span validation precedes decompression. Synchronous standard-library raw DEFLATE uses an
+explicit output bound and checks consumed compressed bytes; gzip additionally checks CRC and ISIZE.
+Tar checksum syntax is byte-exact; high-bit digit or terminator aliases are rejected. The existing
+128 MiB archive, 64 MiB member, 256 MiB payload and 4,096 entry limits remain. The archive/carrier
+buffers and up to one member or complete Gateway tar can coexist in memory; real executor
+memory/runtime admission is still required. This in-process operation has no separate child/worker
+or stream lifecycle, and does not claim memory qualification.
+
+The result is only `matches-producer-inventory-unqualified`. Producer declarations remain
+unauthenticated inputs. Decoding does not establish a reviewed shipping binding, source/build
+provenance, upload-job attribution, installed dependency identity or runtime acceptance. The current
+`verify-website.yml` artifacts contain broader file sets and do not include these prepared records;
+they cannot be silently used as this carrier. A future reviewed uploader must construct the exact
+carrier and retain its authoritative upload provenance. No workflow/upload or compression-setting
+change is made here.
 
 ## Mandatory remaining failures
 
 Successful local correlation returns an opaque capability; its snapshot is `correlated-unqualified`.
 Serialized or edited snapshots cannot act as capabilities. Authentication, upload-job attribution,
-workflow-job-key association, inner archive inspection, terminal reader service result and runtime
-remain null. `requireArchiveReleaseProvenance` always rejects because no admitted authoritative
-implementation can fill those fields. Existing release consumers remain fail closed; synthetic
-passes cannot become release evidence or grant execution/storage authority.
+workflow-job-key association, terminal reader service result and runtime remain null. The inner
+inspection records byte consistency only. `requireArchiveReleaseProvenance` always rejects because
+no admitted authoritative implementation can fill those fields. Existing release consumers remain
+fail closed; synthetic passes cannot become release evidence or grant execution/storage authority.
 
 The tests use actual producer record generation and source-bound parsers with raw synthetic Git,
 in-memory ports/handles and authored ZIP bytes. They verify failure and ownership behavior only. No

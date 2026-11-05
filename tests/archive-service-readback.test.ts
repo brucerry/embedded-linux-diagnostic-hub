@@ -4,6 +4,7 @@ import { zipSync } from 'fflate';
 import { sourceDigest } from '../scripts/lib/committed-source-bridge.mjs';
 import { carrierCRC32, inspectArtifactCarrier } from '../scripts/lib/artifact-carrier-zip.mjs';
 import { parseGatewayArchiveBuildRecord } from '../scripts/lib/gateway-build-record.mjs';
+import { parseWebArchiveBuildRecord } from '../scripts/lib/web-archive-producer.mjs';
 import {
     observeArchiveReadback,
     validateArchiveReadbackSelection,
@@ -18,6 +19,53 @@ async function tickUntil(predicate: () => boolean) {
     for (let i = 0; i < 5000 && !predicate(); i++) await Promise.resolve();
     assert.ok(predicate());
 }
+
+for (const scope of ['web', 'gateway'] as const)
+    for (const mutation of ['malformed-archive', 'wrong-payload'])
+        test(
+            scope + ' independently rejects ' + mutation + ' with consistent enclosing hashes',
+            async () => {
+                const f = await readbackFixture(scope);
+                if (mutation === 'malformed-archive') {
+                    const bytes = Buffer.from('not a ZIP or gzip archive');
+                    f.files.set(f.record.archive.name, bytes);
+                    f.record.archive.bytes = bytes.length;
+                    f.record.archive.sha256 = sourceDigest(bytes);
+                    const checksum = Buffer.from(
+                        `${f.record.archive.sha256}  ${f.record.archive.name}\n`,
+                    );
+                    f.files.set(f.record.checksum.name, checksum);
+                    f.record.checksum.bytes = checksum.length;
+                    f.record.checksum.sha256 = sourceDigest(checksum);
+                } else {
+                    const row = f.record.payload[0];
+                    row.sha256 = '0'.repeat(64);
+                    if (scope === 'gateway')
+                        f.record.tarInventory.entries.find(
+                            (entry: any) => entry.path === row.path,
+                        ).sha256 = row.sha256;
+                }
+                f.files.set(scope + '-build.json', Buffer.from(JSON.stringify(f.record) + '\n'));
+                assert.doesNotThrow(() =>
+                    (scope === 'web' ? parseWebArchiveBuildRecord : parseGatewayArchiveBuildRecord)(
+                        f.files.get(scope + '-build.json'),
+                        f.selection.context,
+                    ),
+                );
+                f.repack(); // The service digest and carrier are recomputed by the fixture too.
+                await assert.rejects(
+                    observeArchiveReadback(f.selection, f.ports),
+                    ArchiveReadbackFailure,
+                );
+                assert.equal(f.active.size, 0);
+                assert.equal(
+                    f.services,
+                    1,
+                    'Inner-byte rejection precedes the post-read service observation.',
+                );
+            },
+        );
+
 for (const scope of ['web', 'gateway'] as const)
     test(scope + ' exact carrier/source/build correlation stays unqualified', async () => {
         const f = await readbackFixture(scope),
@@ -42,11 +90,13 @@ for (const scope of ['web', 'gateway'] as const)
             'serviceAuthentication',
             'artifactJobAttribution',
             'workflowJobKeyAssociation',
-            'innerArchiveInspection',
             'readerTerminalStatus',
             'productRuntime',
         ])
             assert.equal(facts[key], null);
+        assert.equal(facts.innerArchiveInspection.status, 'matches-producer-inventory-unqualified');
+        assert.equal(facts.innerArchiveInspection.sourceProvenance, 'not-established');
+        assert.equal(facts.innerArchiveInspection.releaseAcceptance, false);
         assert.equal(facts.releaseAcceptance, false);
         assert.throws(() => requireArchiveReleaseProvenance(capability), /release remains blocked/);
         facts.serviceAuthentication = { verified: true };
