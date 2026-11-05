@@ -6,11 +6,14 @@ import { startDiagnosticGatewayCommand } from './diagnostic-gateway-command.mjs'
 import { DIAGNOSTIC_GATEWAY_POLICY } from './diagnostic-gateway-inspection.mjs';
 
 export const DIAGNOSTIC_GATEWAY_BRANCH = 'ci/gateway-build-diagnostic-96a56cd-20261105';
-export function validateDiagnosticGatewayContext(value) {
+export const DIAGNOSTIC_GATEWAY_RUNTIME_BRANCH = 'ci/gateway-runtime-diagnostic-96a56cd-20261105';
+export function validateDiagnosticGatewayContext(value) { return validateContext(value, DIAGNOSTIC_GATEWAY_BRANCH); }
+export function validateDiagnosticGatewayRuntimeContext(value) { return validateContext(value, DIAGNOSTIC_GATEWAY_RUNTIME_BRANCH); }
+function validateContext(value, branch) {
     assert.deepEqual(Object.keys(value).sort(), ['arch', 'attempt', 'event', 'policy', 'private', 'ref', 'repository', 'run', 'runner', 'sha', 'system']);
     assert.equal(value.repository, 'brucerry/embedded-linux-diagnostic-hub');
     assert.equal(value.private, false);
-    assert.equal(value.ref, 'refs/heads/' + DIAGNOSTIC_GATEWAY_BRANCH);
+    assert.equal(value.ref, 'refs/heads/' + branch);
     assert.equal(value.event, 'push'); assert.equal(value.attempt, '1');
     assert.equal(value.runner, 'github-hosted'); assert.equal(value.system, 'Linux'); assert.equal(value.arch, 'X64');
     assert.equal(value.policy, DIAGNOSTIC_GATEWAY_POLICY);
@@ -19,9 +22,11 @@ export function validateDiagnosticGatewayContext(value) {
 }
 
 /** One owned build followed by one offline lock command; no native defaults or cleanup escape. */
-export function createDiagnosticGatewayExecution(selection, ports) {
+export function createDiagnosticGatewayExecution(selection, ports) { return createExecution(selection, ports, validateDiagnosticGatewayContext); }
+export function createDiagnosticGatewayRuntimeBuildExecution(selection, ports) { return createExecution(selection, ports, validateDiagnosticGatewayRuntimeContext); }
+function createExecution(selection, ports, validate) {
     ports = Object.freeze({ ...ports });
-    const selected = structuredClone(selection), context = validateDiagnosticGatewayContext(selected.context);
+    const selected = structuredClone(selection), context = validate(selected.context);
     for (const name of ['root', 'gitPath', 'nodePath', 'esbuildPath', 'npmPath'])
         assert.ok(typeof selected[name] === 'string' && selected[name].startsWith('/') &&
             path.posix.normalize(selected[name]) === selected[name] && !/[\\\x00-\x20\x7f]/.test(selected[name]));

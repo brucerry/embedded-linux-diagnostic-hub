@@ -1,0 +1,102 @@
+name: Diagnostic Gateway unmodified CLI runtime
+on:
+    push:
+        branches: [ci/gateway-runtime-diagnostic-96a56cd-20261105]
+permissions:
+    contents: read
+concurrency:
+    group: diagnostic-gateway-runtime-${{ github.ref }}
+    cancel-in-progress: false
+jobs:
+    gateway_runtime:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.run_attempt == 1
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        steps:
+            - name: Refuse an unsupported runner, rerun, source branch or event before any setup
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "${{ github.event.repository.private }}" = false
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/gateway-runtime-diagnostic-96a56cd-20261105
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(id -u)" != 0
+                  for key in NODE_OPTIONS NODE_PATH ESBUILD_BINARY_PATH; do
+                      if [[ -v "$key" ]]; then
+                          printf 'Unsupported runtime injection variable: %s\n' "$key"
+                          exit 1
+                      fi
+                  done
+                  test -d "$GITHUB_WORKSPACE"
+                  workspace_entries="$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"
+                  test -z "$workspace_entries"
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 0
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Select exact source and fresh producer directory
+              id: selected
+              run: |
+                  set -euo pipefail
+                  test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+                  test "$(git rev-parse HEAD^)" = f889bf8cd4d1fd20e9d1e4ac55844ad0b4bb07cd
+                  git --no-pager diff --no-ext-diff --no-textconv --exit-code 96a56cdbb462320c54fe74022d7436e665a31d31 HEAD -- src shared electron backend gateway public package.json package-lock.json vite.config.mts index.html tsconfig.json
+                  test ! -e validation/gateway-runtime
+                  test ! -L validation/gateway-runtime
+                  test ! -e validation/gateway-diagnostic
+                  test ! -L validation/gateway-diagnostic
+                  if test -e validation || test -L validation; then
+                      test -d validation
+                      test ! -L validation
+                  else
+                      mkdir validation
+                  fi
+                  node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+                  import fs from 'node:fs';
+                  const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+                  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[A-Za-z0-9.-]+)?$/.test(version) || version.length > 160) throw Error('Invalid version');
+                  console.log('version=' + version);
+                  NODE
+                  printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Prepare the separately admitted installed toolchain
+              run: |
+                  set -euo pipefail
+                  test "$(df -Pk . | awk 'NR==2 {print $4}')" -ge 4194304
+                  test "$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)" -ge 2097152
+                  test ! -e node_modules
+                  test ! -L node_modules
+                  node --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import fs from 'node:fs';
+                  const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+                  for (const p of Object.values(lock.packages))
+                    if (p.resolved) assert.ok(p.resolved.startsWith('https://registry.npmjs.org/') && typeof p.integrity === 'string');
+                  NODE
+                  npm ci --ignore-scripts --no-audit --no-fund --fetch-retries=0 --registry=https://registry.npmjs.org
+              env:
+                  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            - name: Run the admitted diagnostic build and inspect its same-run archive
+              id: producer
+              env:
+                  SELECTED_VERSION: ${{ steps.selected.outputs.version }}
+                  SELECTED_TREE: ${{ steps.selected.outputs.tree }}
+                  HUB_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+                  HUB_DIAGNOSTIC_GATEWAY_POLICY: github-hosted-diagnostic-teardown-unproved-group-v1
+              run: node .github/diagnostic-gateway-runtime-entry.mjs
+# One original diagnostic job. No artifact/cache upload, signing, browser, SSH/device or release. One owned IPv4 loopback CLI and normal SIGTERM.
+# No forced cleanup/retry; only one normal SIGTERM to the owned CLI. Timeout/cancellation may use GitHub's disposable runner teardown;
+# this does not prove graceful retirement of every descendant and never qualifies the release.

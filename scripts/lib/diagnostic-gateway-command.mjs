@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 const retained = new Set();
 export const GATEWAY_COMMAND_BOUNDS = Object.freeze({
     build: Object.freeze({ deadlineMs: 480000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
+    install: Object.freeze({ deadlineMs: 180000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
     lock: Object.freeze({ deadlineMs: 120000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
 });
 export class DiagnosticGatewayCustodyFailure extends Error {
@@ -26,7 +27,7 @@ const deferred = () => {
  */
 export function startDiagnosticGatewayCommand(plan, environment, ports) {
     ports = Object.freeze({ ...ports });
-    assert.ok(['build', 'lock'].includes(plan.role));
+    assert.ok(['build', 'lock', 'install'].includes(plan.role));
     assert.ok(Array.isArray(plan.command) && plan.command.length > 1);
     assert.ok(plan.command.every((s) => typeof s === 'string' && s && !s.includes('\0')));
     assert.ok(plan.cwd?.startsWith('/'));
