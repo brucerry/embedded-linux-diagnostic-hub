@@ -7,7 +7,7 @@ import { sourceDigest } from './committed-source-bridge.mjs';
 export const INSTRUMENTED_CENSUS_BOUNDS = Object.freeze({ files: 512, entries: 4096, depth: 32, fileBytes: 32 * 1024 ** 2, totalBytes: 64 * 1024 ** 2 });
 const failures = new WeakMap();
 export function instrumentedCensusFailure(error) { return failures.get(error) ?? null; }
-const rootFiles = ['activate.cjs', 'resolution-guard.cjs', 'ownership.cjs', 'package.json', 'package-lock.json'];
+const legacyRootFiles = ['activate.cjs', 'resolution-guard.cjs', 'ownership.cjs', 'package.json', 'package-lock.json'];
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 function identity(s, kind, uid) {
     assert.ok(s && !s.isSymbolicLink() && (kind === 'directory' ? s.isDirectory() : s.isFile()));
@@ -22,7 +22,9 @@ function identity(s, kind, uid) {
  * file remains in the byte/metadata inventory, including binary package data. Only exact UTF-8
  * candidates enter the Inspector map; an observed URL outside that map still fails. Native ports only.
  */
-export async function censusInstrumentedGateway(root, uid, filesystem) {
+export async function censusInstrumentedGateway(root, uid, filesystem, layout = 'legacy') {
+    assert.ok(['legacy','preimport-v1'].includes(layout));
+    const rootFiles=layout==='preimport-v1'?[...legacyRootFiles,'preimport.mjs']:legacyRootFiles;
     let phase='root';
     try {
     assert.ok(typeof root === 'string' && root.startsWith('/') && path.posix.normalize(root) === root && Buffer.byteLength(root) <= 4096 && !/[\\\x00-\x20\x7f]/.test(root));

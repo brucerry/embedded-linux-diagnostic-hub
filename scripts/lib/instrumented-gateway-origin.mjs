@@ -25,14 +25,14 @@ export function deriveCpuOriginPlan(scripts,artifactPath){
     return Object.freeze({creator,creatorURL:pathToFileURL(creator).href,creatorSHA256:SSH2_CONSTANTS_SHA256,line:6,column:12,
         checkoutCpuURL:pathToFileURL(checkout+'/node_modules/cpu-features/lib/index.js').href});
 }
-export function captureRejectionOrigin(p,plan,expected){
+export function captureRejectionOrigin(p,plan,expected,liveAtNotification=false){
     const raw=p.stackTrace?.callFrames,bounded=Array.isArray(raw)&&raw.length>0&&raw.length<=32,frames=bounded?raw:[];
     const top=frames[0],url=top?.url,topFrameKind=!top?'absent':url==='node:internal/modules/cjs/loader'?'node-cjs-loader':url==='node:internal/vm'?'node-vm':typeof url==='string'&&url.startsWith('node:')?'other-node':expected.has(url)?'census-url':'unverified';
     const candidates=plan?frames.filter(f=>f&&f.url===plan.creatorURL):[];
     const state={schema:'rejected-cpu-origin-association-v1',planned:!!plan,checkoutCpuURLMatches:plan?p.url===plan.checkoutCpuURL:null,cpuSourceMatches:null,
         stackWithinBound:bounded,topFrameKind,constantsURLInStack:plan?candidates.length>0:null,
         constantsSiteInStack:plan?candidates.some(f=>f.lineNumber===plan.line&&f.columnNumber===plan.column):null,constantsScriptVerified:null,constantsCreationVerified:null};
-    leases.set(state,{plan,classified:false,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null,
+    leases.set(state,{plan,liveAtNotification:liveAtNotification===true,classified:false,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null,
         frames:candidates.filter(f=>typeof f.scriptId==='string'&&f.scriptId.length>0&&f.scriptId.length<=64).map(f=>({id:f.scriptId,line:Number.isSafeInteger(f.lineNumber)&&f.lineNumber>=0&&f.lineNumber<=2147483647?f.lineNumber:null,column:Number.isSafeInteger(f.columnNumber)&&f.columnNumber>=0&&f.columnNumber<=2147483647?f.columnNumber:null}))});
     return state;
 }
@@ -45,7 +45,7 @@ export function classifyRejectionOrigin(state,verified){
     if(lease.plan){
         const valid=f=>{const v=verified.get(f.id);return v&&v.path===lease.plan.creator&&v.sha256===lease.plan.creatorSHA256&&v.zeroOffset===true?v:null;};
         state.constantsScriptVerified=lease.frames.some(f=>!!valid(f));
-        state.constantsCreationVerified=lease.frames.some(f=>{const v=valid(f);return v&&f.line===lease.plan.line&&f.column===lease.plan.column&&lease.context!==null&&v.context!==null&&lease.context===v.context;});
+        state.constantsCreationVerified=lease.liveAtNotification&&lease.frames.some(f=>{const v=valid(f);return v&&f.line===lease.plan.line&&f.column===lease.plan.column&&lease.context!==null&&v.context!==null&&lease.context===v.context;});
     }
     lease.frames=[];lease.context=null;
 }

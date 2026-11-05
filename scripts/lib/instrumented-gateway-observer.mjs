@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 
+const sourceObservers = new WeakMap();
 const hash = (b) => createHash('sha256').update(b).digest('hex');
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const deferred = () => {
@@ -97,6 +98,11 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         connected = false,
         registration = false,
         started,
+        enabling,
+        enableAcknowledged = false,
+        earlyReady = false,
+        earlyRequested = false,
+        adopted = false,
         finishing,
         sealed = false,
         retired = false,
@@ -131,6 +137,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
     };
     const snapshot = () =>
         Object.freeze({
+            enableAcknowledged, earlyReady,
             acquisitionHeld: acquisition,
             connected,
             listenerHeld: registration,
@@ -156,6 +163,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 if (!retired) fail(Error('Duplicate inspector callback.'));
                 return;
             }
+            if(method==='Debugger.enable'&&!error)enableAcknowledged=true;
             pending.delete(lease);
             if (error) {
                 fail(error,'inspector-callback',diagnostic);
@@ -177,7 +185,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         void task.then(()=>sourceTasks.delete(task));
     }
     async function drainSources(){while(sourceTasks.size)await Promise.all([...sourceTasks]);}
-    function unknownScript(p){
+    function unknownScript(p,liveAtNotification){
         const plan=generatedInventory[0],urlKind=p.url===''?'empty':p.url.startsWith('file:')?'file-url':p.url.startsWith('/')?'absolute-path':'other';
         const frames=p.stackTrace?.callFrames,frame=Array.isArray(frames)&&frames.length>0&&frames.length<=32?frames[0]:null;
         const stackPresent=!!frame,originURL=plan?pathToFileURL(plan.originPath).href:null;
@@ -191,7 +199,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             fail(Error('Unadmitted compiled script.'),'script-unadmitted',diagnostic);
             if(firstPrimary&&!wasmLease){wasmLease=beginWasmDiagnostic(p,wasmPlan);if(wasmLease.record.status==='pending'){try{trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId}).then(result=>observeRejectedWasm(wasmLease,result)).catch(()=>{wasmLease.record.status='rpc-rejected';}));}catch{wasmLease.record.status='rpc-rejected';}}}
             if(fingerprint){
-                rejectionFingerprint=fingerprint;rejectionOrigin=captureRejectionOrigin(p,originPlan,expected);
+                rejectionFingerprint=fingerprint;rejectionOrigin=captureRejectionOrigin(p,originPlan,expected,liveAtNotification);
                 try{trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId}).then(result=>{
                     fingerprintRejectedSource(fingerprint,result?.scriptSource,expected,pathToFileURL(selected.artifactPath).href);
                     if(fingerprint.status==='fingerprinted')observeOriginSource(rejectionOrigin,result.scriptSource);
@@ -201,7 +209,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             return;
         }
         if(tentativeGenerated.length){fail(Error('Generated cardinality exceeded.'),'generated-cardinality',diagnostic);return;}
-        const candidate={plan,diagnostic,frameId:frame&&typeof frame.scriptId==='string'&&frame.scriptId.length>0&&frame.scriptId.length<=64?frame.scriptId:null,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null};
+        const candidate={plan,diagnostic,liveAtNotification,frameId:frame&&typeof frame.scriptId==='string'&&frame.scriptId.length>0&&frame.scriptId.length<=64?frame.scriptId:null,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null};
         tentativeGenerated.push(candidate);
         trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId},diagnostic).then(result=>{
             if(!result||typeof result.scriptSource!=='string'||result.scriptSource.length!==plan.sourceUnits){diagnostic.sourceMatched=false;fail(Error('Generated source response did not match the sealed candidate.'),'generated-source-mismatch',diagnostic);return;}
@@ -216,7 +224,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             const {plan,diagnostic}=candidate,creator=candidate.frameId?verifiedCreators.get(candidate.frameId):null;
             diagnostic.creatorSourceVerified=!!(creator&&creator.path===plan.originPath&&creator.sha256===plan.originSHA256&&creator.zeroOffset);
             diagnostic.contextMatched=!!(creator&&candidate.context!==null&&creator.context!==null&&creator.context===candidate.context);
-            if(diagnostic.nonModuleVerified&&diagnostic.sourceMatched&&diagnostic.siteMatched&&diagnostic.creatorSourceVerified&&diagnostic.contextMatched){
+            if(candidate.liveAtNotification&&diagnostic.nonModuleVerified&&diagnostic.sourceMatched&&diagnostic.siteMatched&&diagnostic.creatorSourceVerified&&diagnostic.contextMatched){
                 observedGenerated.push({identity:plan.identity,sourceSHA256:plan.sourceSHA256,sourceBytes:plan.sourceBytes,creatorSourceVerified:true,creationStackVerified:true});
             }else fail(Error('Generated creator identity remains unproved.'),'generated-origin-unproved',diagnostic);
             candidate.frameId=null;
@@ -227,6 +235,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         let code='script-metadata';
         try {
             assert.ok(!sealed && ++events <= 2048, 'Late/overflow inspector observation.');
+            const liveAtNotification=enableAcknowledged; // Capture before any source RPC/await; replay cannot become live later.
             const p = message?.params;
             if(p?.isLiveEdit){code='script-live-edit';assert.fail('Live edited scripts are unsupported.');}
             if(p?.hasSourceURL){code='script-source-url';assert.fail('SourceURL scripts are unsupported.');}
@@ -251,7 +260,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             }
             code='script-unadmitted';
             const wanted = expected.get(p.url);
-            if(!wanted){unknownScript(p);return;}
+            if(!wanted){unknownScript(p,liveAtNotification);return;}
             code='script-length';
             if (p.length !== undefined) assert.equal(p.length, wanted.text.length);
             code='inspector-operation';
@@ -263,7 +272,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                         result.scriptSource === wanted.text,
                         'Actual compiled source differs from admitted bytes.',
                     );
-                    verifiedCreators.set(p.scriptId,{path:wanted.path,sha256:wanted.sha256,zeroOffset:p.startLine===0&&p.startColumn===0,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null});
+                    verifiedCreators.set(p.scriptId,{liveAtNotification,path:wanted.path,sha256:wanted.sha256,zeroOffset:p.startLine===0&&p.startColumn===0,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null});
                     observed.push({
                         path: wanted.path,
                         bytes: wanted.bytes,
@@ -275,15 +284,10 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             fail(error,code);
         }
     }
-    const owner = Object.freeze({
-        snapshot,
-        failure: () => primary,
-        diagnostics: () => Object.freeze([...diagnostics]),
-        retirement: retirement.promise,
-        start() {
-            assert.ok(!sealed && !finishing && !retired, 'Observer admission is closed.');
-            if (started) return started;
-            started = (async () => {
+    function enableOwned() {
+        assert.ok(!sealed&&!finishing&&!retired,'Observer admission is closed.');
+        if(enabling)return enabling;
+        enabling=(async()=>{
                 acquisition = true;
                 session = sessionFactory();
                 if (
@@ -302,6 +306,26 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 connected = true;
                 await post('Debugger.enable', {});
                 await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);classifyRejectedWasm(wasmLease,verifiedCreators);
+                if(primary)throw primary;
+        })().catch(error=>{fail(error,'observer-admission');throw new InstrumentedGatewayFailure(primary,owner);});
+        enabling.catch(()=>{});return enabling;
+    }
+    const owner = Object.freeze({
+        snapshot,
+        failure: () => primary,
+        diagnostics: () => Object.freeze([...diagnostics]),
+        retirement: retirement.promise,
+        async enableBeforeImport() {
+            assert.ok(!started&&!earlyRequested);earlyRequested=true;
+            try {await enableOwned();assert.ok(!primary&&!sealed&&!retired);assert.ok(!observed.some(row=>row.path===selected.artifactPath),'Target was already compiled before preimport admission.');earlyReady=true;}
+            catch(error){fail(error,'observer-admission');throw error;}
+        },
+        start() {
+            assert.ok(!sealed && !finishing && !retired, 'Observer admission is closed.');
+            if (started) return started;
+            started = (async () => {
+                await enableOwned();
+                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);classifyRejectedWasm(wasmLease,verifiedCreators);
                 if(!observed.some((r)=>r.path===selected.artifactPath)){
                     const error=Error('Instrumented entry was not observed compiled.');fail(error,'entry-missing');throw error;
                 }
@@ -317,6 +341,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             if (finishing) return finishing;
             sealed = true;
             finishing = (async () => {
+                if (enabling) await enabling.catch(() => {});
                 if (started) await started.catch(() => {});
                 await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);classifyRejectedWasm(wasmLease,verifiedCreators);
                 assert.equal(unknownOperations, 0, 'Unknown inspector operation remains held.');
@@ -357,8 +382,10 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             return finishing;
         },
     });
+    sourceObservers.set(owner,{adopt(expectedInput,expectedScripts){assert.ok(earlyReady&&!adopted&&!started&&!finishing&&!retired&&!primary);adopted=true;assert.deepEqual(binding(expectedInput),selected);assert.equal(expectedScripts.size,expected.size);for(const [filename,bytes]of expectedScripts){const v=expected.get(pathToFileURL(filename).href);assert.ok(v&&Buffer.isBuffer(bytes)&&hash(bytes)===v.sha256&&bytes.equals(Buffer.from(v.text)));}return owner;}});
     return owner;
 }
+export function adoptPreimportObserver(observer,input,scripts){const record=sourceObservers.get(observer);assert.ok(record,'Actual same-instance early observer required.');return record.adopt(input,scripts);}
 const counters = [
     'cleanupTimers',
     'requestTasks',
@@ -401,9 +428,10 @@ function productSnapshot(gateway, closed = false) {
 /** Non-shipping bootstrap for actual createGateway, with no server/process defaults.
  * It does not replace or qualify the shipped CLI, and never proves OS process retirement.
  */
-export function createInstrumentedGatewayBootstrap(input, scripts, sessionFactory, createGateway) {
-    const selected = binding(input),
-        loader = createCompiledSourceObserver(selected, scripts, sessionFactory);
+export function createInstrumentedGatewayBootstrap(input,scripts,sessionFactory,createGateway){return bootstrapWithLoader(input,createCompiledSourceObserver(input,scripts,sessionFactory),createGateway);}
+export function createInstrumentedGatewayBootstrapFromObserver(input,scripts,observer,createGateway){return bootstrapWithLoader(input,adoptPreimportObserver(observer,input,scripts),createGateway);}
+function bootstrapWithLoader(input,loader,createGateway){
+    const selected=binding(input);
     assert.equal(typeof createGateway, 'function');
     let startTask,
         closeTask,

@@ -27,7 +27,7 @@ function fixture(){
                 this.emit('Debugger.scriptParsed',{params:event('entry',pathToFileURL(entry).href,entryText.length)});
                 const frame={scriptId:controls.wrongId?'entry':'creator',url:pathToFileURL(creator).href,lineNumber:controls.malformedSite?{private:'must not retain'}:controls.wrongLine?7:6,columnNumber:controls.wrongColumn?13:12};
                 const frames=controls.splitProof?[{...frame,scriptId:'unverified'},{...frame,lineNumber:99}]:[{scriptId:'builtin',url:'node:internal/modules/cjs/loader',lineNumber:1,columnNumber:1},frame];
-                this.emit('Debugger.scriptParsed',{params:{...event('unknown',controls.otherURL?'file:///different/cpu-features/lib/index.js':'file:///checkout/node_modules/cpu-features/lib/index.js',115),...(controls.missingContext?{executionContextId:undefined}:{}),...(controls.missingStack?{}:{stackTrace:{callFrames:controls.overflow?Array(33).fill(frame):frames}})}});done(null,{});
+                const emitUnknown=()=>this.emit('Debugger.scriptParsed',{params:{...event('unknown',controls.otherURL?'file:///different/cpu-features/lib/index.js':'file:///checkout/node_modules/cpu-features/lib/index.js',115),...(controls.missingContext?{executionContextId:undefined}:{}),...(controls.missingStack?{}:{stackTrace:{callFrames:controls.overflow?Array(33).fill(frame):frames}})}});if(controls.replayed)emitUnknown();done(null,{});if(!controls.replayed)emitUnknown();
             }else if(method==='Debugger.getScriptSource'){
                 if(p.scriptId==='creator'){
                     const answer=()=>done(null,{scriptSource:controls.wrongCreator?'wrong':creatorBytes.toString()});if(controls.holdCreator)held.push(answer);else answer();
@@ -50,7 +50,7 @@ test('finite known CPU URL/source/creator associations do not admit outside code
     const detail=projectInstrumentedChildFailure('workload',false,true,{failed:true,retired:true,collector:o.snapshot()});validateInstrumentedChildFailure(detail);assert.equal(detail.releaseAcceptance,false);
     for(const secret of ['/checkout','cpufeatures.node','"creator"','"builtin"'])assert.ok(!JSON.stringify(detail).includes(secret));
 });
-for(const kind of ['zeroContext','negativeContext','otherURL','wrongSource','wrongId','malformedSite','wrongLine','wrongColumn','missingContext','creatorContext','missingCreator','wrongCreator','missingStack','overflow','splitProof'])test('origin cannot combine contradictory or unsupported facts: '+kind,async()=>{
+for(const kind of ['replayed','zeroContext','negativeContext','otherURL','wrongSource','wrongId','malformedSite','wrongLine','wrongColumn','missingContext','creatorContext','missingCreator','wrongCreator','missingStack','overflow','splitProof'])test('origin cannot combine contradictory or unsupported facts: '+kind,async()=>{
     const f=fixture();f.controls[kind]=true;const o=await reject(f),d=o.snapshot().rejectionOrigin;assert.ok(d);validateRejectionOrigin(d);
     if(kind==='otherURL')assert.equal(d.checkoutCpuURLMatches,false);
     else if(kind==='wrongSource')assert.equal(d.cpuSourceMatches,false);
@@ -64,4 +64,8 @@ test('creator verification waits for its source classification before origin pro
 test('origin schema rejects arbitrary fields, numeric proofs and contradictory combinations',async()=>{
     const d=(await reject(fixture())).snapshot().rejectionOrigin;assert.ok(d);
     for(const mutate of [(v:any)=>v.rawPath='/private',(v:any)=>v.checkoutCpuURLMatches=1,(v:any)=>v.planned=false,(v:any)=>v.constantsScriptVerified=false,(v:any)=>v.stackWithinBound=false,(v:any)=>v.topFrameKind='private builtin']){const v=structuredClone(d);mutate(v);assert.throws(()=>validateRejectionOrigin(v));}
+});
+
+test('replayed CPU stack cannot gain creation proof after a held creator RPC',async()=>{
+    const f=fixture();f.controls.replayed=true;f.controls.holdCreator=true;const o=f.start(),task=o.start();const rejected=assert.rejects(task);for(let i=0;i<100;i++)await Promise.resolve();assert.equal(o.snapshot().enableAcknowledged,true);f.release();await rejected;await assert.rejects(o.finish());await o.retirement;assert.equal(o.snapshot().rejectionOrigin?.constantsScriptVerified,true);assert.equal(o.snapshot().rejectionOrigin?.constantsCreationVerified,false);
 });
