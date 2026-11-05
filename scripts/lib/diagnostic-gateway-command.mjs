@@ -190,6 +190,10 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             }
             spawned = true;
             pid = child.pid;
+            if (selected.role === 'ownership') {
+                try { assert.equal(child.spawnfile,selected.command[0]); assert.deepEqual(child.spawnargs,selected.command); }
+                catch(error) { fail(error); }
+            }
         });
         on(child, 'exit', (c, s) => {
             if (exited || !spawned) fail(Error('Invalid Gateway exit.'));

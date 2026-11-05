@@ -1,5 +1,7 @@
 # Separate instrumented Gateway child preparation
 
+This candidate 290 record is preserved. The later source-only native parent wiring and proposed two-child scope are described in [instrumented-gateway-parent-scope.md](instrumented-gateway-parent-scope.md); neither record establishes execution.
+
 This is source preparation, not executed ownership evidence or release acceptance. Production files remain the same 213-file inventory as the unmodified CLI diagnostic at commit `760dba0c7ab9f44b8eb7e00a4b53923272ea488a` (run `41990160342`, job `127120220376`). Those historical raw-CLI results do not qualify this distinct instrumented bundle. No child, build, Inspector session, socket or CI run was started for this revision.
 
 The isolated layout contains `ownership.cjs`, the exact frozen `activate.cjs`, projected `package.json` and `package-lock.json`, and required-only installed dependencies under `node_modules`. Explicit preparation verifies the frozen source bridge and unchanged production inventory, successful bounded compiler acknowledgement, compiler identity, activation bytes, projected manifest and lock. Future native setup must exclusively create this owned layout and install only locked required dependencies with scripts disabled; there is no implicit setup, install or launch in the controller.

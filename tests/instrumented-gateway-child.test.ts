@@ -58,7 +58,7 @@ function parent(f:any,p:any,mode='compatibility'){
     const controls:any={},ports={filesystem:f.filesystem,observeNode:async()=>controls.nodeChanged&&launches?{...node(),sha256:'0'.repeat(64)}:node(),
         writeExclusive:async(file:string,b:Buffer)=>{assert.equal(file,selectedInput);assert.equal(saved.length,0);saved=Buffer.from(b);},
         readInput:async()=>Buffer.from(saved),assertFilesSettled(){assert.equal(f.handles.size,0);},
-        launch(file:string,args:string[],options:any){launches++;assert.equal(file,'/tools/node');assert.deepEqual(args,[root+'/activate.cjs',selectedInput]);assert.equal(options.stdio[0],'ignore');return child;},
+        launch(file:string,args:string[],options:any){launches++;assert.equal(file,'/tools/node');assert.deepEqual(args,[root+'/activate.cjs',selectedInput]);assert.equal(options.stdio[0],'ignore');child.spawnfile=file;child.spawnargs=[file,...args];return child;},
         setTimer(cb:Function,ms:number){assert.equal(ms,60000);timer=cb;return{};},clearTimer(){},now:()=>clock};
     const emit=(change:(e:any)=>void=()=>{})=>{const v=JSON.parse(saved.toString()),r=receipt(p,v.mode);
         const e={schema:'owned-instrumented-gateway-child-result-v1',mode:v.mode,nonce:v.nonce,inputSHA256:sourceDigest(saved),bindingSHA256:sourceDigest(JSON.stringify(p.binding)+'\n'),receipt:r,receiptSHA256:sourceDigest(JSON.stringify(r)+'\n')};change(e);
