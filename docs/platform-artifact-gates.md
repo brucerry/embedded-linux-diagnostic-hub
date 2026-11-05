@@ -6,6 +6,22 @@ or product qualification. All gates below are required; an absent, unsupported, 
 unrun result blocks publication. This document describes gate infrastructure, not a claim that the
 current v0.6.0 candidate has passed it.
 
+## Retained receipt reads
+
+`readBoundedJSON` keeps its existing 1 MiB default (64 KiB for native runtime identity) and
+reads only from one opened descriptor. It requires a regular single-link file, compares exact
+device/inode/mode/size and nanosecond modification/change timestamps before and after reading,
+and checks that the pathname still identifies the observed file. Reads can consume at most the
+initial size plus one growth-detection byte. Premature EOF, growth, replacement, invalid UTF-8,
+invalid JSON and unacknowledged descriptor close fail rather than returning receipt data.
+Primary read/parse failures and close failures are both retained; there is no automatic retry.
+
+This is bounded local snapshot handling, not publisher authentication or immutable future
+custody. It does not make a later pathname read safe, bind parsing to a separate hash operation,
+detect every possible filesystem mutation, or establish the missing producer provenance.
+No receipt schema, acceptance gate or package/native/DUT/spending hold changes. Its deterministic
+controls use synthetic descriptors only; actual filesystem/platform behavior remains unqualified.
+
 ## Catalog and ordering
 
 The canonical catalog retains every existing portable, Mac, web, gateway and helper asset. Versions

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
     includesWindowsSetup,
@@ -11,6 +11,7 @@ import {
     LINUX_ARCHIVE,
 } from './release-assets.mjs';
 import { WINDOWS_SETUP_ASSET, windowsSetupInfoName } from './windows-setup-release.mjs';
+export { readBoundedJSON } from './bounded-receipt-json.mjs';
 
 export const PLATFORM_LANES = Object.freeze([
     { id: 'win32-x64', platform: 'win32', arch: 'x64' },
@@ -453,14 +454,6 @@ export async function hashFile(file, name = path.basename(file)) {
         'File changed during qualification: ' + name,
     );
     return { name, bytes, sha256: hash.digest('hex') };
-}
-export async function readBoundedJSON(file, maximum = 1024 * 1024) {
-    const stat = await lstat(file);
-    assert.ok(
-        stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= maximum,
-        'Invalid or unbounded qualification receipt.',
-    );
-    return JSON.parse(await readFile(file, 'utf8'));
 }
 export async function verifyEvidence(root, cases) {
     const base = await realpath(root);
