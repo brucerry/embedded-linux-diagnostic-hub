@@ -333,8 +333,8 @@ export const syntheticTools = () => ({
     npmVersion: '11.0.0',
     npmPackageSHA256: 'd'.repeat(64),
 });
-export function pipelineFixture() {
-    const source = sourceFixture(),
+export function pipelineFixture(additionalFiles: Map<string, Buffer> = new Map()) {
+    const source = sourceFixture(additionalFiles),
         filesystem = memoryFilesystem(),
         tools = syntheticTools(),
         plans: any[] = [];

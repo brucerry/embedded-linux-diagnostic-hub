@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { parseGatewayArchiveBuildRecord } from './gateway-build-record.mjs';
 import { validatePreparedGatewayLock } from './gateway-lock-plan.mjs';
 import { openGatewayArchiveBytes } from './inner-archive-inspection.mjs';
+import { inspectLockedDependencyBytes } from './gateway-dependency-bytes.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
@@ -103,6 +104,7 @@ export function createFinalGatewayObserver(
         primary,
         pending = 0,
         sequence = 0;
+    let dependencyOrigin;
     const descriptors = new Set(),
         diagnostics = [],
         listeners = new Set();
@@ -313,6 +315,43 @@ export function createFinalGatewayObserver(
     const owner = Object.freeze({
         snapshot,
         diagnostics: () => Object.freeze([...diagnostics]),
+        observeDependencyOrigin(archives) {
+            assert.equal(phase, 'ready', 'Exact installed snapshot is not ready.');
+            assert.equal(dependencyOrigin, undefined, 'Dependency origin already bound.');
+            try {
+                const derived = inspectLockedDependencyBytes(lock, archives);
+                const observed = baseline.files
+                    .filter(
+                        (row) =>
+                            row.path.startsWith('node_modules/') &&
+                            row.path !== 'node_modules/.package-lock.json',
+                    )
+                    .map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }));
+                assert.deepEqual(
+                    observed,
+                    derived.files,
+                    'Installed dependency files differ from locked archive bytes.',
+                );
+                dependencyOrigin = {
+                    kind: 'locked-archive-to-observed-file-comparison',
+                    selectedSource: { ...record.context },
+                    gatewayArchiveSHA256: record.archive.sha256,
+                    buildRecordSHA256: recordSHA256,
+                    preparedLockSHA256: record.preparedLockSHA256,
+                    sourceLockSHA256: record.sourceLockSHA256,
+                    installationTreeSHA256: baseline.treeSHA256,
+                    ...derived,
+                    excludedInstallerMetadata: baseline.files
+                        .filter((r) => r.path === 'node_modules/.package-lock.json')
+                        .map((r) => ({ ...r })),
+                    loadedCodeObserved: false,
+                };
+                return structuredClone(dependencyOrigin);
+            } catch (error) {
+                fail(error);
+                throw new GatewayRuntimeObservationFailure(error, owner);
+            }
+        },
         observeInstallation() {
             if (operation) return operation;
             assert.equal(phase, 'prepared');
@@ -414,6 +453,9 @@ export function createFinalGatewayObserver(
                         selectedSource: { ...record.context },
                         archive: { ...record.archive },
                         buildRecordSHA256: recordSHA256,
+                        dependencyOrigin: dependencyOrigin
+                            ? structuredClone(dependencyOrigin)
+                            : null,
                         installation: structuredClone(baseline),
                         parentReportedChild: structuredClone(spawnIdentity),
                         directChildEvents: { ...row },
