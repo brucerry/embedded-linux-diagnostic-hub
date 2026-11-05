@@ -9,7 +9,7 @@ import {randomBytes} from 'node:crypto';
 import path from 'node:path';
 import { constants } from 'node:fs';
 import { createOwnedWebFiles } from './owned-web-files.mjs';
-import { readStableArtifactFile } from './web-archive-producer.mjs';
+import { readStableArtifactFile } from './stable-artifact-file.mjs';
 import { sourceDigest } from './committed-source-bridge.mjs';
 import { snapshotPreparedInstrumentedGateway } from './instrumented-gateway-snapshot.mjs';
 import {censusInstrumentedGateway} from './instrumented-gateway-census.mjs';
