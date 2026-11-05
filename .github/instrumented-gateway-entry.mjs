@@ -1,5 +1,6 @@
 // Non-shipping, exact-branch workflow entry. Never imported by shipping code or local pure tests.
 import assert from 'node:assert/strict';
+import {releaseKnownInstrumentedFailure} from '../scripts/lib/instrumented-gateway-failure-retirement.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +51,8 @@ export async function main() {
                 outputOwner=startInstrumentedChildOutput(bytes,process.stdout,()=>{process.exitCode=1;});await outputOwner.result;await outputOwner.closed;
             }catch{}
         }
-        // After admission an unknown/failed resource lifetime remains held for the bounded job;
+        if(driverOwner&&outputOwner&&hold!==undefined){try{await releaseKnownInstrumentedFailure(driverOwner,outputOwner,hold,timer=>{clearInterval(timer);});hold=undefined;}catch{}}
+        // Unknown/unacknowledged resources remain held for the bounded job;
         // no retry, signal, deletion or inference of whole-group retirement is made here.
     }
 }

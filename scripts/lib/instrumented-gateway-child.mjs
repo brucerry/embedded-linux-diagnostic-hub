@@ -41,6 +41,12 @@ export function parseInstrumentedChildInput(bytes,root){
     assert.equal(path.dirname(v.selection.artifactPath),root);return v;
 }
 
+const failedChildren=new WeakMap();
+export async function joinInstrumentedChildFailure(error){
+ const record=failedChildren.get(error);assert.ok(record&&record.child,'Actual admitted failed child required.');
+ await record.child.closed;const state=record.child.snapshot();assert.equal(state.directRetired,true);assert.equal(state.unknownOperations,0);
+ synchronousUndefined(record.assertFilesSettled());
+}
 const counterKeys=['stopping','serverListening','cleanupTimers','requestTasks','httpSockets','httpResponses','httpBodyReaders','pendingConnections','sessions','inFlight','ownedSessions','retiringSessions','connectionAttempts','cancelledAttemptCache','sessionOwners','allSessionOwners'];
 const keys=(v,k)=>assert.deepEqual(Object.keys(v).sort(),[...k].sort());
 const elapsed=(n,max)=>assert.ok(Number.isFinite(n)&&n>=0&&n<=max);
@@ -77,6 +83,7 @@ export function validateInstrumentedChildReceipt(prepared,mode,r){
  */
 export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
     assert.ok(modes.includes(mode));for(const k of ['observeNode','writeExclusive','readInput','launch','setTimer','clearTimer','now','assertFilesSettled'])assert.equal(typeof ports[k],'function');
+    ports=Object.freeze({...ports});
     const snapshot=snapshotPreparedInstrumentedGateway(prepared),root=path.dirname(snapshot.selection.artifactPath);rootPath(root);
     const lease={phase:'prelaunch',child:null,failed:false,failureDetail:null,failureEnvelope:'absent'};retained.add(lease);
     let challenge,challengeBytes;
@@ -125,7 +132,7 @@ export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
             try{const output=lease.child.output();lease.failureDetail=parseInstrumentedChildFailure(output.stdout,challenge,challengeBytes);lease.failureEnvelope='observed-bound';}
             catch{lease.failureEnvelope='absent-or-invalid';}
         }
-        throw Object.assign(Error('Owned instrumented child failed; uncertain custody retained.',{cause:error}),{owner:lease});
+        const failure=Object.assign(Error('Owned instrumented child failed; uncertain custody retained.',{cause:error}),{owner:lease});failedChildren.set(failure,Object.freeze({child:lease.child,assertFilesSettled:ports.assertFilesSettled}));throw failure;
     }
 }
 

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {deriveWasmDiagnosticPlan,beginWasmDiagnostic,observeRejectedWasm,classifyRejectedWasm} from './instrumented-gateway-wasm-diagnostic.mjs';
 import { deriveCpuOriginPlan, captureRejectionOrigin, observeOriginSource, classifyRejectionOrigin } from './instrumented-gateway-origin.mjs';
 import { createRejectionFingerprint, fingerprintRejectedSource } from './instrumented-gateway-rejection.mjs';
 import { deriveInstrumentedGeneratedInventory, SSH2_BIGINT_GENERATED_SOURCE } from './instrumented-gateway-generated.mjs';
@@ -104,7 +105,8 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         events = 0,
         builtinScripts = 0,
         unknownOperations = 0;
-    const originPlan=deriveCpuOriginPlan(scripts,selected.artifactPath);
+    const originPlan=deriveCpuOriginPlan(scripts,selected.artifactPath),wasmPlan=deriveWasmDiagnosticPlan(scripts,selected.artifactPath);
+    let wasmLease=null;
     const verifiedCreators=new Map(),sourceTasks=new Set(),tentativeGenerated=[],observedGenerated=[];
     let generatedDiagnostic=null,rejectionFingerprint=null,rejectionOrigin=null;
     const pending = new Set(),
@@ -133,7 +135,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             connected,
             listenerHeld: registration,
             pendingCallbacks: pending.size,
-            pendingSourceClassifications:sourceTasks.size,rejectionOrigin:rejectionOrigin?{...rejectionOrigin}:null,rejectionFingerprint:rejectionFingerprint?{...rejectionFingerprint}:null,generatedDiagnostic:generatedDiagnostic?{...generatedDiagnostic}:null,
+            pendingSourceClassifications:sourceTasks.size,wasmDiagnostic:wasmLease?{...wasmLease.record}:null,rejectionOrigin:rejectionOrigin?{...rejectionOrigin}:null,rejectionFingerprint:rejectionFingerprint?{...rejectionFingerprint}:null,generatedDiagnostic:generatedDiagnostic?{...generatedDiagnostic}:null,
             compiledScripts: observed.length,
             primaryFailure: Boolean(primary),
             failureCode,
@@ -184,9 +186,10 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         const diagnostic={urlKind,declaredUnits:Number.isSafeInteger(p.length)&&p.length>=0&&p.length<=10000?p.length:null,creatorPinned:!!plan,shapeMatched,
             stackPresent,siteMatched,nonModuleVerified:p.isModule===false,sourceMatched:null,sourceSHA256:null,sourceBytes:null,creatorSourceVerified:null,contextMatched:null};
         if(!shapeMatched){
-            const fingerprint=!primary?createRejectionFingerprint(p,expected,selected.artifactPath):null;
+            const firstPrimary=!primary,fingerprint=firstPrimary?createRejectionFingerprint(p,expected,selected.artifactPath):null;
             // Latch rejection before diagnostic dispatch; callback errors cannot replace it.
             fail(Error('Unadmitted compiled script.'),'script-unadmitted',diagnostic);
+            if(firstPrimary&&!wasmLease){wasmLease=beginWasmDiagnostic(p,wasmPlan);if(wasmLease.record.status==='pending'){try{trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId}).then(result=>observeRejectedWasm(wasmLease,result)).catch(()=>{wasmLease.record.status='rpc-rejected';}));}catch{wasmLease.record.status='rpc-rejected';}}}
             if(fingerprint){
                 rejectionFingerprint=fingerprint;rejectionOrigin=captureRejectionOrigin(p,originPlan,expected);
                 try{trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId}).then(result=>{
@@ -298,7 +301,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 sync(session.connect(), undefined, 'connect');
                 connected = true;
                 await post('Debugger.enable', {});
-                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);
+                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);classifyRejectedWasm(wasmLease,verifiedCreators);
                 if(!observed.some((r)=>r.path===selected.artifactPath)){
                     const error=Error('Instrumented entry was not observed compiled.');fail(error,'entry-missing');throw error;
                 }
@@ -315,7 +318,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             sealed = true;
             finishing = (async () => {
                 if (started) await started.catch(() => {});
-                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);
+                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);classifyRejectedWasm(wasmLease,verifiedCreators);
                 assert.equal(unknownOperations, 0, 'Unknown inspector operation remains held.');
                 // Disable is acknowledged before removing the owned listener or disconnecting.
                 if (session && connected) await post('Debugger.disable', {});

@@ -6,7 +6,7 @@ import { createOwnedWebFiles } from './owned-web-files.mjs';
 import { readStableArtifactFile } from './web-archive-producer.mjs';
 import { sourceDigest } from './committed-source-bridge.mjs';
 import { snapshotPreparedInstrumentedGateway } from './instrumented-gateway-check.mjs';
-import { INSTRUMENTED_CHILD_INPUT_LIMIT, runOwnedInstrumentedGatewayChild } from './instrumented-gateway-child.mjs';
+import { INSTRUMENTED_CHILD_INPUT_LIMIT, runOwnedInstrumentedGatewayChild, joinInstrumentedChildFailure } from './instrumented-gateway-child.mjs';
 
 const retained = new Set();
 const modes = ['compatibility', 'ownership'];
@@ -34,7 +34,7 @@ export function createInstrumentedGatewayParent(prepared, host) {
     for (const key of ['launch','setTimer','clearTimer','now']) assert.equal(typeof host[key],'function');
     const native = Object.freeze({ ...host, filesystem: Object.freeze({ ...host.filesystem }) });
     const inputs = new Map(), inputPaths = new Map(modes.map(mode => [parent+'/child-input-'+mode+'.json',mode]));
-    let phase = 'prepared', admitted = false, completed = false, primary, failedAt=null, childFailure=null, nodeIdentity, nodeFileIdentity, launches = 0;
+    let phase = 'prepared', admitted = false, completed = false, primary, failedAt=null, childFailure=null, failedChildError, joinIssued=false, nodeIdentity, nodeFileIdentity, launches = 0;
     const inside = p => typeof p === 'string' && (p === root || p.startsWith(root+'/')) && path.posix.normalize(p) === p;
     const readPath = p => assert.ok(inside(p) || p === runtime.execPath || inputPaths.has(p));
     const metadataPath = p => assert.ok(inside(p) || p === parent || p === runtime.execPath || p === path.dirname(runtime.execPath) || inputPaths.has(p));
@@ -114,7 +114,7 @@ export function createInstrumentedGatewayParent(prepared, host) {
     const snapshot = () => ({ phase,failedAt,childFailure,admitted,completed,failed:Boolean(primary),launches,
         inputs:[...inputs.values()].map(v => ({phase:v.phase,descriptorIdentityObserved:Boolean(v.descriptorIdentity)})),
         files:owned.owner.snapshot(),wholeGroupRetirement:null,releaseAcceptance:false });
-    const owner = Object.freeze({ snapshot, async run() {
+    const owner = Object.freeze({ snapshot, async joinFailedDirectRetirement(){assert.ok(primary&&modes.includes(failedAt)&&failedChildError&&!joinIssued);joinIssued=true;await joinInstrumentedChildFailure(failedChildError);owned.owner.assertSettled();for(const v of inputs.values())assert.equal(v.phase,'acknowledged');}, async run() {
         assert.equal(admitted,false); admitted = true; phase = 'compatibility'; retained.add(owner);
         try {
             const compatibility = await runOwnedInstrumentedGatewayChild(selected,'compatibility',runtime.uid,ports);
@@ -129,7 +129,7 @@ export function createInstrumentedGatewayParent(prepared, host) {
             selected.scripts.clear(); completed = true; phase = 'completed'; retained.delete(owner);
             return Object.freeze({receipt,bytes});
         } catch(error) {
-            failedAt=phase;try{childFailure=projectOwnedInstrumentedFailure(error?.owner);}catch{}primary = error; phase = 'failed';
+            failedAt=phase;failedChildError=error;try{childFailure=projectOwnedInstrumentedFailure(error?.owner);}catch{}primary = error; phase = 'failed';
             throw Object.assign(Error('Native instrumented Gateway parent failed; no retry or forced cleanup.',{cause:error}),{owner});
         }
     } });

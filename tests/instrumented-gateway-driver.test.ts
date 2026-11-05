@@ -63,7 +63,7 @@ test('failure summary omits arbitrary commands, inputs, paths and errors',()=>{
 });
 test('containment workflow has one narrow job and no uploads/cache/secrets or broader triggers',()=>{
     const s=readFileSync(new URL('../.github/workflows/instrumented-gateway-diagnostic.yml',import.meta.url),'utf8');
-    assert.ok(s.includes('branches: [ci/gateway-containment298-96a56cd-20261105]')&&s.includes('timeout-minutes: 20')&&s.includes("node-version: '24.22.0'"));
+    assert.ok(s.includes('branches: [ci/gateway-wasm299-96a56cd-20261105]')&&s.includes('timeout-minutes: 20')&&s.includes("node-version: '24.22.0'"));
     assert.equal((s.match(/^    instrumented_gateway:/gm)||[]).length,1);assert.ok(s.includes('contents: read')&&s.includes('cancel-in-progress: false'));
     assert.ok(!/workflow_dispatch:|workflow_run:|pull_request:|upload-artifact@|actions\/cache@|secrets\.|write-all|continue-on-error|npm ci/.test(s));
     assert.ok(s.includes('node .github/instrumented-gateway-entry.mjs'));
@@ -107,7 +107,7 @@ for(const kind of ['census','build','dependencies'])test('bounded failure codes 
     const b=createInstrumentedGatewayBootstrap(f.selection,f.ports),d=createInstrumentedGatewayDriver(await b.run());
     await assert.rejects(d.run(),(e:any)=>{assert.ok(e.cause);return true;});
     const r=instrumentedFailureSummary('driver',b.snapshot(),d.snapshot());
-    assert.equal(r.schema,'instrumented-gateway-failure-counters-v7');assert.equal(r.driverPhase,kind);assert.equal(r.releaseAcceptance,false);assert.equal(r.processGroupRetirement,null);
+    assert.equal(r.schema,'instrumented-gateway-failure-counters-v8');assert.equal(r.driverPhase,kind);assert.equal(r.releaseAcceptance,false);assert.equal(r.processGroupRetirement,null);
     assert.equal(r.censusPhase,kind==='census'?'file-identity':null);assert.equal(r.preparationPhase,kind==='census'?'snapshot':kind==='build'?'building':null);
     assert.equal(r.parentLaunches,null);assert.ok(Buffer.byteLength(JSON.stringify(r))<1024);assert.equal(f.calls.some(v=>v.role==='compatibility'),false);
 });
@@ -115,4 +115,9 @@ test('failure phase codes are closed enums, never arbitrary paths or error strin
     const r=instrumentedFailureSummary('driver',null,{failedAt:'/private/path',preparationPhase:'sensitive error',censusPhase:'command output'});
     assert.equal(r.driverPhase,null);assert.equal(r.preparationPhase,null);assert.equal(r.censusPhase,null);
     assert.ok(!JSON.stringify(r).includes('private')&&!JSON.stringify(r).includes('sensitive')&&!JSON.stringify(r).includes('command output'));
+});
+
+for(const held of [false,true])test('failed diagnostic direct retirement joins actual child pipes '+held,async()=>{
+ const f=driverMemory();f.controls.hold='compatibility';const b=await createInstrumentedGatewayBootstrap(f.selection,f.ports).run(),d=createInstrumentedGatewayDriver(b),run=d.run(),rejected=assert.rejects(run);await until(()=>f.children.some(v=>v.role==='compatibility'));const child=f.children.at(-1);
+ child.emit('error',Error('authored failed-child diagnostic'));child.emit('exit',1,null);child.emit('close',1,null);if(!held){child.stdout.emit('close');child.stderr.emit('close');}await rejected;let done=false;const joining=d.joinFailedDirectRetirement().then(()=>{done=true;});await pulse();assert.equal(done,!held);if(held){child.stdout.emit('close');child.stderr.emit('close');}await joining;assert.equal(done,true);assert.equal(f.calls.filter(v=>v.role==='compatibility').length,1);assert.equal(f.calls.filter(v=>v.role==='ownership').length,0);await assert.rejects(d.joinFailedDirectRetirement());
 });

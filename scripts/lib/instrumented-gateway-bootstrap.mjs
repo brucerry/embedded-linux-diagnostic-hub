@@ -56,6 +56,7 @@ export function createInstrumentedGatewayBootstrap(selection,ports){
         const actual=startDiagnosticGatewayCommand(plan,env,{...ports,requireSpawnIdentity:true,launch(file,args,options){assert.equal(file,expected[0]);assert.deepEqual(args,expected.slice(1));assert.deepEqual(options,{cwd:plan.cwd,env,shell:false,stdio:['ignore','pipe','pipe']});return ports.launch(file,args,options);}});lease.owner=actual;
         try{const ack=await actual.result;await actual.closed;assert.equal(actual.snapshot().directRetired,true);await verifyTools();acks.push({role:plan.role,id:plan.id,sha256:sourceDigest(JSON.stringify(ack))});return ack;}catch(error){failed=true;throw error;}
     }
+    function assertPostBuildDirectSettled(){assert.equal(phase,'ready');assert.equal(pendingAbsence,0);assert.equal(commandIndex,3);assert.equal(acks.length,3);for(const c of commands)assert.equal(c.owner?.snapshot().directRetired,true);cap.assertSettled();}
     const snapshot=()=>({phase,started,failed,gitReads,pendingAbsence,commandIndex,commands:commands.map(v=>v.owner?v.owner.snapshot():{acquisitionPending:true}),files:cap.snapshot(),processGroupRetirement:null,releaseAcceptance:false});
     const owner=Object.freeze({snapshot,async run(){
         assert.equal(started,false);started=true;phase='source';retained.add(owner);
@@ -71,7 +72,7 @@ export function createInstrumentedGatewayBootstrap(selection,ports){
             for(const name of ['user','global'])await filesystem.writeFile(stage+'/config/'+name+'.npmrc',Buffer.alloc(0),{flag:'wx'});cap.assertSettled();
             phase='toolchain';await absent(s.root+'/node_modules');await stableSource();
             const args=instrumentedSetupCommand(s,'toolchain');await command(Object.freeze({owner:randomBytes(16).toString('hex'),id:1,role:'install',cwd:s.root,command:Object.freeze(args)}),{...environment,NODE_ENV:'development'},args);
-            await stableSource();const value=Object.freeze({s,context,stage,root,esbuildPath,environment,ports,cap,filesystem,read,verifyTools,command,acks,sourceFile,stableSource,bridge,provider,selected,npmVersion,snapshot});
+            await stableSource();const value=Object.freeze({s,context,stage,root,esbuildPath,environment,ports,cap,filesystem,read,verifyTools,command,acks,sourceFile,stableSource,bridge,provider,selected,npmVersion,snapshot,assertPostBuildDirectSettled});
             admissions.add(value);phase='ready';retained.delete(owner);return value;
         }catch(error){failed=true;phase='failed';throw Object.assign(Error('Instrumented bootstrap failed or remains held.',{cause:error}),{owner});}
     }});return owner;

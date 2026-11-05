@@ -1,3 +1,4 @@
+import {joinInstrumentedChildFailure} from '../scripts/lib/instrumented-gateway-child.mjs';
 import { containmentRecord } from './fixtures/instrumented-containment-memory';
 import assert from 'node:assert/strict';
 import { deriveInstrumentedGeneratedInventory } from '../scripts/lib/instrumented-gateway-generated.mjs';
@@ -338,4 +339,9 @@ test('unknown containment preparation preserves liveness and never retries',asyn
 
 test('parent rejects a guard-byte replacement after a purported successful child result',async()=>{
     const f=installation(),p=await prepared(f),h=parent(f,p),task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports),failure=assert.rejects(task);await pulse();h.emit();f.write(root+'/resolution-guard.cjs',Buffer.from('// replaced guard\n'));h.close();await failure;
+});
+
+test('failed child retirement authority retains actual owner despite public diagnostic replacement',async()=>{
+ const f=installation(),p=await prepared(f),h=parent(f,p);const task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports);let failure:any;const caught=task.catch(e=>{failure=e;});await pulse();h.child.emit('spawn');h.expire();await caught;assert.ok(failure);
+ failure.owner.child={closed:Promise.resolve(),snapshot:()=>({directRetired:true,unknownOperations:0})};h.ports.assertFilesSettled=()=>{throw Error('replaced assertion');};let done=false;const joining=joinInstrumentedChildFailure(failure).then(()=>{done=true;});await pulse();assert.equal(done,false);h.close(1);await joining;assert.equal(done,true);
 });

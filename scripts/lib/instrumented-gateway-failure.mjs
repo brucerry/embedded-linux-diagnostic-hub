@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {validateWasmDiagnostic} from './instrumented-gateway-wasm-diagnostic.mjs';
 import { projectContainment, validateContainment } from './instrumented-gateway-containment.mjs';
 import { validateRejectionOrigin } from './instrumented-gateway-origin.mjs';
 import { validateRejectionFingerprint } from './instrumented-gateway-rejection.mjs';
@@ -31,16 +32,16 @@ function validateGenerated(v){
 /** Fixed diagnostic fields only. This is not a passing result or resource-retirement grant. */
 export function projectInstrumentedChildFailure(phase,unknown,knownWorkload,snapshot){
     const c=snapshot?.collector;
-    const detail={schema:'instrumented-child-failure-detail-v5',phase:CHILD_FAILURE_PHASES.includes(phase)?phase:'unknown',
+    const detail={schema:'instrumented-child-failure-detail-v6',phase:CHILD_FAILURE_PHASES.includes(phase)?phase:'unknown',
         unknown:unknown===true,knownWorkload:knownWorkload===true,workloadFailed:boolean(snapshot?.failed),workloadRetired:boolean(snapshot?.retired),
-        containment:projectContainment(snapshot?.containment),inspectorFailure:INSPECTOR_FAILURE_CODES.includes(c?.failureCode)?c.failureCode:null,generatedDiagnostic:projectGenerated(c?.generatedDiagnostic),rejectionFingerprint:projectRejection(c?.rejectionFingerprint),rejectionOrigin:projectOrigin(c?.rejectionOrigin),
+        wasmDiagnostic:c?.wasmDiagnostic?validateWasmDiagnostic(c.wasmDiagnostic):null,containment:projectContainment(snapshot?.containment),inspectorFailure:INSPECTOR_FAILURE_CODES.includes(c?.failureCode)?c.failureCode:null,generatedDiagnostic:projectGenerated(c?.generatedDiagnostic),rejectionFingerprint:projectRejection(c?.rejectionFingerprint),rejectionOrigin:projectOrigin(c?.rejectionOrigin),
         ...Object.fromEntries(numeric.map(k=>[k,count(c?.[k])])),...Object.fromEntries(flags.map(k=>[k,boolean(c?.[k])])),
         wholeGroupRetirement:null,releaseAcceptance:false};
     return detail;
 }
 export function validateInstrumentedChildFailure(detail){
-    keys(detail,['schema','phase','unknown','knownWorkload','workloadFailed','workloadRetired','containment','inspectorFailure','generatedDiagnostic','rejectionFingerprint','rejectionOrigin',...numeric,...flags,'wholeGroupRetirement','releaseAcceptance']);
-    assert.equal(detail.schema,'instrumented-child-failure-detail-v5');assert.ok([...CHILD_FAILURE_PHASES,'unknown'].includes(detail.phase));if(detail.containment!==null)validateContainment(detail.containment);validateGenerated(detail.generatedDiagnostic);if(detail.rejectionFingerprint!==null)validateRejectionFingerprint(detail.rejectionFingerprint);if(detail.rejectionOrigin!==null)validateRejectionOrigin(detail.rejectionOrigin);
+    keys(detail,['schema','phase','unknown','knownWorkload','workloadFailed','workloadRetired','wasmDiagnostic','containment','inspectorFailure','generatedDiagnostic','rejectionFingerprint','rejectionOrigin',...numeric,...flags,'wholeGroupRetirement','releaseAcceptance']);
+    assert.equal(detail.schema,'instrumented-child-failure-detail-v6');assert.ok([...CHILD_FAILURE_PHASES,'unknown'].includes(detail.phase));if(detail.wasmDiagnostic!==null)validateWasmDiagnostic(detail.wasmDiagnostic);if(detail.containment!==null)validateContainment(detail.containment);validateGenerated(detail.generatedDiagnostic);if(detail.rejectionFingerprint!==null)validateRejectionFingerprint(detail.rejectionFingerprint);if(detail.rejectionOrigin!==null)validateRejectionOrigin(detail.rejectionOrigin);
     for(const k of ['unknown','knownWorkload'])assert.equal(typeof detail[k],'boolean');
     for(const k of ['workloadFailed','workloadRetired',...flags])assert.ok(detail[k]===null||typeof detail[k]==='boolean');
     for(const k of numeric)assert.ok(detail[k]===null||count(detail[k])===detail[k]);

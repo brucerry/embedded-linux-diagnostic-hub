@@ -16,9 +16,9 @@ import { instrumentedSetupCommand } from './instrumented-gateway-policy.mjs';
 export function createInstrumentedGatewayDriver(admission) {
     const b=requireInstrumentedGatewayBootstrap(admission);
     const {s,context,root,esbuildPath,environment,ports,cap,filesystem,read,verifyTools:toolIdentity,command,acks,sourceFile,stableSource,provider,selected,npmVersion}=b;
-    let phase='prepared',failedAt=null,preparationPhase=null,censusPhase=null,admitted=false,failed=false,done=false,buildUsed=false,parentOwner;
+    let phase='prepared',failedAt=null,preparationPhase=null,censusPhase=null,admitted=false,failed=false,done=false,buildUsed=false,parentOwner,joinIssued=false;
     const snapshot=()=>({phase,failedAt,preparationPhase,censusPhase,admitted,failed,done,bootstrap:b.snapshot(),parent:parentOwner?.snapshot()??null,processGroupRetirement:null,releaseAcceptance:false});
-    const owner=Object.freeze({snapshot,async run(){
+    const owner=Object.freeze({snapshot,async joinFailedDirectRetirement(){assert.ok(failed&&failedAt==='pair'&&parentOwner&&!joinIssued);joinIssued=true;await parentOwner.joinFailedDirectRetirement();b.assertPostBuildDirectSettled();cap.assertSettled();},async run(){
         assert.equal(admitted,false);admitted=true;phase='source';retained.add(owner);
         try {
             await stableSource();await toolIdentity();phase='staging';
