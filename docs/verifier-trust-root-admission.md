@@ -84,9 +84,12 @@ Distinguish three records:
 
 Current deployed bootstrap keys, quorum sizes, versions, expiry times, target bytes and root/export
 hashes remain **unknown**: this task did not access live trust material. Do not fill them from a
-sample or documentation schedule. The checked-in candidate JSON retains `null` for these facts. Its
-zero version floors denote unestablished rollback history, not observed remembered versions; its
-public-good instance is a proposal pending independent repository-visibility selection.
+sample or documentation schedule. The original checked-in example retained `null` for these facts.
+It now records the historical acquired observations described in
+[verifier-custody.md](verifier-custody.md), with six remaining fields still null; this does not
+establish current admission. Its zero version floors denote unestablished rollback history, not
+observed remembered versions; its public-good instance is a proposal pending independent
+repository-visibility selection.
 
 ## Update, expiry and revocation decision
 

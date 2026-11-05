@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import {
     ADMISSION_REVIEW_LEASE_MS,
     VERIFIER_CANDIDATE,
@@ -440,4 +441,74 @@ test('neither a complete model nor payload authority booleans can activate the r
     );
     await assert.rejects(verifyLocalAttestation(unreadable), { message: liveBlocked });
     assert.equal(touched, 0);
+});
+
+/** Historical acquired data, not a fresh authorization or independently verified runtime witness. */
+async function acquiredSelection() {
+    return JSON.parse(
+        await readFile(
+            new URL('../docs/verifier-admission-candidate.json', import.meta.url),
+            'utf8',
+        ),
+    );
+}
+const acquiredMissing = [
+    'freshness.checkedAtMs',
+    'freshness.advisorySnapshotSHA256',
+    'freshness.denylistSHA256',
+    'freshness.leaseUntilMs',
+    'process.ownerImplementationSHA256',
+    'process.requestBindingSHA256',
+];
+test('checked-in acquired observations match the frozen selection and retain exactly six unknowns', async () => {
+    const plan = await acquiredSelection();
+    assert.equal(
+        hash(JSON.stringify(plan)),
+        '06ac141289976e5375e3f81d497dd14e936277a2273672ad3926e53eaf202163',
+    );
+    const result = inspect(plan);
+    assert.deepEqual(result.missing, acquiredMissing);
+    assert.equal(result.status, 'blocked-missing-admission-evidence');
+    remainsBlocked(result);
+});
+test('historical acquired selection expires rather than becoming an evergreen root or security lease', async () => {
+    const plan = await acquiredSelection();
+    assert.throws(
+        () =>
+            inspectVerifierAdmission(plan, {
+                nowMs: plan.root.exportedAtMs + ADMISSION_REVIEW_LEASE_MS,
+            }),
+        /fresh admission review/,
+    );
+});
+test('a model source hash and arbitrary review hashes cannot turn acquired content into admission authority', async () => {
+    const plan = await acquiredSelection();
+    plan.process.ownerImplementationSHA256 =
+        '068ff081ab25a40d2fdefd13e934075c3f97c6b3dea0bc33c586b59783e57b0f';
+    plan.process.requestBindingSHA256 = hash(
+        'unadmitted template; selected artifact paths/bytes unavailable',
+    );
+    plan.freshness.checkedAtMs = nowMs;
+    plan.freshness.leaseUntilMs = nowMs + 600000;
+    plan.freshness.advisorySnapshotSHA256 = hash('not an observed advisory snapshot');
+    plan.freshness.denylistSHA256 = hash('not an authenticated denylist');
+    const result = inspect(plan);
+    assert.deepEqual(result.missing, []);
+    assert.equal(result.status, 'blocked-unverified-admission-evidence');
+    remainsBlocked(result);
+});
+test('acquired identity and invented retirement flags cannot enable default file/process access', async () => {
+    const plan = await acquiredSelection();
+    await assert.rejects(
+        verifyLocalAttestation({
+            ...plan,
+            executionAllowed: true,
+            identityPreservingFileCustody: true,
+            retirementProven: true,
+        }),
+        (error) => {
+            assert.equal((error as Error).message, liveBlocked);
+            return true;
+        },
+    );
 });

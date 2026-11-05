@@ -61,3 +61,45 @@ This new model does not fill those fields or establish remembered authenticated 
 history, latest-root/revocation status, current leases, ultimate anchor approval or real process
 retirement. Its acquired selections must be revalidated at action time; the prior conditional
 TUF/package observations are not a live authorization.
+
+## Acquisition reconciliation and the six remaining fields
+
+The checked-in `verifier-admission-candidate.json` now preserves the exact thirteen observations
+from the acquired selection (compact JSON SHA256
+`06ac141289976e5375e3f81d497dd14e936277a2273672ad3926e53eaf202163`). This is a historical, PGI-only
+data selection under the selected publisher/bootstrap policy, not a fresh admission. Native/package,
+bootstrap, signed metadata and source-derived JSONL associations were already recorded in the
+private acquisition; they are not newly authenticated or executed by these source tests. Four of the
+thirteen observations are the individual metadata role records. The original all-unknown example
+remains in Git history. No one of the six remaining fields is closed.
+
+| Missing field                       | What retained evidence establishes                              | What is still required                                                                                                                                                             |
+| ----------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `freshness.checkedAtMs`             | Acquisition and conditional validation timestamps               | The time of a real current security/advisory/revocation review; a local file-read timestamp is not that review                                                                     |
+| `freshness.advisorySnapshotSHA256`  | Publisher release/index signatures and selected package bytes   | Exact retained current advisory/compromise sources and their bounded review; release metadata is not an advisory snapshot                                                          |
+| `freshness.denylistSHA256`          | No current compromise/revocation assessment                     | A reviewed exact denylist snapshot/policy; hashing an invented empty list is insufficient                                                                                          |
+| `freshness.leaseUntilMs`            | Signed role expiries and a proposed 24-hour consistency ceiling | Explicit action-time admission lease under the reviewed security policy, covering the complete operation; root expiry does not mint a lease                                        |
+| `process.ownerImplementationSHA256` | The model's exact source hash and fake-port tests               | Reviewed actual file/process owner and native adapter, independently supportable retirement observations, stable scope across both subjects; a model source hash cannot substitute |
+| `process.requestBindingSHA256`      | Fixed command/environment proposal                              | Exact selected subject/archive/record/bundle/root/tool/config identities, arguments, environment and nonce bound to the admitted owner; release artifact access remains held       |
+
+Identity-preserving use remains unsupported: the current model hashes a selected descriptor, closes
+it, then supplies path arguments to the executor, with later rechecks. Those checks can detect
+persistent replacement but cannot exclude substitution during execution followed by restoration.
+Merely retaining a descriptor would still not bind the bytes consumed by an executable or path-based
+input parser. No `/proc` descriptor remapping, implicit trusted-parent policy, inode-as-content
+identity, hardlink creation, permission change or launch adapter is adopted here. Default execution
+is denied before file/process access, even if a payload claims identity preservation or retirement.
+
+The 271 tests establish **model custody**, including held/rejected closes, held dispatch, missing
+streams/exit/close/group observations, forced/contradictory groups, acknowledged observer disposal
+and stale callbacks. They do not establish that native file or descendant-group observations can be
+supplied. Source tests now also bind the actual acquired selection, require its six nulls, reject
+its stale reuse, and show that filling the six fields with model/template/invented hashes still
+confers no authority. No unchanged custody suite is new native evidence.
+
+Separate decisions/actions remain: (1) authorize a concrete current read-only security/root review
+and define the admission lease/remembered rollback policy; (2) choose and independently review an
+identity-preserving native adapter, or expressly approve a precise threat-model assumption for
+immutable/trusted inputs; (3) once capability and evidence exist, separately approve exact stage-B
+verifier and selected-artifact access. Permission alone cannot supply missing OS/process-group
+observations. All execution, artifact, package/storage, native/DUT and spending holds stay in force.
