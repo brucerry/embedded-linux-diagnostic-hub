@@ -657,3 +657,11 @@ test('a missing replayed entry reports the exact fixed predicate while still fai
     await assert.rejects(o.start());await assert.rejects(o.finish());await o.retirement;
     assert.equal(o.snapshot().failureCode,'entry-missing');assert.equal(o.snapshot().observerRetired,true);
 });
+
+test('pending callback overflow has its own fixed code rather than a script-length attribution',async()=>{
+    const f=setup();f.controls.holdSource=true;const o=createCompiledSourceObserver(f.selected,f.scripts,()=>f.session),task=o.start(),rejected=assert.rejects(task);await pulse();
+    for(let i=2;i<18;i++)f.session.emit('Debugger.scriptParsed',{params:{scriptId:String(i),url:pathToFileURL(f.selected.artifactPath).href,length:f.bytes.toString().length}});
+    assert.equal(o.snapshot().failureCode,'inspector-pending-bound');assert.equal(o.snapshot().pendingCallbacks,16);
+    for(const cb of f.callbacks.get('Debugger.getScriptSource')??[])cb(null,{scriptSource:f.bytes.toString()});await rejected;await assert.rejects(o.finish());await o.retirement;
+    assert.equal(o.snapshot().observerRetired,true);assert.equal(o.snapshot().failureCode,'inspector-pending-bound');
+});

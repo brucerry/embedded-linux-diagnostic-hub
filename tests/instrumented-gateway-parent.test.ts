@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { deriveInstrumentedGeneratedInventory } from '../scripts/lib/instrumented-gateway-generated.mjs';
 import { encodeInstrumentedChildFailure,projectInstrumentedChildFailure } from '../scripts/lib/instrumented-gateway-failure.mjs';
 import { instrumentedFailureSummary } from '../scripts/lib/instrumented-gateway-policy.mjs';
 import test from 'node:test';
@@ -43,16 +44,16 @@ function installation(){
 async function prepared(f:ReturnType<typeof installation>){
     const c=await censusInstrumentedGateway(root,1000,f.filesystem),artifactPath=root+'/ownership.cjs',source={sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)},artifactSHA256=sourceDigest(c.scripts.get(artifactPath));
     const selection={...source,artifactPath,artifactSHA256,observerSHA256:'c'.repeat(64)};
-    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v2',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
-        rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,toolchain:{nodePath:'/tools/node',nodeSHA256:sourceDigest(nodeBytes)},
+    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v3',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
+        generatedInventory:deriveInstrumentedGeneratedInventory(c.scripts,root),generatedInventorySHA256:sourceDigest(JSON.stringify(deriveInstrumentedGeneratedInventory(c.scripts,root))),rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,toolchain:{nodePath:'/tools/node',nodeSHA256:sourceDigest(nodeBytes)},
         activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,fileInventory:c.inventory,fileInventorySHA256:c.inventorySHA256,scriptInventory:c.scriptInventory,scriptInventorySHA256:c.scriptInventorySHA256};
     return{binding,selection,scripts:c.scripts};
 }
 function childReceipt(p:any,mode:string){
-    const common={source:p.binding.source,bindingSHA256:sourceDigest(JSON.stringify(p.binding)+'\n'),artifactSHA256:p.selection.artifactSHA256,instrumented:true,compiledScripts:1,elapsedMs:1,releaseAcceptance:false,wholeGroupRetirement:null,shippedCLIBehavior:null};
-    if(mode==='compatibility')return{...common,schema:'instrumented-node-inspector-compatibility-v1',status:'exact-prelaunch-bytes-match-replayed-sources',builtinScripts:0,builtinIdentityVerified:false,observerRetired:true,productWorkload:null};
+    const common={source:p.binding.source,bindingSHA256:sourceDigest(JSON.stringify(p.binding)+'\n'),artifactSHA256:p.selection.artifactSHA256,instrumented:true,compiledScripts:1,generatedScripts:[],elapsedMs:1,releaseAcceptance:false,wholeGroupRetirement:null,shippedCLIBehavior:null};
+    if(mode==='compatibility')return{...common,schema:'instrumented-node-inspector-compatibility-v2',status:'exact-prelaunch-bytes-match-replayed-sources',builtinScripts:0,builtinIdentityVerified:false,observerRetired:true,productWorkload:null};
     const zero={stopping:true,serverListening:false,cleanupTimers:0,requestTasks:0,httpSockets:0,httpResponses:0,httpBodyReaders:0,pendingConnections:0,sessions:0,inFlight:0,ownedSessions:0,retiringSessions:0,connectionAttempts:0,cancelledAttemptCache:0,sessionOwners:0,allSessionOwners:0};
-    return{...common,schema:'separate-instrumented-gateway-ownership-check-v1',rawCLIReference:RAW_CLI_REFERENCE,evidenceSeparation:'this-instrumented-build-only-no-transfer-to-raw-CLI',before:{...zero,stopping:false,serverListening:true,cleanupTimers:1},afterHealth:{...zero,stopping:false,serverListening:true,cleanupTimers:1},afterClose:zero,
+    return{...common,schema:'separate-instrumented-gateway-ownership-check-v2',rawCLIReference:RAW_CLI_REFERENCE,evidenceSeparation:'this-instrumented-build-only-no-transfer-to-raw-CLI',before:{...zero,stopping:false,serverListening:true,cleanupTimers:1},afterHealth:{...zero,stopping:false,serverListening:true,cleanupTimers:1},afterClose:zero,
         health:{role:'healthy',status:200,responseBytes:79,elapsedMs:1,requestRetired:true,responseRetired:true,socketRetired:true,wholeGroupRetirement:null,releaseAcceptance:false},observerRecordSHA256:'a'.repeat(64),productCloseAcknowledged:true,localObserverRetired:true,shippingGC:null,shippingPerformance:null};
 }
 function host(f:ReturnType<typeof installation>,p:any){
@@ -138,7 +139,7 @@ for(const held of [false,true])test('bound failure diagnostics survive command r
     if(held)h.expire();await rejected;
     const state=owner.snapshot();assert.equal(state.failedAt,'compatibility');assert.equal(state.completed,false);assert.equal(state.childFailure.envelope,'observed-bound');
     assert.equal(state.childFailure.detail.inspectorFailure,'script-unadmitted');assert.equal(state.childFailure.directRetired,!held);assert.equal(h.children.length,1);
-    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v3');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
+    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v4');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
     if(held)h.children[0].close(1);await assert.rejects(owner.run());assert.equal(h.children.length,1);
 });
 test('an unbound failure payload stays diagnostic-missing and never starts ownership',async()=>{

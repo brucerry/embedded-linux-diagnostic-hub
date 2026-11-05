@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generatedReceiptRowsMatch } from './instrumented-gateway-generated.mjs';
 import { createCompiledSourceObserver } from './instrumented-gateway-observer.mjs';
 import { snapshotPreparedInstrumentedGateway } from './instrumented-gateway-check.mjs';
 import { sourceDigest } from './committed-source-bridge.mjs';
@@ -32,9 +33,9 @@ export function startInstrumentedInspectorCompatibility(prepared, ports) {
                 if(!primary){
                     assert.deepEqual(observation.selected,selection);assert.ok(observation.compiledScripts.some(r=>r.path===selection.artifactPath&&r.sha256===selection.artifactSHA256));
                     const elapsedMs=ports.now()-started;assert.ok(Number.isFinite(elapsedMs)&&elapsedMs>=0&&elapsedMs<=15000);
-                    const receipt={schema:'instrumented-node-inspector-compatibility-v1',status:'exact-prelaunch-bytes-match-replayed-sources',instrumented:true,
+                    const receipt={schema:'instrumented-node-inspector-compatibility-v2',status:'exact-prelaunch-bytes-match-replayed-sources',instrumented:true,
                         source:binding.source,bindingSHA256:sourceDigest(JSON.stringify(binding)+'\n'),artifactSHA256:selection.artifactSHA256,
-                        compiledScripts:observation.compiledScripts.length,builtinScripts:observation.builtinScripts,builtinIdentityVerified:false,
+                        generatedScripts:generatedReceiptRowsMatch(observation.generatedScripts,binding.generatedInventory),compiledScripts:observation.compiledScripts.length,builtinScripts:observation.builtinScripts,builtinIdentityVerified:false,
                         observerRetired:true,elapsedMs,productWorkload:null,shippedCLIBehavior:null,wholeGroupRetirement:null,releaseAcceptance:false};
                     const bytes=Buffer.from(JSON.stringify(receipt)+'\n');assert.ok(bytes.length<=16384);
                     retired=true;retained.delete(owner);resolveClosed(snapshot());resolve({receipt,bytes});

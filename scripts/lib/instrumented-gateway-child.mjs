@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generatedReceiptRowsMatch } from './instrumented-gateway-generated.mjs';
 import { encodeInstrumentedChildFailure, parseInstrumentedChildFailure, projectInstrumentedChildFailure } from './instrumented-gateway-failure.mjs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -50,15 +51,16 @@ export function validateInstrumentedChildReceipt(prepared,mode,r){
     assert.ok(modes.includes(mode));assert.deepEqual(r.source,prepared.binding.source);
     assert.equal(r.bindingSHA256,sourceDigest(JSON.stringify(prepared.binding)+'\n'));assert.equal(r.artifactSHA256,prepared.selection.artifactSHA256);
     assert.equal(r.instrumented,true);assert.equal(r.releaseAcceptance,false);assert.equal(r.wholeGroupRetirement,null);assert.equal(r.shippedCLIBehavior,null);
-    assert.ok(Number.isSafeInteger(r.compiledScripts)&&r.compiledScripts>0&&r.compiledScripts<=2048);
+    generatedReceiptRowsMatch(r.generatedScripts,prepared.binding.generatedInventory);
+    assert.ok(Number.isSafeInteger(r.compiledScripts)&&r.compiledScripts>0&&r.compiledScripts+r.generatedScripts.length<=2048);
     if(mode==='compatibility'){
-        keys(r,['schema','status','instrumented','source','bindingSHA256','artifactSHA256','compiledScripts','builtinScripts','builtinIdentityVerified','observerRetired','elapsedMs','productWorkload','shippedCLIBehavior','wholeGroupRetirement','releaseAcceptance']);
-        assert.equal(r.schema,'instrumented-node-inspector-compatibility-v1');assert.equal(r.status,'exact-prelaunch-bytes-match-replayed-sources');
+        keys(r,['schema','status','instrumented','source','bindingSHA256','artifactSHA256','compiledScripts','generatedScripts','builtinScripts','builtinIdentityVerified','observerRetired','elapsedMs','productWorkload','shippedCLIBehavior','wholeGroupRetirement','releaseAcceptance']);
+        assert.equal(r.schema,'instrumented-node-inspector-compatibility-v2');assert.equal(r.status,'exact-prelaunch-bytes-match-replayed-sources');
         assert.equal(r.observerRetired,true);assert.equal(r.productWorkload,null);assert.equal(r.builtinIdentityVerified,false);elapsed(r.elapsedMs,15000);
-        assert.ok(Number.isSafeInteger(r.builtinScripts)&&r.builtinScripts>=0&&r.builtinScripts+r.compiledScripts<=2048);
+        assert.ok(Number.isSafeInteger(r.builtinScripts)&&r.builtinScripts>=0&&r.builtinScripts+r.compiledScripts+r.generatedScripts.length<=2048);
     }else{
-        keys(r,['schema','instrumented','source','rawCLIReference','evidenceSeparation','bindingSHA256','artifactSHA256','before','afterHealth','afterClose','health','observerRecordSHA256','compiledScripts','productCloseAcknowledged','localObserverRetired','elapsedMs','wholeGroupRetirement','shippedCLIBehavior','shippingPerformance','shippingGC','releaseAcceptance']);
-        assert.equal(r.schema,'separate-instrumented-gateway-ownership-check-v1');assert.deepEqual(r.rawCLIReference,RAW_CLI_REFERENCE);
+        keys(r,['schema','instrumented','source','rawCLIReference','evidenceSeparation','bindingSHA256','artifactSHA256','before','afterHealth','afterClose','health','observerRecordSHA256','compiledScripts','generatedScripts','productCloseAcknowledged','localObserverRetired','elapsedMs','wholeGroupRetirement','shippedCLIBehavior','shippingPerformance','shippingGC','releaseAcceptance']);
+        assert.equal(r.schema,'separate-instrumented-gateway-ownership-check-v2');assert.deepEqual(r.rawCLIReference,RAW_CLI_REFERENCE);
         assert.equal(r.evidenceSeparation,'this-instrumented-build-only-no-transfer-to-raw-CLI');assert.equal(r.productCloseAcknowledged,true);assert.equal(r.localObserverRetired,true);
         assert.equal(r.shippingGC,null);assert.equal(r.shippingPerformance,null);assert.match(r.observerRecordSHA256,/^[a-f0-9]{64}$/);elapsed(r.elapsedMs,45000);
         counters(r.before,false);counters(r.afterHealth,false);counters(r.afterClose,true);
