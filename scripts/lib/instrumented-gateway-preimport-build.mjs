@@ -17,7 +17,8 @@ import {snapshotPreparedInstrumentedGateway} from './instrumented-gateway-snapsh
 export const PREIMPORT_TARGET_ENTRY='tests/fixtures/instrumented-gateway-preimport-target.ts';
 export const PREIMPORT_ACTIVATION='tests/fixtures/instrumented-gateway-preimport-activate.cjs';
 const GUARD='tests/fixtures/instrumented-gateway-resolution-guard.cjs',OBSERVER='scripts/lib/instrumented-gateway-observer.mjs';
-const preparedBuilds=new WeakMap(),retained=new Set();
+const preparedBuilds=new WeakMap(),retained=new Set(),failures=new WeakMap();
+export const preimportBuildFailure=error=>structuredClone(failures.get(error)??null);
 const absolute=p=>assert.ok(typeof p==='string'&&p.startsWith('/')&&path.posix.normalize(p)===p&&Buffer.byteLength(p)<=4096&&!/[\\\x00-\x20\x7f]/.test(p));
 function acknowledgement(plan,value){
     const ack=structuredClone(value);assert.deepEqual(Object.keys(ack).sort(),['command','cwd','id','lifecycle','owner','role']);
@@ -86,7 +87,7 @@ export async function preparePreimportCompatibilityBuild(input,ports){
     for(const key of ['sourceCommit','sourceTree'])assert.match(input[key],/^[a-f0-9]{40}$/);
     ports=Object.freeze({...ports,filesystem:Object.freeze({...ports.filesystem})});for(const key of ['observeToolchain','execute','read','assertFilesSettled','queryAbsence'])assert.equal(typeof ports[key],'function');
     const source={sourceCommit:input.sourceCommit,sourceTree:input.sourceTree},selected={root:input.root,...source},stage=input.root+'/validation/gateway-ownership',root=stage+'/instrumented';
-    const owner={phase:'source',failed:false,pendingAbsence:0};retained.add(owner);
+    const owner={phase:'source',checkpoint:'source-admission',failed:false,pendingAbsence:0,targetAcknowledged:false,earlyPrepared:false,inputOrdinal:null,expectedInputs:null,observedInputs:null};retained.add(owner);
     try{
         const bridge=await observeSourceBridge(source,ports.sourceProvider);assertInstrumentedProductionBridge(bridge);
         const row=p=>{const r=bridge.inventory.find(v=>v.path===p);assert.ok(r);return r;};
@@ -97,26 +98,26 @@ export async function preparePreimportCompatibilityBuild(input,ports){
         const tools=async()=>instrumentedCompilerIdentity(await ports.observeToolchain(),input.root),toolchain=await tools();
         async function stable(){assert.deepEqual(await observeSourceBridge(source,ports.sourceProvider),bridge);assert.deepEqual(await tools(),toolchain);assert.equal(ports.assertFilesSettled(),undefined);}
         const absent=async file=>{owner.pendingAbsence++;let observed=false;try{const query=ports.queryAbsence(file);assert.ok(types.isPromise(query));try{await query;observed=true;}catch(error){observed=true;assert.equal(error?.code,'ENOENT');return;}assert.fail('Pre-existing build output cannot be replaced.');}finally{if(observed)owner.pendingAbsence--;}};
-        owner.phase='absence';for(const file of [root+'/ownership.cjs',root+'/preimport.mjs',stage+'/target-meta.json',stage+'/preimport-meta.json'])await absent(file);
-        await stable();owner.phase='target-build';
+        owner.phase='absence';owner.checkpoint='output-absence';for(const file of [root+'/ownership.cjs',root+'/preimport.mjs',stage+'/target-meta.json',stage+'/preimport-meta.json'])await absent(file);
+        await stable();owner.phase='target-build';owner.checkpoint='target-command';
         const command=Object.freeze([toolchain.nodePath,toolchain.esbuildPath,input.root+'/'+PREIMPORT_TARGET_ENTRY,'--bundle','--platform=node','--format=cjs','--tree-shaking=false','--outfile='+root+'/ownership.cjs','--metafile='+stage+'/target-meta.json','--external:ssh2']);
-        const plan=Object.freeze({owner:randomBytes(16).toString('hex'),id:1,role:'build',cwd:input.root,command});const targetAck=acknowledgement(plan,await ports.execute(plan));await stable();
-        const target=Buffer.from(await ports.read(root+'/ownership.cjs',32*1024**2)),metaBytes=Buffer.from(await ports.read(stage+'/target-meta.json',4*1024**2)),meta=readInstrumentedMetafile(metaBytes);
-        const external=inspectPreimportTarget(target);assert.deepEqual(external,[...new Set([...targetGraph.edges.values()].flat().filter(v=>v.external).map(v=>v.path))].sort());const output='validation/gateway-ownership/instrumented/ownership.cjs';
-        assert.deepEqual(Object.keys(meta).sort(),['inputs','outputs']);assert.deepEqual(Object.keys(meta.outputs),[output]);assert.deepEqual(Object.keys(meta.inputs).sort(),[...targetGraph.files.keys()].sort());
-        for(const [file,v]of Object.entries(meta.inputs)){
+        const plan=Object.freeze({owner:randomBytes(16).toString('hex'),id:1,role:'build',cwd:input.root,command});const rawTargetAck=await ports.execute(plan);owner.checkpoint='target-acknowledgement';const targetAck=acknowledgement(plan,rawTargetAck);owner.targetAcknowledged=true;owner.checkpoint='target-post-source';await stable();
+        owner.checkpoint='target-read-js';const target=Buffer.from(await ports.read(root+'/ownership.cjs',32*1024**2));owner.checkpoint='target-read-meta';const metaBytes=Buffer.from(await ports.read(stage+'/target-meta.json',4*1024**2));owner.checkpoint='target-parse-meta';const meta=readInstrumentedMetafile(metaBytes);
+        owner.checkpoint='target-inspect-js';const external=inspectPreimportTarget(target);owner.checkpoint='target-external-imports';assert.deepEqual(external,[...new Set([...targetGraph.edges.values()].flat().filter(v=>v.external).map(v=>v.path))].sort());const output='validation/gateway-ownership/instrumented/ownership.cjs';
+        owner.checkpoint='target-input-inventory';owner.expectedInputs=targetGraph.files.size;owner.observedInputs=meta.inputs&&typeof meta.inputs==='object'?Object.keys(meta.inputs).length:null;assert.deepEqual(Object.keys(meta).sort(),['inputs','outputs']);assert.deepEqual(Object.keys(meta.outputs),[output]);assert.deepEqual(Object.keys(meta.inputs).sort(),[...targetGraph.files.keys()].sort());
+        let ordinal=0;for(const [file,v]of Object.entries(meta.inputs)){owner.inputOrdinal=++ordinal;owner.checkpoint='target-input-edges';
             assert.ok(targetGraph.files.has(file),'Unbound target input.');assert.deepEqual(normalizedEdges(v.imports),normalizedEdges(targetGraph.edges.get(file)));
-            assert.equal(v.bytes,row(file).bytes);assert.ok(Array.isArray(v.imports));
-            for(const edge of v.imports){if(edge.external)assert.ok(edge.path==='ssh2'||(edge.path.startsWith('node:')&&isBuiltin(edge.path)&&edge.path!=='node:inspector'));else assert.ok(Object.hasOwn(meta.inputs,edge.path));}
+            owner.checkpoint='target-input-bytes';assert.equal(v.bytes,row(file).bytes);assert.ok(Array.isArray(v.imports));
+            owner.checkpoint='target-input-members';for(const edge of v.imports){if(edge.external)assert.ok(edge.path==='ssh2'||(edge.path.startsWith('node:')&&isBuiltin(edge.path)&&edge.path!=='node:inspector'));else assert.ok(Object.hasOwn(meta.inputs,edge.path));}
         }
-        for(const file of [PREIMPORT_TARGET_ENTRY,'gateway/server.ts','backend/ssh/session.ts'])assert.ok(Object.hasOwn(meta.inputs,file));
-        const result=meta.outputs[output];assert.equal(result.entryPoint,PREIMPORT_TARGET_ENTRY);assert.equal(result.bytes,target.length);assert.ok(Array.isArray(result.exports)&&(result.exports.length===0||JSON.stringify(result.exports)==='["createGateway"]'));
-        assert.deepEqual(Object.keys(result.inputs).sort(),Object.keys(meta.inputs).sort());for(const v of Object.values(result.inputs))assert.ok(Number.isSafeInteger(v.bytesInOutput)&&v.bytesInOutput>0&&v.bytesInOutput<=target.length);
-        for(const edge of result.imports)assert.ok(edge.external===true&&edge.kind==='require-call'&&(edge.path==='ssh2'||(edge.path.startsWith('node:')&&isBuiltin(edge.path)&&edge.path!=='node:inspector')));
+        owner.checkpoint='target-required-inputs';for(const file of [PREIMPORT_TARGET_ENTRY,'gateway/server.ts','backend/ssh/session.ts'])assert.ok(Object.hasOwn(meta.inputs,file));
+        owner.checkpoint='target-output-identity';const result=meta.outputs[output];assert.equal(result.entryPoint,PREIMPORT_TARGET_ENTRY);assert.equal(result.bytes,target.length);assert.ok(Array.isArray(result.exports)&&(result.exports.length===0||JSON.stringify(result.exports)==='["createGateway"]'));
+        owner.checkpoint='target-output-inputs';assert.deepEqual(Object.keys(result.inputs).sort(),Object.keys(meta.inputs).sort());for(const v of Object.values(result.inputs))assert.ok(Number.isSafeInteger(v.bytesInOutput)&&v.bytesInOutput>0&&v.bytesInOutput<=target.length);
+        owner.checkpoint='target-output-imports';for(const edge of result.imports)assert.ok(edge.external===true&&edge.kind==='require-call'&&(edge.path==='ssh2'||(edge.path.startsWith('node:')&&isBuiltin(edge.path)&&edge.path!=='node:inspector')));
         assert.deepEqual([...new Set(result.imports.map(v=>v.path))].sort(),external);
-        owner.phase='early-build';await absent(root+'/preimport.mjs');await absent(stage+'/preimport-meta.json');let earlyExecutions=0;
-        const early=await prepareEarlyArtifact(selected,{...ports,async execute(p){assert.equal(earlyExecutions++,0);assert.equal(p.command[2],input.root+'/'+EARLY_ENTRY);return ports.execute(p);}});assert.equal(earlyExecutions,1);await stable();
-        owner.phase='census';const census=await censusInstrumentedGateway(root,input.uid,ports.filesystem,'preimport-v1');assert.ok(census.scripts.get(root+'/ownership.cjs').equals(target));assert.equal(sourceDigest(census.scripts.get(root+'/preimport.mjs')),early.artifactSHA256);
+        owner.phase='early-build';owner.checkpoint='early-preparation';await absent(root+'/preimport.mjs');await absent(stage+'/preimport-meta.json');let earlyExecutions=0;
+        const early=await prepareEarlyArtifact(selected,{...ports,async execute(p){assert.equal(earlyExecutions++,0);assert.equal(p.command[2],input.root+'/'+EARLY_ENTRY);return ports.execute(p);}});assert.equal(earlyExecutions,1);owner.earlyPrepared=true;owner.checkpoint='early-post-source';await stable();
+        owner.phase='census';owner.checkpoint='installation-census';const census=await censusInstrumentedGateway(root,input.uid,ports.filesystem,'preimport-v1');assert.ok(census.scripts.get(root+'/ownership.cjs').equals(target));assert.equal(sourceDigest(census.scripts.get(root+'/preimport.mjs')),early.artifactSHA256);
         assert.ok(census.scripts.get(root+'/activate.cjs').equals(await sourceFile(PREIMPORT_ACTIVATION)));assert.ok(census.scripts.get(root+'/resolution-guard.cjs').equals(await sourceFile(GUARD)));
         const pkg=JSON.parse((await sourceFile('package.json')).toString()),lock=JSON.parse((await sourceFile('package-lock.json')).toString()),projected=projectGatewayLock(pkg,lock);
         assert.deepEqual(JSON.parse(census.scripts.get(root+'/package.json').toString()),projected.manifest);validatePreparedGatewayLock(JSON.parse(census.scripts.get(root+'/package-lock.json').toString()),projected.manifest,lock);deriveSshReadinessPlan(census.scripts,root);
@@ -127,9 +128,9 @@ export async function preparePreimportCompatibilityBuild(input,ports){
             generatedInventory,generatedInventorySHA256:sourceDigest(JSON.stringify(generatedInventory)),fileInventory:census.inventory,fileInventorySHA256:census.inventorySHA256,scriptInventory:census.scriptInventory,scriptInventorySHA256:census.scriptInventorySHA256,
             preimport:{schema:'source-acknowledged-preimport-pair-v1',earlyArtifactSHA256:early.artifactSHA256,earlyEntrySHA256:row(EARLY_ENTRY).sha256,earlyGraphSHA256:early.graphSHA256,earlyMetafileSHA256:early.metafileSHA256,earlyAcknowledgementSHA256:early.commandAcknowledgementSHA256,targetGraphSHA256:sourceDigest(JSON.stringify([...targetGraph.files].map(([p,b])=>({path:p,bytes:b.length,sha256:sourceDigest(b)})).sort((a,b)=>a.path.localeCompare(b.path)))),targetMetafileSHA256:sourceDigest(metaBytes),targetAcknowledgementSHA256:sourceDigest(JSON.stringify(targetAck))},
             provenance:'local-source-command-and-byte-consistency-not-service-attestation',buildProvenanceVerified:false,wholeGroupRetirement:null,releaseAcceptance:false};
-        const copied=snapshotPreparedInstrumentedGateway({binding,selection,scripts:census.scripts});await stable();
+        owner.checkpoint='final-binding';const copied=snapshotPreparedInstrumentedGateway({binding,selection,scripts:census.scripts});await stable();
         owner.phase='prepared';retained.delete(owner);const capability=Object.freeze({snapshot:()=>({source:{...source},targetSHA256:selection.artifactSHA256,earlySHA256:early.artifactSHA256,buildCommands:2,wholeGroupRetirement:null,releaseAcceptance:false})});
         preparedBuilds.set(capability,{prepared:copied,uid:input.uid,census:census.census,used:false});return capability;
-    }catch(cause){owner.failed=true;throw Object.assign(Error('Preimport pair preparation failed; no launch or retry.',{cause}),{owner});}
+    }catch(cause){owner.failed=true;const error=Object.assign(Error('Preimport pair preparation failed; no launch or retry.',{cause}),{owner});const count=n=>Number.isSafeInteger(n)&&n>=0&&n<=100000?n:null;failures.set(error,{phase:owner.phase,checkpoint:owner.checkpoint,targetAcknowledged:owner.targetAcknowledged,earlyPrepared:owner.earlyPrepared,inputOrdinal:count(owner.inputOrdinal),expectedInputs:count(owner.expectedInputs),observedInputs:count(owner.observedInputs)});throw error;}
 }
 export function claimPreimportCompatibilityBuild(value){const record=preparedBuilds.get(value);assert.ok(record&&!record.used,'Actual one-use two-artifact preparation required.');record.used=true;return{prepared:snapshotPreparedInstrumentedGateway(record.prepared),uid:record.uid,census:structuredClone(record.census)};}

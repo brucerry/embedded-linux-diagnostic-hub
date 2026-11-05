@@ -88,6 +88,16 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
         result: result.promise,
         closed: closure.promise,
         snapshot,
+        observation: () => Object.freeze({
+            exitObserved: exited, closeObserved: closed,
+            exitCode: exited && Number.isInteger(code) && code >= 0 && code <= 255 ? code : null,
+            closeCode: closed && Number.isInteger(closeCode) && closeCode >= 0 && closeCode <= 255 ? closeCode : null,
+            exitSignalObserved: exited ? signal !== null : null,
+            closeSignalObserved: closed ? closeSignal !== null : null,
+            controllerSucceeded: retired && !primary, controllerFailed: Boolean(primary),
+            stdoutBytes: outputs.stdout.bytes, stderrBytes: outputs.stderr.bytes,
+            wholeGroupRetirement: null, releaseAcceptance: false,
+        }),
         diagnostics: () => [...diagnostics],
         output: () => ({ stdout: Buffer.concat(outputs.stdout.chunks), stderr: Buffer.concat(outputs.stderr.chunks) }),
     });
