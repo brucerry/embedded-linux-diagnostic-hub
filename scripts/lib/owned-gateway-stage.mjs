@@ -22,15 +22,19 @@ export class OwnedGatewayStage {
     #action = null;
     #directories = new Set();
     #initialized = false;
+    #writeExclusive;
     #initializing = false;
     #plans = new Map();
     #roles = new Set();
     #completed = new Set();
     #namespace = 'not-attempted';
-    constructor(filesystem, sourceRoot, leaf) {
+    /** @param {((file: string, bytes: Buffer) => Promise<void>) | undefined} [writeExclusive] */
+    constructor(filesystem, sourceRoot, leaf, writeExclusive = undefined) {
         assert.ok(path.isAbsolute(sourceRoot));
         assert.match(leaf, /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/);
         this.#fs = filesystem;
+        assert.ok(writeExclusive === undefined || typeof writeExclusive === 'function');
+        this.#writeExclusive = writeExclusive;
         Object.defineProperties(this, {
             sourceRoot: { value: sourceRoot, enumerable: true },
             directory: { value: path.join(sourceRoot, 'validation', leaf), enumerable: true },
@@ -160,6 +164,24 @@ export class OwnedGatewayStage {
         assert.equal(await this.#fs.realpath(parent), parent);
         const parentStat = await this.#fs.lstat(parent);
         assert.ok(parentStat.isDirectory() && !parentStat.isSymbolicLink());
+        if (this.#writeExclusive) {
+            // This is an owned whole-file transaction, not an invented OS file handle.
+            // Its callback must acknowledge exclusive write, sync and file/directory close.
+            const id = ++this.#ordinal;
+            this.#pending.set(id, { file, handle: null, state: 'exclusive-write-pending' });
+            retained.add(this);
+            try {
+                const operation = this.#writeExclusive(file, bytes);
+                assert.ok(operation && typeof operation.then === 'function');
+                assert.equal(await operation, undefined);
+                this.#pending.delete(id);
+                this.#retain();
+                return;
+            } catch (error) {
+                this.#pending.get(id).state = 'exclusive-write-unacknowledged';
+                throw this.#fail(error);
+            }
+        }
         const { id, handle } = await this.#open(file, 'wx'),
             errors = [];
         try {

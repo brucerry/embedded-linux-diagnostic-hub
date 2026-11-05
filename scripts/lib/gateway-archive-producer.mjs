@@ -223,7 +223,7 @@ export async function produceGatewayArchive(input, options, io) {
         JSON.parse(sourceFiles.get('package-lock.json').toString('utf8')),
     );
     const builder = toolchain(await io.observeToolchain());
-    const stage = new OwnedGatewayStage(io.filesystem, options.sourceRoot, options.leaf);
+    const stage = new OwnedGatewayStage(io.filesystem, options.sourceRoot, options.leaf, io.writeExclusive);
     try {
         await stage.initialize();
         const build = await stage.execute(stage.plan('build', builder), io.execute);
