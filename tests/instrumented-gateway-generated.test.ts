@@ -17,7 +17,7 @@ const locked=JSON.parse(readFileSync(new URL('../package-lock.json',import.meta.
 assert.equal(origin.length,3647);assert.equal(sourceDigest(origin),SSH2_BIGINT_ORIGIN_SHA256);
 const pulse=async()=>{for(let i=0;i<100;i++)await Promise.resolve();};
 function fixture(){
-    const entry=Buffer.from('// synthetic entry; never executed\n'),scripts=new Map([[artifactPath,entry],[creator,origin],
+    const entry=Buffer.from('// synthetic entry; never executed\n'),scripts=new Map([[artifactPath,entry],[root+'/resolution-guard.cjs',Buffer.from('// inert guard\n')],[creator,origin],
         [root+'/node_modules/ssh2/package.json',Buffer.from('{"name":"ssh2","version":"1.17.0"}')],
         [root+'/package-lock.json',Buffer.from(JSON.stringify({lockfileVersion:3,packages:{'node_modules/ssh2':locked}}))]]);
     const selected={artifactPath,artifactSHA256:sourceDigest(entry),observerSHA256:'c'.repeat(64),sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)};
@@ -81,7 +81,7 @@ test('generated diagnostics disclose only fixed match facts and hash, preserving
 });
 test('sealed generated inventory and separately reported rows cannot be extended or mutated',()=>{
     const f=fixture(),inventory=[...f.scripts].map(([path,b])=>({path,bytes:b.length,sha256:sourceDigest(b)})).sort((a,b)=>a.path<b.path?-1:1),generated=deriveInstrumentedGeneratedInventory(f.scripts,root);
-    const binding:any={kind:'separate-instrumented-gateway-build-byte-binding-v3',source:{sourceCommit:f.selected.sourceCommit,sourceTree:f.selected.sourceTree},artifactPath,artifactSHA256:f.selected.artifactSHA256,observerSHA256:f.selected.observerSHA256,rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,fileInventory:inventory,fileInventorySHA256:sourceDigest(JSON.stringify(inventory)),scriptInventory:inventory,scriptInventorySHA256:sourceDigest(JSON.stringify(inventory)),generatedInventory:generated,generatedInventorySHA256:sourceDigest(JSON.stringify(generated))};
+    const binding:any={guardSHA256:sourceDigest(f.scripts.get(root+'/resolution-guard.cjs')),kind:'separate-instrumented-gateway-build-byte-binding-v4',source:{sourceCommit:f.selected.sourceCommit,sourceTree:f.selected.sourceTree},artifactPath,artifactSHA256:f.selected.artifactSHA256,observerSHA256:f.selected.observerSHA256,rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,fileInventory:inventory,fileInventorySHA256:sourceDigest(JSON.stringify(inventory)),scriptInventory:inventory,scriptInventorySHA256:sourceDigest(JSON.stringify(inventory)),generatedInventory:generated,generatedInventorySHA256:sourceDigest(JSON.stringify(generated))};
     const prepared={binding,selection:f.selected,scripts:f.scripts};assert.equal(snapshotPreparedInstrumentedGateway(prepared).binding.generatedInventory.length,1);
     for(const mutate of [(v:any)=>v.generatedInventory=[],(v:any)=>v.generatedInventory[0].originColumn++,(v:any)=>v.generatedInventory.push({...v.generatedInventory[0]})]){
         const v=structuredClone(binding);mutate(v);v.generatedInventorySHA256=sourceDigest(JSON.stringify(v.generatedInventory));assert.throws(()=>snapshotPreparedInstrumentedGateway({...prepared,binding:v}));

@@ -1,3 +1,4 @@
+import { containmentRecord } from './instrumented-containment-memory';
 import assert from 'node:assert/strict';
 import { readFileSync, constants } from 'node:fs';
 import { EventEmitter } from 'node:events';
@@ -9,7 +10,7 @@ import { INSTRUMENTED_GATEWAY_BRANCH } from '../../scripts/lib/instrumented-gate
 const root='/project',installed=root+'/validation/gateway-ownership/instrumented';
 const reference=JSON.parse(readFileSync(new URL('./gateway-ownership-production.json',import.meta.url),'utf8'));
 const files=new Map<string,Buffer>(reference.inventory.map((v:any)=>[v.path,readFileSync(new URL('../../'+v.path,import.meta.url))]));
-for(const p of ['tests/fixtures/instrumented-gateway-check-entry.ts','tests/fixtures/instrumented-gateway-activate.cjs','tests/fixtures/instrumented-gateway-entry.ts','scripts/lib/instrumented-gateway-observer.mjs','scripts/lib/instrumented-gateway-check.mjs','scripts/lib/instrumented-gateway-source.mjs'])files.set(p,readFileSync(new URL('../../'+p,import.meta.url)));
+for(const p of ['tests/fixtures/instrumented-gateway-check-entry.ts','tests/fixtures/instrumented-gateway-activate.cjs','tests/fixtures/instrumented-gateway-resolution-guard.cjs','tests/fixtures/instrumented-gateway-entry.ts','scripts/lib/instrumented-gateway-observer.mjs','scripts/lib/instrumented-gateway-check.mjs','scripts/lib/instrumented-gateway-source.mjs'])files.set(p,readFileSync(new URL('../../'+p,import.meta.url)));
 function receipt(input:any){
     const common={source:input.binding.source,bindingSHA256:sourceDigest(JSON.stringify(input.binding)+'\n'),artifactSHA256:input.selection.artifactSHA256,instrumented:true,compiledScripts:1,generatedScripts:[],elapsedMs:1,releaseAcceptance:false,wholeGroupRetirement:null,shippedCLIBehavior:null};
     if(input.mode==='compatibility')return{...common,schema:'instrumented-node-inspector-compatibility-v2',status:'exact-prelaunch-bytes-match-replayed-sources',builtinScripts:0,builtinIdentityVerified:false,observerRetired:true,productWorkload:null};
@@ -67,7 +68,7 @@ export function driverMemory(options:any={}){
                 }
                 if(role==='build')f.write(installed+'/ownership.cjs',Buffer.from('// synthetic compiled artifact; never executed\n'));
                 if(role==='compatibility'||role==='ownership'){
-                    const bytes=f.bytes(args[1]),input=JSON.parse(bytes.toString()),r=receipt(input),e={schema:'owned-instrumented-gateway-child-result-v1',mode:input.mode,nonce:input.nonce,inputSHA256:sourceDigest(bytes),bindingSHA256:sourceDigest(JSON.stringify(input.binding)+'\n'),receipt:r,receiptSHA256:sourceDigest(JSON.stringify(r)+'\n')};
+                    const bytes=f.bytes(args[1]),input=JSON.parse(bytes.toString()),r=receipt(input),e={schema:'owned-instrumented-gateway-child-result-v2',containment:containmentRecord(),mode:input.mode,nonce:input.nonce,inputSHA256:sourceDigest(bytes),bindingSHA256:sourceDigest(JSON.stringify(input.binding)+'\n'),receipt:r,receiptSHA256:sourceDigest(JSON.stringify(r)+'\n')};
                     if(controls.badCompatibility&&role==='compatibility')e.nonce='0'.repeat(32);
                     child.stdout.emit('data',Buffer.from('HUB_INSTRUMENTED_GATEWAY_CHILD='+JSON.stringify(e)+'\n'));
                 }

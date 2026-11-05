@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { validateContainment } from './instrumented-gateway-containment.mjs';
 import { generatedReceiptRowsMatch } from './instrumented-gateway-generated.mjs';
 import { encodeInstrumentedChildFailure, parseInstrumentedChildFailure, projectInstrumentedChildFailure } from './instrumented-gateway-failure.mjs';
 import path from 'node:path';
@@ -27,6 +28,7 @@ function assertSnapshot(prepared,census){
     assert.equal(census.lockSHA256,prepared.binding.installationLockSHA256);assert.equal(census.packageSHA256,prepared.binding.installationPackageSHA256);
     const root=path.dirname(prepared.selection.artifactPath);
     assert.equal(sourceDigest(census.scripts.get(root+'/activate.cjs')),prepared.binding.activationSHA256);
+    assert.equal(sourceDigest(census.scripts.get(root+'/resolution-guard.cjs')),prepared.binding.guardSHA256);
 }
 export function parseInstrumentedChildInput(bytes,root){
     rootPath(root);assert.ok(Buffer.isBuffer(bytes)&&bytes.length>0&&bytes.length<=INSTRUMENTED_CHILD_INPUT_LIMIT);
@@ -103,17 +105,17 @@ export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
         const output=child.output();assert.equal(output.stderr.length,0);
         const text=new TextDecoder('utf-8',{fatal:true}).decode(output.stdout);assert.ok(text.startsWith(INSTRUMENTED_CHILD_MARKER));
         const json=text.slice(INSTRUMENTED_CHILD_MARKER.length),envelope=JSON.parse(json);assert.equal(json,JSON.stringify(envelope)+'\n');
-        assert.deepEqual(Object.keys(envelope).sort(),['bindingSHA256','inputSHA256','mode','nonce','receipt','receiptSHA256','schema']);
-        assert.equal(envelope.schema,'owned-instrumented-gateway-child-result-v1');assert.equal(envelope.mode,mode);assert.equal(envelope.nonce,input.nonce);
+        assert.deepEqual(Object.keys(envelope).sort(),['bindingSHA256','containment','inputSHA256','mode','nonce','receipt','receiptSHA256','schema']);
+        assert.equal(envelope.schema,'owned-instrumented-gateway-child-result-v2');validateContainment(envelope.containment,true);assert.equal(envelope.mode,mode);assert.equal(envelope.nonce,input.nonce);
         assert.equal(envelope.inputSHA256,sourceDigest(inputBytes));assert.equal(envelope.bindingSHA256,sourceDigest(JSON.stringify(snapshot.binding)+'\n'));
         const receiptBytes=Buffer.from(JSON.stringify(envelope.receipt)+'\n');assert.ok(receiptBytes.length<=16384);assert.equal(sourceDigest(receiptBytes),envelope.receiptSHA256);
         validateInstrumentedChildReceipt(snapshot,mode,envelope.receipt);
         lease.phase='postlaunch';const after=await censusInstrumentedGateway(root,uid,ports.filesystem);assertSnapshot(snapshot,after);assert.deepEqual(after.census,before.census);
         assert.deepEqual(nodeIdentity(await ports.observeNode()),node);assert.ok((await ports.readInput(inputPath,INSTRUMENTED_CHILD_INPUT_LIMIT)).equals(inputBytes));
         synchronousUndefined(ports.assertFilesSettled());snapshot.scripts.clear();retained.delete(lease);
-        const completed=Object.freeze({receipt:{schema:'parent-observed-instrumented-gateway-child-v1',mode,source:snapshot.binding.source,
+        const completed=Object.freeze({receipt:{schema:'parent-observed-instrumented-gateway-child-v2',mode,source:snapshot.binding.source,
             bindingSHA256:envelope.bindingSHA256,artifactSHA256:snapshot.selection.artifactSHA256,activationSHA256:snapshot.binding.activationSHA256,
-            nodeSHA256:node.sha256,censusSHA256:before.censusSHA256,childReceiptSHA256:envelope.receiptSHA256,
+            nodeSHA256:node.sha256,guardSHA256:snapshot.binding.guardSHA256,containment:envelope.containment,containmentContextClosed:true,censusSHA256:before.censusSHA256,childReceiptSHA256:envelope.receiptSHA256,
             normalChildAndPipesClosed:true,postCensusUnchanged:true,childReceipt:envelope.receipt,wholeGroupRetirement:null,releaseAcceptance:false}});
         if(mode==='compatibility')compatibilityAdmissions.set(completed,{bindingSHA256:envelope.bindingSHA256,censusSHA256:before.censusSHA256,node,used:false});
         return completed;
@@ -132,9 +134,15 @@ export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
  */
 export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
     rootPath(ports.root);assert.ok(modes.some(mode=>inputPath===path.dirname(ports.root)+'/child-input-'+mode+'.json'));
-    for(const k of ['startHold','clearHold','readInput','observeNode','runOwnership','runCompatibility','writeOutput','assertFilesSettled','setExitCode'])assert.equal(typeof ports[k],'function');
-    const lease={phase:'input',hold:null,workload:null,unknown:false};retained.add(lease);
-    let knownWorkload=false, knownOutput=false, output, clearIssued=false, input, inputBytes;
+    for(const k of ['startHold','clearHold','readInput','observeNode','runOwnership','runCompatibility','writeOutput','assertFilesSettled','setExitCode','assertContainment','prepareContainmentClose','assertContainmentClose','containmentSnapshot'])assert.equal(typeof ports[k],'function');
+    const lease={phase:'input',hold:null,workload:null,unknown:false,containmentPrepared:false};retained.add(lease);
+    let knownWorkload=false, knownOutput=false, output, clearIssued=false, input, inputBytes, containmentIssued=false;
+    function prepareContainment(allowFailure){
+        assert.equal(containmentIssued,false);containmentIssued=true;lease.unknown=true;
+        const value=ports.prepareContainmentClose(allowFailure);if(typeof value?.then==='function')Promise.resolve(value).catch(()=>{});
+        const record=validateContainment(value,!allowFailure);assert.ok(record.registered&&record.closePrepared&&!record.uncertain&&!record.inFlight);
+        lease.containmentPrepared=true;lease.unknown=false;return record;
+    }
     function clearHoldOnce(){
         assert.equal(clearIssued,false);clearIssued=true;lease.unknown=true;
         const cleared=ports.clearHold(lease.hold);
@@ -144,6 +152,7 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
         lease.unknown=true;lease.hold=ports.startHold();if(lease.hold===undefined||lease.hold===null||typeof lease.hold?.then==='function'){lease.unknown=true;if(typeof lease.hold?.then==='function')Promise.resolve(lease.hold).catch(()=>{});throw Error('Unknown liveness lease.');}lease.unknown=false;
         const bytes=await ports.readInput(inputPath,INSTRUMENTED_CHILD_INPUT_LIMIT);input=parseInstrumentedChildInput(bytes,ports.root);inputBytes=bytes;
         assert.equal(inputPath,path.dirname(ports.root)+'/child-input-'+input.mode+'.json');
+        lease.phase='containment';synchronousUndefined(ports.assertContainment());
         lease.phase='node';
         assert.deepEqual(nodeIdentity(await ports.observeNode()),input.node);
         assert.equal(input.uid,ports.uid);
@@ -151,7 +160,7 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
         const census=await censusInstrumentedGateway(input.root,input.uid,ports.filesystem);
         lease.phase='snapshot';
         const prepared={binding:input.binding,selection:input.selection,scripts:census.scripts};const copied=snapshotPreparedInstrumentedGateway(prepared);assertSnapshot(copied,census);
-        lease.phase='workload-acquiring';lease.unknown=true;lease.workload=input.mode==='compatibility'?ports.runCompatibility(copied):ports.runOwnership(copied,input.token);
+        synchronousUndefined(ports.assertContainment());lease.phase='workload-acquiring';lease.unknown=true;lease.workload=input.mode==='compatibility'?ports.runCompatibility(copied):ports.runOwnership(copied,input.token);
         if(typeof lease.workload?.then==='function')Promise.resolve(lease.workload).catch(()=>{});
         assert.ok(lease.workload&&typeof lease.workload.result?.then==='function'&&typeof lease.workload.closed?.then==='function');knownWorkload=true;lease.unknown=false;lease.phase='workload';
         const completed=await lease.workload.result;await lease.workload.closed;
@@ -159,14 +168,15 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
         assert.ok(Buffer.isBuffer(completed.bytes)&&completed.bytes.length<=16384&&completed.bytes.equals(Buffer.from(JSON.stringify(completed.receipt)+'\n')));
         validateInstrumentedChildReceipt(copied,input.mode,completed.receipt);
         synchronousUndefined(ports.assertFilesSettled());
-        const envelope={schema:'owned-instrumented-gateway-child-result-v1',mode:input.mode,nonce:input.nonce,inputSHA256:sourceDigest(bytes),
+        lease.phase='containment';synchronousUndefined(ports.assertContainment());const containment=prepareContainment(false);
+        const envelope={schema:'owned-instrumented-gateway-child-result-v2',containment,mode:input.mode,nonce:input.nonce,inputSHA256:sourceDigest(bytes),
             bindingSHA256:sourceDigest(JSON.stringify(input.binding)+'\n'),receiptSHA256:sourceDigest(completed.bytes),receipt:completed.receipt};
         const outputBytes=Buffer.from(INSTRUMENTED_CHILD_MARKER+JSON.stringify(envelope)+'\n');assert.ok(outputBytes.length<=32768);
         lease.phase='stdout';lease.unknown=true;const writeOwner=ports.writeOutput(outputBytes);
         if(typeof writeOwner?.then==='function')Promise.resolve(writeOwner).catch(()=>{});
         assert.ok(writeOwner&&typeof writeOwner.result?.then==='function'&&typeof writeOwner.closed?.then==='function');
         output=writeOwner;knownOutput=true;lease.unknown=false;assert.equal(await writeOwner.result,undefined);await writeOwner.closed;
-        clearHoldOnce();
+        synchronousUndefined(ports.assertContainmentClose(false));clearHoldOnce();
         copied.scripts.clear();census.scripts.clear();lease.phase='retired';retained.delete(lease);return;
     }catch(error){
         if(lease.phase==='workload-acquiring'&&!knownWorkload)lease.unknown=true;
@@ -177,7 +187,8 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
             let observed;try{observed=lease.workload?.snapshot?.();}catch{}
             const priorUnknown=lease.unknown;
             try{
-                const detail=projectInstrumentedChildFailure(lease.phase,lease.unknown,knownWorkload,observed);
+                let containment;try{containment=ports.containmentSnapshot();validateContainment(containment);}catch{lease.unknown=true;}
+                const detail=projectInstrumentedChildFailure(lease.phase,lease.unknown,knownWorkload,{...observed,containment});
                 const bytes=encodeInstrumentedChildFailure(input,inputBytes,detail);lease.unknown=true;
                 const attempt=ports.writeOutput(bytes);if(typeof attempt?.then==='function')Promise.resolve(attempt).catch(()=>{});
                 assert.ok(attempt&&typeof attempt.result?.then==='function'&&typeof attempt.closed?.then==='function');
@@ -188,7 +199,8 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
         if(knownOutput)try{await output.closed;}catch{lease.unknown=true;}
         try{
             synchronousUndefined(ports.assertFilesSettled());assert.equal(lease.unknown,false);assert.equal(clearIssued,false);
-            clearHoldOnce();
+            if(!lease.containmentPrepared){assert.equal(containmentIssued,false);prepareContainment(true);}
+            synchronousUndefined(ports.assertContainmentClose(true));clearHoldOnce();
             retained.delete(lease);
         }catch{lease.unknown=true;}
         throw Object.assign(Error('Instrumented child activation failed or remains held.',{cause:error}),{owner:lease});

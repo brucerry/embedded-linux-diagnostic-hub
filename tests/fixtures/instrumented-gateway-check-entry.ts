@@ -41,7 +41,7 @@ export function runPreparedInstrumentedGatewayCompatibility(prepared: Parameters
 /** Explicit activation only from the exact separate activate.cjs file, never on import. No spawn,
  * external debug endpoint, process signal, forced exit, deletion or automatic retry exists here.
  */
-export function activateInstrumentedGatewayChildFromFile(inputPath: string) {
+export function activateInstrumentedGatewayChildFromFile(inputPath: string, guard: { assertActive(root:string):void; prepareClose(root:string,allowFailure:boolean):unknown; assertClosePrepared(root:string,allowFailure:boolean):void; snapshot():unknown }) {
     assert.equal(process.platform, 'linux'); assert.equal(process.arch, 'x64');
     assert.equal(process.version, 'v24.22.0'); assert.deepEqual(process.execArgv, []);
     assert.equal(process.env.NODE_OPTIONS, undefined); assert.equal(process.env.NODE_PATH, undefined);
@@ -50,6 +50,10 @@ export function activateInstrumentedGatewayChildFromFile(inputPath: string) {
     const owned = createOwnedWebFiles(filesystem);
     return activateOwnedInstrumentedGatewayChild(inputPath, {
         root, uid: process.getuid!(), filesystem: owned.filesystem,
+        assertContainment: () => guard.assertActive(root),
+        prepareContainmentClose: (allowFailure:boolean) => guard.prepareClose(root,allowFailure),
+        assertContainmentClose: (allowFailure:boolean) => guard.assertClosePrepared(root,allowFailure),
+        containmentSnapshot: () => guard.snapshot(),
         readInput: async (file: string, maximum: number) => {
             assert.equal(maximum, INSTRUMENTED_CHILD_INPUT_LIMIT);
             return (await readStableArtifactFile(path.dirname(file), path.basename(file), maximum, owned.filesystem)).bytes;

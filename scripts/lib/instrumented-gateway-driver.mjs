@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { sourceDigest } from './committed-source-bridge.mjs';
 import { projectGatewayLock } from './gateway-lock-plan.mjs';
-import { prepareInstrumentedGatewayCheck, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION } from './instrumented-gateway-check.mjs';
+import { prepareInstrumentedGatewayCheck, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION, INSTRUMENTED_GUARD } from './instrumented-gateway-check.mjs';
 import { censusInstrumentedGateway, instrumentedCensusFailure } from './instrumented-gateway-census.mjs';
 import { createInstrumentedGatewayParent } from './instrumented-gateway-parent.mjs';
 
@@ -22,12 +22,12 @@ export function createInstrumentedGatewayDriver(admission) {
         assert.equal(admitted,false);admitted=true;phase='source';retained.add(owner);
         try {
             await stableSource();await toolIdentity();phase='staging';
-            const sourcePackage=await sourceFile('package.json'),sourceLock=await sourceFile('package-lock.json'),activation=await sourceFile(INSTRUMENTED_ACTIVATION);
+            const sourcePackage=await sourceFile('package.json'),sourceLock=await sourceFile('package-lock.json'),activation=await sourceFile(INSTRUMENTED_ACTIVATION),guard=await sourceFile(INSTRUMENTED_GUARD);
             const projected=projectGatewayLock(JSON.parse(sourcePackage.toString('utf8')),JSON.parse(sourceLock.toString('utf8')));
             await filesystem.mkdir(root);
             await filesystem.writeFile(root+'/package.json',Buffer.from(JSON.stringify(projected.manifest,null,2)+'\n'),{flag:'wx'});
             await filesystem.writeFile(root+'/package-lock.json',Buffer.from(JSON.stringify(projected.lock,null,2)+'\n'),{flag:'wx'});
-            await filesystem.writeFile(root+'/activate.cjs',activation,{flag:'wx'});cap.assertSettled();
+            await filesystem.writeFile(root+'/activate.cjs',activation,{flag:'wx'});await filesystem.writeFile(root+'/resolution-guard.cjs',guard,{flag:'wx'});cap.assertSettled();
             phase='dependencies';await stableSource();const args=instrumentedSetupCommand(s,'dependencies');
             await command(Object.freeze({owner:randomBytes(16).toString('hex'),id:2,role:'install',cwd:root,command:Object.freeze(args)}),{...environment,NODE_ENV:'production'},args);await stableSource();
             phase='build';

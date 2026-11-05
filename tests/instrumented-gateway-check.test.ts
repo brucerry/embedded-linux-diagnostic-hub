@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { pathToFileURL } from 'node:url';
-import { prepareInstrumentedGatewayCheck, snapshotPreparedInstrumentedGateway, startInstrumentedGatewayCheck, RAW_CLI_REFERENCE, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION } from '../scripts/lib/instrumented-gateway-check.mjs';
+import { prepareInstrumentedGatewayCheck, snapshotPreparedInstrumentedGateway, startInstrumentedGatewayCheck, RAW_CLI_REFERENCE, INSTRUMENTED_ENTRY, INSTRUMENTED_ACTIVATION, INSTRUMENTED_GUARD } from '../scripts/lib/instrumented-gateway-check.mjs';
 import { createInstrumentedGatewayBootstrap } from '../scripts/lib/instrumented-gateway-observer.mjs';
 import { sourceFixture, observedLifecycle } from './fixtures/gateway-producer-memory';
 import { projectGatewayLock } from '../scripts/lib/gateway-lock-plan.mjs';
@@ -11,7 +11,7 @@ import { sourceDigest } from '../scripts/lib/committed-source-bridge.mjs';
 
 const reference = JSON.parse(readFileSync(new URL('./fixtures/gateway-ownership-production.json', import.meta.url),'utf8'));
 const sourceFiles = new Map<string,Buffer>(reference.inventory.map((r:any) => [r.path,readFileSync(new URL('../'+r.path,import.meta.url))]));
-for (const p of [INSTRUMENTED_ENTRY,INSTRUMENTED_ACTIVATION,'tests/fixtures/instrumented-gateway-entry.ts','scripts/lib/instrumented-gateway-observer.mjs','scripts/lib/instrumented-gateway-check.mjs','scripts/lib/instrumented-gateway-source.mjs'])
+for (const p of [INSTRUMENTED_ENTRY,INSTRUMENTED_ACTIVATION,INSTRUMENTED_GUARD,'tests/fixtures/instrumented-gateway-entry.ts','scripts/lib/instrumented-gateway-observer.mjs','scripts/lib/instrumented-gateway-check.mjs','scripts/lib/instrumented-gateway-source.mjs'])
     sourceFiles.set(p,readFileSync(new URL('../'+p,import.meta.url)));
 const pulse=async()=>{for(let i=0;i<100;i++)await Promise.resolve();};
 const deferred=()=>{let resolve!:(v?:any)=>void;const promise=new Promise<any>(r=>{resolve=r;});return{promise,resolve};};
@@ -32,7 +32,7 @@ function producer() {
         async readArtifact(file:string,maximum:number){assert.equal(file,artifactPath);assert.equal(maximum,32*1024**2);return controls.stringArtifact?artifact.toString():Buffer.from(artifact);},
         async fileSnapshot(){const projected=projectGatewayLock(JSON.parse(sourceFiles.get('package.json')!.toString()),JSON.parse(sourceFiles.get('package-lock.json')!.toString()));
             const directory=artifactPath.slice(0,artifactPath.lastIndexOf('/'));return new Map([[artifactPath,controls.scriptChange?Buffer.from('different'):Buffer.from(artifact)],
-            [directory+'/activate.cjs',sourceFiles.get(INSTRUMENTED_ACTIVATION)!],[directory+'/package.json',Buffer.from(JSON.stringify(projected.manifest))],[directory+'/package-lock.json',Buffer.from(JSON.stringify(projected.lock))]]);},
+            [directory+'/activate.cjs',sourceFiles.get(INSTRUMENTED_ACTIVATION)!],[directory+'/resolution-guard.cjs',sourceFiles.get(INSTRUMENTED_GUARD)!],[directory+'/package.json',Buffer.from(JSON.stringify(projected.manifest))],[directory+'/package-lock.json',Buffer.from(JSON.stringify(projected.lock))]]);},
     };
     const input={root:'/project',sourceCommit:f.context.sourceCommit,sourceTree:f.context.sourceTree};
     return{f,ports,input,controls,calls,artifactPath,artifact};
@@ -190,4 +190,9 @@ test('preparation binds binary data separately from exact script candidates and 
         if(kind==='binaryScript'){const row=q.binding.fileInventory.find((v:any)=>v.path===binary)!;q.binding.scriptInventory.push(row);q.binding.scriptInventory.sort((a:any,b:any)=>a.path<b.path?-1:1);q.binding.scriptInventorySHA256=sourceDigest(JSON.stringify(q.binding.scriptInventory));q.scripts.set(binary,Buffer.from([0x4d,0x5a,0xff]));}
         assert.throws(()=>snapshotPreparedInstrumentedGateway(q));
     }
+});
+
+test('copied containment guard must match independently frozen source bytes',async()=>{
+    const f=producer(),original=f.ports.fileSnapshot;f.ports.fileSnapshot=async()=>{const files=await original();files.set(f.artifactPath.slice(0,f.artifactPath.lastIndexOf('/'))+'/resolution-guard.cjs',Buffer.from('// changed guard, never executed\n'));return files;};
+    await assert.rejects(prepareInstrumentedGatewayCheck(f.input,f.ports));
 });

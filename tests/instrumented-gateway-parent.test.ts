@@ -1,3 +1,4 @@
+import { containmentRecord } from './fixtures/instrumented-containment-memory';
 import assert from 'node:assert/strict';
 import { deriveInstrumentedGeneratedInventory } from '../scripts/lib/instrumented-gateway-generated.mjs';
 import { encodeInstrumentedChildFailure,projectInstrumentedChildFailure } from '../scripts/lib/instrumented-gateway-failure.mjs';
@@ -21,6 +22,7 @@ function installation(){
     const inputFile=(p:string)=>p.startsWith(parent+'/child-input-');
     f.write('/tools/node',nodeBytes);f.write(root+'/ownership.cjs',Buffer.from('// synthetic compiled source; never run\n'));
     f.write(root+'/activate.cjs',Buffer.from('// synthetic fixed activation; never run\n'));
+    f.write(root+'/resolution-guard.cjs',Buffer.from('// synthetic guard; never executed\n'));
     f.write(root+'/package.json',Buffer.from('{"name":"synthetic","version":"1.0.0"}'));
     f.write(root+'/package-lock.json',Buffer.from('{"lockfileVersion":3,"packages":{"":{"name":"synthetic","version":"1.0.0"},"node_modules/dep":{"version":"1.0.0"}}}'));
     f.write(root+'/node_modules/dep/package.json',Buffer.from('{"name":"dep","version":"1.0.0"}'));
@@ -44,9 +46,9 @@ function installation(){
 async function prepared(f:ReturnType<typeof installation>){
     const c=await censusInstrumentedGateway(root,1000,f.filesystem),artifactPath=root+'/ownership.cjs',source={sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)},artifactSHA256=sourceDigest(c.scripts.get(artifactPath));
     const selection={...source,artifactPath,artifactSHA256,observerSHA256:'c'.repeat(64)};
-    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v3',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
+    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v4',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
         generatedInventory:deriveInstrumentedGeneratedInventory(c.scripts,root),generatedInventorySHA256:sourceDigest(JSON.stringify(deriveInstrumentedGeneratedInventory(c.scripts,root))),rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,toolchain:{nodePath:'/tools/node',nodeSHA256:sourceDigest(nodeBytes)},
-        activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,fileInventory:c.inventory,fileInventorySHA256:c.inventorySHA256,scriptInventory:c.scriptInventory,scriptInventorySHA256:c.scriptInventorySHA256};
+        guardSHA256:sourceDigest(c.scripts.get(root+'/resolution-guard.cjs')),activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,fileInventory:c.inventory,fileInventorySHA256:c.inventorySHA256,scriptInventory:c.scriptInventory,scriptInventorySHA256:c.scriptInventorySHA256};
     return{binding,selection,scripts:c.scripts};
 }
 function childReceipt(p:any,mode:string){
@@ -64,7 +66,7 @@ function host(f:ReturnType<typeof installation>,p:any){
             const mode=children.length?'ownership':'compatibility';events.push('launch:'+mode);
             assert.deepEqual(args,[root+'/activate.cjs',parent+'/child-input-'+mode+'.json']);assert.deepEqual(options.stdio,['ignore','pipe','pipe']);
             const input=f.bytes(args[1]),v=JSON.parse(input.toString()),receipt:any=childReceipt({binding:v.binding,selection:v.selection},mode);
-            const envelope={schema:'owned-instrumented-gateway-child-result-v1',mode,nonce:v.nonce,inputSHA256:sourceDigest(input),bindingSHA256:sourceDigest(JSON.stringify(v.binding)+'\n'),receipt,receiptSHA256:sourceDigest(JSON.stringify(receipt)+'\n')};
+            const envelope={schema:'owned-instrumented-gateway-child-result-v2',containment:containmentRecord(),mode,nonce:v.nonce,inputSHA256:sourceDigest(input),bindingSHA256:sourceDigest(JSON.stringify(v.binding)+'\n'),receipt,receiptSHA256:sourceDigest(JSON.stringify(receipt)+'\n')};
             if(controls.badReceipt)envelope.nonce='0'.repeat(32);
             const child:any=new EventEmitter();Object.assign(child,{pid:2222+children.length,exitCode:null,signalCode:null,stdin:null,stdout:new EventEmitter(),stderr:new EventEmitter(),spawnfile:file,spawnargs:[file,...args]});
             if(controls.wrongSpawn)child.spawnargs=[file,'unapproved'];
@@ -139,7 +141,7 @@ for(const held of [false,true])test('bound failure diagnostics survive command r
     if(held)h.expire();await rejected;
     const state=owner.snapshot();assert.equal(state.failedAt,'compatibility');assert.equal(state.completed,false);assert.equal(state.childFailure.envelope,'observed-bound');
     assert.equal(state.childFailure.detail.inspectorFailure,'script-unadmitted');assert.equal(state.childFailure.directRetired,!held);assert.equal(h.children.length,1);
-    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v6');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
+    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v7');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
     if(held)h.children[0].close(1);await assert.rejects(owner.run());assert.equal(h.children.length,1);
 });
 test('an unbound failure payload stays diagnostic-missing and never starts ownership',async()=>{

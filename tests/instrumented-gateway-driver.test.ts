@@ -61,13 +61,13 @@ test('failure summary omits arbitrary commands, inputs, paths and errors',()=>{
     const raw={phase:'bad secret',gitReads:2,pendingAbsence:0,commands:[{directRetired:true,command:'sensitive'}],files:{files:{pending:0,handles:1,uncertainPublications:0}},error:'do not emit'};
     const r=instrumentedFailureSummary('bootstrap',raw,null);assert.equal(r.status,'failed-or-held');assert.equal(r.fileHandles,1);assert.equal(r.directCommandsRetired,1);assert.ok(!JSON.stringify(r).includes('secret')&&!JSON.stringify(r).includes('sensitive')&&!JSON.stringify(r).includes('do not emit'));
 });
-test('prepared origin workflow is held, narrow, and has no uploads/cache/secrets or broader triggers',()=>{
+test('containment workflow has one narrow job and no uploads/cache/secrets or broader triggers',()=>{
     const s=readFileSync(new URL('../.github/workflows/instrumented-gateway-diagnostic.yml',import.meta.url),'utf8');
-    assert.ok(s.includes('branches: [ci/gateway-origin297-96a56cd-20261105]')&&s.includes('timeout-minutes: 20')&&s.includes("node-version: '24.22.0'"));
+    assert.ok(s.includes('branches: [ci/gateway-containment298-96a56cd-20261105]')&&s.includes('timeout-minutes: 20')&&s.includes("node-version: '24.22.0'"));
     assert.equal((s.match(/^    instrumented_gateway:/gm)||[]).length,1);assert.ok(s.includes('contents: read')&&s.includes('cancel-in-progress: false'));
     assert.ok(!/workflow_dispatch:|workflow_run:|pull_request:|upload-artifact@|actions\/cache@|secrets\.|write-all|continue-on-error|npm ci/.test(s));
     assert.ok(s.includes('node .github/instrumented-gateway-entry.mjs'));
-    const hold=(text:string)=>assert.ok(text.includes('if: ${{ false && github.repository'));hold(s);assert.throws(()=>hold(s.replace('false && github.repository','github.repository')));
+    assert.ok(s.includes("if: github.repository == 'brucerry/embedded-linux-diagnostic-hub'")&&s.includes('github.run_attempt == 1'));assert.ok(!s.includes('if: ${{ false &&'));
 });
 test('preliminary file custody is covered before first native IO and retained in sanitized failures',()=>{
     const text=readFileSync(new URL('../.github/instrumented-gateway-entry.mjs',import.meta.url),'utf8');
@@ -107,7 +107,7 @@ for(const kind of ['census','build','dependencies'])test('bounded failure codes 
     const b=createInstrumentedGatewayBootstrap(f.selection,f.ports),d=createInstrumentedGatewayDriver(await b.run());
     await assert.rejects(d.run(),(e:any)=>{assert.ok(e.cause);return true;});
     const r=instrumentedFailureSummary('driver',b.snapshot(),d.snapshot());
-    assert.equal(r.schema,'instrumented-gateway-failure-counters-v6');assert.equal(r.driverPhase,kind);assert.equal(r.releaseAcceptance,false);assert.equal(r.processGroupRetirement,null);
+    assert.equal(r.schema,'instrumented-gateway-failure-counters-v7');assert.equal(r.driverPhase,kind);assert.equal(r.releaseAcceptance,false);assert.equal(r.processGroupRetirement,null);
     assert.equal(r.censusPhase,kind==='census'?'file-identity':null);assert.equal(r.preparationPhase,kind==='census'?'snapshot':kind==='build'?'building':null);
     assert.equal(r.parentLaunches,null);assert.ok(Buffer.byteLength(JSON.stringify(r))<1024);assert.equal(f.calls.some(v=>v.role==='compatibility'),false);
 });

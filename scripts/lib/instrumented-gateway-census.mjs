@@ -7,7 +7,7 @@ import { sourceDigest } from './committed-source-bridge.mjs';
 export const INSTRUMENTED_CENSUS_BOUNDS = Object.freeze({ files: 512, entries: 4096, depth: 32, fileBytes: 32 * 1024 ** 2, totalBytes: 64 * 1024 ** 2 });
 const failures = new WeakMap();
 export function instrumentedCensusFailure(error) { return failures.get(error) ?? null; }
-const rootFiles = ['activate.cjs', 'ownership.cjs', 'package.json', 'package-lock.json'];
+const rootFiles = ['activate.cjs', 'resolution-guard.cjs', 'ownership.cjs', 'package.json', 'package-lock.json'];
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 function identity(s, kind, uid) {
     assert.ok(s && !s.isSymbolicLink() && (kind === 'directory' ? s.isDirectory() : s.isFile()));

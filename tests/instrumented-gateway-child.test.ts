@@ -1,3 +1,4 @@
+import { containmentRecord } from './fixtures/instrumented-containment-memory';
 import assert from 'node:assert/strict';
 import { deriveInstrumentedGeneratedInventory } from '../scripts/lib/instrumented-gateway-generated.mjs';
 import test from 'node:test';
@@ -20,6 +21,7 @@ function installation(){
     const m=memoryFilesystem(), controls:any={};
     m.write(root+'/ownership.cjs',Buffer.from('// synthetic CJS; never executed\n'));
     m.write(root+'/activate.cjs',Buffer.from('// synthetic activation; never executed\n'));
+    m.write(root+'/resolution-guard.cjs',Buffer.from('// synthetic guard; never executed\n'));
     m.write(root+'/package.json',Buffer.from(JSON.stringify({name:'synthetic',version:'1.0.0'})));
     m.write(root+'/package-lock.json',Buffer.from(JSON.stringify({lockfileVersion:3,packages:{'':{name:'synthetic',version:'1.0.0'},'node_modules/dep':{version:'1.0.0'}}})));
     m.write(root+'/node_modules/dep/package.json',Buffer.from(JSON.stringify({name:'dep',version:'1.0.0'})));
@@ -32,9 +34,9 @@ async function prepared(f:ReturnType<typeof installation>){
     const c=await censusInstrumentedGateway(root,1000,f.filesystem),artifactPath=root+'/ownership.cjs';
     const source={sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)},artifactSHA256=sourceDigest(c.scripts.get(artifactPath));
     const selection={...source,artifactPath,artifactSHA256,observerSHA256:'c'.repeat(64)};
-    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v3',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
+    const binding={kind:'separate-instrumented-gateway-build-byte-binding-v4',source,artifactPath,artifactSHA256,observerSHA256:selection.observerSHA256,
         generatedInventory:deriveInstrumentedGeneratedInventory(c.scripts,root),generatedInventorySHA256:sourceDigest(JSON.stringify(deriveInstrumentedGeneratedInventory(c.scripts,root))),rawCLIReference:RAW_CLI_REFERENCE,releaseAcceptance:false,buildProvenanceVerified:false,
-        toolchain:{nodePath:'/tools/node',nodeSHA256:'d'.repeat(64)},activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),
+        toolchain:{nodePath:'/tools/node',nodeSHA256:'d'.repeat(64)},guardSHA256:sourceDigest(c.scripts.get(root+'/resolution-guard.cjs')),activationSHA256:sourceDigest(c.scripts.get(root+'/activate.cjs')),
         installationPackageSHA256:c.packageSHA256,installationLockSHA256:c.lockSHA256,fileInventory:c.inventory,fileInventorySHA256:c.inventorySHA256,scriptInventory:c.scriptInventory,scriptInventorySHA256:c.scriptInventorySHA256};
     return{binding,selection,scripts:c.scripts};
 }
@@ -63,13 +65,13 @@ function parent(f:any,p:any,mode='compatibility'){
         launch(file:string,args:string[],options:any){launches++;assert.equal(file,'/tools/node');assert.deepEqual(args,[root+'/activate.cjs',selectedInput]);assert.equal(options.stdio[0],'ignore');child.spawnfile=file;child.spawnargs=[file,...args];return child;},
         setTimer(cb:Function,ms:number){assert.equal(ms,60000);timer=cb;return{};},clearTimer(){},now:()=>clock};
     const emit=(change:(e:any)=>void=()=>{})=>{const v=JSON.parse(saved.toString()),r=receipt(p,v.mode);
-        const e={schema:'owned-instrumented-gateway-child-result-v1',mode:v.mode,nonce:v.nonce,inputSHA256:sourceDigest(saved),bindingSHA256:sourceDigest(JSON.stringify(p.binding)+'\n'),receipt:r,receiptSHA256:sourceDigest(JSON.stringify(r)+'\n')};change(e);
+        const e={schema:'owned-instrumented-gateway-child-result-v2',containment:containmentRecord(),mode:v.mode,nonce:v.nonce,inputSHA256:sourceDigest(saved),bindingSHA256:sourceDigest(JSON.stringify(p.binding)+'\n'),receipt:r,receiptSHA256:sourceDigest(JSON.stringify(r)+'\n')};change(e);
         child.emit('spawn');child.stdout.emit('data',Buffer.from(INSTRUMENTED_CHILD_MARKER+JSON.stringify(e)+'\n'));};
     const close=(code=0,signal:any=null,pipes=true)=>{child.emit('exit',code,signal);child.emit('close',code,signal);if(pipes){child.stdout.emit('close');child.stderr.emit('close');}};
     return{ports,controls,child,emit,close,get launches(){return launches;},expire(){clock=60001;timer();}};
 }
 test('complete two-pass census includes extensionless files and lock/package identities',async()=>{
-    const f=installation(),c=await censusInstrumentedGateway(root,1000,f.filesystem);assert.equal(c.inventory.length,6);assert.ok(c.scripts.has(root+'/node_modules/dep/extensionless'));assert.equal(f.handles.size,0);
+    const f=installation(),c=await censusInstrumentedGateway(root,1000,f.filesystem);assert.equal(c.inventory.length,7);assert.ok(c.scripts.has(root+'/node_modules/dep/extensionless'));assert.equal(f.handles.size,0);
 });
 for(const kind of ['symlink','hardlink','binaryActivation','foreign','extra','optional','wrongVersion','missingActivation','alias','nestedOverride'])test('prelaunch census rejects '+kind,async()=>{
     const f=installation(),file=root+'/node_modules/dep/extensionless';
@@ -108,9 +110,13 @@ test('deadline rejects without sending a signal or relaunching',async()=>{
     const f=installation(),p=await prepared(f),h=parent(f,p),task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports);const rejected=assert.rejects(task);await pulse();h.expire();await rejected;assert.equal(h.launches,1);assert.equal(h.child.eventNames().includes('kill'),false);
 });
 function activation(f:any,p:any){
-    const result=deferred(),closed=deferred(),flush=deferred(),controls:any={},events:string[]=[];let written=Buffer.alloc(0),clears=0;
+    const result=deferred(),closed=deferred(),flush=deferred(),controls:any={},events:string[]=[];let written=Buffer.alloc(0),clears=0,guardPrepared=false;
     const workload={result:result.promise,closed:closed.promise};
-    const ports={root,uid:1000,filesystem:f.filesystem,readInput:async()=>input(p),observeNode:async()=>node(),
+    const ports={root,uid:1000,filesystem:f.filesystem,
+        assertContainment(){if(controls.guardFailure)throw Error('authored guard violation');},
+        prepareContainmentClose(allowFailure:boolean){guardPrepared=true;return containmentRecord(controls.guardFailure?{failed:true,violationCode:'outside-root',outsideRejected:1}:{});},
+        assertContainmentClose(allowFailure:boolean){assert.equal(guardPrepared,true);if(!allowFailure&&controls.guardLateFailure)throw Error('authored late guard failure');},
+        containmentSnapshot(){return containmentRecord({closePrepared:guardPrepared,...(controls.guardFailure?{failed:true,violationCode:'outside-root',outsideRejected:1}:{})});},readInput:async()=>input(p),observeNode:async()=>node(),
         startHold(){events.push('hold');return{};},clearHold(){clears++;events.push('clear');if(controls.clearThrows)throw Error('authored uncertain clear');if(controls.clearRejected)return Promise.reject(Error('authored rejected clear'));},
         runCompatibility(){events.push('workload');if(controls.acquireThrows)throw Error('uncertain acquisition');if(controls.acquireRejected)return Promise.reject(Error('unsupported async acquisition'));return workload;},runOwnership(){throw Error('Wrong mode');},
         writeOutput(b:Buffer){events.push('stdout');written=Buffer.from(b);return controls.badWrite?undefined:{result:flush.promise,closed:Promise.resolve()};},
@@ -221,10 +227,12 @@ test('fixed CJS activation calls only the copied owner export and rejects unsupp
     const source=readFileSync(new URL('./fixtures/instrumented-gateway-activate.cjs',import.meta.url),'utf8');
     assert.ok(Buffer.byteLength(source)<2048);
     for(const mode of ['compatibility','ownership','invalid']){
-        let calls=0;const module={},pending=deferred(),process:any={argv:['/tools/node',root+'/activate.cjs','/project/validation/gateway-ownership/child-input-'+mode+'.json']};
+        let calls=0,guards=0;const guard={retainFailure(){throw Error('unexpected guard uncertainty');}},module={},pending=deferred(),process:any={platform:'linux',arch:'x64',version:'v24.22.0',execArgv:[],env:{},argv:['/tools/node',root+'/activate.cjs','/project/validation/gateway-ownership/child-input-'+mode+'.json']};
         const require:any=(name:string)=>{if(name==='node:assert/strict')return assert;if(name==='node:path')return{join:(...v:string[])=>v.join('/').replace('/instrumented/..','')};
-            assert.equal(name,'./ownership.cjs');return{activateInstrumentedGatewayChildFromFile:(p:string)=>{calls++;assert.equal(p,process.argv[2]);return pending.promise;}};};require.main=module;
-        const run=()=>runInNewContext(source,{require,module,process,__dirname:root,__filename:root+'/activate.cjs'},{timeout:1000});
+            if(name==='node:module')return{registerHooks(){throw Error('native registration forbidden in activation projection');},isBuiltin:()=>false};
+            if(name==='./resolution-guard.cjs')return{createInstrumentedResolutionGuard:(selected:string,ports:any)=>{assert.equal(selected,root);assert.equal(typeof ports.onUncertain,'function');guards++;return guard;}};
+            assert.equal(name,'./ownership.cjs');assert.equal(guards,1);return{activateInstrumentedGatewayChildFromFile:(p:string,selectedGuard:any)=>{assert.equal(selectedGuard,guard);calls++;assert.equal(p,process.argv[2]);return pending.promise;}};};require.main=module;
+        const run=()=>runInNewContext('process.execArgv = [];\n'+source,{require,module,process,__dirname:root,__filename:root+'/activate.cjs'},{timeout:1000});
         if(mode==='invalid'){assert.throws(run);assert.equal(calls,0);}else{run();assert.equal(calls,1);pending.reject(Error('authored owner failure'));await pulse();assert.equal(process.exitCode,1);}
     }
 });
@@ -316,4 +324,18 @@ for(const kind of ['throw','thenable'])test('unknown diagnostic writer '+kind+' 
     const f=installation(),p=await prepared(f),h=activation(f,p),cause=Error('authored-primary-workload');let writes=0;
     (h.ports as any).writeOutput=()=>{writes++;if(kind==='throw')throw Error('authored-secondary-writer');return Promise.reject(Error('authored-unsupported-writer'));};
     const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task,(e:any)=>{assert.equal(e.cause,cause);assert.equal(e.owner.unknown,true);return true;});await pulse();h.result.reject(cause);await pulse();h.closed.resolve();await rejected;assert.equal(writes,1);assert.equal(h.clears,0);
+});
+
+for(const field of ['registered','uncertain','closePrepared'])test('parent refuses unsupported containment readiness '+field,async()=>{
+    const f=installation(),p=await prepared(f),h=parent(f,p),task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports),failure=assert.rejects(task);await pulse();h.emit(e=>{e.containment[field]=field==='uncertain'?true:false;});h.close();await failure;
+});
+test('late guard failure after stdout acceptance cannot complete a child successfully',async()=>{
+    const f=installation(),p=await prepared(f),h=activation(f,p);h.controls.guardLateFailure=true;const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),failure=assert.rejects(task);await pulse();h.complete();h.closed.resolve();await pulse();h.flush.resolve();await failure;assert.ok(h.events.includes('exit1'));assert.equal(h.clears,1);
+});
+test('unknown containment preparation preserves liveness and never retries',async()=>{
+    const f=installation(),p=await prepared(f),h=activation(f,p);let calls=0;h.ports.prepareContainmentClose=()=>{calls++;throw Error('authored unknown preparation');};const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),failure=assert.rejects(task);await pulse();h.complete();h.closed.resolve();h.flush.resolve();await failure;assert.equal(calls,1);assert.equal(h.clears,0);
+});
+
+test('parent rejects a guard-byte replacement after a purported successful child result',async()=>{
+    const f=installation(),p=await prepared(f),h=parent(f,p),task=runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports),failure=assert.rejects(task);await pulse();h.emit();f.write(root+'/resolution-guard.cjs',Buffer.from('// replaced guard\n'));h.close();await failure;
 });
