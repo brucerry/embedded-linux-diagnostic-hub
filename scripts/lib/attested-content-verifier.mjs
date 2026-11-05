@@ -342,10 +342,10 @@ export async function verifyLocalAttestation(request, dependencies = {}) {
         TERM: 'dumb',
         LC_ALL: 'C',
     });
-    function run(args, maximum) {
+    async function run(args, maximum) {
         let result;
         try {
-            result = execute(request.tool.path, args, {
+            result = await execute(request.tool.path, args, {
                 cwd: request.configurationDirectory,
                 env: environment,
                 shell: false,
@@ -379,7 +379,7 @@ export async function verifyLocalAttestation(request, dependencies = {}) {
         }
         await configuration(request.configurationDirectory, filesystem, uid, configIdentity);
     }
-    const versionText = decoder.decode(run(['--version'], 4096));
+    const versionText = decoder.decode(await run(['--version'], 4096));
     const match =
         /^gh version (\d+\.\d+\.\d+)(?: \([^\r\n]*\))?\r?\n(?:https:\/\/github\.com\/cli\/cli\/releases\/tag\/v\d+\.\d+\.\d+\r?\n)?$/.exec(
             versionText,
@@ -387,7 +387,7 @@ export async function verifyLocalAttestation(request, dependencies = {}) {
     assert.ok(match && match[1] === request.tool.version, 'Pinned verifier version mismatch.');
     await recheck();
     const c = request.constraints;
-    const stdout = run(
+    const stdout = await run(
         [
             'attestation',
             'verify',
