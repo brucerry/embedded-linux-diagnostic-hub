@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRejectionFingerprint, fingerprintRejectedSource } from './instrumented-gateway-rejection.mjs';
 import { deriveInstrumentedGeneratedInventory, SSH2_BIGINT_GENERATED_SOURCE } from './instrumented-gateway-generated.mjs';
 import { INSPECTOR_FAILURE_CODES } from './instrumented-gateway-failure.mjs';
 import { createHash } from 'node:crypto';
@@ -103,7 +104,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         builtinScripts = 0,
         unknownOperations = 0;
     const verifiedCreators=new Map(),sourceTasks=new Set(),tentativeGenerated=[],observedGenerated=[];
-    let generatedDiagnostic=null;
+    let generatedDiagnostic=null,rejectionFingerprint=null;
     const pending = new Set(),
         waiters = [],
         ids = new Set(),
@@ -130,7 +131,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             connected,
             listenerHeld: registration,
             pendingCallbacks: pending.size,
-            pendingSourceClassifications:sourceTasks.size,generatedDiagnostic:generatedDiagnostic?{...generatedDiagnostic}:null,
+            pendingSourceClassifications:sourceTasks.size,rejectionFingerprint:rejectionFingerprint?{...rejectionFingerprint}:null,generatedDiagnostic:generatedDiagnostic?{...generatedDiagnostic}:null,
             compiledScripts: observed.length,
             primaryFailure: Boolean(primary),
             failureCode,
@@ -180,7 +181,19 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         const shapeMatched=!!(plan&&p.url===''&&p.length===plan.sourceUnits&&p.isModule!==true);
         const diagnostic={urlKind,declaredUnits:Number.isSafeInteger(p.length)&&p.length>=0&&p.length<=10000?p.length:null,creatorPinned:!!plan,shapeMatched,
             stackPresent,siteMatched,nonModuleVerified:p.isModule===false,sourceMatched:null,sourceSHA256:null,sourceBytes:null,creatorSourceVerified:null,contextMatched:null};
-        if(!shapeMatched){fail(Error('Unadmitted compiled script.'),'script-unadmitted',diagnostic);return;}
+        if(!shapeMatched){
+            const fingerprint=!primary?createRejectionFingerprint(p,expected,selected.artifactPath):null;
+            // Latch rejection before diagnostic dispatch; callback errors cannot replace it.
+            fail(Error('Unadmitted compiled script.'),'script-unadmitted',diagnostic);
+            if(fingerprint){
+                rejectionFingerprint=fingerprint;
+                try{trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId}).then(result=>{
+                    fingerprintRejectedSource(fingerprint,result?.scriptSource,expected,pathToFileURL(selected.artifactPath).href);
+                }).catch(()=>{fingerprint.status='rpc-rejected';}));}
+                catch{fingerprint.status='rpc-rejected';}
+            }
+            return;
+        }
         if(tentativeGenerated.length){fail(Error('Generated cardinality exceeded.'),'generated-cardinality',diagnostic);return;}
         const candidate={plan,diagnostic,frameId:frame&&typeof frame.scriptId==='string'&&frame.scriptId.length>0&&frame.scriptId.length<=64?frame.scriptId:null,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>=0?p.executionContextId:null};
         tentativeGenerated.push(candidate);

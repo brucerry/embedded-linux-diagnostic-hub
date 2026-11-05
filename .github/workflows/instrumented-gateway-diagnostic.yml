@@ -1,7 +1,7 @@
 name: Separate instrumented Gateway diagnostic
 on:
     push:
-        branches: [ci/gateway-generated295-96a56cd-20261105]
+        branches: [ci/gateway-fingerprint296-96a56cd-20261105]
 permissions:
     contents: read
 concurrency:
@@ -20,7 +20,7 @@ jobs:
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "${{ github.event.repository.private }}" = false
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/gateway-generated295-96a56cd-20261105
+                  test "$GITHUB_REF" = refs/heads/ci/gateway-fingerprint296-96a56cd-20261105
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$GITHUB_JOB" = instrumented_gateway
                   test "${RUNNER_ENVIRONMENT:-}" = github-hosted
@@ -47,7 +47,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git rev-parse HEAD^)" = 89e42a2d24d93f588b5fbe11ba7dc5d87735021c
+                  test "$(git rev-parse HEAD^)" = 8bb9770db22a4c86a235b2be234fc896d927146c
                   git --no-pager diff --no-ext-diff --no-textconv --exit-code 96a56cdbb462320c54fe74022d7436e665a31d31 HEAD -- src shared electron backend gateway public package.json package-lock.json vite.config.mts index.html tsconfig.json LICENSE .env.gateway.example docs/gateway.md
                   test ! -e validation
                   test ! -L validation

@@ -139,7 +139,7 @@ for(const held of [false,true])test('bound failure diagnostics survive command r
     if(held)h.expire();await rejected;
     const state=owner.snapshot();assert.equal(state.failedAt,'compatibility');assert.equal(state.completed,false);assert.equal(state.childFailure.envelope,'observed-bound');
     assert.equal(state.childFailure.detail.inspectorFailure,'script-unadmitted');assert.equal(state.childFailure.directRetired,!held);assert.equal(h.children.length,1);
-    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v4');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
+    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v5');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
     if(held)h.children[0].close(1);await assert.rejects(owner.run());assert.equal(h.children.length,1);
 });
 test('an unbound failure payload stays diagnostic-missing and never starts ownership',async()=>{
