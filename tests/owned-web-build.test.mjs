@@ -232,11 +232,17 @@ test('caller plan mutation cannot rewrite the selected command or environment', 
     const f = fixture();
     f.plan.command[0] = '/changed';
     f.plan.environment.NODE_ENV = 'changed';
+    f.plan.env.LANG = 'changed';
     f.child.emit('spawn');
     f.close();
     const result = await f.owner.result;
     assert.equal(result.command[0], '/synthetic/node');
     assert.equal(result.environment.NODE_ENV, 'production');
+    assert.equal(f.selected.options.env.LANG, 'C');
+    assert.equal(
+        result.custody.environmentSHA256,
+        createHash('sha256').update('[["LANG","C"]]').digest('hex'),
+    );
 });
 
 test('summary validator rejects missing or fabricated direct closure and broader claims', async () => {
@@ -251,6 +257,7 @@ test('summary validator rejects missing or fabricated direct closure and broader
         { descendantRetirement: 'proven' },
         { policy: 'timeout-is-retired' },
         { bounds: { ...WEB_BUILD_BOUNDS, deadlineMs: 1 } },
+        { environmentSHA256: 'not-a-hash' },
         { stdout: { ...custody.stdout, closed: false } },
     ]) {
         assert.throws(() => validateWebBuildCustody({ ...custody, ...patch }));
@@ -300,8 +307,9 @@ test('Vite custody is not represented as full default Git/file or environment ad
         new URL('../docs/web-producer-integration.md', import.meta.url),
         'utf8',
     );
-    assert.match(cli, /default-git-and-file-custody/);
-    assert.match(cli, /localSourceProvider\(root\)/);
+    assert.match(cli, /native-executor-group-and-profile-admission/);
+    assert.match(cli, /localSourceProvider\(root,\s*\{/);
+    assert.match(cli, /requireOwnedWebCapabilities\(capability\)/);
     assert.match(provider, /timeout: 30000/);
     assert.match(doc.replace(/\s+/g, ' '), /Full default producer execution remains held/);
     assert.match(doc.replace(/\s+/g, ' '), /not a complete observed/);

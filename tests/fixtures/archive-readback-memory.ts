@@ -116,6 +116,7 @@ export async function readbackFixture(scope: 'web' | 'gateway' = 'gateway') {
                 environment: { NODE_ENV: 'production', WEB_BASE_PATH: './' },
                 custody: {
                     policy: 'owned-direct-child-no-signals-v1',
+                    environmentSHA256: 'c'.repeat(64), // Synthetic build fixture, not live admission.
                     bounds: {
                         deadlineMs: 600000,
                         stdoutBytes: 16777216,

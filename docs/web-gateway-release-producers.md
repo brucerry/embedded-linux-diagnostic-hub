@@ -77,10 +77,10 @@ here claims real browser behavior, calibration, a memory pass or normal retireme
 
 ## Bounds and effects
 
-The new asynchronous custody covers only the Vite child. The default source-provider Git timeout,
-command-local configuration, executable/file reads and exclusive publication adapters have not
-acquired the same custody proof. Full default producer execution remains held. The recorded fixed
-environment overlay is not the entire inherited child environment; admit that separately.
+Vite custody remains separate from whole-producer/descendant proof. Opt-in async Git and owned
+file/publication capabilities are now prepared, but default native execution has no capability grant
+and remains held. The record's fixed environment overlay is distinct from the new selected
+complete-profile digest; real environment/toolchain/OS admission is still required.
 
 The existing archive-admission bounds are retained: 128 MiB compressed archive, 256 MiB total
 payload, 64 MiB/member, 4,096 entries and 1,024 UTF-8 path bytes. Stable file reads use 64 KiB

@@ -1,11 +1,9 @@
 // Explicit held producer entry. Import is inert; normal package commands and workflows are unchanged.
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { requireOwnedWebCapabilities } from './lib/owned-web-capabilities.mjs';
 import { startOwnedWebBuild, runHeldWebProducer } from './lib/owned-web-build.mjs';
-import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import {
@@ -15,7 +13,10 @@ import {
 } from './lib/web-archive-producer.mjs';
 import { localSourceProvider, readStableSourceFile } from './lib/committed-source-provider.mjs';
 
-export async function main(raw) {
+export async function main(raw, capability) {
+    // No serialized manifest, ambient environment or inactive workflow can grant native execution.
+    const native = requireOwnedWebCapabilities(capability),
+        fs = native.filesystem;
     const args = new Map();
     for (const value of raw) {
         const match =
@@ -71,8 +72,13 @@ export async function main(raw) {
         'Use an isolated local installed toolchain, not a shared dependency symlink.',
     );
     assert.equal(await fs.realpath(dependencies), dependencies);
-    const provider = await localSourceProvider(root);
-    // This default Git/file path is not covered by Vite direct-child custody or live admission.
+    const provider = await localSourceProvider(root, {
+        filesystem: fs,
+        execute: native.executeGit,
+        asynchronous: true,
+        platform: process.platform,
+        environment: native.gitEnvironment,
+    });
     const require = createRequire(import.meta.url),
         vite = await fs.realpath(
             path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js'),
@@ -83,12 +89,18 @@ export async function main(raw) {
     );
     const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
     async function runtime() {
-        const executablePath = await fs.realpath(process.execPath),
-            hash = createHash('sha256');
-        for await (const bytes of createReadStream(executablePath)) hash.update(bytes);
+        const executablePath = await fs.realpath(process.execPath);
+        const bytes = (
+            await readStableArtifactFile(
+                path.dirname(executablePath),
+                path.basename(executablePath),
+                WEB_ARCHIVE_LIMITS.archive,
+                fs,
+            )
+        ).bytes;
         return {
             executablePath,
-            executableSHA256: hash.digest('hex'),
+            executableSHA256: digest(bytes),
             node: process.version,
             platform: process.platform,
             arch: process.arch,
@@ -159,12 +171,13 @@ export async function main(raw) {
             ];
             const environment = { NODE_ENV: 'production', WEB_BASE_PATH: './' };
             const owner = startOwnedWebBuild(
-                { command, cwd: root, environment, env: { ...process.env, ...environment } },
+                { command, cwd: root, environment, env: native.buildEnvironment },
                 {
-                    launch: (command, options) => spawn(command[0], command.slice(1), options),
-                    setTimer: (callback, milliseconds) => setTimeout(callback, milliseconds),
-                    clearTimer: (timer) => clearTimeout(timer),
-                    now: () => performance.now(),
+                    launch: (command, options) =>
+                        native.launch(command[0], command.slice(1), options),
+                    setTimer: native.setTimer,
+                    clearTimer: native.clearTimer,
+                    now: native.now,
                 },
             );
             // Rejection retains the owner through the error and never reaches archive publication.
@@ -194,13 +207,15 @@ export async function main(raw) {
             return { name: 'web-build.json', bytes: measured.length, sha256: digest(measured) };
         },
     });
+    native.assertSettled();
     console.log(
         JSON.stringify({
             status: result.status,
             archive: result.archive,
+            completeChildEnvironmentSHA256: native.profile.sha256,
             releaseAcceptance: false,
             blocked: [
-                'default-git-and-file-custody',
+                'native-executor-group-and-profile-admission',
                 'independent-service-build-provenance',
                 'installed-toolchain-provenance',
                 'product-runtime',

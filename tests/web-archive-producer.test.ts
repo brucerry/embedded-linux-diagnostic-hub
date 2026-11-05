@@ -99,6 +99,7 @@ function fixture() {
         environment: { NODE_ENV: 'production', WEB_BASE_PATH: './' },
         custody: {
             policy: 'owned-direct-child-no-signals-v1',
+            environmentSHA256: 'c'.repeat(64), // Explicit synthetic full-environment identity.
             bounds: {
                 deadlineMs: 600000,
                 stdoutBytes: 16777216,

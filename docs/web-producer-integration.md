@@ -14,20 +14,17 @@ without this field fails validation. This is a tightening of the prepared v1 rec
 that a previously executed producer was migrated. Runtime/GC/loader fields stay null and
 `releaseAcceptance` stays false.
 
-This custody applies to the Vite child only, not the complete default producer.
-`localSourceProvider` still uses synchronous `execFileSync` Git commands with a 30-second timeout
-and command-local Git configuration overrides. A timeout may request termination; a rejected command
-is not proof of Git or descendant retirement. Existing executable/file readers and exclusive
-`fs.writeFile` publication also have separate descriptor, failure and durability limitations. `wx`
-prevents overwrite but is not a complete file-custody or publication acknowledgement. Partial files
-can remain on failure. Full default producer execution remains held pending review/admission of
-these Git and file adapters.
+The Vite custody is not complete producer/descendant retirement. An opt-in async Git provider and
+owned descriptor/publication wrappers are now prepared; the CLI requires a source-owned capability
+before native work and has no default grant. Other source-provider callers retain the old sync
+interface. Full default producer execution remains held pending actual executor/group/profile,
+toolchain/filesystem and service admission. See [web native custody](web-native-custody.md).
 
 The build record's `environment` is the fixed NODE_ENV/WEB_BASE_PATH overlay, not a complete
-observed or allowlisted child environment. The launcher still inherits other ambient variables.
-Refusing NODE_OPTIONS, NODE_PATH and VITE_ does not authenticate every toolchain input; environment
-admission is a separate prerequisite. This integration neither adopts a new environment policy nor
-changes Git settings or filesystem permissions.
+observed child environment. The new capability constructs a separately selected complete child
+profile and binds its digest into custody without inheriting ambient variables. This proposed
+profile still requires actual toolchain/configuration/filesystem admission. No Git setting or
+permission changed.
 
 The observation deadline is ten minutes, with a monotonic elapsed-time check before success to
 refuse a late close even if the timer callback was delayed. Retained output is capped at 16 MiB

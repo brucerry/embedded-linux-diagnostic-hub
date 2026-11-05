@@ -9,6 +9,19 @@ export const WEB_BUILD_BOUNDS = Object.freeze({
 });
 const retained = new Set();
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+export function completeEnvironmentDigest(value) {
+    assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+    const rows = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    assert.ok(
+        rows.length <= 256 &&
+            rows.every(
+                ([k, v]) => k && !/[=\x00]/.test(k) && typeof v === 'string' && !v.includes('\0'),
+            ),
+    );
+    const bytes = Buffer.from(JSON.stringify(rows));
+    assert.ok(bytes.length <= 65536);
+    return digest(bytes);
+}
 
 export function validateWebBuildCustody(value) {
     assert.deepEqual(Object.keys(value).sort(), [
@@ -16,6 +29,7 @@ export function validateWebBuildCustody(value) {
         'childClose',
         'descendantRetirement',
         'elapsedMs',
+        'environmentSHA256',
         'exit',
         'policy',
         'spawn',
@@ -33,6 +47,7 @@ export function validateWebBuildCustody(value) {
     assert.equal(value.exit, true);
     assert.equal(value.childClose, true);
     assert.equal(value.descendantRetirement, 'not-observed');
+    assert.match(value.environmentSHA256, /^[a-f0-9]{64}$/);
     for (const name of ['stdout', 'stderr']) {
         assert.deepEqual(Object.keys(value[name]).sort(), ['bytes', 'closed', 'sha256']);
         assert.equal(value[name].closed, true);
@@ -77,6 +92,7 @@ export function startOwnedWebBuild(plan, ports) {
     for (const name of ['launch', 'setTimer', 'clearTimer', 'now'])
         assert.equal(typeof ports[name], 'function');
     const selected = structuredClone(plan);
+    const environmentSHA256 = completeEnvironmentDigest(selected.env);
     const started = ports.now();
     assert.ok(Number.isFinite(started) && started >= 0);
     let elapsedMs = 0;
@@ -195,6 +211,7 @@ export function startOwnedWebBuild(plan, ports) {
             childClose: true,
             elapsedMs,
             descendantRetirement: 'not-observed',
+            environmentSHA256,
             stdout: {
                 bytes: streams.stdout.bytes,
                 closed: true,

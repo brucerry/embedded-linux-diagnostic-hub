@@ -77,7 +77,10 @@ export async function readStableSourceFile(
     assert.ok(result);
     return result;
 }
-/** Local raw-object reads only: no checkout, filters, remote, hooks, fsmonitor or index refresh. */
+/** Local raw-object reads only: no checkout, filters, remote, hooks, fsmonitor or index refresh.
+ * @param {string} directory
+ * @param {{filesystem?: any, execute?: (file: string, args: string[], options: any) => any, platform?: string, environment?: Record<string, string | undefined>, asynchronous?: boolean}} [options]
+ */
 export async function localSourceProvider(
     directory,
     {
@@ -85,6 +88,7 @@ export async function localSourceProvider(
         execute = execFileSync,
         platform = process.platform,
         environment = process.env,
+        asynchronous = false,
     } = {},
 ) {
     assert.ok(path.isAbsolute(directory));
@@ -117,9 +121,9 @@ export async function localSourceProvider(
         GIT_OPTIONAL_LOCKS: '0',
         GIT_TERMINAL_PROMPT: '0',
     });
-    const git = (args, input, maximum = gitLimit, missing = false) => {
+    const git = async (args, input, maximum = gitLimit, missing = false) => {
         try {
-            return execute(
+            return await execute(
                 'git',
                 [
                     '--no-replace-objects',
@@ -139,10 +143,11 @@ export async function localSourceProvider(
                     env: commandEnvironment,
                     stdio: ['pipe', 'pipe', 'pipe'],
                     shell: false,
-                    timeout: 30000,
+                    ...(asynchronous ? { missing } : { timeout: 30000 }),
                 },
             );
         } catch (error) {
+            if (asynchronous) throw error; // Keep the owned executor's original error/custody.
             if (missing && error.status === 1 && error.stdout?.length === 0) return Buffer.alloc(0);
             throw new Error(
                 'Read-only Git operation failed: ' +
@@ -152,37 +157,43 @@ export async function localSourceProvider(
             );
         }
     };
-    const text = (args) => decoder.decode(git(args, undefined, 1024 * 1024)).trim();
-    assert.equal(text(['rev-parse', '--show-toplevel']), directory);
+    const text = async (args) => decoder.decode(await git(args, undefined, 1024 * 1024)).trim();
+    assert.equal(await text(['rev-parse', '--show-toplevel']), directory);
     assert.equal(
-        text(['rev-parse', '--show-object-format']),
+        await text(['rev-parse', '--show-object-format']),
         'sha1',
         'Only SHA1 Git object format is supported.',
     );
-    assert.equal(text(['rev-parse', '--show-prefix']), '');
+    assert.equal(await text(['rev-parse', '--show-prefix']), '');
     assert.equal(
-        git(
-            [
-                'config',
-                '--includes',
-                '--name-only',
-                '--get-regexp',
-                '^(extensions\.partialclone|remote\..*\.promisor)$',
-            ],
-            undefined,
-            1024 * 1024,
-            true,
+        (
+            await git(
+                [
+                    'config',
+                    '--includes',
+                    '--name-only',
+                    '--get-regexp',
+                    '^(extensions\\.partialclone|remote\\..*\\.promisor)$',
+                ],
+                undefined,
+                1024 * 1024,
+                true,
+            )
         ).length,
         0,
         'Partial/promisor source is unsupported; no lazy fetch is permitted.',
     );
     return {
         async state() {
-            const sourceCommit = text(['rev-parse', '--verify', 'HEAD']),
-                sourceTree = text(['rev-parse', '--verify', 'HEAD^{tree}']);
+            const sourceCommit = await text(['rev-parse', '--verify', 'HEAD']),
+                sourceTree = await text(['rev-parse', '--verify', 'HEAD^{tree}']);
             assert.match(sourceCommit, oid);
             assert.match(sourceTree, oid);
-            const raw = git(['ls-files', '--stage', '--sparse', '-z'], undefined, 8 * 1024 ** 2),
+            const raw = await git(
+                    ['ls-files', '--stage', '--sparse', '-z'],
+                    undefined,
+                    8 * 1024 ** 2,
+                ),
                 index = [];
             let offset = 0;
             while (offset < raw.length) {
@@ -210,7 +221,7 @@ export async function localSourceProvider(
             assert.ok(ids.length > 0 && ids.length <= 64);
             ids.forEach((value) => assert.match(value, oid));
             const metadata = decoder.decode(
-                git(['cat-file', '--batch-check'], ids.join('\n') + '\n', 1024 * 1024),
+                await git(['cat-file', '--batch-check'], ids.join('\n') + '\n', 1024 * 1024),
             );
             assert.ok(metadata.endsWith('\n'));
             const lines = metadata.slice(0, -1).split('\n');
@@ -228,7 +239,7 @@ export async function localSourceProvider(
                 assert.ok(total <= SOURCE_LIMITS.total);
                 return fields;
             });
-            const raw = git(
+            const raw = await git(
                     ['cat-file', '--batch'],
                     ids.join('\n') + '\n',
                     total + ids.length * 128,

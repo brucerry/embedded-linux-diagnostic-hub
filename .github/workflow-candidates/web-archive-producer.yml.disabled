@@ -1,6 +1,7 @@
 # INERT REVIEW CANDIDATE: outside workflows/, non-YAML suffix, and job-level false guard.
 # Copying/renaming or removing the guard requires separate execution/storage admission.
 # Vite custody does not admit the existing default Git timeout or file/publication adapters.
+# The CLI has no default native capability: enabling this template alone cannot admit execution.
 name: Held source-bound web archive producer
 on:
     workflow_call:
