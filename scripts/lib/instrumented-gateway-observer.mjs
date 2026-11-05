@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { deriveCpuOriginPlan, captureRejectionOrigin, observeOriginSource, classifyRejectionOrigin } from './instrumented-gateway-origin.mjs';
 import { createRejectionFingerprint, fingerprintRejectedSource } from './instrumented-gateway-rejection.mjs';
 import { deriveInstrumentedGeneratedInventory, SSH2_BIGINT_GENERATED_SOURCE } from './instrumented-gateway-generated.mjs';
 import { INSPECTOR_FAILURE_CODES } from './instrumented-gateway-failure.mjs';
@@ -103,8 +104,9 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         events = 0,
         builtinScripts = 0,
         unknownOperations = 0;
+    const originPlan=deriveCpuOriginPlan(scripts,selected.artifactPath);
     const verifiedCreators=new Map(),sourceTasks=new Set(),tentativeGenerated=[],observedGenerated=[];
-    let generatedDiagnostic=null,rejectionFingerprint=null;
+    let generatedDiagnostic=null,rejectionFingerprint=null,rejectionOrigin=null;
     const pending = new Set(),
         waiters = [],
         ids = new Set(),
@@ -131,7 +133,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             connected,
             listenerHeld: registration,
             pendingCallbacks: pending.size,
-            pendingSourceClassifications:sourceTasks.size,rejectionFingerprint:rejectionFingerprint?{...rejectionFingerprint}:null,generatedDiagnostic:generatedDiagnostic?{...generatedDiagnostic}:null,
+            pendingSourceClassifications:sourceTasks.size,rejectionOrigin:rejectionOrigin?{...rejectionOrigin}:null,rejectionFingerprint:rejectionFingerprint?{...rejectionFingerprint}:null,generatedDiagnostic:generatedDiagnostic?{...generatedDiagnostic}:null,
             compiledScripts: observed.length,
             primaryFailure: Boolean(primary),
             failureCode,
@@ -186,9 +188,10 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             // Latch rejection before diagnostic dispatch; callback errors cannot replace it.
             fail(Error('Unadmitted compiled script.'),'script-unadmitted',diagnostic);
             if(fingerprint){
-                rejectionFingerprint=fingerprint;
+                rejectionFingerprint=fingerprint;rejectionOrigin=captureRejectionOrigin(p,originPlan,expected);
                 try{trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId}).then(result=>{
                     fingerprintRejectedSource(fingerprint,result?.scriptSource,expected,pathToFileURL(selected.artifactPath).href);
+                    if(fingerprint.status==='fingerprinted')observeOriginSource(rejectionOrigin,result.scriptSource);
                 }).catch(()=>{fingerprint.status='rpc-rejected';}));}
                 catch{fingerprint.status='rpc-rejected';}
             }
@@ -295,7 +298,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 sync(session.connect(), undefined, 'connect');
                 connected = true;
                 await post('Debugger.enable', {});
-                await drain();await drainSources();classifyGenerated();
+                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);
                 if(!observed.some((r)=>r.path===selected.artifactPath)){
                     const error=Error('Instrumented entry was not observed compiled.');fail(error,'entry-missing');throw error;
                 }
@@ -312,7 +315,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             sealed = true;
             finishing = (async () => {
                 if (started) await started.catch(() => {});
-                await drain();await drainSources();classifyGenerated();
+                await drain();await drainSources();classifyGenerated();classifyRejectionOrigin(rejectionOrigin,verifiedCreators);
                 assert.equal(unknownOperations, 0, 'Unknown inspector operation remains held.');
                 // Disable is acknowledged before removing the owned listener or disconnecting.
                 if (session && connected) await post('Debugger.disable', {});

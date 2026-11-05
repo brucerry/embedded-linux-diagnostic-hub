@@ -1,7 +1,7 @@
 name: Separate instrumented Gateway diagnostic
 on:
     push:
-        branches: [ci/gateway-fingerprint296-96a56cd-20261105]
+        branches: [ci/gateway-origin297-96a56cd-20261105]
 permissions:
     contents: read
 concurrency:
@@ -9,7 +9,8 @@ concurrency:
     cancel-in-progress: false
 jobs:
     instrumented_gateway:
-        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.run_attempt == 1
+        # Prepared only: ancestor optional-module isolation must be corrected before any job.
+        if: ${{ false && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         steps:
@@ -20,7 +21,7 @@ jobs:
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "${{ github.event.repository.private }}" = false
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/gateway-fingerprint296-96a56cd-20261105
+                  test "$GITHUB_REF" = refs/heads/ci/gateway-origin297-96a56cd-20261105
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$GITHUB_JOB" = instrumented_gateway
                   test "${RUNNER_ENVIRONMENT:-}" = github-hosted
@@ -47,7 +48,7 @@ jobs:
               run: |
                   set -euo pipefail
                   test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-                  test "$(git rev-parse HEAD^)" = 8bb9770db22a4c86a235b2be234fc896d927146c
+                  test "$(git rev-parse HEAD^)" = db303e7df961a678dfc5dd04d36f903c7a88b1a5
                   git --no-pager diff --no-ext-diff --no-textconv --exit-code 96a56cdbb462320c54fe74022d7436e665a31d31 HEAD -- src shared electron backend gateway public package.json package-lock.json vite.config.mts index.html tsconfig.json LICENSE .env.gateway.example docs/gateway.md
                   test ! -e validation
                   test ! -L validation

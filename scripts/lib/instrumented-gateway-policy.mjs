@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { validateOwnedInstrumentedFailure } from './instrumented-gateway-failure.mjs';
 import path from 'node:path';
 const DIAGNOSTIC_GATEWAY_POLICY = 'github-hosted-diagnostic-teardown-unproved-group-v1';
-export const INSTRUMENTED_GATEWAY_BRANCH = 'ci/gateway-fingerprint296-96a56cd-20261105';
+export const INSTRUMENTED_GATEWAY_BRANCH = 'ci/gateway-origin297-96a56cd-20261105';
 export function validateInstrumentedGatewayContext(v) {
     assert.deepEqual(Object.keys(v).sort(),['arch','attempt','event','job','policy','private','ref','repository','run','runner','sha','system','tree']);
     assert.equal(v.repository,'brucerry/embedded-linux-diagnostic-hub');assert.equal(v.private,false);
@@ -25,7 +25,7 @@ export function instrumentedFailureSummary(stage,bootstrap,driver,preliminary=nu
     const b=driver?.bootstrap??bootstrap,files=b?.files?.files??preliminary,p=driver?.parent;
     const code=(value,allowed)=>allowed.includes(value)?value:null;
     let childFailure=null;try{childFailure=validateOwnedInstrumentedFailure(p?.childFailure);}catch{}
-    return{schema:'instrumented-gateway-failure-counters-v5',status:'failed-or-held',stage:['admission','initial-files','bootstrap','driver-import','driver','receipt'].includes(stage)?stage:'unknown',
+    return{schema:'instrumented-gateway-failure-counters-v6',status:'failed-or-held',stage:['admission','initial-files','bootstrap','driver-import','driver','receipt'].includes(stage)?stage:'unknown',
         driverPhase:code(driver?.failedAt,['source','staging','dependencies','build','census','pair','completed']),
         preparationPhase:code(driver?.preparationPhase,['source','building','readback','snapshot','binding']),
         censusPhase:code(driver?.censusPhase,['root','directory','file-identity','file-read','directory-verification','two-pass-verification','layout']),

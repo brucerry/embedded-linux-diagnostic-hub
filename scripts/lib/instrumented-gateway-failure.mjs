@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { validateRejectionOrigin } from './instrumented-gateway-origin.mjs';
 import { validateRejectionFingerprint } from './instrumented-gateway-rejection.mjs';
 import { createHash } from 'node:crypto';
 
 export const INSTRUMENTED_CHILD_FAILURE_MARKER='HUB_INSTRUMENTED_GATEWAY_CHILD_FAILURE=';
 export const CHILD_FAILURE_PHASES=Object.freeze(['input','node','census','snapshot','workload-acquiring','workload','receipt','stdout','retired']);
 export const INSPECTOR_FAILURE_CODES=Object.freeze(['inspector-operation','inspector-callback','inspector-dispatch','inspector-pending-bound','script-metadata','script-live-edit','script-source-url','script-id','script-unadmitted','script-length','source-response','source-content','entry-missing','observer-admission','observer-retirement','generated-source-mismatch','generated-origin-unproved','generated-cardinality']);
+const projectOrigin=v=>{if(!v)return null;try{return validateRejectionOrigin(v);}catch{return null;}};
 const projectRejection=v=>{if(!v)return null;try{return validateRejectionFingerprint(v);}catch{return null;}};
 const count=n=>Number.isSafeInteger(n)&&n>=0&&n<=10000?n:null;
 const boolean=n=>typeof n==='boolean'?n:null;
@@ -28,16 +30,16 @@ function validateGenerated(v){
 /** Fixed diagnostic fields only. This is not a passing result or resource-retirement grant. */
 export function projectInstrumentedChildFailure(phase,unknown,knownWorkload,snapshot){
     const c=snapshot?.collector;
-    const detail={schema:'instrumented-child-failure-detail-v3',phase:CHILD_FAILURE_PHASES.includes(phase)?phase:'unknown',
+    const detail={schema:'instrumented-child-failure-detail-v4',phase:CHILD_FAILURE_PHASES.includes(phase)?phase:'unknown',
         unknown:unknown===true,knownWorkload:knownWorkload===true,workloadFailed:boolean(snapshot?.failed),workloadRetired:boolean(snapshot?.retired),
-        inspectorFailure:INSPECTOR_FAILURE_CODES.includes(c?.failureCode)?c.failureCode:null,generatedDiagnostic:projectGenerated(c?.generatedDiagnostic),rejectionFingerprint:projectRejection(c?.rejectionFingerprint),
+        inspectorFailure:INSPECTOR_FAILURE_CODES.includes(c?.failureCode)?c.failureCode:null,generatedDiagnostic:projectGenerated(c?.generatedDiagnostic),rejectionFingerprint:projectRejection(c?.rejectionFingerprint),rejectionOrigin:projectOrigin(c?.rejectionOrigin),
         ...Object.fromEntries(numeric.map(k=>[k,count(c?.[k])])),...Object.fromEntries(flags.map(k=>[k,boolean(c?.[k])])),
         wholeGroupRetirement:null,releaseAcceptance:false};
     return detail;
 }
 export function validateInstrumentedChildFailure(detail){
-    keys(detail,['schema','phase','unknown','knownWorkload','workloadFailed','workloadRetired','inspectorFailure','generatedDiagnostic','rejectionFingerprint',...numeric,...flags,'wholeGroupRetirement','releaseAcceptance']);
-    assert.equal(detail.schema,'instrumented-child-failure-detail-v3');assert.ok([...CHILD_FAILURE_PHASES,'unknown'].includes(detail.phase));validateGenerated(detail.generatedDiagnostic);if(detail.rejectionFingerprint!==null)validateRejectionFingerprint(detail.rejectionFingerprint);
+    keys(detail,['schema','phase','unknown','knownWorkload','workloadFailed','workloadRetired','inspectorFailure','generatedDiagnostic','rejectionFingerprint','rejectionOrigin',...numeric,...flags,'wholeGroupRetirement','releaseAcceptance']);
+    assert.equal(detail.schema,'instrumented-child-failure-detail-v4');assert.ok([...CHILD_FAILURE_PHASES,'unknown'].includes(detail.phase));validateGenerated(detail.generatedDiagnostic);if(detail.rejectionFingerprint!==null)validateRejectionFingerprint(detail.rejectionFingerprint);if(detail.rejectionOrigin!==null)validateRejectionOrigin(detail.rejectionOrigin);
     for(const k of ['unknown','knownWorkload'])assert.equal(typeof detail[k],'boolean');
     for(const k of ['workloadFailed','workloadRetired',...flags])assert.ok(detail[k]===null||typeof detail[k]==='boolean');
     for(const k of numeric)assert.ok(detail[k]===null||count(detail[k])===detail[k]);
