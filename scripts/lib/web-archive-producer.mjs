@@ -1,20 +1,15 @@
 import assert from 'node:assert/strict';
 import { zipSync, unzipSync } from 'fflate';
 import path from 'node:path';
+import { validateWebBuildCustody } from './owned-web-build.mjs';
 import {
     observeSourceBridge,
     sourceDigest,
     validateSourceBridge,
 } from './committed-source-bridge.mjs';
 
-// The already reviewed exact_artifact_admission.py limits; admission bounds, not memory policy.
-export const WEB_ARCHIVE_LIMITS = Object.freeze({
-    archive: 128 * 1024 ** 2,
-    expanded: 256 * 1024 ** 2,
-    member: 64 * 1024 ** 2,
-    entries: 4096,
-    path: 1024,
-});
+import { WEB_ARCHIVE_LIMITS } from './web-archive-limits.mjs';
+export { WEB_ARCHIVE_LIMITS } from './web-archive-limits.mjs';
 const hash = /^[a-f0-9]{64}$/;
 const oid = /^[a-f0-9]{40}$/;
 function closed(value, fields) {
@@ -120,7 +115,7 @@ function builder(value) {
     return JSON.parse(JSON.stringify(value));
 }
 function buildOutcome(result, observedBuilder) {
-    closed(result, ['pid', 'exitCode', 'signal', 'error', 'command', 'environment']);
+    closed(result, ['pid', 'exitCode', 'signal', 'error', 'command', 'environment', 'custody']);
     assert.ok(
         Array.isArray(result.command) &&
             result.command.length === 9 &&
@@ -145,6 +140,7 @@ function buildOutcome(result, observedBuilder) {
     assert.equal(result.error, null);
     assert.equal(result.exitCode, 0);
     assert.equal(result.signal, null);
+    validateWebBuildCustody(result.custody);
     return result;
 }
 /** An actual producer's fixed sequence, with injectable IO only for memory tests. No workload/runtime pass. */
@@ -157,7 +153,7 @@ export async function produceWebArchive(input, sourceProvider, io) {
     assert.ok(packageRecord && sourceDigest(packageBytes) === packageRecord.sha256);
     assert.equal(JSON.parse(packageBytes.toString('utf8')).version, expected.version);
     const observedBuilder = builder(await io.builder());
-    const result = await io.build();
+    const result = structuredClone(await io.build());
     buildOutcome(result, observedBuilder);
     // A rejected/unknown build cannot be promoted into output collection or publication.
     const before = payload(await io.output());

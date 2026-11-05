@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { startOwnedWebBuild, runHeldWebProducer } from './lib/owned-web-build.mjs';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -71,6 +72,7 @@ export async function main(raw) {
     );
     assert.equal(await fs.realpath(dependencies), dependencies);
     const provider = await localSourceProvider(root);
+    // This default Git/file path is not covered by Vite direct-child custody or live admission.
     const require = createRequire(import.meta.url),
         vite = await fs.realpath(
             path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js'),
@@ -156,20 +158,18 @@ export async function main(raw) {
                 site,
             ];
             const environment = { NODE_ENV: 'production', WEB_BASE_PATH: './' };
-            const result = spawnSync(command[0], command.slice(1), {
-                cwd: root,
-                env: { ...process.env, ...environment },
-                stdio: 'inherit',
-                shell: false,
-            });
-            return {
-                pid: result.pid,
-                exitCode: result.status,
-                signal: result.signal,
-                error: result.error ? String(result.error) : null,
-                command,
-                environment,
-            };
+            const owner = startOwnedWebBuild(
+                { command, cwd: root, environment, env: { ...process.env, ...environment } },
+                {
+                    launch: (command, options) => spawn(command[0], command.slice(1), options),
+                    setTimer: (callback, milliseconds) => setTimeout(callback, milliseconds),
+                    clearTimer: (timer) => clearTimeout(timer),
+                    now: () => performance.now(),
+                },
+            );
+            // Rejection retains the owner through the error and never reaches archive publication.
+            // The CLI does not force exit, signal the child, destroy streams, retry or clean work.
+            return await owner.result;
         },
         output,
         async writeArchive(name, bytes) {
@@ -200,6 +200,7 @@ export async function main(raw) {
             archive: result.archive,
             releaseAcceptance: false,
             blocked: [
+                'default-git-and-file-custody',
                 'independent-service-build-provenance',
                 'installed-toolchain-provenance',
                 'product-runtime',
@@ -211,4 +212,9 @@ export async function main(raw) {
     );
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-    await main(process.argv.slice(2));
+    await runHeldWebProducer(() => main(process.argv.slice(2)), {
+        setExitCode: (code) => {
+            process.exitCode = code;
+        },
+        report: (message) => console.error(message),
+    });

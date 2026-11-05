@@ -2,8 +2,8 @@
 
 This source supplies a real, explicit **web build/archive producer entry**, not a full-product pass.
 It has not been executed. The current entry supports Node24 on Linux/macOS; the existing source
-provider does not support Windows executable-mode observations. Package/storage and execution holds apply; no workflow, normal package
-command or publication consumer invokes it automatically.
+provider does not support Windows executable-mode observations. Package/storage and execution holds
+apply; no workflow, normal package command or publication consumer invokes it automatically.
 
 `scripts/produce-web-archive.mjs` accepts exactly eight explicit arguments: `scope`, `version`,
 `source-commit`, `source-tree`, `run-id`, `run-attempt`, `job-key` and `output`, each in
@@ -25,12 +25,15 @@ harness transform and starts no browser, Gateway or SSH target. Ambient Node inj
 VITE-prefixed inputs are refused; `NODE_ENV=production` and `WEB_BASE_PATH=./` are set only for the
 build child.
 
-Only an observed positive PID, code-zero, unsignalled, error-free synchronous build result can
-advance. A rejected, missing or pending result cannot collect output or write an archive. This
-records the returned build command result; it does not prove descendant retirement or grant process
-execution. The actual future job must have an admitted owner, complete lifetime bounds and
-failure/timeout teardown. The entry adds no force-kill or cleanup operation and is not an
-execution-admission tool.
+The command now uses the bounded asynchronous direct-child owner described in
+[web producer integration](web-producer-integration.md). Only an observed positive PID, spawn,
+code-zero unsignalled exit, matching child close, both pipe closures and acknowledged listener
+removal can advance. Its required `custody` record binds the fixed observation/output limits and
+bounded output hashes. A rejected, missing or pending outcome cannot collect output or write an
+archive. Failure remains latched after later closure. This is direct-child observation, not
+independent descendant retirement or execution authority. The future job still needs an admitted
+owner, resource/environment bounds and a separately approved whole-job failure policy. No signal,
+forced cleanup, process-exit shortcut or retry is added.
 
 Complete regular-file output is captured under the same source identity; aliases, links, special
 files, unsafe member names and missing HTML/export-worker entries fail. The producer uses the
@@ -74,6 +77,11 @@ here claims real browser behavior, calibration, a memory pass or normal retireme
 
 ## Bounds and effects
 
+The new asynchronous custody covers only the Vite child. The default source-provider Git timeout,
+command-local configuration, executable/file reads and exclusive publication adapters have not
+acquired the same custody proof. Full default producer execution remains held. The recorded fixed
+environment overlay is not the entire inherited child environment; admit that separately.
+
 The existing archive-admission bounds are retained: 128 MiB compressed archive, 256 MiB total
 payload, 64 MiB/member, 4,096 entries and 1,024 UTF-8 path bytes. Stable file reads use 64 KiB
 chunks. The combined build record has a separate 16 MiB storage bound. Exceeding a bound fails
@@ -90,14 +98,15 @@ cleanup checks. No scratch cleanup or dependency modification has been exercised
 
 ## Gateway and release blockers
 
-Gateway requests fail before build or allocation. The existing Gateway packager rewrites a staged
-package/lock with `npm install --package-lock-only` and produces a tar from that staging tree. A
-real Gateway producer still needs an owned staged-lock/dependency construction and a complete
-archive payload census bound to source, compiled entry, staging inputs and actual job. Merely
-borrowing a web ZIP record, private JS-only SSH profile or Node harness observation is unsupported.
+Gateway requests through this web CLI fail before build or allocation. A separate prepared Gateway
+engine now exists in `gateway-archive-producer.mjs` and `owned-gateway-stage.mjs`, with staged-lock
+validation and a source-bound tar census. Its safe synthetic checks do not supply an admitted live
+executor or actual package/job evidence. The final-tar and retained-dependency observers and the
+separate instrumented ownership entry are likewise preparation, not a shipping Gateway pass.
+Borrowing a web ZIP record, private JS-only SSH profile or Node harness observation is unsupported.
 
-Next implementation is that Gateway staging/census producer, followed by independent
-service/artifact readback and a runtime adapter that consumes the exact inspected shipping bytes.
+Next execution prerequisites include independent service/artifact readback, actual admitted package
+bytes, owned executor/OS-group retirement and separate instrumented versus shipped CLI evidence.
 Actual loader and installed-dependency provenance, browser engines/applicability, per-GC reviewed
 calibration/policy, full-product measured results (at least 30 minutes and 100 measured cycles per
 required GC mode), retention and acknowledged normal cleanup remain required. Ten installer/product

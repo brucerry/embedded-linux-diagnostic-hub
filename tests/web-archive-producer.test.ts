@@ -97,6 +97,30 @@ function fixture() {
             '/synthetic/validation/new/site',
         ],
         environment: { NODE_ENV: 'production', WEB_BASE_PATH: './' },
+        custody: {
+            policy: 'owned-direct-child-no-signals-v1',
+            bounds: {
+                deadlineMs: 600000,
+                stdoutBytes: 16777216,
+                stderrBytes: 1048576,
+                chunksPerStream: 4096,
+            },
+            spawn: true,
+            exit: true,
+            childClose: true,
+            elapsedMs: 0,
+            descendantRetirement: 'not-observed',
+            stdout: {
+                bytes: 0,
+                closed: true,
+                sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            },
+            stderr: {
+                bytes: 0,
+                closed: true,
+                sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            },
+        },
     };
     const builder = {
         runtime: {
@@ -523,7 +547,8 @@ test('held CLI uses only fixed shipping config, new output paths and exclusive w
         source,
         /\[\s*await fs\.realpath\(process\.execPath\),\s*vite,\s*'build',\s*'--config'/,
     );
-    assert.match(source, /shell: false/);
+    assert.match(source, /startOwnedWebBuild/);
+    assert.doesNotMatch(source, /spawnSync|stdio: 'inherit'/);
     assert.equal((source.match(/flag: 'wx'/g) || []).length, 3);
     assert.doesNotMatch(source, /fs\.(rm|unlink|chmod|chown)|--no-sandbox|npm.*install/);
 });

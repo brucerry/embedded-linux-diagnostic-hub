@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { WEB_ARCHIVE_LIMITS } from './web-archive-producer.mjs';
+import { WEB_ARCHIVE_LIMITS } from './web-archive-limits.mjs';
 
 // Transport container only. Inner shipping ZIP/tar remains a separate inspection boundary.
 export const CARRIER_LIMIT = WEB_ARCHIVE_LIMITS.archive + 16 * 1024 ** 2 + 1024 ** 2;

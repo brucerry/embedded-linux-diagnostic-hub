@@ -1,0 +1,68 @@
+# INERT REVIEW CANDIDATE: outside workflows/, non-YAML suffix, and job-level false guard.
+# Copying/renaming or removing the guard requires separate execution/storage admission.
+# Vite custody does not admit the existing default Git timeout or file/publication adapters.
+name: Held source-bound web archive producer
+on:
+    workflow_call:
+permissions:
+    contents: read
+jobs:
+    web_archive:
+        if: ${{ false }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - name: Prepare the separately admitted installed toolchain
+              run: npm ci --ignore-scripts
+              env:
+                  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+            - name: Select exact source and fresh producer directory
+              id: selected
+              run: |
+                  test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+                  mkdir -p validation
+                  node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+                  import fs from 'node:fs';
+                  const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+                  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[A-Za-z0-9.-]+)?$/.test(version) || version.length > 160) throw Error('Invalid version');
+                  console.log('version=' + version);
+                  NODE
+                  printf 'tree=%s\n' "$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+            - name: Produce source-bound shipping ZIP and bounded build record
+              id: producer
+              env:
+                  SELECTED_VERSION: ${{ steps.selected.outputs.version }}
+                  SELECTED_TREE: ${{ steps.selected.outputs.tree }}
+              run: |
+                  node scripts/produce-web-archive.mjs \
+                    --scope=web \
+                    --version="$SELECTED_VERSION" \
+                    --source-commit="$GITHUB_SHA" \
+                    --source-tree="$SELECTED_TREE" \
+                    --run-id="$GITHUB_RUN_ID" \
+                    --run-attempt="$GITHUB_RUN_ATTEMPT" \
+                    --job-key="$GITHUB_JOB" \
+                    --output=validation/web-source
+            - name: Retain only the exact readback carrier members after producer success
+              id: upload
+              if: ${{ success() && steps.producer.outcome == 'success' }}
+              uses: actions/upload-artifact@v4
+              with:
+                  name: web-archive-${{ github.run_id }}-${{ github.run_attempt }}
+                  compression-level: 0
+                  retention-days: 1
+                  if-no-files-found: error
+                  overwrite: false
+                  path: |
+                      validation/web-source/Diagnostic-Hub-Web-${{ steps.selected.outputs.version }}.zip
+                      validation/web-source/Diagnostic-Hub-Web-${{ steps.selected.outputs.version }}.zip.sha256
+                      validation/web-source/web-build.json
+# No release consumer needs this candidate; no attestation/signing grant or accepting readback job.
+# Service artifact ID/digest from upload outputs do not establish terminal run/job provenance.
