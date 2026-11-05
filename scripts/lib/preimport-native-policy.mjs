@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-export const PREIMPORT_NATIVE_BRANCH='ci/gateway-preimport306-96a56cd-20261105';
+export const PREIMPORT_NATIVE_BRANCH='ci/gateway-preimport307-96a56cd-20261105';
 export function preimportNativeContext(value){
     assert.deepEqual(Object.keys(value).sort(),['arch','attempt','event','job','policy','private','ref','repository','run','runner','sha','system','tree']);
     assert.equal(value.repository,'brucerry/embedded-linux-diagnostic-hub');assert.equal(value.private,false);assert.equal(value.ref,'refs/heads/'+PREIMPORT_NATIVE_BRANCH);

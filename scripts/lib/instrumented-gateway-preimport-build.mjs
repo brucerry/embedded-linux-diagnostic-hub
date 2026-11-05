@@ -57,11 +57,24 @@ export function inspectPreimportTarget(bytes){
 }
 
 export async function preimportTargetGraph(sourceFile,hasFile){
-    const files=new Map(),edges=new Map();let total=0;
+    const files=new Map(),edges=new Map(),metadataEdges=new Map();let total=0;
     const permitted=file=>file===PREIMPORT_TARGET_ENTRY||file==='package.json'||file==='src/features/automation/serial-completion.ts'||['gateway/','backend/','shared/'].some(prefix=>file.startsWith(prefix));
     async function load(file){
         assert.ok(permitted(file),'Unreviewed target dependency.');if(files.has(file))return;assert.ok(files.size<128);const bytes=await sourceFile(file);assert.ok(Buffer.isBuffer(bytes)&&bytes.length<=16*1024**2);total+=bytes.length;assert.ok(total<=4*1024**2);files.set(file,Buffer.from(bytes));
-        if(file==='package.json'){JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));edges.set(file,[]);return;}
+        if(file==='package.json'){JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));edges.set(file,[]);metadataEdges.set(file,[]);return;}
+        // Input metadata records source-declared non-type external imports even when a
+        // binding is later erased because its uses are types (observed for session's Client).
+        // These edges describe compiler input syntax, never runtime loads or new source files.
+        const original=ts.createSourceFile(file,new TextDecoder('utf-8',{fatal:true}).decode(bytes),ts.ScriptTarget.Latest,true),declaredExternal=[];assert.equal(original.parseDiagnostics.length,0);
+        for(const statement of original.statements)if(ts.isImportDeclaration(statement)){
+            assert.ok(ts.isStringLiteral(statement.moduleSpecifier));const request=statement.moduleSpecifier.text,clause=statement.importClause;
+            if(clause?.isTypeOnly)continue;
+            const named=clause?.namedBindings;
+            if(!clause?.name&&named&&ts.isNamedImports(named)&&named.elements.length>0&&named.elements.every(v=>v.isTypeOnly))continue;
+            if(request.startsWith('.'))continue;
+            assert.ok(request==='ssh2'||(request.startsWith('node:')&&isBuiltin(request)&&request!=='node:inspector'),'Unreviewed external declaration.');
+            declaredExternal.push({path:request,kind:'import-statement',external:true});
+        }
         // Strip type-only syntax using the pinned local parser/compiler. A real esbuild census
         // must agree; disagreement is unsupported and fails closed, never silently refreshed.
         const emitted=ts.transpileModule(new TextDecoder('utf-8',{fatal:true}).decode(bytes),{fileName:file,reportDiagnostics:true,compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022,verbatimModuleSyntax:false}});assert.ok(!emitted.diagnostics.some(d=>d.category===ts.DiagnosticCategory.Error));
@@ -73,9 +86,9 @@ export async function preimportTargetGraph(sourceFile,hasFile){
         }
         for(const statement of tree.statements)if((ts.isImportDeclaration(statement)||ts.isExportDeclaration(statement))&&statement.moduleSpecifier){assert.ok(ts.isStringLiteral(statement.moduleSpecifier));edge(statement.moduleSpecifier.text,'import-statement');}
         function walk(node){if(ts.isCallExpression(node)&&(node.expression.kind===ts.SyntaxKind.ImportKeyword||(ts.isIdentifier(node.expression)&&node.expression.text==='require'))){assert.ok(node.arguments.length===1&&ts.isStringLiteral(node.arguments[0]));edge(node.arguments[0].text,node.expression.kind===ts.SyntaxKind.ImportKeyword?'dynamic-import':'require-call');}ts.forEachChild(node,child=>{walk(child);});}walk(tree);
-        edges.set(file,imports);for(const item of imports)if(!item.external)await load(item.path);
+        edges.set(file,imports);metadataEdges.set(file,normalizedEdges([...imports,...declaredExternal]).map(text=>JSON.parse(text)));for(const item of imports)if(!item.external)await load(item.path);
     }
-    await load(PREIMPORT_TARGET_ENTRY);return{files,edges};
+    await load(PREIMPORT_TARGET_ENTRY);return{files,edges,metadataEdges};
 }
 const normalizedEdges=rows=>[...new Set(rows.map(v=>{assert.ok(v&&typeof v.path==='string'&&['import-statement','require-call','dynamic-import'].includes(v.kind));assert.ok(v.external===undefined||typeof v.external==='boolean');return JSON.stringify({path:v.path,kind:v.kind,external:v.external===true});}))].sort();
 
@@ -121,7 +134,7 @@ export async function preparePreimportCompatibilityBuild(input,ports){
         owner.checkpoint='target-inspect-js';const external=inspectPreimportTarget(target);owner.checkpoint='target-external-imports';assert.deepEqual(external,[...new Set([...targetGraph.edges.values()].flat().filter(v=>v.external).map(v=>v.path))].sort());const output='validation/gateway-ownership/instrumented/ownership.cjs';
         owner.checkpoint='target-input-inventory';owner.expectedInputs=targetGraph.files.size;owner.observedInputs=meta.inputs&&typeof meta.inputs==='object'?Object.keys(meta.inputs).length:null;assert.deepEqual(Object.keys(meta).sort(),['inputs','outputs']);assert.deepEqual(Object.keys(meta.outputs),[output]);assert.deepEqual(Object.keys(meta.inputs).sort(),[...targetGraph.files.keys()].sort());
         let ordinal=0;for(const [file,v]of Object.entries(meta.inputs)){owner.inputOrdinal=++ordinal;owner.checkpoint='target-input-edges';
-            assert.ok(targetGraph.files.has(file),'Unbound target input.');owner.edgeDisagreement=preimportEdgeDisagreement(file,targetGraph.files,targetGraph.edges.get(file),v.imports);assert.deepEqual(normalizedEdges(v.imports),normalizedEdges(targetGraph.edges.get(file)));owner.edgeDisagreement=null;
+            assert.ok(targetGraph.files.has(file),'Unbound target input.');owner.edgeDisagreement=preimportEdgeDisagreement(file,targetGraph.files,targetGraph.metadataEdges.get(file),v.imports);assert.deepEqual(normalizedEdges(v.imports),normalizedEdges(targetGraph.metadataEdges.get(file)));owner.edgeDisagreement=null;
             owner.checkpoint='target-input-bytes';assert.equal(v.bytes,row(file).bytes);assert.ok(Array.isArray(v.imports));
             owner.checkpoint='target-input-members';for(const edge of v.imports){if(edge.external)assert.ok(edge.path==='ssh2'||(edge.path.startsWith('node:')&&isBuiltin(edge.path)&&edge.path!=='node:inspector'));else assert.ok(Object.hasOwn(meta.inputs,edge.path));}
         }
