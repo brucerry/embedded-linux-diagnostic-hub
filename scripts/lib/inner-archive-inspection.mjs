@@ -170,7 +170,7 @@ function tarName(bytes) {
     assert.ok(end >= 0 && zero(bytes.subarray(end)));
     return decoder.decode(bytes.subarray(0, end));
 }
-function inspectGateway(raw, payload, expected) {
+function inspectGateway(raw, payload, expected, members) {
     assert.ok(
         expected &&
             Number.isSafeInteger(expected.expandedBytes) &&
@@ -239,6 +239,7 @@ function inspectGateway(raw, payload, expected) {
                 bytes: size,
                 sha256: sha(expanded.subarray(start, finish)),
             };
+            if (members) members.set(filename, Buffer.from(expanded.subarray(start, finish)));
             actual.push(file);
             entries.push({ kind: 'file', ...file, mode });
             payloadBytes += size;
@@ -272,7 +273,7 @@ function inspect(raw, record, scope, members) {
     const observed =
         scope === 'web'
             ? inspectZip(raw, record.payload, members)
-            : inspectGateway(raw, record.payload, record.tarInventory);
+            : inspectGateway(raw, record.payload, record.tarInventory, members);
     assert.deepEqual(
         observed.payload,
         record.payload,
@@ -306,6 +307,22 @@ export function openWebArchiveBytes(raw, record) {
         },
         read(name) {
             assert.ok(members.has(name), 'Unknown inspected web member.');
+            return Buffer.from(members.get(name));
+        },
+    });
+}
+
+/** Checked Gateway USTAR member snapshots only; no extraction, install or execution. */
+export function openGatewayArchiveBytes(raw, record) {
+    const members = new Map();
+    const facts = inspect(raw, record, 'gateway', members);
+    return Object.freeze({
+        inspection: () => structuredClone(facts),
+        releaseBytes() {
+            members.clear();
+        },
+        read(name) {
+            assert.ok(members.has(name), 'Unknown inspected Gateway member.');
             return Buffer.from(members.get(name));
         },
     });
