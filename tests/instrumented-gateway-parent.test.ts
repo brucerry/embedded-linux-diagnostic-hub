@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { encodeInstrumentedChildFailure,projectInstrumentedChildFailure } from '../scripts/lib/instrumented-gateway-failure.mjs';
+import { instrumentedFailureSummary } from '../scripts/lib/instrumented-gateway-policy.mjs';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import { constants, readFileSync } from 'node:fs';
@@ -66,11 +68,12 @@ function host(f:ReturnType<typeof installation>,p:any){
             const child:any=new EventEmitter();Object.assign(child,{pid:2222+children.length,exitCode:null,signalCode:null,stdin:null,stdout:new EventEmitter(),stderr:new EventEmitter(),spawnfile:file,spawnargs:[file,...args]});
             if(controls.wrongSpawn)child.spawnargs=[file,'unapproved'];
             child.close=(code=0)=>{child.emit('exit',code,null);child.emit('close',code,null);if(!controls.holdPipes){child.stdout.emit('close');child.stderr.emit('close');}};
+            const diagnostic=encodeInstrumentedChildFailure(controls.badFailureBinding?{...v,nonce:'0'.repeat(32)}:v,input,projectInstrumentedChildFailure('workload',false,true,{failed:true,retired:true,collector:{failureCode:'script-unadmitted',observerRetired:true,pendingCallbacks:0}}));
             children.push(child);
-            Promise.resolve().then(()=>{child.started=true;child.emit('spawn');child.stdout.emit('data',controls.overflow?Buffer.alloc(32769):Buffer.from(INSTRUMENTED_CHILD_MARKER+JSON.stringify(envelope)+'\n'));
+            Promise.resolve().then(()=>{child.started=true;child.emit('spawn');child.stdout.emit('data',controls.failedChild?diagnostic:controls.overflow?Buffer.alloc(32769):Buffer.from(INSTRUMENTED_CHILD_MARKER+JSON.stringify(envelope)+'\n'));
                 if(controls.replaceAfterReceipt)f.write(args[1],f.bytes(args[1]),true);
                 if(controls.changeNode)f.write('/tools/node',nodeBytes,true);
-                if(!controls.holdChild)child.close(controls.nonzero?1:0);});
+                if(!controls.holdChild)child.close(controls.nonzero||controls.failedChild?1:0);});
             return child;
         }};
     return{ports,controls,children,events,expire:()=>timers.at(-1)!()};
@@ -127,4 +130,18 @@ test('factory snapshots prepared bytes, metadata and native function selection b
     const original=p.binding.source.sourceCommit;p.scripts.get(p.selection.artifactPath)!.fill(0);p.binding.source.sourceCommit='f'.repeat(40);
     h.ports.runtime.version='v0.0.0';h.ports.launch=()=>{throw Error('replaced caller port must not be selected');};
     const result=await owner.run();assert.equal(result.receipt.source.sourceCommit,original);assert.equal(h.children.length,2);
+});
+
+for(const held of [false,true])test('bound failure diagnostics survive command rejection while direct custody held='+held,async()=>{
+    const f=installation(),p=await prepared(f),h=host(f,p);h.controls.failedChild=true;h.controls.holdChild=held;
+    const owner=createInstrumentedGatewayParent(p,h.ports),task=owner.run(),rejected=assert.rejects(task);await until(()=>h.children.length===1&&h.children[0].started);
+    if(held)h.expire();await rejected;
+    const state=owner.snapshot();assert.equal(state.failedAt,'compatibility');assert.equal(state.completed,false);assert.equal(state.childFailure.envelope,'observed-bound');
+    assert.equal(state.childFailure.detail.inspectorFailure,'script-unadmitted');assert.equal(state.childFailure.directRetired,!held);assert.equal(h.children.length,1);
+    const summary=instrumentedFailureSummary('driver',null,{parent:state});assert.equal(summary.schema,'instrumented-gateway-failure-counters-v3');assert.equal(summary.parentPhase,'compatibility');assert.equal(summary.childFailure.directRetired,!held);assert.equal(summary.releaseAcceptance,false);
+    if(held)h.children[0].close(1);await assert.rejects(owner.run());assert.equal(h.children.length,1);
+});
+test('an unbound failure payload stays diagnostic-missing and never starts ownership',async()=>{
+    const f=installation(),p=await prepared(f),h=host(f,p);h.controls.failedChild=true;h.controls.badFailureBinding=true;
+    const owner=createInstrumentedGatewayParent(p,h.ports);await assert.rejects(owner.run());assert.equal(owner.snapshot().childFailure.detail,null);assert.equal(owner.snapshot().childFailure.envelope,'absent-or-invalid');assert.equal(h.children.length,1);
 });

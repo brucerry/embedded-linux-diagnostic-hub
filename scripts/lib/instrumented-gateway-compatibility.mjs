@@ -14,7 +14,7 @@ export function startInstrumentedInspectorCompatibility(prepared, ports) {
     const closed=new Promise(a=>{resolveClosed=a;});const started=ports.now();assert.ok(Number.isFinite(started));
     const snapshot=()=>({failed:Boolean(primary),retired,unknownOperation:Boolean(unknown),collector:collector.snapshot(),wholeGroupRetirement:null});
     const owner=Object.freeze({result,closed,snapshot});retained.add(owner);
-    const fail=()=>{if(retired)return;primary??=Error('Node Inspector compatibility failed or remains held.');reject(Object.assign(Error(primary.message),{owner}));};
+    const fail=(error=undefined)=>{if(retired)return;primary??=collector.failure()??error??Error('Node Inspector compatibility failed or remains held.');reject(Object.assign(Error('Node Inspector compatibility failed or remains held.',{cause:primary}),{owner}));};
     void(async()=>{
         let observation, localClosed=false;
         try {
@@ -22,10 +22,10 @@ export function startInstrumentedInspectorCompatibility(prepared, ports) {
             if(timer===undefined||typeof timer?.then==='function'){unknown=timer??true;if(typeof timer?.then==='function')Promise.resolve(timer).catch(()=>{});throw Error('Unsupported timer.');}
             await collector.start();if(primary)throw primary;
             observation=await collector.finish();
-        }catch{fail();}
+        }catch(error){fail(error);}
         finally {
             try {
-                try{observation=await collector.finish();}catch{fail();}
+                try{observation=await collector.finish();}catch(error){fail(error);}
                 assert.equal(collector.snapshot().observerRetired,true);assert.equal(unknown,undefined);await collector.retirement;
                 const cleared=ports.clearTimer(timer);if(cleared!==undefined){unknown={cleared};if(typeof cleared?.then==='function')Promise.resolve(cleared).catch(()=>{});throw Error('Unacknowledged timer cleanup.');}
                 scripts.clear();localClosed=true;
@@ -39,7 +39,7 @@ export function startInstrumentedInspectorCompatibility(prepared, ports) {
                     const bytes=Buffer.from(JSON.stringify(receipt)+'\n');assert.ok(bytes.length<=16384);
                     retired=true;retained.delete(owner);resolveClosed(snapshot());resolve({receipt,bytes});
                 }else{retired=true;retained.delete(owner);resolveClosed(snapshot());}
-            }catch{fail();if(localClosed){retired=true;retained.delete(owner);resolveClosed(snapshot());}}
+            }catch(error){fail(error);if(localClosed){retired=true;retained.delete(owner);resolveClosed(snapshot());}}
         }
     })();return owner;
 }

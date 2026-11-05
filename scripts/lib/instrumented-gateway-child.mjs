@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { encodeInstrumentedChildFailure, parseInstrumentedChildFailure, projectInstrumentedChildFailure } from './instrumented-gateway-failure.mjs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sourceDigest } from './committed-source-bridge.mjs';
@@ -73,13 +74,14 @@ export function validateInstrumentedChildReceipt(prepared,mode,r){
 export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
     assert.ok(modes.includes(mode));for(const k of ['observeNode','writeExclusive','readInput','launch','setTimer','clearTimer','now','assertFilesSettled'])assert.equal(typeof ports[k],'function');
     const snapshot=snapshotPreparedInstrumentedGateway(prepared),root=path.dirname(snapshot.selection.artifactPath);rootPath(root);
-    const lease={phase:'prelaunch',child:null,failed:false};retained.add(lease);
+    const lease={phase:'prelaunch',child:null,failed:false,failureDetail:null,failureEnvelope:'absent'};retained.add(lease);
+    let challenge,challengeBytes;
     try{
         const node=nodeIdentity(await ports.observeNode());assert.equal(node.path,snapshot.binding.toolchain.nodePath);assert.equal(node.sha256,snapshot.binding.toolchain.nodeSHA256);
         const before=await censusInstrumentedGateway(root,uid,ports.filesystem);assertSnapshot(snapshot,before);
         const input={schema:'owned-instrumented-gateway-child-input-v1',mode,nonce:randomBytes(16).toString('hex'),root,uid,node,
             binding:snapshot.binding,selection:snapshot.selection,token:randomBytes(32).toString('hex')};
-        const inputBytes=Buffer.from(JSON.stringify(input)+'\n');assert.ok(inputBytes.length<=INSTRUMENTED_CHILD_INPUT_LIMIT);
+        const inputBytes=Buffer.from(JSON.stringify(input)+'\n');assert.ok(inputBytes.length<=INSTRUMENTED_CHILD_INPUT_LIMIT);challenge=input;challengeBytes=inputBytes;
         const prior=mode==='ownership'?compatibilityAdmissions.get(ports.compatibility):null;
         if(mode==='ownership'){assert.ok(prior&&!prior.used,'An actual parent-acknowledged compatibility result is required.');assert.equal(prior.bindingSHA256,sourceDigest(JSON.stringify(snapshot.binding)+'\n'));assert.equal(prior.censusSHA256,before.censusSHA256);assert.deepEqual(prior.node,node);prior.used=true;}
         const inputPath=path.dirname(root)+'/child-input-'+mode+'.json';const written=ports.writeExclusive(inputPath,inputBytes);
@@ -95,6 +97,7 @@ export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
             assert.deepEqual(options.env,env);assert.deepEqual(options.stdio,['ignore','pipe','pipe']);return ports.launch(file,args,options);
         },setTimer:ports.setTimer,clearTimer:ports.clearTimer,now:ports.now});lease.child=child;
         await child.result;await child.closed;assert.equal(child.snapshot().directRetired,true);
+        lease.phase='receipt';
         const output=child.output();assert.equal(output.stderr.length,0);
         const text=new TextDecoder('utf-8',{fatal:true}).decode(output.stdout);assert.ok(text.startsWith(INSTRUMENTED_CHILD_MARKER));
         const json=text.slice(INSTRUMENTED_CHILD_MARKER.length),envelope=JSON.parse(json);assert.equal(json,JSON.stringify(envelope)+'\n');
@@ -112,7 +115,14 @@ export async function runOwnedInstrumentedGatewayChild(prepared,mode,uid,ports){
             normalChildAndPipesClosed:true,postCensusUnchanged:true,childReceipt:envelope.receipt,wholeGroupRetirement:null,releaseAcceptance:false}});
         if(mode==='compatibility')compatibilityAdmissions.set(completed,{bindingSHA256:envelope.bindingSHA256,censusSHA256:before.censusSHA256,node,used:false});
         return completed;
-    }catch(error){lease.failed=true;throw Object.assign(Error('Owned instrumented child failed; uncertain custody retained.',{cause:error}),{owner:lease});}
+    }catch(error){
+        lease.failed=true;
+        if(challenge&&lease.child){
+            try{const output=lease.child.output();lease.failureDetail=parseInstrumentedChildFailure(output.stdout,challenge,challengeBytes);lease.failureEnvelope='observed-bound';}
+            catch{lease.failureEnvelope='absent-or-invalid';}
+        }
+        throw Object.assign(Error('Owned instrumented child failed; uncertain custody retained.',{cause:error}),{owner:lease});
+    }
 }
 
 /** Child activation body. An owned liveness interval remains while known/unknown local resources
@@ -122,7 +132,7 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
     rootPath(ports.root);assert.ok(modes.some(mode=>inputPath===path.dirname(ports.root)+'/child-input-'+mode+'.json'));
     for(const k of ['startHold','clearHold','readInput','observeNode','runOwnership','runCompatibility','writeOutput','assertFilesSettled','setExitCode'])assert.equal(typeof ports[k],'function');
     const lease={phase:'input',hold:null,workload:null,unknown:false};retained.add(lease);
-    let knownWorkload=false, knownOutput=false, output, clearIssued=false;
+    let knownWorkload=false, knownOutput=false, output, clearIssued=false, input, inputBytes;
     function clearHoldOnce(){
         assert.equal(clearIssued,false);clearIssued=true;lease.unknown=true;
         const cleared=ports.clearHold(lease.hold);
@@ -130,16 +140,20 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
     }
     try{
         lease.unknown=true;lease.hold=ports.startHold();if(lease.hold===undefined||lease.hold===null||typeof lease.hold?.then==='function'){lease.unknown=true;if(typeof lease.hold?.then==='function')Promise.resolve(lease.hold).catch(()=>{});throw Error('Unknown liveness lease.');}lease.unknown=false;
-        const bytes=await ports.readInput(inputPath,INSTRUMENTED_CHILD_INPUT_LIMIT),input=parseInstrumentedChildInput(bytes,ports.root);
+        const bytes=await ports.readInput(inputPath,INSTRUMENTED_CHILD_INPUT_LIMIT);input=parseInstrumentedChildInput(bytes,ports.root);inputBytes=bytes;
         assert.equal(inputPath,path.dirname(ports.root)+'/child-input-'+input.mode+'.json');
+        lease.phase='node';
         assert.deepEqual(nodeIdentity(await ports.observeNode()),input.node);
         assert.equal(input.uid,ports.uid);
+        lease.phase='census';
         const census=await censusInstrumentedGateway(input.root,input.uid,ports.filesystem);
+        lease.phase='snapshot';
         const prepared={binding:input.binding,selection:input.selection,scripts:census.scripts};const copied=snapshotPreparedInstrumentedGateway(prepared);assertSnapshot(copied,census);
         lease.phase='workload-acquiring';lease.unknown=true;lease.workload=input.mode==='compatibility'?ports.runCompatibility(copied):ports.runOwnership(copied,input.token);
         if(typeof lease.workload?.then==='function')Promise.resolve(lease.workload).catch(()=>{});
         assert.ok(lease.workload&&typeof lease.workload.result?.then==='function'&&typeof lease.workload.closed?.then==='function');knownWorkload=true;lease.unknown=false;lease.phase='workload';
         const completed=await lease.workload.result;await lease.workload.closed;
+        lease.phase='receipt';
         assert.ok(Buffer.isBuffer(completed.bytes)&&completed.bytes.length<=16384&&completed.bytes.equals(Buffer.from(JSON.stringify(completed.receipt)+'\n')));
         validateInstrumentedChildReceipt(copied,input.mode,completed.receipt);
         synchronousUndefined(ports.assertFilesSettled());
@@ -155,6 +169,19 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
     }catch(error){
         if(lease.phase==='workload-acquiring'&&!knownWorkload)lease.unknown=true;
         try{synchronousUndefined(ports.setExitCode(1));}catch{lease.unknown=true;}
+        // Publish a bounded identity-bound diagnostic before joins that may remain held.
+        // This output never grants success or retirement; original cleanup policy continues below.
+        if(input&&!knownOutput){
+            let observed;try{observed=lease.workload?.snapshot?.();}catch{}
+            const priorUnknown=lease.unknown;
+            try{
+                const detail=projectInstrumentedChildFailure(lease.phase,lease.unknown,knownWorkload,observed);
+                const bytes=encodeInstrumentedChildFailure(input,inputBytes,detail);lease.unknown=true;
+                const attempt=ports.writeOutput(bytes);if(typeof attempt?.then==='function')Promise.resolve(attempt).catch(()=>{});
+                assert.ok(attempt&&typeof attempt.result?.then==='function'&&typeof attempt.closed?.then==='function');
+                output=attempt;knownOutput=true;lease.unknown=priorUnknown;await output.result;await output.closed;
+            }catch{}
+        }
         if(knownWorkload)try{await lease.workload.closed;}catch{lease.unknown=true;}
         if(knownOutput)try{await output.closed;}catch{lease.unknown=true;}
         try{
@@ -162,6 +189,6 @@ export async function activateOwnedInstrumentedGatewayChild(inputPath,ports){
             clearHoldOnce();
             retained.delete(lease);
         }catch{lease.unknown=true;}
-        throw Object.assign(Error('Instrumented child activation failed or remains held.'),{owner:lease});
+        throw Object.assign(Error('Instrumented child activation failed or remains held.',{cause:error}),{owner:lease});
     }
 }

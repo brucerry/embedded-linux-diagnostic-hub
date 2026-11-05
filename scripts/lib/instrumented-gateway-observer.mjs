@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { INSPECTOR_FAILURE_CODES } from './instrumented-gateway-failure.mjs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -95,6 +96,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         sealed = false,
         retired = false,
         primary,
+        failureCode = null,
         events = 0,
         builtinScripts = 0,
         unknownOperations = 0;
@@ -105,9 +107,10 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         retirement = deferred(),
         diagnostics = [],
         unknownReturns = new Set();
-    const fail = (error) => {
+    const fail = (error,code='inspector-operation') => {
         if (primary && error !== primary && !diagnostics.includes(error) && diagnostics.length < 16)
             diagnostics.push(error);
+        if(!primary)failureCode=INSPECTOR_FAILURE_CODES.includes(code)?code:'inspector-operation';
         primary ??= error;
     };
     const sync = (actual, expected, operation) => {
@@ -125,6 +128,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             pendingCallbacks: pending.size,
             compiledScripts: observed.length,
             primaryFailure: Boolean(primary),
+            failureCode,
             observerRetired: retired,
             cleanupDiagnostics: diagnostics.length,
             unknownOperations,
@@ -144,7 +148,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             }
             pending.delete(lease);
             if (error) {
-                fail(error);
+                fail(error,'inspector-callback');
                 result.reject(error);
             } else result.resolve(value);
             if (!pending.size) for (const resolve of waiters.splice(0)) resolve();
@@ -152,7 +156,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
         try {
             sync(session.post(method, params, done), undefined, 'dispatch');
         } catch (error) {
-            fail(error);
+            fail(error,'inspector-dispatch');
             result.reject(error);
             // Throw after dispatch is not acknowledgement. Keep the lease unless callback acknowledged it.
         }
@@ -160,9 +164,12 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
     }
     function parsed(message) {
         if (retired) return; // A stale callback cannot mutate a later session or completed receipt.
+        let code='script-metadata';
         try {
             assert.ok(!sealed && ++events <= 2048, 'Late/overflow inspector observation.');
             const p = message?.params;
+            if(p?.isLiveEdit){code='script-live-edit';assert.fail('Live edited scripts are unsupported.');}
+            if(p?.hasSourceURL){code='script-source-url';assert.fail('SourceURL scripts are unsupported.');}
             assert.ok(
                 p &&
                     typeof p.url === 'string' &&
@@ -170,6 +177,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                     !p.isLiveEdit &&
                     !p.hasSourceURL,
             );
+            code='script-id';
             assert.ok(
                 typeof p.scriptId === 'string' &&
                     p.scriptId.length > 0 &&
@@ -181,12 +189,15 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 builtinScripts++;
                 return;
             }
+            code='script-unadmitted';
             const wanted = expected.get(p.url);
             assert.ok(wanted, 'Unadmitted compiled script.');
+            code='script-length';
             if (p.length !== undefined) assert.equal(p.length, wanted.text.length);
             void post('Debugger.getScriptSource', { scriptId: p.scriptId })
                 .then((result) => {
-                    assert.ok(result && typeof result.scriptSource === 'string');
+                    if(!result||typeof result.scriptSource!=='string'){fail(Error('Missing inspector source response.'),'source-response');return;}
+                    if(result.scriptSource!==wanted.text){fail(Error('Actual compiled source differs from admitted bytes.'),'source-content');return;}
                     assert.ok(
                         result.scriptSource === wanted.text,
                         'Actual compiled source differs from admitted bytes.',
@@ -197,9 +208,9 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                         sha256: wanted.sha256,
                     });
                 })
-                .catch(fail);
+                .catch(error=>fail(error,'source-response'));
         } catch (error) {
-            fail(error);
+            fail(error,code);
         }
     }
     const owner = Object.freeze({
@@ -229,13 +240,12 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 connected = true;
                 await post('Debugger.enable', {});
                 await drain();
-                assert.ok(
-                    observed.some((r) => r.path === selected.artifactPath),
-                    'Instrumented entry was not observed compiled.',
-                );
+                if(!observed.some((r)=>r.path===selected.artifactPath)){
+                    const error=Error('Instrumented entry was not observed compiled.');fail(error,'entry-missing');throw error;
+                }
                 if (primary) throw primary;
             })().catch((error) => {
-                fail(error);
+                fail(error,'observer-admission');
                 throw new InstrumentedGatewayFailure(primary, owner);
             });
             started.catch(() => {});
@@ -261,7 +271,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                 }
                 assert.ok(!acquisition && !registration && !pending.size);
                 if (!observed.some((r) => r.path === selected.artifactPath))
-                    fail(Error('Instrumented entry was not observed compiled.'));
+                    fail(Error('Instrumented entry was not observed compiled.'),'entry-missing');
                 expected.clear();
                 retired = true;
                 retirement.resolve(snapshot());
@@ -277,7 +287,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                     observerRetired: true,
                 };
             })().catch((error) => {
-                fail(error);
+                fail(error,'observer-retirement');
                 throw new InstrumentedGatewayFailure(primary, owner);
             });
             finishing.catch(() => {});

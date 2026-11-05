@@ -651,3 +651,9 @@ for (const kind of ['factory', 'registration', 'bind', 'off'])
             assert.equal(o.snapshot().productHeld || o.snapshot().factoryHeld, true);
         },
     );
+
+test('a missing replayed entry reports the exact fixed predicate while still failing admission',async()=>{
+    const f=setup();f.controls.missing=true;const o=createCompiledSourceObserver(f.selected,f.scripts,()=>f.session);
+    await assert.rejects(o.start());await assert.rejects(o.finish());await o.retirement;
+    assert.equal(o.snapshot().failureCode,'entry-missing');assert.equal(o.snapshot().observerRetired,true);
+});

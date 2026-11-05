@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { projectOwnedInstrumentedFailure } from './instrumented-gateway-failure.mjs';
 import path from 'node:path';
 import { constants } from 'node:fs';
 import { createOwnedWebFiles } from './owned-web-files.mjs';
@@ -33,7 +34,7 @@ export function createInstrumentedGatewayParent(prepared, host) {
     for (const key of ['launch','setTimer','clearTimer','now']) assert.equal(typeof host[key],'function');
     const native = Object.freeze({ ...host, filesystem: Object.freeze({ ...host.filesystem }) });
     const inputs = new Map(), inputPaths = new Map(modes.map(mode => [parent+'/child-input-'+mode+'.json',mode]));
-    let phase = 'prepared', admitted = false, completed = false, primary, nodeIdentity, nodeFileIdentity, launches = 0;
+    let phase = 'prepared', admitted = false, completed = false, primary, failedAt=null, childFailure=null, nodeIdentity, nodeFileIdentity, launches = 0;
     const inside = p => typeof p === 'string' && (p === root || p.startsWith(root+'/')) && path.posix.normalize(p) === p;
     const readPath = p => assert.ok(inside(p) || p === runtime.execPath || inputPaths.has(p));
     const metadataPath = p => assert.ok(inside(p) || p === parent || p === runtime.execPath || p === path.dirname(runtime.execPath) || inputPaths.has(p));
@@ -110,7 +111,7 @@ export function createInstrumentedGatewayParent(prepared, host) {
         clearTimer: timer => native.clearTimer(timer), now: () => native.now(),
         assertFilesSettled: () => { owned.owner.assertSettled(); },
     };
-    const snapshot = () => ({ phase,admitted,completed,failed:Boolean(primary),launches,
+    const snapshot = () => ({ phase,failedAt,childFailure,admitted,completed,failed:Boolean(primary),launches,
         inputs:[...inputs.values()].map(v => ({phase:v.phase,descriptorIdentityObserved:Boolean(v.descriptorIdentity)})),
         files:owned.owner.snapshot(),wholeGroupRetirement:null,releaseAcceptance:false });
     const owner = Object.freeze({ snapshot, async run() {
@@ -128,7 +129,7 @@ export function createInstrumentedGatewayParent(prepared, host) {
             selected.scripts.clear(); completed = true; phase = 'completed'; retained.delete(owner);
             return Object.freeze({receipt,bytes});
         } catch(error) {
-            primary = error; phase = 'failed';
+            failedAt=phase;try{childFailure=projectOwnedInstrumentedFailure(error?.owner);}catch{}primary = error; phase = 'failed';
             throw Object.assign(Error('Native instrumented Gateway parent failed; no retry or forced cleanup.',{cause:error}),{owner});
         }
     } });

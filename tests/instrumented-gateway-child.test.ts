@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { runInNewContext } from 'node:vm';
 import { pathToFileURL } from 'node:url';
 import { readFileSync } from 'node:fs';
+import { INSTRUMENTED_CHILD_FAILURE_MARKER,parseInstrumentedChildFailure,projectInstrumentedChildFailure,encodeInstrumentedChildFailure } from '../scripts/lib/instrumented-gateway-failure.mjs';
 import { censusInstrumentedGateway } from '../scripts/lib/instrumented-gateway-census.mjs';
 import { runOwnedInstrumentedGatewayChild, activateOwnedInstrumentedGatewayChild, parseInstrumentedChildInput, validateInstrumentedChildReceipt, INSTRUMENTED_CHILD_MARKER } from '../scripts/lib/instrumented-gateway-child.mjs';
 import { startInstrumentedChildOutput } from '../scripts/lib/instrumented-gateway-output.mjs';
@@ -124,10 +125,10 @@ test('activation retains liveness until workload closure and stdout callback, no
 });
 for(const kind of ['clearThrows','clearRejected','badWrite','acquireThrows','acquireRejected'])test('activation retains uncertain '+kind+' without retrying cleanup',async()=>{
     const f=installation(),p=await prepared(f),h=activation(f,p);h.controls[kind]=true;const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task,(e:any)=>{assert.equal(e.owner.unknown,true);return true;});
-    await pulse();if(!kind.startsWith('acquire')){h.complete();h.closed.resolve();h.flush.resolve();}await rejected;assert.equal(h.clears,kind.startsWith('clear')?1:0);
+    await pulse();h.flush.resolve();if(!kind.startsWith('acquire')){h.complete();h.closed.resolve();h.flush.resolve();}await rejected;assert.equal(h.clears,kind.startsWith('clear')?1:0);
 });
 test('acknowledged failed workload sets failure and joins closure before releasing liveness',async()=>{
-    const f=installation(),p=await prepared(f),h=activation(f,p),task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task);await pulse();h.result.reject(Error('authored failure'));await pulse();assert.ok(h.events.includes('exit1'));assert.equal(h.clears,0);h.closed.resolve();await rejected;assert.equal(h.clears,1);assert.equal(h.written.length,0);
+    const f=installation(),p=await prepared(f),h=activation(f,p),task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task);await pulse();h.result.reject(Error('authored failure'));await pulse();assert.ok(h.events.includes('exit1'));assert.equal(h.clears,0);assert.ok(h.written.toString().startsWith(INSTRUMENTED_CHILD_FAILURE_MARKER));h.flush.resolve();h.closed.resolve();await rejected;assert.equal(h.clears,1);
 });
 test('canonical input rejects changed mode/node version and extra fields',async()=>{
     const f=installation(),p=await prepared(f),bytes=input(p);assert.equal(parseInstrumentedChildInput(bytes,root).mode,'compatibility');
@@ -173,7 +174,7 @@ for(const kind of ['mode','uid','inputCollision'])test('child admission refuses 
     if(kind==='mode')h.ports.readInput=async()=>input(p,'ownership');
     if(kind==='uid')h.ports.uid=1001;
     if(kind==='inputCollision')h.ports.readInput=async()=>Buffer.from('bad input');
-    await assert.rejects(activateOwnedInstrumentedGatewayChild(inputPath,h.ports));assert.equal(h.events.includes('workload'),false);assert.equal(h.clears,1);
+    h.flush.resolve();await assert.rejects(activateOwnedInstrumentedGatewayChild(inputPath,h.ports));assert.equal(h.events.includes('workload'),false);assert.equal(h.clears,1);
 });
 function outputFixture(){
     const stream:any=new EventEmitter(),controls:any={},events:string[]=[];let callback:Function=()=>{},failures=0;
@@ -266,4 +267,52 @@ test('dropping a binary from the bound inventory cannot authorize parent launch'
     const f=installation();f.write(binaryPath,binaryBytes());const p=await prepared(f);
     p.binding.fileInventory=p.binding.fileInventory.filter(v=>v.path!==binaryPath);p.binding.fileInventorySHA256=sourceDigest(JSON.stringify(p.binding.fileInventory));
     const h=parent(f,p);await assert.rejects(runOwnedInstrumentedGatewayChild(p,'compatibility',1000,h.ports));assert.equal(h.launches,0);
+});
+
+test('failed activation preserves the original private cause and emits bound diagnostics before a held workload joins',async()=>{
+    const f=installation(),p=await prepared(f),h=activation(f,p),cause=Error('private-authored-error');
+    const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task,(e:any)=>{assert.equal(e.cause,cause);return true;});await pulse();h.result.reject(cause);await pulse();
+    assert.ok(h.written.toString().startsWith(INSTRUMENTED_CHILD_FAILURE_MARKER));const parsed=JSON.parse(input(p).toString()),detail=parseInstrumentedChildFailure(h.written,parsed,input(p));
+    assert.equal(detail.phase,'workload');assert.equal(detail.knownWorkload,true);assert.equal(detail.releaseAcceptance,false);assert.equal(h.clears,0);assert.equal(h.written.includes(Buffer.from(cause.message)),false);
+    h.flush.resolve();await pulse();assert.equal(h.clears,0);h.closed.resolve();await rejected;assert.equal(h.clears,1);
+});
+test('failure diagnostics cannot disclose strings, forge identity, or authorize successful child acceptance',async()=>{
+    const f=installation(),p=await prepared(f),data=input(p),parsed=JSON.parse(data.toString());
+    const detail=projectInstrumentedChildFailure('workload',true,true,{failed:true,retired:false,collector:{failureCode:'/secret/url',pendingCallbacks:1,compiledScripts:2,token:'private',acquisitionHeld:true}});
+    const bytes=encodeInstrumentedChildFailure(parsed,data,detail);assert.ok(!bytes.includes(Buffer.from('private'))&&!bytes.includes(Buffer.from('/secret')));assert.ok(bytes.length<=4096);
+    assert.equal(parseInstrumentedChildFailure(bytes,parsed,data).inspectorFailure,null);
+    for(const change of [(v:any)=>v.nonce='0'.repeat(32),(v:any)=>v.mode='ownership',(v:any)=>v.bindingSHA256='0'.repeat(64),(v:any)=>v.detail.releaseAcceptance=true,(v:any)=>v.detail.extra='secret']){
+        const v=JSON.parse(bytes.toString().slice(INSTRUMENTED_CHILD_FAILURE_MARKER.length));change(v);await assert.rejects(async()=>parseInstrumentedChildFailure(Buffer.from(INSTRUMENTED_CHILD_FAILURE_MARKER+JSON.stringify(v)+'\n'),parsed,data));
+    }
+});
+
+test('compatibility preserves the private Inspector cause and exposes only its fixed code',async()=>{
+    const f=installation(),p=await prepared(f),h=inspector(p),factory=h.ports.sessionFactory,cause=Error('authored-private-inspector-failure');
+    h.ports.sessionFactory=()=>{const session=factory(),post=session.post.bind(session);session.post=(method:string,params:any,cb:Function)=>{if(method==='Debugger.getScriptSource')cb(cause);else post(method,params,cb);};return session;};
+    const o=startInstrumentedInspectorCompatibility(p,h.ports);await assert.rejects(o.result,(e:any)=>{assert.equal(e.cause,cause);return true;});await o.closed;
+    assert.equal(o.snapshot().collector.failureCode,'inspector-callback');assert.ok(!JSON.stringify(projectInstrumentedChildFailure('workload',false,true,o.snapshot())).includes(cause.message));
+});
+
+test('compatibility cleanup errors retain their own cause when the collector has no earlier failure',async()=>{
+    const f=installation(),p=await prepared(f),h=inspector(p),cause=Error('authored-private-cleanup-error');
+    h.ports.clearTimer=()=>{throw cause;};const o=startInstrumentedInspectorCompatibility(p,h.ports);
+    await assert.rejects(o.result,(e:any)=>{assert.equal(e.cause,cause);return true;});assert.equal(o.snapshot().retired,false);
+});
+
+test('an unreadable diagnostic snapshot cannot replace the original error or skip actual workload retirement',async()=>{
+    const f=installation(),p=await prepared(f),h=activation(f,p),cause=Error('authored-original-failure');
+    const original=h.ports.runCompatibility;h.ports.runCompatibility=()=>({...original(),snapshot:()=>({get collector(){throw Error('diagnostic getter failed');}})});
+    const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task,(e:any)=>{assert.equal(e.cause,cause);return true;});await pulse();h.result.reject(cause);await pulse();assert.equal(h.clears,0);h.closed.resolve();await rejected;assert.equal(h.clears,1);
+});
+
+test('diagnostic-write rejection preserves workload cause and waits for separate write and workload closure',async()=>{
+    const f=installation(),p=await prepared(f),h=activation(f,p),cause=Error('authored-primary-workload'),write=deferred(),closed=deferred();let writes=0;
+    h.ports.writeOutput=()=>{writes++;return{result:write.promise,closed:closed.promise};};
+    const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task,(e:any)=>{assert.equal(e.cause,cause);return true;});await pulse();h.result.reject(cause);await pulse();assert.equal(writes,1);
+    write.reject(Error('authored-secondary-writer'));await pulse();assert.equal(h.clears,0);h.closed.resolve();await pulse();assert.equal(h.clears,0);closed.resolve();await rejected;assert.equal(h.clears,1);
+});
+for(const kind of ['throw','thenable'])test('unknown diagnostic writer '+kind+' retains custody without replacing the primary cause',async()=>{
+    const f=installation(),p=await prepared(f),h=activation(f,p),cause=Error('authored-primary-workload');let writes=0;
+    (h.ports as any).writeOutput=()=>{writes++;if(kind==='throw')throw Error('authored-secondary-writer');return Promise.reject(Error('authored-unsupported-writer'));};
+    const task=activateOwnedInstrumentedGatewayChild(inputPath,h.ports),rejected=assert.rejects(task,(e:any)=>{assert.equal(e.cause,cause);assert.equal(e.owner.unknown,true);return true;});await pulse();h.result.reject(cause);await pulse();h.closed.resolve();await rejected;assert.equal(writes,1);assert.equal(h.clears,0);
 });
