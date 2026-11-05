@@ -59,3 +59,7 @@ for(const kind of ['output-unknown','owner-rejected','clear-unknown','clear-reje
 for(const key of ['failed','unknownOperation'])test('late output '+key+' while local join held cannot release root fence',async()=>{
  const local=deferred();let cleared=0;const state={writeRetired:true,failed:false,unknownOperation:false};const d={async joinFailedDirectRetirement(){await local.promise;}};const output={result:Promise.resolve(),closed:Promise.resolve(),snapshot:()=>({...state})};const task=releaseKnownInstrumentedFailure(d,output,{},()=>{cleared++;});const rejected=assert.rejects(task);await pulse();state[key as 'failed'|'unknownOperation']=true;local.resolve();await rejected;assert.equal(cleared,0);
 });
+
+for(const id of [0,-1,undefined])test('unestablished Wasm context '+id+' never becomes same-context proof',()=>{
+ const n:any=notification();n.executionContextId=id;const plan=deriveWasmDiagnosticPlan(scripts(),artifactPath)!;const l=beginWasmDiagnostic(n,plan);classifyRejectedWasm(l,new Map([['creator',{path:creator,sha256:plan.creatorSHA256,zeroOffset:true,context:id}]]));assert.equal(l.record.contextMatched,false);
+});

@@ -24,7 +24,7 @@ export function beginWasmDiagnostic(p,plan){
     const frame=within&&plan?frames.find(f=>f?.url===plan.creatorURL&&typeof f.scriptId==='string'&&f.scriptId.length>0&&f.scriptId.length<=64):null;
     const record={schema:'rejected-wasm-diagnostic-v1',status:'metadata-only',language:['JavaScript','WebAssembly'].includes(p.scriptLanguage)?p.scriptLanguage:'unknown',wasmURL:p.url.startsWith('wasm://'),planPinned:!!plan,
         bytecodeBytes:null,bytecodeSHA256:null,matchesPinnedEmbeddedModule:null,stackWithinBound:within,creatorInStack:!!frame,creatorSourceVerified:null,contextMatched:null};
-    const lease={record,plan,frameId:frame?.scriptId??null,context:Number.isSafeInteger(p.executionContextId)?p.executionContextId:null};
+    const lease={record,plan,frameId:frame?.scriptId??null,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null};
     if(plan&&record.language==='WebAssembly'&&record.wasmURL)record.status='pending';
     return lease;
 }
@@ -38,7 +38,7 @@ export function observeRejectedWasm(lease,result){
 export function classifyRejectedWasm(lease,verified){
     if(!lease||lease.classified)return;lease.classified=true;const creator=lease.frameId?verified.get(lease.frameId):null,r=lease.record;
     r.creatorSourceVerified=!!(lease.plan&&creator&&creator.path===lease.plan.creator&&creator.sha256===lease.plan.creatorSHA256&&creator.zeroOffset);
-    r.contextMatched=!!(creator&&lease.context!==null&&creator.context!==null&&creator.context===lease.context);lease.frameId=null;lease.context=null;
+    r.contextMatched=!!(creator&&lease.context!==null&&Number.isSafeInteger(creator.context)&&creator.context>0&&creator.context===lease.context);lease.frameId=null;lease.context=null;
 }
 export function validateWasmDiagnostic(v){
     assert.deepEqual(Object.keys(v).sort(),['schema','status','language','wasmURL','planPinned','bytecodeBytes','bytecodeSHA256','matchesPinnedEmbeddedModule','stackWithinBound','creatorInStack','creatorSourceVerified','contextMatched'].sort());

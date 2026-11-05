@@ -32,7 +32,7 @@ export function captureRejectionOrigin(p,plan,expected){
     const state={schema:'rejected-cpu-origin-association-v1',planned:!!plan,checkoutCpuURLMatches:plan?p.url===plan.checkoutCpuURL:null,cpuSourceMatches:null,
         stackWithinBound:bounded,topFrameKind,constantsURLInStack:plan?candidates.length>0:null,
         constantsSiteInStack:plan?candidates.some(f=>f.lineNumber===plan.line&&f.columnNumber===plan.column):null,constantsScriptVerified:null,constantsCreationVerified:null};
-    leases.set(state,{plan,classified:false,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>=0?p.executionContextId:null,
+    leases.set(state,{plan,classified:false,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null,
         frames:candidates.filter(f=>typeof f.scriptId==='string'&&f.scriptId.length>0&&f.scriptId.length<=64).map(f=>({id:f.scriptId,line:Number.isSafeInteger(f.lineNumber)&&f.lineNumber>=0&&f.lineNumber<=2147483647?f.lineNumber:null,column:Number.isSafeInteger(f.columnNumber)&&f.columnNumber>=0&&f.columnNumber<=2147483647?f.columnNumber:null}))});
     return state;
 }

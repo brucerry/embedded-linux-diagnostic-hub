@@ -201,7 +201,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
             return;
         }
         if(tentativeGenerated.length){fail(Error('Generated cardinality exceeded.'),'generated-cardinality',diagnostic);return;}
-        const candidate={plan,diagnostic,frameId:frame&&typeof frame.scriptId==='string'&&frame.scriptId.length>0&&frame.scriptId.length<=64?frame.scriptId:null,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>=0?p.executionContextId:null};
+        const candidate={plan,diagnostic,frameId:frame&&typeof frame.scriptId==='string'&&frame.scriptId.length>0&&frame.scriptId.length<=64?frame.scriptId:null,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null};
         tentativeGenerated.push(candidate);
         trackSource(post('Debugger.getScriptSource',{scriptId:p.scriptId},diagnostic).then(result=>{
             if(!result||typeof result.scriptSource!=='string'||result.scriptSource.length!==plan.sourceUnits){diagnostic.sourceMatched=false;fail(Error('Generated source response did not match the sealed candidate.'),'generated-source-mismatch',diagnostic);return;}
@@ -263,7 +263,7 @@ export function createCompiledSourceObserver(input, scripts, sessionFactory) {
                         result.scriptSource === wanted.text,
                         'Actual compiled source differs from admitted bytes.',
                     );
-                    verifiedCreators.set(p.scriptId,{path:wanted.path,sha256:wanted.sha256,zeroOffset:p.startLine===0&&p.startColumn===0,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>=0?p.executionContextId:null});
+                    verifiedCreators.set(p.scriptId,{path:wanted.path,sha256:wanted.sha256,zeroOffset:p.startLine===0&&p.startColumn===0,context:Number.isSafeInteger(p.executionContextId)&&p.executionContextId>0?p.executionContextId:null});
                     observed.push({
                         path: wanted.path,
                         bytes: wanted.bytes,

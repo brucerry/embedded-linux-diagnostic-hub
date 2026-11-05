@@ -18,7 +18,7 @@ function fixture(){
     const entryText='// inert fixture entry\n',scripts=new Map([[entry,Buffer.from(entryText)],[creator,creatorBytes],[root+'/package-lock.json',Buffer.from(JSON.stringify(lock))]]);
     const selected={artifactPath:entry,artifactSHA256:hash(entryText),observerSHA256:'c'.repeat(64),sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40)};
     const controls:any={},held:Function[]=[];
-    const event=(id:string,url:string,length:number)=>({scriptId:id,url,length,startLine:0,startColumn:0,executionContextId:1,isModule:false});
+    const event=(id:string,url:string,length:number)=>({scriptId:id,url,length,startLine:0,startColumn:0,executionContextId:controls.zeroContext?0:controls.negativeContext?-1:1,isModule:false});
     class Session extends EventEmitter{
         connect(){}disconnect(){}
         post(method:string,p:any,done:Function){
@@ -50,7 +50,7 @@ test('finite known CPU URL/source/creator associations do not admit outside code
     const detail=projectInstrumentedChildFailure('workload',false,true,{failed:true,retired:true,collector:o.snapshot()});validateInstrumentedChildFailure(detail);assert.equal(detail.releaseAcceptance,false);
     for(const secret of ['/checkout','cpufeatures.node','"creator"','"builtin"'])assert.ok(!JSON.stringify(detail).includes(secret));
 });
-for(const kind of ['otherURL','wrongSource','wrongId','malformedSite','wrongLine','wrongColumn','missingContext','creatorContext','missingCreator','wrongCreator','missingStack','overflow','splitProof'])test('origin cannot combine contradictory or unsupported facts: '+kind,async()=>{
+for(const kind of ['zeroContext','negativeContext','otherURL','wrongSource','wrongId','malformedSite','wrongLine','wrongColumn','missingContext','creatorContext','missingCreator','wrongCreator','missingStack','overflow','splitProof'])test('origin cannot combine contradictory or unsupported facts: '+kind,async()=>{
     const f=fixture();f.controls[kind]=true;const o=await reject(f),d=o.snapshot().rejectionOrigin;assert.ok(d);validateRejectionOrigin(d);
     if(kind==='otherURL')assert.equal(d.checkoutCpuURLMatches,false);
     else if(kind==='wrongSource')assert.equal(d.cpuSourceMatches,false);
