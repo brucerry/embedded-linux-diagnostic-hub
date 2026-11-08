@@ -1,0 +1,260 @@
+name: Windows host context prerequisite probe
+
+on:
+    push:
+        branches: [ci/v060-windows-host-context-20261108]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: windows-host-context-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    inspect-host-context:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-windows-host-context-20261108' && github.run_attempt == 1
+        runs-on: windows-latest
+        timeout-minutes: 2
+        steps:
+            - name: Read current host context without launching an application
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $ProgressPreference = 'SilentlyContinue'
+                  $WarningPreference = 'SilentlyContinue'
+                  $VerbosePreference = 'SilentlyContinue'
+                  $DebugPreference = 'SilentlyContinue'
+                  if ($env:GITHUB_REPOSITORY -cne 'brucerry/embedded-linux-diagnostic-hub' -or
+                      $env:GITHUB_EVENT_NAME -cne 'push' -or
+                      $env:GITHUB_REF -cne 'refs/heads/ci/v060-windows-host-context-20261108' -or
+                      $env:GITHUB_RUN_ATTEMPT -cne '1' -or $env:RUNNER_OS -cne 'Windows' -or
+                      $env:RUNNER_ARCH -cne 'X64' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
+                    Write-Output '::error title=Windows host context::context-refused'
+                    exit 1
+                  }
+                  $record = [ordered]@{
+                    schema = 'windows-host-context.v1'
+                    status = 'query-unavailable'
+                    effectiveIdentityAdministrator = $null
+                    processTokenElevated = $null
+                    processTokenElevationType = 'unknown'
+                    processTokenIntegrity = 'unknown'
+                    processSession = 'unknown'
+                    managedUserInteractive = $null
+                    processWindowStationAvailable = $null
+                    processWindowStationVisible = $null
+                    threadDesktopAvailable = $null
+                    threadDesktopReceivesInput = $null
+                    inputDesktopOpenedForRead = $null
+                    inputDesktopReceivesInput = $null
+                    managedIdentityDisposed = 'not-acquired'
+                    processTokenHandleClosed = 'not-acquired'
+                    inputDesktopHandleClosed = 'not-acquired'
+                    queryBufferReleased = 'not-acquired'
+                    uiInteractionObserved = $false
+                    installerExecuted = $false
+                    installationAdmitted = $false
+                    releaseAcceptance = $false
+                  }
+                  $failed = $false
+                  try {
+                    # Explicit P/Invoke token opens request TOKEN_QUERY only. The exact
+                    # managed product predicate can perform its own internal handle work.
+                    # No borrowed process/window-station/thread-desktop handle is closed.
+                    Add-Type -ErrorAction Stop -WarningAction SilentlyContinue -TypeDefinition @'
+                  using System;
+                  using System.Runtime.InteropServices;
+                  using System.Security.Principal;
+                  public static class WindowsHostContextProbe {
+                    public sealed class Facts {
+                      public string Status = "observed";
+                      public bool? Administrator, Elevated, UserInteractive;
+                      public bool? StationAvailable, StationVisible, ThreadAvailable, ThreadInput;
+                      public bool? InputOpened, InputReceives;
+                      public string ElevationType = "unknown", Integrity = "unknown", Session = "unknown";
+                      public string IdentityClosed = "not-acquired", TokenClosed = "not-acquired";
+                      public string InputClosed = "not-acquired", BufferReleased = "not-acquired";
+                    }
+                    // Retain uncertain own references; never retry their cleanup or acquire
+                    // another resource after cleanup uncertainty. The VM ends this process.
+                    private static IntPtr heldToken, heldDesktop, heldBuffer;
+                    private static WindowsIdentity heldIdentity;
+                    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+                    [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
+                    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+                    [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+                    private static extern bool ProcessIdToSessionId(uint process, out uint session);
+                    [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+                    private static extern bool CloseHandle(IntPtr handle);
+                    [DllImport("advapi32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+                    private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+                    [DllImport("advapi32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+                    private static extern bool GetTokenInformation(IntPtr token, int kind, IntPtr buffer, uint size, out uint used);
+                    [DllImport("user32.dll")] private static extern IntPtr GetProcessWindowStation();
+                    [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
+                    [DllImport("user32.dll")] private static extern IntPtr OpenInputDesktop(uint flags, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint access);
+                    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+                    private static extern bool CloseDesktop(IntPtr desktop);
+                    [DllImport("user32.dll", EntryPoint = "GetUserObjectInformationW")] [return: MarshalAs(UnmanagedType.Bool)]
+                    private static extern bool GetUserObjectInformation(IntPtr handle, int kind, IntPtr buffer, uint size, out uint used);
+                    private static bool? InputFlag(IntPtr handle, IntPtr buffer) {
+                      uint used;
+                      if (!GetUserObjectInformation(handle, 6, buffer, 4, out used) || used != 4) return null;
+                      int value = Marshal.ReadInt32(buffer);
+                      return value == 0 ? (bool?)false : value == 1 ? (bool?)true : null;
+                    }
+                    private static string Integrity(IntPtr buffer, uint used) {
+                      // TOKEN_MANDATORY_LABEL contains an in-buffer SID. Inspect only its
+                      // bounded mandatory-label authority and final RID, never emit a SID.
+                      if (used < (uint)(IntPtr.Size + 4) || used > 4096) return "unknown";
+                      IntPtr sid = Marshal.ReadIntPtr(buffer);
+                      long offset = sid.ToInt64() - buffer.ToInt64();
+                      if (offset < IntPtr.Size + 4 || offset > used - 8) return "unknown";
+                      int count = Marshal.ReadByte(sid, 1);
+                      if (Marshal.ReadByte(sid) != 1 || count < 1 || count > 15 || offset + 8 + count * 4 > used) return "unknown";
+                      for (int i = 2; i < 7; i++) if (Marshal.ReadByte(sid, i) != 0) return "unknown";
+                      if (Marshal.ReadByte(sid, 7) != 16) return "unknown";
+                      uint rid = unchecked((uint)Marshal.ReadInt32(sid, 8 + (count - 1) * 4));
+                      switch (rid) {
+                        case 0: return "untrusted";
+                        case 4096: return "low";
+                        case 8192: return "medium";
+                        case 8448: return "medium-plus";
+                        case 12288: return "high";
+                        case 16384: return "system";
+                        case 20480: return "protected";
+                        default: return "unknown";
+                      }
+                    }
+                    public static Facts Read() {
+                      Facts f = new Facts();
+                      WindowsIdentity identity = null;
+                      try {
+                        identity = WindowsIdentity.GetCurrent();
+                        if (identity == null) { f.Status = "query-error"; return f; }
+                        heldIdentity = identity;
+                        f.Administrator = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                      } catch { f.Status = "query-error"; return f; }
+                      finally {
+                        if (identity != null) {
+                          try { identity.Dispose(); heldIdentity = null; f.IdentityClosed = "acknowledged"; }
+                          catch { f.IdentityClosed = "unknown"; f.Status = "close-unknown"; }
+                        }
+                      }
+                      if (f.IdentityClosed != "acknowledged") return f;
+                      IntPtr token = IntPtr.Zero, buffer = IntPtr.Zero;
+                      bool acquisitionUnknown = false;
+                      try {
+                        // A single fixed-size query buffer bounds all authored native reads.
+                        buffer = Marshal.AllocHGlobal(4096); heldBuffer = buffer;
+                        if (buffer == IntPtr.Zero) { f.Status = "query-error"; return f; }
+                        bool opened = OpenProcessToken(GetCurrentProcess(), 0x0008, out token);
+                        heldToken = token;
+                        if (!opened && token != IntPtr.Zero) { acquisitionUnknown = true; f.Status = "query-unknown"; }
+                        else if (opened && token != IntPtr.Zero) {
+                          uint used;
+                          if (GetTokenInformation(token, 20, buffer, 4, out used) && used == 4) {
+                            int value = Marshal.ReadInt32(buffer);
+                            f.Elevated = value == 0 ? (bool?)false : value == 1 ? (bool?)true : null;
+                          }
+                          if (GetTokenInformation(token, 18, buffer, 4, out used) && used == 4) {
+                            int value = Marshal.ReadInt32(buffer);
+                            f.ElevationType = value == 1 ? "default" : value == 2 ? "full" : value == 3 ? "limited" : "unknown";
+                          }
+                          if (GetTokenInformation(token, 25, buffer, 4096, out used)) f.Integrity = Integrity(buffer, used);
+                        } else if (opened) { acquisitionUnknown = true; f.Status = "query-unknown"; }
+                        else { f.Status = "partial"; }
+                      } catch { acquisitionUnknown = true; f.Status = "query-error"; }
+                      finally {
+                        if (token != IntPtr.Zero && !acquisitionUnknown) {
+                          try {
+                            if (CloseHandle(token)) { heldToken = IntPtr.Zero; f.TokenClosed = "acknowledged"; }
+                            else { f.TokenClosed = "unknown"; f.Status = "close-unknown"; }
+                          } catch { f.TokenClosed = "unknown"; f.Status = "close-unknown"; }
+                        } else if (acquisitionUnknown) f.TokenClosed = "unknown";
+                        if (buffer != IntPtr.Zero) {
+                          try { Marshal.FreeHGlobal(buffer); heldBuffer = IntPtr.Zero; f.BufferReleased = "acknowledged"; }
+                          catch { f.BufferReleased = "unknown"; f.Status = "close-unknown"; }
+                        }
+                      }
+                      if (acquisitionUnknown || f.TokenClosed == "unknown" || f.BufferReleased == "unknown") return f;
+                      // All handles below are borrowed except OpenInputDesktop's result.
+                      IntPtr desktop = IntPtr.Zero;
+                      bool desktopAcquisitionIssued = false;
+                      bool desktopAcquisitionReturned = false;
+                      buffer = IntPtr.Zero;
+                      try {
+                        f.UserInteractive = Environment.UserInteractive;
+                        uint session;
+                        if (ProcessIdToSessionId(GetCurrentProcessId(), out session)) f.Session = session == 0 ? "zero" : "nonzero";
+                        buffer = Marshal.AllocHGlobal(4096); heldBuffer = buffer;
+                        if (buffer == IntPtr.Zero) { f.Status = "query-error"; return f; }
+                        IntPtr station = GetProcessWindowStation();
+                        f.StationAvailable = station != IntPtr.Zero;
+                        uint used;
+                        if (station != IntPtr.Zero && GetUserObjectInformation(station, 1, buffer, 12, out used) && used == 12)
+                          f.StationVisible = (Marshal.ReadInt32(buffer, 8) & 1) != 0;
+                        IntPtr thread = GetThreadDesktop(GetCurrentThreadId());
+                        f.ThreadAvailable = thread != IntPtr.Zero;
+                        if (thread != IntPtr.Zero) f.ThreadInput = InputFlag(thread, buffer);
+                        desktopAcquisitionIssued = true;
+                        desktop = OpenInputDesktop(0, false, 0x0001); heldDesktop = desktop;
+                        desktopAcquisitionReturned = true;
+                        f.InputOpened = desktop != IntPtr.Zero;
+                        if (desktop != IntPtr.Zero) f.InputReceives = InputFlag(desktop, buffer);
+                      } catch { f.Status = "query-error"; }
+                      finally {
+                        if (desktopAcquisitionIssued && !desktopAcquisitionReturned) {
+                          f.InputClosed = "unknown"; f.Status = "query-unknown";
+                        }
+                        if (desktop != IntPtr.Zero) {
+                          try {
+                            if (CloseDesktop(desktop)) { heldDesktop = IntPtr.Zero; f.InputClosed = "acknowledged"; }
+                            else { f.InputClosed = "unknown"; f.Status = "close-unknown"; }
+                          } catch { f.InputClosed = "unknown"; f.Status = "close-unknown"; }
+                        }
+                        if (buffer != IntPtr.Zero) {
+                          try { Marshal.FreeHGlobal(buffer); heldBuffer = IntPtr.Zero; f.BufferReleased = "acknowledged"; }
+                          catch { f.BufferReleased = "unknown"; f.Status = "close-unknown"; }
+                        }
+                      }
+                      return f;
+                    }
+                  }
+                  '@ | Out-Null
+                    $facts = [WindowsHostContextProbe]::Read()
+                    $record.status = $facts.Status
+                    $record.effectiveIdentityAdministrator = $facts.Administrator
+                    $record.processTokenElevated = $facts.Elevated
+                    $record.processTokenElevationType = $facts.ElevationType
+                    $record.processTokenIntegrity = $facts.Integrity
+                    $record.processSession = $facts.Session
+                    $record.managedUserInteractive = $facts.UserInteractive
+                    $record.processWindowStationAvailable = $facts.StationAvailable
+                    $record.processWindowStationVisible = $facts.StationVisible
+                    $record.threadDesktopAvailable = $facts.ThreadAvailable
+                    $record.threadDesktopReceivesInput = $facts.ThreadInput
+                    $record.inputDesktopOpenedForRead = $facts.InputOpened
+                    $record.inputDesktopReceivesInput = $facts.InputReceives
+                    $record.managedIdentityDisposed = $facts.IdentityClosed
+                    $record.processTokenHandleClosed = $facts.TokenClosed
+                    $record.inputDesktopHandleClosed = $facts.InputClosed
+                    $record.queryBufferReleased = $facts.BufferReleased
+                    $failed = $record.status -notin @('observed', 'partial')
+                  } catch {
+                    $record.status = 'probe-error'
+                    $failed = $true
+                  }
+                  # Context access is not actual window interaction, installer eligibility,
+                  # a reusable host admission, or evidence about any later runner VM.
+                  $json = ConvertTo-Json -InputObject $record -Compress -Depth 3
+                  if ([Text.Encoding]::UTF8.GetByteCount($json) -gt 2048) {
+                    Write-Output '::error title=Windows host context::bounded-record-refused'
+                    exit 1
+                  }
+                  Write-Output ('::notice title=Windows host context::' + $json)
+                  if ($failed) { exit 1 }
