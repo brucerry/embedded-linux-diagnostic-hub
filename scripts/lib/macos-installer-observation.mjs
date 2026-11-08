@@ -90,8 +90,8 @@ const canonicalTime = (value) => {
     return value;
 };
 const hash = (value) => assert.match(value, /^[a-f0-9]{64}$/);
-function commandVector(command) {
-    assert.ok(Array.isArray(command) && command.length > 0 && command.length <= 32);
+function commandVector(command, maxParts = 32) {
+    assert.ok(Array.isArray(command) && command.length > 0 && command.length <= maxParts);
     for (const part of command)
         assert.ok(typeof part === 'string' && part.length > 0 && part.length <= 4096);
 }
@@ -217,7 +217,7 @@ export function createMacInstallerObservation({
             runtime.osRelease.length < 256,
     );
     hash(runtime.executableSHA256);
-    commandVector(command);
+    commandVector(command, compactCommandEvidence ? 33 : 32);
     const lane = 'darwin-' + runtime.arch;
     const nativeCases = macInstallerLifecycleDefinitions(lane);
     assert.ok(Array.isArray(artifacts));

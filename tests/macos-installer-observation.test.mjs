@@ -126,6 +126,114 @@ test('complete fixture assertions produce nine unqualified cases and no observed
     );
 });
 
+function compactCommand() {
+    const fields = [
+        'task-root',
+        'node',
+        'tsx',
+        'playwright',
+        'approval',
+        'approval-sha256',
+        'root',
+        'source-root',
+        'current-zip',
+        'current-info',
+        'current-tree',
+        'prior-zip',
+        'prior-info',
+        'prior-tree',
+    ];
+    return [
+        '/synthetic/node',
+        '--import',
+        '/synthetic/loader.mjs',
+        '/synthetic/tests/macos-installer-native-cli.mjs',
+        '--run',
+        ...fields.flatMap((name) => ['--' + name, '/synthetic/' + name]),
+    ];
+}
+
+test('compact command evidence retains all 33 parts in digest-bound stages without qualification', () => {
+    const command = compactCommand();
+    assert.equal(command.length, 33);
+    const { stageBytes, receiptBytes } = completed({
+        command,
+        compactCommandEvidence: true,
+    }).serialize();
+    const stages = JSON.parse(stageBytes),
+        receipt = JSON.parse(receiptBytes);
+    assert.deepEqual(stages.command, command);
+    assert.equal(Object.hasOwn(receipt, 'command'), false);
+    assert.deepEqual(receipt.commandReference, { path: 'stages.json', pointer: '/command' });
+    assert.ok(receipt.cases.every((item) => !Object.hasOwn(item, 'command')));
+    assert.ok(receipt.cases.every((item) => item.commandReference.pointer === '/command'));
+    assert.deepEqual(receipt.cases[0].evidence[0], {
+        path: 'stages.json',
+        bytes: stageBytes.length,
+        sha256: digest(stageBytes),
+    });
+    assert.ok(stageBytes.length <= INSTALLER_STAGE_LIMIT);
+    assert.ok(receiptBytes.length <= INSTALLER_RECEIPT_LIMIT);
+    assert.equal(receipt.status, 'blocked');
+    assert.equal(receipt.exitObserved, false);
+    assert.ok(receipt.cases.every((item) => item.qualificationStatus === 'unverified'));
+});
+
+test('compact command evidence rejects 34 parts and oversized individual parts', () => {
+    const command = compactCommand();
+    assert.throws(() =>
+        createMacInstallerObservation({
+            ...inputs(),
+            command: [...command, 'extra'],
+            compactCommandEvidence: true,
+        }),
+    );
+    const oversized = [...command];
+    oversized[0] = 'x'.repeat(4097);
+    assert.throws(() =>
+        createMacInstallerObservation({
+            ...inputs(),
+            command: oversized,
+            compactCommandEvidence: true,
+        }),
+    );
+});
+
+test('ordinary command evidence keeps the 32-part limit', () => {
+    const command = compactCommand();
+    assert.doesNotThrow(() =>
+        createMacInstallerObservation({
+            ...inputs(),
+            command: command.slice(0, 32),
+        }),
+    );
+    assert.throws(() => createMacInstallerObservation({ ...inputs(), command }));
+});
+
+test('helper return keeps the 32-part limit with compact command evidence', () => {
+    const command = compactCommand();
+    const observation = createMacInstallerObservation({
+        ...inputs(),
+        command,
+        compactCommandEvidence: true,
+    });
+    observation.start('package-shape', at);
+    const fact = {
+        command,
+        exitCode: 0,
+        signal: null,
+        error: 'none',
+        stdout: '',
+        stderr: '',
+    };
+    assert.throws(() => observation.helperReturn(fact));
+    observation.helperReturn({ ...fact, command: command.slice(0, 32) });
+    observation.fail(at);
+    const stages = JSON.parse(observation.serialize().stageBytes);
+    assert.deepEqual(stages.command, command);
+    assert.deepEqual(stages.helperReturns[0].command, command.slice(0, 32));
+});
+
 test('unchanged release consumer rejects a successful fixture observation', () => {
     const receipt = JSON.parse(completed().serialize().receiptBytes);
     assert.throws(() =>

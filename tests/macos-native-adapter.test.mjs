@@ -922,6 +922,7 @@ test('complete native-labelled adapter action path executes only inert substitut
     assert.ok(m.files.get(m.root + '/evidence/observation.json').length <= 8192);
     assert.equal(receipt.commandReference.pointer, '/command');
     const stages = JSON.parse(m.files.get(m.root + '/evidence/stages.json'));
+    assert.equal(stages.command.length, 33);
     assert.deepEqual(stages.command.slice(-m.argv('--run').length), m.argv('--run'));
     assert.deepEqual(stages.command.slice(0, 3), [
         m.sourcePins.find((pin) => pin.role === 'node').path,

@@ -225,7 +225,7 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
                 path.join(NATIVE_WORKSPACE, 'tests/macos-installer-native-cli.mjs'),
                 ...argv,
             ],
-            compactCommandEvidence: true, // Complete exact command retained once in digest-bound stages; no cap increase/truncation.
+            compactCommandEvidence: true, // Exact 33-part CLI grammar is retained once in digest-bound stages; byte caps unchanged, no truncation.
             startedAt: admitted.approval.issuedAt,
         });
         observation.attachNativeActions(state.actions.result);
