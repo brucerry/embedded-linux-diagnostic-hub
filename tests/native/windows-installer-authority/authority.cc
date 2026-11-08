@@ -214,22 +214,31 @@ std::string releaseHandles(Owner* o) {
   std::ostringstream s; s << "{\"readHandlesClosed\":" << (o->released ? "true" : "false") << ",\"retainedUnknown\":" << (o->released ? "false" : "true") << ",\"closedCount\":" << closed << ",\"totalCount\":" << total << ",\"processOwnership\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false}"; return s.str();
 }
 struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; bool isProcess; bool isRelease = false; DWORD pid; uint64_t creation; std::string result; };
-void execute(napi_env, void* raw) { auto* w = static_cast<Work*>(raw); try { if (w->isRelease) w->result = releaseHandles(w->o); else if (w->isProcess) { process(w->o, w->pid, w->creation); w->result = processFacts(w->o); } else { pin(w->o); w->result = fileFacts(w->o); } } catch (const Fault& f) { w->o->note(f); } catch (...) { w->o->primaryException = std::current_exception(); w->o->note({"NATIVE_EXCEPTION_RETAINED", 0}); } }
+void execute(napi_env, void* raw) { auto* w = static_cast<Work*>(raw); try { if (w->isRelease) w->result = releaseHandles(w->o); else if (w->isProcess) { process(w->o, w->pid, w->creation); w->result = processFacts(w->o); } else { pin(w->o); w->result = fileFacts(w->o); } } catch (const Fault& f) { w->o->note(f); } catch (...) { if (!w->o->primaryException) w->o->primaryException = std::current_exception(); w->o->note({"NATIVE_EXCEPTION_RETAINED", 0}); } }
 void complete(napi_env e, napi_status status, void* raw) {
   auto* w = static_cast<Work*>(raw);
   try {
     if (status != napi_ok) w->o->note({"ASYNC_COMPLETION_RETAINED", 0});
-    napi_status settled;
-    if (status == napi_ok && !w->result.empty() && (w->isRelease || (!w->o->failure && !w->o->cancelled.load()))) settled = napi_resolve_deferred(e, w->deferred, text(e, w->result));
-    else { napi_value error; auto message = text(e, std::string("WINDOWS_NATIVE_") + (w->o->failure ? w->o->failure : "CANCELLED_RETAINED")); api(e, napi_create_error(e, nullptr, message, &error)); settled = napi_reject_deferred(e, w->deferred, error); }
-    api(e, settled);
+    // This local value remains rooted in the existing completion callback scope
+    // after deleting the strong reference, through the final settlement call.
+    napi_value localCap; api(e, napi_get_reference_value(e, w->cap, &localCap));
+    need(localCap != nullptr, "COMPLETION_CAP_MISSING");
+    const bool resolve = status == napi_ok && !w->result.empty() && (w->isRelease || (!w->o->failure && !w->o->cancelled.load()));
+    napi_value settlement;
+    if (resolve) settlement = text(e, w->result);
+    else { auto message = text(e, std::string("WINDOWS_NATIVE_") + (w->o->failure ? w->o->failure : "CANCELLED_RETAINED")); api(e, napi_create_error(e, nullptr, message, &settlement)); }
+    // A successful release must not escape while async bookkeeping is unknown.
+    // Mark only acknowledged deletes, and never repeat them after a later error.
     api(e, napi_delete_async_work(e, w->work));
+    w->workCreated = false; w->work = nullptr;
     api(e, napi_delete_reference(e, w->cap));
+    w->referenceCreated = false; w->cap = nullptr;
+    api(e, resolve ? napi_resolve_deferred(e, w->deferred, settlement) : napi_reject_deferred(e, w->deferred, settlement));
     w->o->pendingWork = nullptr; w->o->busy.store(false); delete w;
   } catch (...) {
     // No C++ exception crosses this callback. Keep work/reference/owner custody
     // and the busy fence when completion bookkeeping was not acknowledged.
-    w->o->primaryException = std::current_exception(); w->o->note({"NAPI_COMPLETION_RETAINED", 0});
+    if (!w->o->primaryException) w->o->primaryException = std::current_exception(); w->o->note({"NAPI_COMPLETION_RETAINED", 0});
   }
 }
 
