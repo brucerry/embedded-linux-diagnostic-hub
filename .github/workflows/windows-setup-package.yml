@@ -1,0 +1,136 @@
+name: Windows Setup package consistency candidate
+
+on:
+    push:
+        branches: [ci/v060-windows-setup-package-20261108]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: windows-setup-package-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    package-setup:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-windows-setup-package-20261108' && github.run_attempt == 1 }}
+        runs-on: windows-latest
+        timeout-minutes: 30
+        steps:
+            - name: Check the exact runner and source context before checkout
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-setup-package-20261108' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Unexpected Setup candidate context.' }
+                  if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') { throw 'Require the standard hosted Windows x64 runner.' }
+                  if ($env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Missing exact event source identity.' }
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: '24.22.0'
+                  cache: ''
+                  package-manager-cache: false
+            - name: Verify the committed source, lock and fixed Setup command
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $program = @'
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const [pkg, lock] = ['package.json', 'package-lock.json'].map(name => {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    return JSON.parse(bytes);
+                  });
+                  assert.equal(pkg.name, 'embedded-linux-diagnostic-hub');
+                  assert.equal(pkg.version, '0.6.0');
+                  assert.equal(lock.name, pkg.name);
+                  assert.equal(lock.version, pkg.version);
+                  assert.equal(lock.packages[''].version, pkg.version);
+                  assert.equal(lock.lockfileVersion, 3);
+                  assert.equal(pkg.scripts['package:win-setup'], 'npm run build && node scripts/package-windows-portable.mjs --dir && tsx scripts/package-windows-setup.mts');
+                  assert.equal(pkg.scripts['prepackage:win-setup'], undefined);
+                  assert.equal(pkg.scripts['postpackage:win-setup'], undefined);
+                  for (const name of ['dist', 'dist-web', 'dist-electron', 'release']) {
+                    try { lstatSync(name); assert.fail('Existing output slot.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  console.log('::notice title=Windows Setup source::' + JSON.stringify({ source: process.env.GITHUB_SHA, tree: git('rev-parse', 'HEAD^{tree}'), version: pkg.version, releaseAcceptance: false }));
+                  '@
+                  node --input-type=module -e $program
+                  if ($LASTEXITCODE -ne 0) { throw 'Setup source and lock admission failed.' }
+            - name: Install the committed build dependencies
+              run: npm ci
+            - name: Build the unpacked Windows payload and compile Setup without executing it
+              run: npm run package:win-setup
+            - name: Independently measure and validate the three Setup output files
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Checkout identity changed.' }
+                  git diff --exit-code -- package.json package-lock.json
+                  if ($LASTEXITCODE -ne 0) { throw 'Package or lock bytes changed.' }
+                  $measurements = @()
+                  foreach ($file in @('release/Diagnostic-Hub-Windows-x64-Setup.exe', 'release/Diagnostic-Hub-Windows-x64-Setup.exe.sha256', 'release/Diagnostic-Hub-Windows-x64-Setup.exe.info.json', 'release/win-unpacked/diagnostic-hub-setup-payload.json')) {
+                      $before = Get-Item -LiteralPath $file
+                      if ($before.PSIsContainer -or ($before.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Setup output must be an ordinary file.' }
+                      $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
+                      $after = Get-Item -LiteralPath $file
+                      if ($before.Length -ne $after.Length -or $before.LastWriteTimeUtc -ne $after.LastWriteTimeUtc) { throw 'Setup output changed during measurement.' }
+                      $measurements += @{ file = $file; bytes = $after.Length; sha256 = $hash.Hash.ToLowerInvariant() }
+                  }
+                  $env:HUB_SETUP_MEASUREMENTS = ConvertTo-Json -InputObject $measurements -Compress
+                  try {
+                      $program = @'
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, statSync } from 'node:fs';
+                  import { createHash } from 'node:crypto';
+                  import { validateWindowsSetupInfo, WINDOWS_SETUP_ASSET, MAX_WINDOWS_SETUP_INFO_BYTES } from './scripts/lib/windows-setup-release.mjs';
+                  const rows = JSON.parse(process.env.HUB_SETUP_MEASUREMENTS);
+                  assert.equal(rows.length, 4);
+                  const names = ['release/' + WINDOWS_SETUP_ASSET, 'release/' + WINDOWS_SETUP_ASSET + '.sha256', 'release/' + WINDOWS_SETUP_ASSET + '.info.json', 'release/win-unpacked/diagnostic-hub-setup-payload.json'];
+                  assert.deepEqual(rows.map(row => row.file), names);
+                  for (const row of rows) {
+                    assert.ok(Number.isSafeInteger(row.bytes) && row.bytes > 0);
+                    assert.match(row.sha256, /^[a-f0-9]{64}$/);
+                  }
+                  assert.ok(rows[1].bytes <= 256 && rows[2].bytes <= MAX_WINDOWS_SETUP_INFO_BYTES);
+                  const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+                  assert.equal(version, '0.6.0');
+                  assert.match(process.env.GITHUB_SHA, /^[a-f0-9]{40}$/);
+                  const infoBytes = readFileSync(names[2]);
+                  assert.equal(infoBytes.length, rows[2].bytes);
+                  assert.equal(createHash('sha256').update(infoBytes).digest('hex'), rows[2].sha256);
+                  const info = validateWindowsSetupInfo(JSON.parse(infoBytes), { version, commit: process.env.GITHUB_SHA, asset: WINDOWS_SETUP_ASSET, bytes: rows[0].bytes, sha256: rows[0].sha256 });
+                  assert.equal(info.payloadManifestSHA256, rows[3].sha256);
+                  const checksumBytes = readFileSync(names[1]);
+                  assert.equal(checksumBytes.length, rows[1].bytes);
+                  assert.equal(createHash('sha256').update(checksumBytes).digest('hex'), rows[1].sha256);
+                  assert.equal(checksumBytes.toString('utf8'), rows[0].sha256 + '  ' + WINDOWS_SETUP_ASSET + '\n');
+                  for (const row of rows) assert.equal(statSync(row.file).size, row.bytes);
+                  const record = { source: process.env.GITHUB_SHA, version, artifacts: rows.slice(0, 3), payloadManifestSHA256: rows[3].sha256, installerExecuted: false, embeddedBytesExtracted: false, releaseAcceptance: false };
+                  const message = JSON.stringify(record);
+                  assert.ok(Buffer.byteLength(message) <= 2048);
+                  console.log('::notice title=Windows Setup package identity::' + message);
+                  console.log('::notice title=Windows Setup validation::Setup bytes, checksum and descriptor are consistent with this job and measured input payload manifest. Installer not executed; release acceptance false.');
+                  '@
+                      node --input-type=module -e $program
+                      if ($LASTEXITCODE -ne 0) { throw 'Setup output validation failed.' }
+                  } finally {
+                      $env:HUB_SETUP_MEASUREMENTS = $null
+                  }

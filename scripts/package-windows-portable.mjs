@@ -4,7 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { types } from 'node:util';
 
 /** Use the vendor map installed by npm ci, rather than a second remote checksum fetch. */
-export function windowsPortableOptions({ manifest, lock, installed, checksums }) {
+export function windowsPortableOptions(
+    { manifest, lock, installed, checksums },
+    mode = 'portable',
+) {
+    assert.ok(mode === 'portable' || mode === 'directory');
     const selected = lock?.packages?.['node_modules/electron'];
     const version = selected?.version;
     assert.equal(typeof version, 'string');
@@ -29,7 +33,7 @@ export function windowsPortableOptions({ manifest, lock, installed, checksums })
         assert.match(sha256, /^[a-f0-9]{64}$/);
     }
     assert.ok(Object.hasOwn(checksums, `electron-v${version}-win32-x64.zip`));
-    return {
+    const options = {
         win: ['portable'],
         x64: true,
         publish: 'never',
@@ -37,6 +41,14 @@ export function windowsPortableOptions({ manifest, lock, installed, checksums })
         // Do not add mirrorOptions: createDownloadOpts would discard the checksum map.
         config: { electronDownload: { force: false, checksums: Object.fromEntries(entries) } },
     };
+    return mode === 'directory' ? { ...options, win: [], dir: true } : options;
+}
+
+export function windowsPackageMode(argv) {
+    assert.ok(Array.isArray(argv));
+    if (argv.length === 0) return 'portable';
+    if (argv.length === 1 && argv[0] === '--dir') return 'directory';
+    throw Error('Only the fixed optional --dir packaging mode is supported.');
 }
 
 const knownCodes = new Set([
@@ -107,12 +119,18 @@ export function windowsPortableFailure(error, stage) {
 }
 
 /** All effects are explicit ports; rejection identity survives reporting failure. */
-export async function runWindowsPortablePackage({ loadEnvironment, readInputs, build, report }) {
+export async function runWindowsPortablePackage({
+    loadEnvironment,
+    readInputs,
+    build,
+    report,
+    mode = 'portable',
+}) {
     let stage = 'environment';
     try {
         await loadEnvironment();
         stage = 'inputs';
-        const options = windowsPortableOptions(await readInputs());
+        const options = windowsPortableOptions(await readInputs(), mode);
         stage = 'build';
         return await build(options);
     } catch (error) {
@@ -146,6 +164,7 @@ async function nativePorts() {
 }
 
 export async function main({
+    argv = process.argv.slice(2),
     load = nativePorts,
     report = (record) =>
         console.error(
@@ -162,9 +181,10 @@ export async function main({
 } = {}) {
     let entered = false;
     try {
+        const mode = windowsPackageMode(argv);
         const ports = await load();
         entered = true;
-        await runWindowsPortablePackage({ ...ports, report });
+        await runWindowsPortablePackage({ ...ports, report, mode });
     } catch (error) {
         if (!entered) {
             try {

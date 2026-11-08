@@ -48,7 +48,7 @@
         "package:launchers": "node scripts/package-launchers.mjs",
         "test:portability": "node scripts/build-portable-web.mjs && playwright test --config playwright.portability.config.ts",
         "test:window-desktop": "npm run build && tsx tests/native-window-smoke.ts",
-        "package:win-setup": "npm run build && electron-builder --win --dir --x64 --publish never && tsx scripts/package-windows-setup.mts",
+        "package:win-setup": "npm run build && node scripts/package-windows-portable.mjs --dir && tsx scripts/package-windows-setup.mts",
         "test:ssh-stream": "tsx --test --test-concurrency=1 tests/ssh-production-stream.test.ts tests/ssh-stream-contract.test.ts tests/ssh-stream-cleanup.test.ts",
         "test:ssh-soak": "tsx --test --test-concurrency=1 tests/soak/ssh-large-output.mts",
         "test:ssh-native": "tsx tests/ssh-stream-native-smoke.ts",

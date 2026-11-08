@@ -7,6 +7,7 @@ import {
     runWindowsPortablePackage,
     windowsPortableFailure,
     windowsPortableOptions,
+    windowsPackageMode,
 } from '../scripts/package-windows-portable.mjs';
 
 const require = createRequire(import.meta.url);
@@ -494,4 +495,139 @@ test('actual entry stays inert on import and both workflow callers retain fixed 
     );
     assert.ok(shipping.includes('run: node scripts/package-windows-portable.mjs'));
     assert.equal(shipping.includes('npx electron-builder --win portable'), false);
+});
+
+test('fixed directory mode retains checksum configuration and normalizes only to Windows x64 DIR_TARGET', async () => {
+    const portable = windowsPortableOptions(input());
+    const directory = windowsPortableOptions(input(), 'directory');
+    assert.deepEqual(directory, { ...portable, win: [], dir: true });
+    assert.deepEqual(windowsPortableOptions(input()), portable);
+    const source = readFileSync(require.resolve('electron-builder/out/builder.js'), 'utf8');
+    const windows = { name: 'synthetic-windows' };
+    const normalize = new Function(
+        'app_builder_lib_1',
+        'builder_util_1',
+        between(source, 'function normalizeOptions(', 'function coerceValue(') +
+            '; return normalizeOptions;',
+    )({ Platform: { WINDOWS: windows }, DIR_TARGET: 'synthetic-dir' }, { Arch: { x64: 1 } });
+    const normalized = normalize(directory);
+    assert.equal(normalized.targets.size, 1);
+    assert.deepEqual([...normalized.targets.get(windows)], [[1, ['synthetic-dir']]]);
+    assert.equal(normalized.publish, 'never');
+    assert.deepEqual(normalized.config, portable.config);
+    assert.equal(Object.hasOwn(normalized, 'dir'), false);
+    const seen: unknown[] = [];
+    await runWindowsPortablePackage({
+        mode: 'directory',
+        loadEnvironment: async () => {},
+        readInputs: async () => input(),
+        build: async (options: unknown) => {
+            seen.push(options);
+        },
+        report: () => assert.fail('unexpected failure'),
+    });
+    assert.deepEqual(seen, [directory]);
+});
+
+test('only an empty argument vector or one --dir is admitted before any native loader', async () => {
+    assert.equal(windowsPackageMode([]), 'portable');
+    assert.equal(windowsPackageMode(['--dir']), 'directory');
+    for (const argv of [
+        ['--dir', '--dir'],
+        ['--publish=always'],
+        ['--win'],
+        ['--dir', 'extra'],
+        ['--DIR'],
+    ]) {
+        let loads = 0;
+        const exits: number[] = [],
+            reports: unknown[] = [];
+        await main({
+            argv,
+            load: async () => {
+                loads++;
+                throw Error('must-not-load');
+            },
+            setExitCode: (code: number) => {
+                exits.push(code);
+            },
+            report: (record: unknown) => {
+                reports.push(record);
+            },
+        });
+        assert.equal(loads, 0);
+        assert.deepEqual(exits, [1]);
+        assert.deepEqual(reports, [
+            {
+                event: 'windows-portable-package-failure',
+                stage: 'bootstrap',
+                status: null,
+                code: 'other',
+                artifact: 'unknown',
+            },
+        ]);
+    }
+    let built = 0;
+    await main({
+        argv: ['--dir'],
+        load: async () => ({
+            loadEnvironment: async () => null,
+            readInputs: async () => input(),
+            build: async (options: any) => {
+                built++;
+                assert.deepEqual(options.win, []);
+                assert.equal(options.dir, true);
+                return [];
+            },
+        }),
+        setExitCode: () => assert.fail('unexpected failure'),
+        report: () => assert.fail('unexpected report'),
+    });
+    assert.equal(built, 1);
+});
+
+test('Setup script and isolated workflow preserve the noninstall boundary and existing descriptor authority', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    assert.equal(
+        pkg.scripts['package:win-setup'],
+        'npm run build && node scripts/package-windows-portable.mjs --dir && tsx scripts/package-windows-setup.mts',
+    );
+    const workflow = readFileSync(
+        new URL('../.github/workflows/windows-setup-package.yml', import.meta.url),
+        'utf8',
+    );
+    for (const required of [
+        'branches: [ci/v060-windows-setup-package-20261108]',
+        'github.run_attempt == 1',
+        'runs-on: windows-latest',
+        'timeout-minutes: 30',
+        'persist-credentials: false',
+        'package-manager-cache: false',
+        'run: npm run package:win-setup',
+        'validateWindowsSetupInfo(JSON.parse(infoBytes)',
+        'assert.equal(info.payloadManifestSHA256, rows[3].sha256)',
+        '::notice title=Windows Setup package identity::',
+        'embeddedBytesExtracted: false',
+        'installerExecuted: false',
+        'releaseAcceptance: false',
+        'Buffer.byteLength(message) <= 2048',
+    ])
+        assert.ok(workflow.includes(required), required);
+    for (const absent of [
+        'upload-artifact',
+        'actions/cache',
+        'npm run verify',
+        'npm test',
+        'test:e2e',
+        'Start-Process',
+        'Stop-Process',
+        'Remove-Item',
+        'windows-installer-offline-launch',
+        'native-window-smoke',
+        'device-clock',
+    ])
+        assert.equal(workflow.includes(absent), false, absent);
+    const admission = workflow.indexOf('Check the exact runner and source context before checkout');
+    const checkout = workflow.indexOf('uses: actions/checkout@');
+    assert.ok(admission >= 0 && checkout > admission);
 });
