@@ -656,6 +656,8 @@ for (const [label, role, change] of [
 ])
     test('honestly rehashed busy projection rejects ' + label, async () => {
         const f = fixture();
+        // Tamper with decoded retained JSON, not the capture-time frozen projection.
+        f.values[role] = JSON.parse(f.files.get(f.records[role].path).toString('utf8'));
         change(f.values[role]);
         f.update(role);
         await assert.rejects(produceMacBusyLifecycle(f.expected, f.records, f.read));
