@@ -1655,7 +1655,11 @@ function ownedQuitFixture() {
             closedObserved: false,
             disconnectOnly() {
                 calls.push(kind + '-disconnect');
-                assert.equal(owner.quitScheduledAck, true);
+                if (kind === 'main') assert.equal(owner.quitScheduledAck, true);
+                else {
+                    assert.equal(owner.preQuitReceiptVerified, true);
+                    assert.equal(owner.quitIntent, false);
+                }
                 requested.resolve();
             },
             acknowledge() {
@@ -1718,6 +1722,12 @@ test('actual owned normal shutdown joins independently observed root EOF and bot
     const quit = f.desktop.normalQuit();
     void quit.catch(() => {}); // Observe rejection custody; later await still exposes it.
     try {
+        await f.browserRequested.promise;
+        assert.equal(f.owner.quitIntent, false);
+        assert.equal(f.owner.quitScheduledAck, false);
+        assert.equal(f.scheduled.length, 0);
+        assert.deepEqual(f.calls, ['browser-disconnect']);
+        f.browserLink.acknowledge();
         await f.mainRequested.promise;
         assert.equal(f.owner.quitScheduledAck, true);
         assert.equal(f.scheduled.length, 1);
@@ -1726,22 +1736,19 @@ test('actual owned normal shutdown joins independently observed root EOF and bot
         assert.equal(f.quitCalls(), 1);
         assert.equal(f.owner.quitComplete, false);
         f.emitRoot();
-        await f.browserRequested.promise;
         assert.equal(f.owner.exitCode, 0);
         assert.equal(f.owner.signal, null);
         assert.equal(f.owner.streams.stdoutEOF && f.owner.streams.stderrEOF, true);
         assert.equal(f.owner.quitComplete, false);
+        assert.equal(f.mainLink.closedObserved, false);
         f.mainLink.acknowledge();
-        await Promise.resolve();
-        assert.equal(f.owner.quitComplete, false);
-        f.browserLink.acknowledge();
         await quit;
         assert.equal(f.owner.shutdown.complete, true);
         assert.equal(f.owner.quitComplete, true);
         assert.equal(f.owner.reason, null);
         assert.equal(f.owner.shutdownPending.size, 0);
         assert.doesNotThrow(() => f.owner.active());
-        assert.deepEqual(f.calls, ['main-disconnect', 'browser-disconnect']);
+        assert.deepEqual(f.calls, ['browser-disconnect', 'main-disconnect']);
     } finally {
         f.release();
         await quit.catch(() => {});
@@ -1754,14 +1761,14 @@ test('actual owned socket errors may drain direct closure while retaining the no
         const quit = f.desktop.normalQuit();
         void quit.catch(() => {}); // Observe rejection custody; later await still exposes it.
         try {
+            await f.browserRequested.promise;
+            f.browserLink.acknowledge();
             await f.mainRequested.promise;
             f.owner.socketError(kind);
             assert.equal(f.owner.shutdown.mode, 'DRAINING_NONPASS');
             assert.equal(f.owner.reason, kind + '-socket-error');
             f.emitRoot();
-            await f.browserRequested.promise;
             f.mainLink.acknowledge();
-            f.browserLink.acknowledge();
             await quit;
             assert.equal(f.owner.quitComplete, true);
             assert.equal(f.owner.shutdown.complete, true);
@@ -1780,7 +1787,7 @@ test('actual owned socket errors may drain direct closure while retaining the no
 });
 
 test('actual renderer transport close refuses before during and after independently observed normal shutdown', async () => {
-    for (const timing of ['before', 'during', 'after']) {
+    for (const timing of ['before', 'preclose', 'during', 'after']) {
         const f = ownedQuitFixture();
         let sent = 0,
             disconnected = 0;
@@ -1796,14 +1803,22 @@ test('actual renderer transport close refuses before during and after independen
         try {
             if (timing !== 'before') {
                 quit = f.desktop.normalQuit();
-                // Register rejection observation before a deliberately refused callback.
                 void quit.catch(() => {});
-                await f.mainRequested.promise;
-                if (timing === 'after') {
-                    f.release();
-                    await quit;
-                    assert.equal(f.owner.reason, null);
-                    assert.equal(f.owner.quitComplete, true);
+                await f.browserRequested.promise;
+                if (timing !== 'preclose') {
+                    f.browserLink.acknowledge();
+                    await f.mainRequested.promise;
+                    assert.equal(f.owner.quitScheduledAck, true);
+                    assert.equal(f.scheduled.length, 1);
+                    if (timing === 'after') {
+                        f.release();
+                        await quit;
+                        assert.equal(f.owner.reason, null);
+                        assert.equal(f.owner.quitComplete, true);
+                    }
+                } else {
+                    assert.equal(f.owner.quitIntent, false);
+                    assert.equal(f.scheduled.length, 0);
                 }
             }
             transport.close();
@@ -1811,12 +1826,12 @@ test('actual renderer transport close refuses before during and after independen
             assert.equal(sent, 0);
             assert.equal(disconnected, 0);
             assert.throws(() => f.owner.active(), /framework-transport-close-refused/);
-            if (timing === 'during') {
+            if (timing === 'preclose' || timing === 'during') {
                 f.release();
                 await assert.rejects(quit, /shutdown-retained|framework-transport-close-refused/);
                 assert.equal(f.owner.quitComplete, false);
+                assert.equal(f.scheduled.length, timing === 'preclose' ? 0 : 1);
             } else if (timing === 'after') {
-                // Completion facts are preserved, but a later framework request grants no authority.
                 assert.equal(f.owner.quitComplete, true);
                 assert.equal(f.owner.shutdown.mode, 'RETAINED_UNKNOWN');
             }
@@ -1863,6 +1878,105 @@ test('actual renderer transport preserves forbidden termination commands and sen
             /forbidden-termination-command/,
         );
         assert.equal(owner.reason, 'forbidden-termination-command');
+    }
+});
+
+test('actual browser preclose refuses errors cancellation and missing or late acknowledgements', async () => {
+    for (const mode of ['throw', 'error', 'late', 'cancel', 'error-after-ack']) {
+        const f = await protocolQuitFixture({
+            browserClose: ['late', 'cancel'].includes(mode) ? 'hold' : mode,
+        });
+        const quit = f.desktop.normalQuit();
+        void quit.catch(() => {});
+        try {
+            await f.browserRequested.promise;
+            if (mode === 'error-after-ack') {
+                await Promise.race([f.mainRequested.promise, quit]);
+                assert.equal(f.sockets.get('browser').readyState, 3);
+                f.sockets.get('browser').emit('error');
+                assert.equal(f.owner.shutdown.mode, 'DRAINING_NONPASS');
+                f.scheduled[0]();
+                await quit;
+                assert.equal(f.owner.quitComplete, true);
+                assert.equal(f.owner.reason, 'browser-socket-error');
+                assert.throws(() => f.owner.active(), /browser-socket-error/);
+            } else {
+                assert.equal(f.owner.quitIntent, false);
+                assert.equal(f.quitCalls(), 0);
+                assert.equal(f.events.includes('main-quit-evaluate'), false);
+                assert.equal(f.sockets.get('node').readyState, 1);
+                if (mode === 'late') {
+                    assert.equal(f.owner.shutdown.until, 20000);
+                    assert.equal(f.owner.shutdownPending.size, 1);
+                    f.advance(20001);
+                }
+                if (mode === 'cancel') f.owner.freeze('authored-shutdown-cancelled');
+                await assert.rejects(quit);
+                const expected = {
+                    throw: 'browser-transport-close-failed',
+                    error: 'browser-socket-error',
+                    late: 'shutdown-deadline',
+                    cancel: 'authored-shutdown-cancelled',
+                }[mode];
+                assert.equal(f.owner.reason, expected);
+                assert.equal(f.owner.shutdown.mode, 'RETAINED_UNKNOWN');
+                assert.equal(f.owner.quitComplete, false);
+                f.sockets.get('browser').acknowledge();
+                await Promise.resolve();
+                await Promise.resolve();
+                assert.equal(f.owner.reason, expected);
+                assert.throws(() => f.owner.active());
+                assert.equal(f.quitCalls(), 0);
+                assert.equal(f.events.includes('main-quit-evaluate'), false);
+            }
+        } finally {
+            f.release();
+            await quit.catch(() => {});
+            assert.equal(f.timers.size, 0);
+        }
+    }
+});
+
+test('actual browser preclose preserves prequit workload gates and refuses a premature root exit', async () => {
+    for (const defect of ['prequit', 'generic-pending', 'main-pending', 'publication-fd']) {
+        const f = await protocolQuitFixture();
+        if (defect === 'prequit') f.owner.preQuitReceiptVerified = false;
+        if (defect === 'generic-pending') f.owner.pendingWaits.set(99, { phase: 'file-open' });
+        if (defect === 'main-pending') f.owner.mainPendingCount = 1;
+        if (defect === 'publication-fd') f.owner.publicationFDs.add(99);
+        const quit = f.desktop.normalQuit();
+        void quit.catch(() => {});
+        try {
+            await assert.rejects(quit);
+            assert.equal(f.sockets.get('browser').closeCalls, 0);
+            assert.equal(f.owner.quitIntent, false);
+            assert.equal(f.events.includes('main-quit-evaluate'), false);
+            assert.equal(f.quitCalls(), 0);
+        } finally {
+            f.release();
+            await quit.catch(() => {});
+            assert.equal(f.timers.size, 0);
+        }
+    }
+    const f = await protocolQuitFixture({ browserClose: 'hold' });
+    const quit = f.desktop.normalQuit();
+    void quit.catch(() => {});
+    try {
+        await f.browserRequested.promise;
+        assert.equal(f.owner.quitIntent, false);
+        f.emitRoot();
+        await assert.rejects(quit, /unexpected-root-exit|shutdown-retained/);
+        assert.equal(f.owner.reason, 'unexpected-root-exit');
+        assert.equal(f.owner.quitComplete, false);
+        f.sockets.get('browser').acknowledge();
+        await Promise.resolve();
+        assert.equal(f.events.includes('main-quit-evaluate'), false);
+        assert.equal(f.quitCalls(), 0);
+        assert.throws(() => f.owner.active(), /unexpected-root-exit/);
+    } finally {
+        f.release();
+        await quit.catch(() => {});
+        assert.equal(f.timers.size, 0);
     }
 });
 

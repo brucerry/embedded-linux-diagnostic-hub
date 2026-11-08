@@ -810,9 +810,13 @@ export class OwnedDesktop {
         this.owner.beginShutdown();
         assert(!this.quitCalled, 'Quit intent spent');
         this.quitCalled = true;
-        this.owner.quitIntent = true;
-        this.owner.cut('normal-quit-intent');
         try {
+            // Close only our idle browser inspector before asking the independent main
+            // inspector to quit. A request is not an ACK and consumes the same deadline.
+            this.browserLink!.disconnectOnly();
+            await this.owner.waitShutdown(this.browserLink!.closed.promise, 'transport-close');
+            this.owner.quitIntent = true;
+            this.owner.cut('normal-quit-intent');
             const ack = await this.evaluate(({ app }) => {
                 setImmediate(() => app.quit());
                 return { scheduled: true };
@@ -834,7 +838,6 @@ export class OwnedDesktop {
                     this.owner.streams.stderrComplete,
             );
             this.owner.cut('normal-root-close-acknowledged');
-            this.browserLink?.disconnectOnly();
             await this.owner.waitShutdown(
                 Promise.all([this.mainLink!.closed.promise, this.browserLink!.closed.promise]),
                 'transport-close',
