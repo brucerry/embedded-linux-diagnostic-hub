@@ -1,0 +1,92 @@
+name: Read-only supervisor manager details
+run-name: Diagnose Ubuntu manager queries without service activation
+
+'on':
+    push:
+        branches: [ci/supervisor-manager-details-20261108]
+        paths: [.github/workflows/supervisor-manager-details.yml]
+
+permissions: {}
+
+jobs:
+    manager_details:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false &&
+            github.event_name == 'push' && github.run_attempt == 1
+        runs-on: ubuntu-24.04
+        timeout-minutes: 3
+        defaults:
+            run:
+                shell: bash --noprofile --norc -euo pipefail {0}
+        steps:
+            - name: Verify genuine public hosted Ubuntu context
+              id: context
+              run: |
+                  [[ "$GITHUB_ACTIONS" == true ]]
+                  [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+                  [[ "$GITHUB_REPOSITORY" == brucerry/embedded-linux-diagnostic-hub ]]
+                  [[ "$GITHUB_REF" == refs/heads/ci/supervisor-manager-details-20261108 ]]
+                  [[ "$RUNNER_ENVIRONMENT" == github-hosted ]]
+                  [[ "$RUNNER_OS" == Linux && "$RUNNER_ARCH" == X64 ]]
+                  [[ "$(id -u)" -ne 0 ]]
+                  . /etc/os-release
+                  [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]]
+
+            - name: Query manager Version successfully
+              id: version_query
+              if: ${{ !cancelled() && steps.context.outcome == 'success' }}
+              run: |
+                  value="$(systemctl --system show --property=Version --value)"
+                  present=false
+                  bounded=false
+                  if [[ -n "$value" ]]; then present=true; fi
+                  if (( ${#value} <= 256 )); then bounded=true; fi
+                  printf 'present=%s\nbounded=%s\n' "$present" "$bounded" >> "$GITHUB_OUTPUT"
+
+            - name: Query manager SystemState successfully
+              id: state_query
+              if: ${{ !cancelled() && steps.context.outcome == 'success' }}
+              run: |
+                  value="$(systemctl --system show --property=SystemState --value)"
+                  state_class=other
+                  case "$value" in
+                      running|degraded|initializing|starting|maintenance|stopping|offline|unknown)
+                          state_class="$value" ;;
+                      '') state_class=empty ;;
+                  esac
+                  allowed=false
+                  if [[ "$value" == running || "$value" == degraded ]]; then allowed=true; fi
+                  printf 'state_class=%s\nallowed=%s\n' "$state_class" "$allowed" >> "$GITHUB_OUTPUT"
+
+            - name: Verify queried Version is nonempty
+              if: ${{ !cancelled() && steps.context.outcome == 'success' && steps.version_query.outcome == 'success' }}
+              env:
+                  PRESENT: ${{ steps.version_query.outputs.present }}
+              run: '[[ "$PRESENT" == true ]]'
+
+            - name: Verify queried Version is at most 256 characters
+              if: ${{ !cancelled() && steps.context.outcome == 'success' && steps.version_query.outcome == 'success' }}
+              env:
+                  BOUNDED: ${{ steps.version_query.outputs.bounded }}
+              run: '[[ "$BOUNDED" == true ]]'
+
+            - name: Verify allowed manager state (${{ steps.state_query.outputs.state_class }})
+              if: ${{ !cancelled() && steps.context.outcome == 'success' && steps.state_query.outcome == 'success' }}
+              env:
+                  ALLOWED: ${{ steps.state_query.outputs.allowed }}
+              run: '[[ "$ALLOWED" == true ]]'
+
+            - name: Observe private manager socket presence
+              if: ${{ !cancelled() && steps.context.outcome == 'success' }}
+              run: '[[ -S /run/systemd/private ]]'
+
+            - name: Observe system bus socket presence
+              if: ${{ !cancelled() && steps.context.outcome == 'success' }}
+              run: '[[ -S /run/dbus/system_bus_socket ]]'
+
+            - name: Inspect sudo policy for systemd-run without invoking it
+              if: ${{ !cancelled() && steps.context.outcome == 'success' }}
+              run: |
+                  [[ -x /usr/bin/sudo && -x /usr/bin/systemd-run ]]
+                  sudo -n -l /usr/bin/systemd-run > /dev/null 2>&1
