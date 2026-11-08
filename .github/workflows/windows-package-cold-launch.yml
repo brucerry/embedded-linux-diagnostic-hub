@@ -67,7 +67,7 @@ jobs:
                   assert.equal(lock.version, pkg.version);
                   assert.equal(lock.packages[''].version, pkg.version);
                   assert.equal(lock.lockfileVersion, 3);
-                  for (const [name, script] of Object.entries({ 'package:win': 'npm run build && electron-builder --win portable --x64 --publish never', 'build:web': 'npm run typecheck && vite build --mode web', 'verify:package': 'node scripts/verify-package.mjs release' })) {
+                  for (const [name, script] of Object.entries({ 'package:win': 'npm run build && node scripts/package-windows-portable.mjs', 'build:web': 'npm run typecheck && vite build --mode web', 'verify:package': 'node scripts/verify-package.mjs release' })) {
                     assert.equal(pkg.scripts[name], script);
                     assert.equal(pkg.scripts['pre' + name], undefined);
                     assert.equal(pkg.scripts['post' + name], undefined);

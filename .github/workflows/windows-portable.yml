@@ -42,7 +42,7 @@ jobs:
               run: npm run test:e2e -- --workers=1
             - run: npx tsx tests/desktop-smoke.ts
             - name: Build portable executable
-              run: npx electron-builder --win portable --x64 --publish never
+              run: node scripts/package-windows-portable.mjs
               env:
                   CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
                   CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
