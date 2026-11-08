@@ -1,0 +1,124 @@
+name: Verify public process-cleanup fixture
+
+on:
+    push:
+        branches: [ci/process-cleanup-public-e1acc710-20261108]
+        paths: [.github/workflows/process-cleanup-public-e1acc710.yml]
+
+permissions:
+    contents: read
+
+jobs:
+    process-cleanup:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.run_attempt == 1
+        runs-on: ubuntu-24.04
+        timeout-minutes: 6
+        steps:
+            - name: Require the hosted VM and first run attempt
+              timeout-minutes: 1
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/process-cleanup-public-e1acc710-20261108
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "${RUNNER_ENVIRONMENT:-}" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(id -u)" != 0
+                  test ! -v NODE_OPTIONS
+                  test ! -v NODE_PATH
+                  printf '%s\n' '{"phase":"runner-admitted","runner":"github-hosted","os":"Linux","arch":"X64"}'
+
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              timeout-minutes: 1
+              with:
+                  ref: e1acc710717881512454c73159e3de34b08fa29a
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+                  show-progress: false
+
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              timeout-minutes: 2
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+                  check-latest: false
+
+            - name: Verify the public source and locked test toolchain
+              timeout-minutes: 1
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(git rev-parse HEAD)" = e1acc710717881512454c73159e3de34b08fa29a
+                  test "$(node --version)" = v24.22.0
+                  node --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import { createHash } from 'node:crypto';
+                  import { readFileSync } from 'node:fs';
+                  const blobs = {
+                    'tests/process-cleanup.test.ts': '69e6bef0bb091357831f0ea3574e5e64e37f2f81',
+                    'tests/fixtures/processes.ts': '8252a66511bcfdc8ca0e515c607a601f3b29e0a7',
+                    'tsconfig.json': '60decebb3e04158cacf75f29ba0cfeb40fc1431c',
+                    'package.json': '3677e153bf6ad4df2d5727594d425b65d94c6bd0',
+                    'package-lock.json': '1740addeb21f57ca2c2b43faa450784396fc7f05',
+                  };
+                  for (const [path, expected] of Object.entries(blobs)) {
+                    const bytes = readFileSync(path);
+                    const actual = createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+                    assert.equal(actual, expected, `Source mismatch: ${path}`);
+                  }
+                  const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+                  for (const pkg of Object.values(lock.packages)) {
+                    if (pkg.resolved) assert.ok(pkg.resolved.startsWith('https://registry.npmjs.org/') && typeof pkg.integrity === 'string');
+                  }
+                  assert.equal(lock.packages['node_modules/tsx'].version, '4.23.15');
+                  assert.equal(lock.packages['node_modules/esbuild'].version, '0.28.2');
+                  console.log(JSON.stringify({ phase: 'source-verified', source_sha: 'e1acc710717881512454c73159e3de34b08fa29a', workflow_sha: process.env.GITHUB_SHA, node: process.version, blobs }));
+                  NODE
+
+            - name: Install locked dependencies without lifecycle scripts
+              timeout-minutes: 2
+              shell: bash
+              env:
+                  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+              run: |
+                  set -euo pipefail
+                  npm ci --ignore-scripts --no-audit --no-fund --fetch-retries=0 --registry=https://registry.npmjs.org --loglevel=error
+                  printf '%s\n' '{"phase":"dependencies-installed","lifecycle_scripts":false}'
+
+            - name: Run exactly one cleanup test and emit a bounded receipt
+              timeout-minutes: 1
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  node --input-type=module <<'NODE'
+                  import { spawnSync } from 'node:child_process';
+                  const command = './node_modules/.bin/tsx';
+                  const args = ['--test', '--test-concurrency=1', '--test-reporter=tap', 'tests/process-cleanup.test.ts'];
+                  const expected = 'relaunch cleanup handles rewritten argv and resistant descendants without stopping other profiles';
+                  console.log(JSON.stringify({ phase: 'test-started', command, args, source_sha: 'e1acc710717881512454c73159e3de34b08fa29a', workflow_sha: process.env.GITHUB_SHA, run_id: process.env.GITHUB_RUN_ID, attempt: process.env.GITHUB_RUN_ATTEMPT }));
+                  const started = Date.now();
+                  const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 65536, timeout: 45000, killSignal: 'SIGKILL' });
+                  const out = result.stdout || '';
+                  const counts = {};
+                  for (const key of ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo']) {
+                    const matches = [...out.matchAll(new RegExp(`^# ${key} (\\d+)\\r?$`, 'gm'))];
+                    counts[key] = matches.length === 1 ? Number(matches[0][1]) : null;
+                  }
+                  const names = [...out.matchAll(/^# Subtest: (.*)\r?$/gm)].map(match => match[1]);
+                  const namedPass = out.split(/\r?\n/).includes(`ok 1 - ${expected}`);
+                  const passed = !result.error && result.status === 0 && result.signal === null && names.length === 1 && names[0] === expected && namedPass && counts.tests === 1 && counts.pass === 1 && ['fail', 'cancelled', 'skipped', 'todo'].every(key => counts[key] === 0);
+                  console.log(JSON.stringify({ phase: 'test-result', result: passed ? 'passed' : 'failed', exit_code: result.status, signal: result.signal, error_code: result.error?.code || null, intended_test_observed: names.length === 1 && names[0] === expected, named_pass: namedPass, counts, duration_ms: Date.now() - started, stdout_bytes: Buffer.byteLength(out), stderr_bytes: Buffer.byteLength(result.stderr || '') }));
+                  if (!passed) process.exitCode = 1;
+                  NODE
+
+# Public-source fixture coverage only. No application build, SSH/device-clock test,
+# browser, native app, artifact/cache upload, release or rerun.
+# The fixture and direct test timeout signal only processes inside this fresh VM.
+# GitHub may tear down the disposable VM on job timeout; no local session is touched.
