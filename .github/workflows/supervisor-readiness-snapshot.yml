@@ -1,0 +1,248 @@
+name: Read-only supervisor readiness snapshots
+'on':
+  push:
+    branches: [ci/supervisor-readiness-snapshot-20261108]
+    paths: [.github/workflows/supervisor-readiness-snapshot.yml]
+permissions: {}
+jobs:
+  readiness:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.event.repository.private == false &&
+      github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Collect two read-only readiness snapshots
+        id: snapshot
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          """Read-only readiness snapshots. Preparation only; no service activation."""
+          import os
+          import platform
+          import re
+          import select
+          import subprocess
+          import time
+          
+          UNITS = ('sysinit.target', 'basic.target', 'shutdown.target', 'rescue.target',
+                   'emergency.target', 'system.slice', 'systemd-tmpfiles-setup.service',
+                   'tmp.mount', 'var-tmp.mount')
+          ERRORS = ('timeout', 'capture-overflow', 'command-failed', 'invalid-metadata')
+          
+          
+          class Failure(Exception):
+              pass
+          
+          
+          def query(args, accepted=(0,)):
+              end = time.monotonic() + 3
+              child = subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              streams = [child.stdout, child.stderr]
+              data = {stream: bytearray() for stream in streams}
+              count = 0
+              try:
+                  while streams:
+                      remaining = end - time.monotonic()
+                      if remaining <= 0:
+                          raise Failure('timeout')
+                      ready, _, _ = select.select(streams, [], [], remaining)
+                      if not ready:
+                          raise Failure('timeout')
+                      for stream in ready:
+                          chunk = os.read(stream.fileno(), min(4096, 32768 - count + 1))
+                          count += len(chunk)
+                          if count > 32768:
+                              raise Failure('capture-overflow')
+                          if chunk:
+                              data[stream].extend(chunk)
+                          else:
+                              streams.remove(stream)
+                  remaining = end - time.monotonic()
+                  if remaining <= 0:
+                      raise Failure('timeout')
+                  if child.wait(timeout=remaining) not in accepted:
+                      raise Failure('command-failed')
+                  return data[child.stdout].decode('ascii')
+              finally:
+                  if child.poll() is None:
+                      child.kill()  # Only the read-only query client; never a unit/job.
+                  child.stdout.close(); child.stderr.close()
+          
+          
+          def fields(text, allowed):
+              result = {}
+              for line in text.splitlines():
+                  if not line:
+                      continue
+                  key, sep, value = line.partition('=')
+                  assert sep and key in allowed and key not in result
+                  result[key] = value
+              assert set(result) == set(allowed)
+              return result
+          
+          
+          def manager():
+              keys = ('Version', 'SystemState', 'NJobs', 'FinishTimestampMonotonic')
+              value = fields(query(['/usr/bin/systemctl', '--system', 'show', '--no-pager'] +
+                                   ['--property=' + key for key in keys]), keys)
+              assert 0 < len(value['Version']) <= 256
+              # Only validated numeric major is reported, not the arbitrary version suffix.
+              version = re.match(r'^([0-9]{1,4})(?:\D|$)', value['Version'])
+              assert version
+              state = value['SystemState']
+              assert state in ('initializing', 'starting', 'running', 'degraded',
+                               'maintenance', 'stopping', 'offline', 'unknown')
+              jobs = value['NJobs']
+              finish = value['FinishTimestampMonotonic']
+              assert re.fullmatch('[0-9]{1,6}', jobs)
+              assert re.fullmatch('[0-9]{1,20}', finish)
+              return 'v' + version[1] + '-' + state + '-jobs' + jobs + '-boot-finished-' + ('yes' if int(finish) else 'no')
+          
+          
+          def units():
+              keys = ('Id', 'LoadState', 'ActiveState', 'SubState', 'Job',
+                      'Result', 'ConditionResult', 'AssertResult')
+              text = query(['/usr/bin/systemctl', '--system', 'show', '--no-pager', *UNITS] +
+                           ['--property=' + key for key in keys], accepted=(0, 4))
+              blocks = text.strip().split('\n\n')
+              assert len(blocks) == len(UNITS)
+              observed = {}
+              for block in blocks:
+                  # Result is a service property and may be absent on targets/mounts.
+                  value = {}
+                  for line in block.splitlines():
+                      key, sep, item = line.partition('=')
+                      assert sep and key in keys and key not in value
+                      value[key] = item
+                  assert set(keys) - {'Result'} <= set(value)
+                  name = value['Id']
+                  assert name in UNITS and name not in observed
+                  assert value['LoadState'] in ('loaded', 'not-found', 'masked', 'error', 'bad-setting', 'stub', 'merged')
+                  assert value['ActiveState'] in ('active', 'inactive', 'failed', 'activating', 'deactivating', 'reloading', 'maintenance')
+                  assert re.fullmatch('[a-z-]{1,32}', value['SubState'])
+                  assert not value['Job'] or re.fullmatch('[0-9]{1,12}', value['Job'])
+                  assert value['ConditionResult'] in ('yes', 'no') and value['AssertResult'] in ('yes', 'no')
+                  if 'Result' in value:
+                      assert not value['Result'] or re.fullmatch('[a-z-]{1,32}', value['Result'])
+                  observed[name] = (name + ':' + value['LoadState'] + ':' + value['ActiveState'] +
+                                    ':' + value['SubState'] + ':job-' + ('yes' if value['Job'] and int(value['Job']) else 'no') +
+                                    ':condition-' + value['ConditionResult'] + ':assert-' + value['AssertResult'] +
+                                    ':result-' + (value.get('Result') or 'not-applicable'))
+              return ';'.join(observed[name] for name in UNITS)
+          
+          
+          def jobs():
+              text = query(['/usr/bin/systemctl', '--system', 'list-jobs', '--no-pager', '--no-legend', '--plain', '--full'])
+              rows = [line.split() for line in text.splitlines() if line.strip()]
+              assert len(rows) <= 256
+              result = []
+              for row in rows[:8]:
+                  assert len(row) == 4
+                  number, unit, kind, state = row
+                  assert re.fullmatch('[0-9]{1,12}', number)
+                  assert re.fullmatch('[A-Za-z0-9_.@:-]{1,128}', unit)
+                  assert kind in ('start', 'stop', 'reload', 'restart', 'try-restart',
+                                  'reload-or-start', 'verify-active', 'nop')
+                  assert state in ('waiting', 'running')
+                  result.append(unit + ':' + kind + ':' + state)
+              # Unreported rows are NOT claimed understood, even if their syntax is valid.
+              return ('reported-' + str(min(len(rows), 8)) + '-truncated-' + ('yes' if len(rows) > 8 else 'no') +
+                      '-' + (';'.join(result) if result else 'none'))
+          
+          
+          def mount(path):
+              parts = query(['/usr/bin/findmnt', '--noheadings', '--target', path,
+                             '--output', 'TARGET,FSTYPE']).split()
+              assert len(parts) == 2
+              target = parts[0] if parts[0] in ('/', '/tmp', '/var', '/var/tmp') else 'other'
+              kind = parts[1] if parts[1] in ('ext4', 'xfs', 'tmpfs', 'btrfs', 'overlay') else 'other'
+              return target + ':' + kind
+          
+          
+          def record(key, value):
+              assert re.fullmatch('[a-z0-9_]{1,32}', key)
+              assert len(value) <= 2048 and re.fullmatch('[A-Za-z0-9_.@:/; -]+', value)
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='ascii') as output:
+                  output.write(key + '=' + value + '\n')
+          
+          
+          def main():
+              wanted = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'push', 'GITHUB_RUN_ATTEMPT': '1',
+                        'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'X64',
+                        'GITHUB_REPOSITORY': 'brucerry/embedded-linux-diagnostic-hub',
+                        'GITHUB_REF': 'refs/heads/ci/supervisor-readiness-snapshot-20261108'}
+              assert all(os.environ.get(key) == value for key, value in wanted.items())
+              assert os.getuid() != 0
+              release = platform.freedesktop_os_release()
+              assert release['ID'] == 'ubuntu' and release['VERSION_ID'] == '24.04'
+              record('context', 'verified')
+              complete = True
+              for snapshot in (1, 2):
+                  if snapshot == 2:
+                      time.sleep(5)
+                  for name, get in (('manager', manager), ('units', units), ('jobs', jobs),
+                                    ('tmp', lambda: mount('/tmp')), ('var_tmp', lambda: mount('/var/tmp'))):
+                      try:
+                          value = get()
+                      except Exception as error:
+                          complete = False
+                          value = str(error) if isinstance(error, Failure) and str(error) in ERRORS else 'invalid-metadata'
+                      record('s' + str(snapshot) + '_' + name, value)
+              record('result', 'snapshots-collected-not-admission' if complete else 'incomplete-not-admission')
+              return 0 if complete else 1
+          
+          
+          if __name__ == '__main__':
+              try:
+                  status = main()
+              except Exception:
+                  status = 1  # No raw exception text, paths, or traceback is emitted.
+              raise SystemExit(status)
+          PYTHON
+      - name: "Snapshot 1 Manager: ${{ steps.snapshot.outputs.s1_manager || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 1 Units: ${{ steps.snapshot.outputs.s1_units || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 1 Outstanding jobs: ${{ steps.snapshot.outputs.s1_jobs || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 1 Temp backing mount: ${{ steps.snapshot.outputs.s1_tmp || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 1 Var-temp backing mount: ${{ steps.snapshot.outputs.s1_var_tmp || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 2 Manager: ${{ steps.snapshot.outputs.s2_manager || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 2 Units: ${{ steps.snapshot.outputs.s2_units || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 2 Outstanding jobs: ${{ steps.snapshot.outputs.s2_jobs || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 2 Temp backing mount: ${{ steps.snapshot.outputs.s2_tmp || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Snapshot 2 Var-temp backing mount: ${{ steps.snapshot.outputs.s2_var_tmp || 'unavailable' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
+      - name: "Diagnostic result: ${{ steps.snapshot.outputs.result || 'incomplete-not-admission' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
