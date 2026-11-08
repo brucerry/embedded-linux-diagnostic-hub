@@ -1,10 +1,12 @@
+import { updateErrors } from './update-ownership';
 import { validateSnapshot } from '../shared/report';
 import type { Snapshot, UpdateMode, UpdateProgress } from '../shared/types';
-import { UpdateReports } from './update-reports';
+import type { UpdateReports } from './update-reports';
 import type { ReleaseUpdater } from './updates';
 
 interface Lifecycle {
     isConnecting(): boolean;
+    isReportExporting?(): boolean;
     isConnected(): boolean;
     waitForCollection(): Promise<void>;
     quiesceSerial?(): Promise<void>;
@@ -15,13 +17,15 @@ interface Lifecycle {
 }
 
 // One native transaction owns draining, disconnect, backup, verification and restart.
-// Its lock remains held until quit, or is released on failure without reconnecting SSH.
+// Its transaction lock remains held until quit on success. Native UpdateOwnership
+// separately retains any unacknowledged IO after failure, without reconnecting SSH.
 export class UpdateCoordinator {
     active = false;
 
     constructor(
         private updater: Pick<ReleaseUpdater, 'assertCanDownload' | 'download' | 'executable'>,
-        private reports: UpdateReports,
+        private reports: Pick<UpdateReports, 'save' | 'arm' | 'acknowledge'> &
+            Partial<Pick<UpdateReports, 'isArmed'>>,
         private lifecycle: Lifecycle,
     ) {}
 
@@ -37,6 +41,8 @@ export class UpdateCoordinator {
                 : undefined;
         if (this.active) throw Error('An update is already in progress.');
         if (this.lifecycle.isConnecting()) throw Error('Wait for the SSH connection to finish.');
+        if (this.lifecycle.isReportExporting?.())
+            throw Error('Finish the current report export before updating.');
         this.updater.assertCanDownload();
         this.active = true;
         let armed = false;
@@ -76,12 +82,30 @@ export class UpdateCoordinator {
             });
             await this.lifecycle.restart(executable);
         } catch (error) {
-            this.lifecycle.progress({
-                stage: 'failed',
-                message: error instanceof Error ? error.message : String(error),
-            });
-            this.active = false;
-            if (armed && saved) await this.reports.acknowledge(saved.id);
+            try {
+                try {
+                    this.lifecycle.progress({
+                        stage: 'failed',
+                        message: error instanceof Error ? error.message : String(error),
+                    });
+                } catch {
+                    // A lost renderer must not interrupt native transaction unwind.
+                }
+                if (saved && (armed || this.reports.isArmed?.(saved))) {
+                    try {
+                        await this.reports.acknowledge(saved.id);
+                    } catch (disarmError) {
+                        updateErrors(
+                            { failed: true, error },
+                            [disarmError],
+                            'recovery marker disarm failed',
+                        );
+                    }
+                }
+            } finally {
+                // Keep reentrant updates locked out until marker disarm settles.
+                this.active = false;
+            }
             throw error;
         }
     }

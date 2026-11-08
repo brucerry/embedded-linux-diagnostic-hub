@@ -55,6 +55,8 @@ export interface DesktopBridge
         Partial<import('./terminal').TerminalTransport>,
         Partial<import('./serial').SerialDesktopBridge>,
         Partial<import('./automation').AutomationTransport> {
+    captureStorage?: import('./capture-rpc').CaptureRpcTransport;
+    consoleStorage?: import('./console-archive-rpc').ConsoleArchiveRpc;
     acquireAutomationActivity?(): Promise<string>;
     releaseAutomationActivity?(id: string): Promise<void>;
     onAutomationInterrupted?(callback: (reason: string) => void): () => void;
@@ -82,7 +84,15 @@ export interface DesktopBridge
     readClipboard?(): Promise<string>;
     openRepository(): Promise<void>;
     openReleases(): Promise<void>;
-    exportReport(importedSnapshot?: Snapshot): Promise<boolean>;
+    exportReport(
+        importedSnapshot?: Snapshot,
+        id?: string,
+    ): Promise<import('./report-export').ReportExportStatus>;
+    cancelReportExport(id: string): Promise<void>;
+    reportExportStatus(): Promise<import('./report-export').ReportExportStatus | null>;
+    onReportExportStatus(
+        callback: (status: import('./report-export').ReportExportStatus) => void,
+    ): () => void;
     onDisconnected(callback: (reason?: 'update') => void): () => void;
 }
 
@@ -116,7 +126,40 @@ export interface UpdateReceipt {
     state: 'verified' | 'restart-requested' | 'restart-failed' | 'confirmed';
     updatedAt: string;
 }
+/** Read-only main-process self-observation. It grants no setup or retirement authority. */
+export interface LinuxSetupReadiness {
+    schemaVersion: 1;
+    source: 'linux-main-self-observation';
+    root: string;
+    installationId: string;
+    transactionId: string;
+    manifestSHA256: string;
+    version: string;
+    process: { pid: number; uid: number; executable: string; creationTimeMs: number };
+    profile: { path: string; lockOwned: true };
+    window: {
+        electronId: number;
+        nativeHandleHex: string;
+        visible: true;
+        minimized: false;
+        mainFrameReady: true;
+    };
+    observedAtMs: number;
+    payloadIntegrity: 'not-checked';
+    independentProcessObservation: false;
+    independentWindowObservation: false;
+    descendantRetirement: false;
+    finalizationAuthority: false;
+}
 export interface UpdateInfo {
+    installation?: {
+        id: string;
+        layout: import('./installation').InstalledLayout;
+        profilePath: string;
+        payloadIntegrity: 'not-checked';
+        automaticUpdateQualified: false;
+        linuxSetupReadiness?: LinuxSetupReadiness | null;
+    };
     currentVersion: string;
     currentPath: string | null;
     receipt: UpdateReceipt | null;

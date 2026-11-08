@@ -4,20 +4,27 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
+import { downloaderTestCustody } from './fixtures/downloader-test-custody.ts';
 
 const launcher = path.resolve('public/download-run.sh');
 
+async function closeFixture(
+    root: string,
+    custody: ReturnType<typeof downloaderTestCustody>,
+    t: TestContext,
+) {
+    if (custody.canRemoveFixture()) await rm(root, { recursive: true, force: true });
+    else t.diagnostic('Retained downloader fixture; descendant closure is unproved: ' + root);
+}
+
 test(
     'Linux prerequisite installation requires explicit consent and rechecks libraries before launch',
-    {
-        skip:
-            process.platform !== 'linux' ||
-            spawnSync('script', ['--version'], { encoding: 'utf8' }).status !== 0,
-    },
-    async () => {
+    { skip: process.platform !== 'linux' },
+    async (t) => {
         for (const answer of ['n', 'y']) {
             const root = await mkdtemp(path.join(tmpdir(), 'hub-install-consent-'));
+            const custody = downloaderTestCustody();
             try {
                 const bin = path.join(root, 'bin');
                 await mkdir(bin);
@@ -35,20 +42,23 @@ test(
                     '#!/bin/sh\ntouch "$HUB_TEST_ROOT/launched"\n',
                     { mode: 0o755 },
                 );
-                const result = spawnSync(
-                    'script',
-                    ['-q', '-e', '-c', 'bash scripts/linux-launcher.sh', '/dev/null'],
-                    {
-                        input: answer + '\n',
-                        encoding: 'utf8',
-                        timeout: 10_000,
-                        env: {
-                            ...process.env,
-                            PATH: bin + path.delimiter + process.env.PATH,
-                            APPDIR: root,
-                            HUB_TEST_ROOT: root,
+                const result = custody.run(() =>
+                    spawnSync(
+                        'script',
+                        ['-q', '-e', '-c', 'bash scripts/linux-launcher.sh', '/dev/null'],
+                        {
+                            input: answer + '\n',
+                            encoding: 'utf8',
+                            timeout: 10_000,
+                            maxBuffer: 1024 * 1024,
+                            env: {
+                                ...process.env,
+                                PATH: bin + path.delimiter + process.env.PATH,
+                                APPDIR: root,
+                                HUB_TEST_ROOT: root,
+                            },
                         },
-                    },
+                    ),
                 );
                 assert.match(result.stdout, /Install these prerequisites now\? \[y\/N\]/);
                 if (answer === 'y') {
@@ -64,14 +74,15 @@ test(
                     await assert.rejects(readFile(path.join(root, 'launched')));
                 }
             } finally {
-                await rm(root, { recursive: true, force: true });
+                await closeFixture(root, custody, t);
             }
         }
     },
 );
 
-async function fixture() {
+async function fixture(t: TestContext) {
     const root = await mkdtemp(path.join(tmpdir(), 'hub-download-test-'));
+    const custody = downloaderTestCustody();
     const bin = path.join(root, 'bin');
     await mkdir(bin);
     const payload = '#!/usr/bin/env bash\nprintf "%s" "$*" > "$HUB_TEST_LAUNCH_MARKER"\n';
@@ -92,40 +103,64 @@ const name = 'Diagnostic-Hub-linux-x64.AppImage';
 let content;
 if (url.includes('/releases?')) {
     content = JSON.stringify([{prerelease:true, assets:[{browser_download_url:'https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/download/v0.1.0/' + name}]}]);
+} else if (url.includes('/releases/tags/')) {
+    content = JSON.stringify({tag_name:'v0.1.0', draft:false, target_commitish:'a'.repeat(40)});
+} else if (url.endsWith('/linux-build-info.json')) {
+    content = JSON.stringify({version:'0.1.0', platform:'linux', arch:'x64', commit:'a'.repeat(40), assets:{[name]:'${hash}'}});
 } else if (url.endsWith('.sha256')) {
     content = (process.env.HUB_TEST_CORRUPT ? '0'.repeat(64) : '${hash}') + '  ' + name + '\\n';
 } else content = fs.readFileSync(root + '/payload');
 if (args.includes('--output')) fs.writeFileSync(args[args.indexOf('--output') + 1], content);
 else process.stdout.write(content);
+const writeOut = args.indexOf('--write-out');
+if (writeOut !== -1) {
+    if (args[writeOut + 1] !== '%{http_code}') throw Error('Unsupported mock curl write-out format');
+    process.stdout.write('200');
+}
 `,
         { mode: 0o755 },
     );
+    for (const [tool, body] of Object.entries({
+        zenity: 'printf "%s\\n" "Save portable package and Open"',
+        kdialog: 'exit 255',
+        setsid: '[ "$1" != --wait ] || shift\nexec "$@"',
+    }))
+        await writeFile(path.join(bin, tool), '#!/bin/sh\n' + body + '\n', { mode: 0o755 });
     for (const tool of ['sudo', 'pkexec', 'su'])
         await writeFile(path.join(bin, tool), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     return {
         root,
         payload,
         run: (extra: string[] = [], env: Record<string, string> = {}) =>
-            spawnSync('bash', [launcher, '--directory', path.join(root, 'download'), ...extra], {
-                encoding: 'utf8',
-                env: {
-                    ...process.env,
-                    PATH: bin + path.delimiter + process.env.PATH,
-                    DISPLAY: ':99',
-                    HUB_TEST_DOWNLOAD_ROOT: root,
-                    HUB_TEST_LAUNCH_MARKER: path.join(root, 'launched'),
-                    ...env,
-                },
-            }),
-        close: () => rm(root, { recursive: true, force: true }),
+            custody.run(() =>
+                spawnSync(
+                    'bash',
+                    [launcher, '--directory', path.join(root, 'download'), ...extra],
+                    {
+                        encoding: 'utf8',
+                        timeout: 60_000,
+                        maxBuffer: 1024 * 1024,
+                        input: '',
+                        env: {
+                            ...process.env,
+                            PATH: bin + path.delimiter + process.env.PATH,
+                            DISPLAY: ':99',
+                            HUB_TEST_DOWNLOAD_ROOT: root,
+                            HUB_TEST_LAUNCH_MARKER: path.join(root, 'launched'),
+                            ...env,
+                        },
+                    },
+                ),
+            ),
+        close: () => closeFixture(root, custody, t),
     };
 }
 
 test(
-    'Linux download-and-run selects engineering previews, verifies bytes, launches without elevation or FUSE',
+    'Linux download-and-run selects engineering previews, verifies source and bytes, and opens only with mocked explicit consent',
     { skip: process.platform !== 'linux' },
-    async () => {
-        const item = await fixture();
+    async (t) => {
+        const item = await fixture(t);
         try {
             const result = item.run();
             assert.equal(result.status, 0, result.stderr);
@@ -140,7 +175,8 @@ test(
                 await readFile(path.join(item.root, 'launched'), 'utf8'),
                 '--appimage-extract-and-run',
             );
-            assert.match(result.stdout, /Verified v0.1.0/);
+            assert.match(result.stdout, /Saved verified v0.1.0/);
+            assert.match(result.stdout, /Source: a{40}/);
         } finally {
             await item.close();
         }
@@ -150,8 +186,8 @@ test(
 test(
     'Linux downloader rejects corrupt bytes without replacing the last verified executable',
     { skip: process.platform !== 'linux' },
-    async () => {
-        const item = await fixture();
+    async (t) => {
+        const item = await fixture(t);
         try {
             assert.equal(item.run(['--download-only']).status, 0);
             const result = item.run([], { HUB_TEST_CORRUPT: '1' });
@@ -174,8 +210,8 @@ test(
 test(
     'unsupported Linux architecture and unsafe version tags fail before network requests',
     { skip: process.platform !== 'linux' },
-    async () => {
-        const item = await fixture();
+    async (t) => {
+        const item = await fixture(t);
         try {
             assert.notEqual(item.run(['--download-only'], { HUB_TEST_MACHINE: 'i686' }).status, 0);
             assert.notEqual(item.run(['--version', '../../escape', '--download-only']).status, 0);
@@ -189,8 +225,9 @@ test(
 test(
     'Linux prerequisite launcher reports missing packages and does not install silently',
     { skip: process.platform !== 'linux' },
-    async () => {
+    async (t) => {
         const root = await mkdtemp(path.join(tmpdir(), 'hub-prerequisite-test-'));
+        const custody = downloaderTestCustody();
         try {
             const bin = path.join(root, 'bin');
             await mkdir(bin);
@@ -209,15 +246,24 @@ test(
                 '#!/bin/sh\necho forbidden > "$HUB_TEST_INSTALL_MARKER"; exit 99\n',
                 { mode: 0o755 },
             );
-            const result = spawnSync('bash', [path.resolve('scripts/linux-launcher.sh')], {
-                encoding: 'utf8',
+            // A new Linux session prevents inheriting a controlling terminal; pipes alone do not.
+            const options = {
+                detached: true,
+                stdio: 'pipe' as const,
+                input: '',
+                timeout: 10_000,
+                maxBuffer: 1024 * 1024,
+                encoding: 'utf8' as const,
                 env: {
                     ...process.env,
                     PATH: bin + path.delimiter + process.env.PATH,
                     APPDIR: root,
                     HUB_TEST_INSTALL_MARKER: path.join(root, 'installed'),
                 },
-            });
+            };
+            const result = custody.run(() =>
+                spawnSync('bash', [path.resolve('scripts/linux-launcher.sh')], options),
+            );
             assert.notEqual(result.status, 0);
             assert.match(result.stderr, /libnss3.so/);
             assert.match(result.stderr, /sudo apt-get install libnss3/);
@@ -227,7 +273,7 @@ test(
             );
             await assert.rejects(readFile(path.join(root, 'installed')));
         } finally {
-            await rm(root, { recursive: true, force: true });
+            await closeFixture(root, custody, t);
         }
     },
 );
@@ -236,10 +282,14 @@ test(
     'the Linux downloader rejects macOS before any download or prerequisite operation',
     { skip: process.platform !== 'darwin' },
     () => {
-        const result = spawnSync('bash', [launcher, '--version', 'v0.2.0', '--download-only'], {
-            encoding: 'utf8',
-            timeout: 5000,
-        });
+        const custody = downloaderTestCustody();
+        const result = custody.run(() =>
+            spawnSync('bash', [launcher, '--version', 'v0.2.0', '--download-only'], {
+                encoding: 'utf8',
+                timeout: 5000,
+                maxBuffer: 1024 * 1024,
+            }),
+        );
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, /requires Linux x86_64/);
     },

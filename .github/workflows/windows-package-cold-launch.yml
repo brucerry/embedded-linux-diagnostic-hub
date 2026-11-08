@@ -1,0 +1,115 @@
+name: Windows portable package and cold-launch candidate
+
+# Prepared for this exact temporary branch only. Local source review is not a
+# publication or execution grant; full release acceptance remains separate.
+on:
+    push:
+        branches: [ci/v060-windows-cold-launch-20261108]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: windows-cold-launch-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    package-cold-launch:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-windows-cold-launch-20261108' && github.run_attempt == 1 }}
+        runs-on: windows-latest
+        timeout-minutes: 30
+        steps:
+            - name: Check the proposed runner and source context before checkout
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-cold-launch-20261108' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Unexpected candidate context.' }
+                  if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') { throw 'Require the standard hosted Windows x64 runner.' }
+                  if ($env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Missing exact event source identity.' }
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (v6)
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 (v7)
+              with:
+                  node-version: '24.22.0'
+                  cache: ''
+                  package-manager-cache: false
+            - name: Verify actual Git HEAD, package version and committed lock bytes
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $program = @'
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync } from 'node:fs';
+                  import { createHash } from 'node:crypto';
+                  import { execFileSync } from 'node:child_process';
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const files = ['package.json', 'package-lock.json'].map(name => {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    return { name, sha256: createHash('sha256').update(bytes).digest('hex'), value: JSON.parse(bytes) };
+                  });
+                  const [pkg, lock] = files.map(file => file.value);
+                  assert.equal(pkg.name, 'embedded-linux-diagnostic-hub');
+                  assert.equal(pkg.version, '0.6.0');
+                  assert.equal(lock.name, pkg.name);
+                  assert.equal(lock.version, pkg.version);
+                  assert.equal(lock.packages[''].version, pkg.version);
+                  assert.equal(lock.lockfileVersion, 3);
+                  for (const [name, script] of Object.entries({ 'package:win': 'npm run build && electron-builder --win portable --x64 --publish never', 'build:web': 'npm run typecheck && vite build --mode web', 'verify:package': 'node scripts/verify-package.mjs release' })) {
+                    assert.equal(pkg.scripts[name], script);
+                    assert.equal(pkg.scripts['pre' + name], undefined);
+                    assert.equal(pkg.scripts['post' + name], undefined);
+                  }
+                  for (const name of ['dist', 'dist-web', 'dist-electron', 'release']) {
+                    try { lstatSync(name); assert.fail('Existing output slot: ' + name); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  console.log(JSON.stringify({ sourceCommit: process.env.GITHUB_SHA, sourceTree: git('rev-parse', 'HEAD^{tree}'), version: pkg.version, files: files.map(({ name, sha256 }) => ({ name, sha256 })), releaseAcceptance: false }));
+                  '@
+                  node --input-type=module -e $program
+                  if ($LASTEXITCODE -ne 0) { throw 'Source and lock admission failed.' }
+                  node --version
+                  npm --version
+            - name: Install the committed build dependencies
+              run: npm ci
+            - name: Build the portable Windows executable
+              run: npm run package:win
+            - name: Build the website assets used by package comparison
+              run: npm run build:web
+            - name: Inspect actual portable, ASAR, renderer and icon bytes
+              run: npm run verify:package
+            - name: Record the package bytes proposed for cold launch
+              shell: pwsh
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Checkout identity changed.' }
+                  git diff --exit-code -- package.json package-lock.json
+                  if ($LASTEXITCODE -ne 0) { throw 'Package or lock bytes changed.' }
+                  foreach ($file in @('release/Diagnostic-Hub.exe', 'release/win-unpacked/resources/app.asar')) {
+                      $item = Get-Item -LiteralPath $file
+                      $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
+                      @{ source = $env:GITHUB_SHA; file = $file; bytes = $item.Length; sha256 = $hash.Hash.ToLowerInvariant(); releaseAcceptance = $false } | ConvertTo-Json -Compress
+                  }
+            - name: Proposed normal cold launch of the actual portable executable
+              timeout-minutes: 3
+              shell: pwsh
+              run: |
+                  powershell.exe -NoProfile -File tests/windows-launch.ps1 -Executable release/Diagnostic-Hub.exe
+                  if ($LASTEXITCODE -ne 0) { throw 'Portable cold-launch check failed.' }
+            - name: State the limited evidence retained in the job log
+              shell: pwsh
+              run: |
+                  Write-Output 'Candidate package/static checks and proposed cold launch only. No assisted setup, SSH, clock, native-window suite, installer lifecycle, full release framework or descendant retirement acceptance.'
+                  Write-Output 'No package upload/cache/release mutation. Package bytes and retained smoke profile expire with this disposable runner; logs follow repository retention.'

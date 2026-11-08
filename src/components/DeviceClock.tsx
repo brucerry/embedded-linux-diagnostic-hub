@@ -65,7 +65,7 @@ function pixelHand(angle: number, length: number) {
 export function DeviceClock({ status, sample }: DeviceClockState) {
     const label =
         status === 'disconnected'
-            ? 'No device connected'
+            ? 'SSH disconnected'
             : status === 'loading'
               ? 'Reading device time…'
               : status === 'unavailable'

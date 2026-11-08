@@ -1,12 +1,21 @@
+import { stagedGCFixture } from './fixtures/staged-gc-evidence-memory.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { test } from 'node:test';
 import { releaseAssets } from '../scripts/lib/release-assets.mjs';
+import {
+    PLATFORM_LANES,
+    consumerCases,
+    hashFile,
+    laneFiles,
+    producerCases,
+    producerFiles,
+} from '../scripts/lib/staged-artifact-gate.mjs';
 import {
     EXISTING_RELEASE,
     QUALIFIED_ARTIFACTS,
@@ -14,7 +23,149 @@ import {
     createExistingReceipt,
 } from '../scripts/lib/existing-release-recovery.mjs';
 
-async function fixture(version: string, existing = false) {
+const fixtureRun = { runId: '123456', runAttempt: '1' };
+
+/** Contract-test inputs only: no native execution, measured soak or reviewed policy is claimed. */
+async function syntheticStagedEvidence(root: string, version: string, sourceCommit: string) {
+    assert.ok(path.resolve(root).startsWith(path.resolve(tmpdir()) + path.sep));
+    assert.ok(path.basename(root).startsWith('hub-publication-notes-'));
+    assert.ok(['0.5.0', '0.5.1'].includes(version), 'Model only the historical note fixtures.');
+    const output = path.join(root, 'synthetic-staged-contract-inputs');
+    const label = { syntheticPublicationUnitOnly: true, nativeExecutionPerformed: false };
+    const context = {
+        version,
+        sourceCommit,
+        sourceTree: execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+            cwd: root,
+            encoding: 'utf8',
+        }).trim(),
+        ...fixtureRun,
+    };
+    const recordBytes = async (name: string, bytes: Buffer) => {
+        const file = path.join(output, name);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, bytes, { flag: 'wx' });
+        const result = await hashFile(file, name);
+        return { path: name, bytes: result.bytes, sha256: result.sha256 };
+    };
+    const record = (name: string, value: unknown) =>
+        recordBytes(name, Buffer.from(JSON.stringify(value) + '\n'));
+    const runtime = (lane: (typeof PLATFORM_LANES)[number]) => ({
+        platform: lane.platform,
+        arch: lane.arch,
+        osRelease: 'synthetic-contract-model',
+        node: '24.21.0',
+        executable: lane.platform === 'win32' ? 'C:\\synthetic\\node.exe' : '/synthetic/node',
+        executableSHA256: createHash('sha256').update('synthetic observer').digest('hex'),
+    });
+    const artifacts = (names: string[]) =>
+        Promise.all(names.map((name) => hashFile(path.join(root, 'release', name), name)));
+    const modelCase = (
+        id: string,
+        evidence: Array<{ path: string; bytes: number; sha256: string }>,
+    ) => ({
+        id,
+        status: 'passed',
+        exitCode: 0,
+        signal: null,
+        command: ['synthetic-publication-contract-model-only', id],
+        evidence,
+    });
+    for (const lane of PLATFORM_LANES) {
+        const applications = [];
+        const cases = [];
+        for (const id of consumerCases(lane.id)) {
+            if (id.endsWith('runtime-identity')) {
+                const asset =
+                    lane.platform === 'win32'
+                        ? 'Diagnostic-Hub.exe'
+                        : lane.platform === 'darwin'
+                          ? `Diagnostic-Hub-macos-${lane.arch}.zip`
+                          : id.startsWith('appimage')
+                            ? 'Diagnostic-Hub-linux-x64.AppImage'
+                            : 'Diagnostic-Hub-linux-x64.tar.gz';
+                const app = {
+                    ...label,
+                    asset,
+                    packaged: true,
+                    version,
+                    platform: lane.platform,
+                    arch: lane.arch,
+                    executableSHA256: createHash('sha256')
+                        .update('synthetic ' + asset)
+                        .digest('hex'),
+                    asarSHA256: createHash('sha256').update('synthetic asar').digest('hex'),
+                    versions: { electron: '44.5.1', node: '24.21.0', chrome: 'synthetic' },
+                    executable:
+                        lane.platform === 'win32' ? 'C:\\synthetic\\hub.exe' : '/synthetic/hub',
+                    asar:
+                        lane.platform === 'win32'
+                            ? 'C:\\synthetic\\resources\\app.asar'
+                            : '/synthetic/resources/app.asar',
+                    rendererPID: 123,
+                    contextsSeparated: true,
+                    pageNodeAbsent: true,
+                    osSandboxed: true,
+                    sandbox: true,
+                };
+                applications.push(app);
+                cases.push(modelCase(id, [await record(`${lane.id}/${id}.json`, app)]));
+            } else {
+                cases.push(
+                    modelCase(id, [await record(`${lane.id}/${id}.json`, { ...label, id })]),
+                );
+            }
+        }
+        await record(lane.id + '.json', {
+            ...label,
+            schemaVersion: 1,
+            kind: 'staged-native-consumer',
+            status: 'passed',
+            ...context,
+            lane: lane.id,
+            runtime: runtime(lane),
+            artifacts: await artifacts(laneFiles(version, lane.id)),
+            applications,
+            cases,
+        });
+    }
+    for (const scope of ['web', 'gateway']) {
+        const gc = stagedGCFixture(scope);
+        const retained = await Promise.all(
+            ['runtime', 'loader'].map((kind) =>
+                record(`${scope}/${kind}.json`, { ...label, scope, kind }),
+            ),
+        );
+        for (const [file, bytes] of gc.files)
+            retained.push(await recordBytes(scope + '/' + file, bytes));
+        await record(scope + '.json', {
+            ...label,
+            schemaVersion: 2,
+            kind: 'staged-artifact-producer',
+            status: 'passed',
+            ...context,
+            scope,
+            runtime: runtime(PLATFORM_LANES[0]),
+            artifacts: await artifacts(producerFiles(version, scope)),
+            cases: producerCases(scope).map((id: string) => modelCase(id, retained)),
+            qualificationScope: 'full-product',
+            runtimeProfileSHA256: retained[0].sha256,
+            // These are schema boundary values, not durations/cycles measured by this test.
+            normalGC: structuredClone(gc.normalGC),
+            forcedGC: structuredClone(gc.forcedGC),
+            browserVersions: { chromium: 'synthetic', firefox: 'synthetic', webkit: 'synthetic' },
+            optionalNativeAddon: 'absent',
+            loaderProvenanceSHA256: retained[1].sha256,
+        });
+    }
+    return output;
+}
+
+async function fixture(
+    version: string,
+    existing = false,
+    options: { noteOnlyGuardStub?: boolean } = {},
+) {
     const root = await mkdtemp(path.join(tmpdir(), 'hub-publication-notes-'));
     const git = (...args: string[]) =>
         execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -25,6 +176,10 @@ async function fixture(version: string, existing = false) {
     await mkdir(path.join(root, 'docs/releases'), { recursive: true });
     await mkdir(path.join(root, 'release'));
     git('init', '--initial-branch=main');
+    // Copied ESM scripts must resolve the existing dependencies without copying or committing them.
+    await writeFile(path.join(root, '.gitignore'), '/node_modules\n', { flag: 'wx' });
+    await symlink(path.resolve('node_modules'), path.join(root, 'node_modules'), 'junction');
+    assert.equal(git('check-ignore', 'node_modules'), 'node_modules');
     git('config', 'core.autocrlf', 'false');
     git('config', 'user.name', 'Fixture Author');
     git('config', 'user.email', 'fixture@example.invalid');
@@ -91,13 +246,16 @@ async function fixture(version: string, existing = false) {
     };
     const payloads = new Map<string, Buffer>();
     for (const name of releaseAssets(version)) {
-        const bytes =
-            existing &&
-            ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'].includes(name)
+        const helper = ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'].includes(
+            name,
+        );
+        const bytes = helper
+            ? existing
                 ? execFileSync('git', ['show', EXISTING_RELEASE.tag + ':public/' + name], {
                       cwd: root,
                   })
-                : Buffer.from('Fixture bytes: ' + name);
+                : await readFile(path.join(root, 'public', name))
+            : Buffer.from('Fixture bytes: ' + name);
         payloads.set(name, bytes);
         await add(name, bytes);
         await add(name + '.sha256', Buffer.from(digest(bytes) + '  ' + name + '\n'));
@@ -148,6 +306,9 @@ async function fixture(version: string, existing = false) {
             ),
         );
     }
+    const stagedOutput = existing
+        ? undefined
+        : await syntheticStagedEvidence(root, version, commit);
     const draft = {
         id: existing ? EXISTING_RELEASE.draft : 77,
         tag_name: 'v' + version,
@@ -159,7 +320,7 @@ async function fixture(version: string, existing = false) {
         assets,
     };
     await writeFile(path.join(root, 'draft.json'), JSON.stringify(draft));
-    const toolingSHA = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const toolingSHA = git('rev-parse', 'HEAD');
     const receiptPath = path.join(root, 'receipt.json');
     if (existing) {
         await writeFile(
@@ -271,7 +432,13 @@ async function fixture(version: string, existing = false) {
             'if(draft.assets.some(asset=>asset.browser_download_url===url))return response({},404);',
             "throw Error('Unexpected URL; real network forbidden: '+url); };",
             'const original=cp.execFileSync;',
-            String.raw`cp.execFileSync=function(command,args,options){ const result=original(command,args,options); if(command===process.execPath&&args[0]==='scripts/release-notes.mjs'&&process.env.HUB_BAD_NOTES){ let notes=fs.readFileSync('release/notes.md','utf8'); const type=process.env.HUB_BAD_NOTES; if(type==='missing')notes=notes.replace(/^(?:🔗 )?Links:\n/m,''); else if(type==='duplicate')notes+='\n'+(draft.tag_name==='v0.5.1'?'🔧 ':'')+'Changes:\n- Duplicate.\n'; else if(type==='wrong-order')notes=notes.replace(/^(?:🔧 )?Changes:/m,'TEMP-HEADING:').replace(/^(?:🔖 )?Commits:/m,draft.tag_name==='v0.5.1'?'🔧 Changes:':'Changes:').replace('TEMP-HEADING:',draft.tag_name==='v0.5.1'?'🔖 Commits:':'Commits:'); else if(type==='wrong-emoji')notes=notes.replace('🔧 Changes:','📋 Changes:'); else if(type==='hidden-space'||type==='hidden-markdown')notes=notes.replace(/\n\n(?=(?:🔧 )?Changes:)/,'\n'+(type==='hidden-space'?'Changes:   ':'## Changes:')+'\n\n'); else if(type==='bad-url')notes=notes.replace('[Setup](https://example.invalid/setup)','[Setup](https://?)'); else if(type==='legacy-new')notes=notes.replace(/(?:📋|🔧|🔖|🔗) /g,''); fs.writeFileSync('release/notes.md',notes); } return result; };`,
+            // Note-specific unit tests isolate only the qualification guard. Other tests use
+            // the real verifier; this stub never represents staged evidence acceptance.
+            // Bake the source-owned fixture choice into this injected test bootstrap.
+            // No CLI argument, environment variable or evidence field can enable it.
+            `cp.execFileSync=function(command,args,options){ if(${options.noteOnlyGuardStub === true}&&command===process.execPath&&args.length===2&&args[0]==='scripts/staged-artifact-gate.mjs'&&args[1]==='verify'){ fs.appendFileSync('notes-only-guard-calls.jsonl',JSON.stringify({notesExist:fs.existsSync('release/notes.md')})+'\\n'); return Buffer.alloc(0); } return original(command,args,options); };`,
+            'const notesGuard=cp.execFileSync;',
+            String.raw`cp.execFileSync=function(command,args,options){ const result=notesGuard(command,args,options); if(command===process.execPath&&args[0]==='scripts/release-notes.mjs'&&process.env.HUB_BAD_NOTES){ let notes=fs.readFileSync('release/notes.md','utf8'); const type=process.env.HUB_BAD_NOTES; if(type==='missing')notes=notes.replace(/^(?:🔗 )?Links:\n/m,''); else if(type==='duplicate')notes+='\n'+(draft.tag_name==='v0.5.1'?'🔧 ':'')+'Changes:\n- Duplicate.\n'; else if(type==='wrong-order')notes=notes.replace(/^(?:🔧 )?Changes:/m,'TEMP-HEADING:').replace(/^(?:🔖 )?Commits:/m,draft.tag_name==='v0.5.1'?'🔧 Changes:':'Changes:').replace('TEMP-HEADING:',draft.tag_name==='v0.5.1'?'🔖 Commits:':'Commits:'); else if(type==='wrong-emoji')notes=notes.replace('🔧 Changes:','📋 Changes:'); else if(type==='hidden-space'||type==='hidden-markdown')notes=notes.replace(/\n\n(?=(?:🔧 )?Changes:)/,'\n'+(type==='hidden-space'?'Changes:   ':'## Changes:')+'\n\n'); else if(type==='bad-url')notes=notes.replace('[Setup](https://example.invalid/setup)','[Setup](https://?)'); else if(type==='legacy-new')notes=notes.replace(/(?:📋|🔧|🔖|🔗) /g,''); fs.writeFileSync('release/notes.md',notes); } return result; };`,
             'syncBuiltinESMExports();',
         ].join('\n'),
     );
@@ -279,7 +446,8 @@ async function fixture(version: string, existing = false) {
         root,
         commit,
         headings,
-        run: (invalid = '', badInventory = '') =>
+        stagedOutput,
+        run: (invalid = '', badInventory = '', stagedEnv: Record<string, string> = {}) =>
             spawnSync(
                 process.execPath,
                 existing
@@ -294,11 +462,15 @@ async function fixture(version: string, existing = false) {
                         GITHUB_REPOSITORY: 'brucerry/embedded-linux-diagnostic-hub',
                         GITHUB_REF_NAME: 'v' + version,
                         GITHUB_SHA: commit,
+                        GITHUB_RUN_ID: fixtureRun.runId,
+                        GITHUB_RUN_ATTEMPT: fixtureRun.runAttempt,
+                        HUB_PLATFORM_EVIDENCE: stagedOutput,
                         GH_TOKEN: 'fixture-token',
                         HUB_BAD_NOTES: invalid,
                         HUB_EXISTING_BAD: badInventory,
                         HUB_TOOLING_SHA: toolingSHA,
                         NODE_OPTIONS: '--import=' + JSON.stringify(pathToFileURL(bootstrap).href),
+                        ...stagedEnv,
                     },
                 },
             ),
@@ -314,12 +486,19 @@ async function fixture(version: string, existing = false) {
 }
 for (const version of ['0.5.0', '0.5.1']) {
     test(
-        'actual publication CLI accepts the generated final note contract for ' + version,
+        'note-only publication CLI contract with mocked qualification guard for ' + version,
         async () => {
-            const f = await fixture(version);
+            const f = await fixture(version, false, { noteOnlyGuardStub: true });
             try {
                 const result = f.run();
                 assert.equal(result.status, 0, result.stderr);
+                const guards = (
+                    await readFile(path.join(f.root, 'notes-only-guard-calls.jsonl'), 'utf8')
+                )
+                    .trim()
+                    .split('\n')
+                    .map((line) => JSON.parse(line));
+                assert.deepEqual(guards, [{ notesExist: false }, { notesExist: true }]);
                 const request = JSON.parse(
                     await readFile(path.join(f.root, 'publication-request.json'), 'utf8'),
                 );
@@ -334,13 +513,81 @@ for (const version of ['0.5.0', '0.5.1']) {
                 );
                 assert.ok(notes.includes('/commit/' + f.commit));
                 assert.match(result.stdout, /Release version verified/);
+                assert.doesNotMatch(result.stdout, /All four native staged-consumer receipts bind/);
             } finally {
                 await f.close();
             }
         },
     );
 }
-test('actual publication CLI rejects malformed final notes before PATCH for old and new formats', async () => {
+test('actual publication CLI keeps staged evidence mandatory before any server write', async () => {
+    const f = await fixture('0.5.1');
+    try {
+        assert.ok(f.stagedOutput);
+        // A runtime environment value cannot enable the source-injected note-only stub.
+        const baseline = f.run('', '', { HUB_NOTES_ONLY_GUARD_STUB: '1' });
+        assert.notEqual(baseline.status, 0);
+        assert.match(
+            baseline.stderr,
+            /Require one retained fixed web evidence path: web\/web-build\.json/,
+        );
+        for (const file of [
+            'server-write-attempt.json',
+            'publication-request.json',
+            'notes-only-guard-calls.jsonl',
+        ])
+            await assert.rejects(() => readFile(path.join(f.root, file)), { code: 'ENOENT' });
+        const refuses = async (
+            name: string,
+            env: Record<string, string> = {},
+            expectedFailure = /AssertionError|ENOENT/,
+        ) => {
+            const result = f.run('', '', env);
+            assert.equal(result.error, undefined, name);
+            assert.equal(result.signal, null, name);
+            assert.notEqual(result.status, 0, name);
+            assert.match(result.stderr, expectedFailure, name);
+            for (const file of ['server-write-attempt.json', 'publication-request.json'])
+                await assert.rejects(() => readFile(path.join(f.root, file)), { code: 'ENOENT' });
+        };
+        await refuses('run identity missing', { GITHUB_RUN_ID: '' });
+        await refuses('receipt belongs to a different run', { GITHUB_RUN_ID: '999999' });
+        for (const name of ['win32-x64.json', 'gateway.json']) {
+            const file = path.join(f.stagedOutput, name);
+            const original = await readFile(file);
+            try {
+                await rm(file);
+                // Web verification comes first: its missing retained build record blocks before reading
+                // gateway.json. This assertion proves no write, not gateway-missing detection.
+                await refuses(
+                    'required receipt missing: ' + name,
+                    {},
+                    name === 'gateway.json'
+                        ? /Require one retained fixed web evidence path: web\/web-build\.json/
+                        : /ENOENT/,
+                );
+            } finally {
+                await writeFile(file, original, { flag: 'wx' });
+            }
+        }
+        for (const file of [
+            path.join(f.stagedOutput, 'win32-x64/portable-desktop.json'),
+            path.join(f.root, 'release/Diagnostic-Hub.exe'),
+        ]) {
+            const original = await readFile(file);
+            try {
+                await writeFile(file, Buffer.concat([original, Buffer.from('tampered')]));
+                await refuses('retained bytes changed: ' + path.basename(file));
+            } finally {
+                await writeFile(file, original);
+            }
+        }
+    } finally {
+        await f.close();
+    }
+});
+
+test('note-only publication CLI with mocked qualification guard rejects malformed final notes', async () => {
     for (const version of ['0.5.0', '0.5.1']) {
         const invalids =
             version === '0.5.1'
@@ -362,13 +609,20 @@ test('actual publication CLI rejects malformed final notes before PATCH for old 
                       'hidden-markdown',
                       'bad-url',
                   ];
-        const f = await fixture(version);
+        const f = await fixture(version, false, { noteOnlyGuardStub: true });
         try {
             for (const invalid of invalids) {
+                await rm(path.join(f.root, 'notes-only-guard-calls.jsonl'), { force: true });
                 const result = f.run(invalid);
                 assert.notEqual(result.status, 0, version + ' ' + invalid + ' must reject');
                 assert.match(result.stdout, /Release version verified/);
                 assert.match(result.stderr, /Final release (?:note|link)|Release links/);
+                assert.equal(
+                    (await readFile(path.join(f.root, 'notes-only-guard-calls.jsonl'), 'utf8'))
+                        .trim()
+                        .split('\n').length,
+                    1,
+                );
                 await assert.rejects(
                     () => readFile(path.join(f.root, 'publication-request.json'), 'utf8'),
                     { code: 'ENOENT' },

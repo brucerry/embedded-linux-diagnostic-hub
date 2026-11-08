@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { validateMacPayloadIdentity } from './macos-payload-identity.mjs';
 
 export const MAC_ARCHES = ['x64', 'arm64'];
 export const macAsset = (arch) => `Diagnostic-Hub-macos-${arch}.zip`;
@@ -15,6 +16,12 @@ export function validateMacManifest(info, { arch, version, commit, sha256 }) {
     assert.match(info.sha256, /^[a-f0-9]{64}$/);
     assert.equal(info.sha256, sha256);
     assert.match(info.asarSHA256, /^[a-f0-9]{64}$/);
+    // Historical manifests remain historical. Current native admission separately requires
+    // this new real producer binding; absence is never silently filled from an input tree.
+    if (info.payloadIdentity !== undefined) {
+        validateMacPayloadIdentity(info.payloadIdentity);
+        assert.equal(info.payloadIdentity.asarSHA256, info.asarSHA256);
+    }
     assert.equal(info.bundleIdentifier, 'dev.diagnostichub.desktop');
     assert.match(info.minimumMacOSVersion, /^\d+\.\d+(?:\.\d+)?$/);
     assert.equal(info.signature, 'ad-hoc');

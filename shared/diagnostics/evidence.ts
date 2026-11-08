@@ -23,7 +23,16 @@ const MAX_DEPTH = 32;
 const table = (columns: string[], rows: string[][], note?: string): EvidencePresentation =>
     rows.length ? { table: { columns, rows }, ...(note ? { note } : {}) } : empty;
 const pathKey = (path: string[]) => JSON.stringify(path);
-const valueText = (value: unknown): string => JSON.stringify(value) ?? String(value);
+const valueText = (value: unknown): string => {
+    // JSON.parse may round a device's integer or overflow it to Infinity. Never
+    // present that approximation (or JSON.stringify's null) as recorded evidence.
+    if (
+        typeof value === 'number' &&
+        (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value)))
+    )
+        return 'Number exceeds exact display range; inspect Standard output.';
+    return JSON.stringify(value) ?? String(value);
+};
 
 function jsonPresentation(id: string, value: object): EvidencePresentation {
     let count = 0,

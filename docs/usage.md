@@ -101,19 +101,25 @@ the terminal text. The animation pauses when the terminal is hidden or blocked b
 
 ## Desktop updates
 
-On Windows and Linux, choose **Check for updates** in the desktop header; prereleases are supported.
-The choices are **Update without saving**, **Save report & update**, and **Save, update & reopen
-report**. Cancel before starting leaves the session unchanged. Once an update transaction starts,
-cancellation is disabled; closing the dialog is not presented as cancelling the native transaction.
+For portable Windows EXE and Linux AppImage copies, choose **Check for updates** in the desktop
+header; prereleases are supported. The choices are **Update without saving**, **Save report &
+update**, and **Save, update & reopen report**. Cancel before starting leaves the session unchanged.
+Once an update transaction starts, cancellation is disabled; closing the dialog is not presented as
+cancelling the native transaction.
 
 Mac shows manual update guidance and a verification command for its saved installer helper. Quit the
 app before running that helper to replace the bundle; see
 [Mac installation](downloads.md#mac-installation-and-launch).
 
-Windows and Linux in-app updates wait for active collection, disconnect SSH, verify the download and
-restart without reconnecting. Saved reports remain under `update-reports` in the user's application
-data folder. Updating without saving keeps older backups and trusted SSH fingerprints. See
-[update and release details](delivery.md#maintenance).
+Portable Windows and Linux in-app updates wait for active collection, disconnect SSH, verify the
+download and restart without reconnecting. Saved reports remain under `update-reports` in the user's
+application data folder. Updating without saving keeps older backups and trusted SSH fingerprints.
+See [update and release details](delivery.md#maintenance).
+
+Installed Windows copies do not use this portable updater. Close that copy and use verified setup
+for **Update application** or **Repair application**; see the
+[Windows setup and maintenance guide](windows-setup.md). Native installer qualification remains
+separate from this development contract.
 
 ### Update progress and executable locations
 

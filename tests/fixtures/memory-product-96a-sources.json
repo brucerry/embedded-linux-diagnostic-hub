@@ -1,0 +1,155 @@
+{
+    "sourceCommit": "96a56cdbb462320c54fe74022d7436e665a31d31",
+    "files": [
+        {
+            "path": "backend/ssh/monitor.ts",
+            "bytes": 3161,
+            "sha256": "668d48ff0a8e817a3f419b5b8916059dafe6699abadb227985a24c38aec8aaac",
+            "gitBlob": "af0efe8168e26460588b3f7f7a7e98b47b1e63f5"
+        },
+        {
+            "path": "backend/ssh/session.ts",
+            "bytes": 34423,
+            "sha256": "e62a116121347e2a1eec0415441bfee3bb908ad5e7b9819c6c7befba8f0bba5f",
+            "gitBlob": "881de62ca90e8f74ed0d2539c69b12d2fbd3a85b"
+        },
+        {
+            "path": "backend/ssh/stream-host.ts",
+            "bytes": 12503,
+            "sha256": "224f9914811347f2b01de205b7c8d2664fdb5596a2524a38047109d1f7043e5c",
+            "gitBlob": "7a0f58c5661fc2262db8b6b3490ac443100b316c"
+        },
+        {
+            "path": "electron/automation-activity.ts",
+            "bytes": 1217,
+            "sha256": "1a3e969e9545476ca0157c6504e9df072ff1240e68e512ef4fc6370aa573d95c",
+            "gitBlob": "a74f1ec4d6ab037f1eaa9c6fdbcf5d0dd36f2ab3"
+        },
+        {
+            "path": "electron/capture-host.ts",
+            "bytes": 3684,
+            "sha256": "a939da5ab4819be7306427db68c34bfe6b07593f73bdc056b2a3661ac227b2e3",
+            "gitBlob": "5fdfee08668fd55d03bc2e5e5802b9aff04ba005"
+        },
+        {
+            "path": "electron/capture-store.ts",
+            "bytes": 42602,
+            "sha256": "6e96a463141882f7f292a72352b80ddcb5be64d64915a98c1fef482903097721",
+            "gitBlob": "772f75ce54bb93c9a71227322e41cf05b9d75035"
+        },
+        {
+            "path": "electron/connection-attempts.ts",
+            "bytes": 5798,
+            "sha256": "ef279a81801d736dabba39df04e09b08e81dc08d7413a95f8f64ce2ff1bb9b30",
+            "gitBlob": "06c764cd7d8493f69615a4de3d5e4e2ebb6e082d"
+        },
+        {
+            "path": "electron/console-service.ts",
+            "bytes": 14031,
+            "sha256": "66db1bb327e50423aad6027fb2cd1de76caa193fec3811f4154bbae1222d2f2a",
+            "gitBlob": "deebb47eda5c250bc5e08c500a568e96bd5d615d"
+        },
+        {
+            "path": "electron/host-verification.ts",
+            "bytes": 1366,
+            "sha256": "2680a5d558f53eadfc5e680f2388d05b28349bf14ea1557171aef1fe4de23ff0",
+            "gitBlob": "83b34c5813c1e4ef97ac53a9e47ba03cf28eb7a7"
+        },
+        {
+            "path": "electron/main.ts",
+            "bytes": 36693,
+            "sha256": "5c2fb3610fdf1801e521be69cc726572df82d4357c03a2c488695783855b78ef",
+            "gitBlob": "be0557a553417de82f526a435e1a06a87286fa68"
+        },
+        {
+            "path": "electron/report-export.ts",
+            "bytes": 9429,
+            "sha256": "73243675423cf9e0f38ac575df7dbfaf46bb315a42ac4670a350886575578bc5",
+            "gitBlob": "5af0ebcecd8efc94ed38e22e9e8f69399c4e6e62"
+        },
+        {
+            "path": "electron/update-ownership.ts",
+            "bytes": 5449,
+            "sha256": "e019015944ac47575349ca9ea4428ab209885f29fe0866040aa711381492e6f8",
+            "gitBlob": "a43a8326c5e548dc473dfdd52e7ecdfa03446f7d"
+        },
+        {
+            "path": "gateway/server.ts",
+            "bytes": 36153,
+            "sha256": "5b3eac41a69a6e33c0761453618bf31dcb46d2a92294295f46026efecffd3fba",
+            "gitBlob": "d09e9d6752fc3c9dee157d1f980e53ecc4620d48"
+        },
+        {
+            "path": "shared/capture-rpc.ts",
+            "bytes": 19741,
+            "sha256": "255f7434b7bbadda2401f3245902fe2ac40add0dab610f7d154363e655fe9949",
+            "gitBlob": "e3854da2f19a74733bdf9acaa78dc6a871d04f4c"
+        },
+        {
+            "path": "shared/quit-cleanup.ts",
+            "bytes": 6188,
+            "sha256": "4561dc9bf71cae68807ff65524bb301b295839bb07825e3aad31fe115fdc8ee7",
+            "gitBlob": "0ebda34b40ce0d637ef5d2b4f02c827af9c8d3ac"
+        },
+        {
+            "path": "src/features/automation/AutomationPage.tsx",
+            "bytes": 111592,
+            "sha256": "ea978e8dfe36aaedaf763db7102892c82ca0ac298fbd36d9994cc1d72456cab4",
+            "gitBlob": "17c7b3c8b345864e5bfc014590ddad79b12e36b7"
+        },
+        {
+            "path": "src/features/automation/activity-release.ts",
+            "bytes": 4705,
+            "sha256": "5620edfd25a683e3ce82a01ab151896fe69314600f38ea0d88219bd2e66dc68b",
+            "gitBlob": "8eadbccf768564132209c4bf52d23e04e011a5b5"
+        },
+        {
+            "path": "src/features/automation/capture/browser-export.ts",
+            "bytes": 15087,
+            "sha256": "c7122f17851177d7eebc1dd9cdca4978812756f7ab5881fb9d6428507de8de6b",
+            "gitBlob": "61ee892f82979796dcb5390585cd4365936a3e14"
+        },
+        {
+            "path": "src/features/automation/capture/indexeddb-console.ts",
+            "bytes": 28411,
+            "sha256": "9d80bd2305f7427331a95c4783ce7f5c18a5c2e96e6b44f67e99b9f214e46450",
+            "gitBlob": "ece40c24d1538bb125227d6b40501238668680ab"
+        },
+        {
+            "path": "src/features/automation/capture/indexeddb-store.ts",
+            "bytes": 30570,
+            "sha256": "c7e5c7c9b6caa52552b1e566bfdc67d9db5057d4d2385eba18a1ff819bd34fee",
+            "gitBlob": "c62755ba9d619675812be22e6fa1879c194e0cf1"
+        },
+        {
+            "path": "src/features/automation/capture/native-repository.ts",
+            "bytes": 7816,
+            "sha256": "31bb990c21c1c10af4cf98e38e6fe09688f5bfd232ce93e7d5b156b4ae19d52e",
+            "gitBlob": "218c86d6ec080337ad6b7cbc1085e8b363c26122"
+        },
+        {
+            "path": "src/features/automation/capture/ssh-stream-client.ts",
+            "bytes": 6181,
+            "sha256": "a1b81822296844c8ae3abe5a97a486ff5eb5d9ad53f6520594f6d9ecf15599a3",
+            "gitBlob": "87bcbd19ca15b1044b47b1af569fb2b219f26eb1"
+        },
+        {
+            "path": "src/features/automation/runner.ts",
+            "bytes": 21022,
+            "sha256": "cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a",
+            "gitBlob": "df1b10248b27a464a5c15ac9453fd7cb0fcdd7c1"
+        },
+        {
+            "path": "src/features/serial/session.ts",
+            "bytes": 35962,
+            "sha256": "979ef0a9175fa9d96f6f916599e17282d2271723ca843b3431e626b53e70d464",
+            "gitBlob": "495d0395a35f26925cf254b4f29b9d36477edceb"
+        },
+        {
+            "path": "src/services/GatewayClient.ts",
+            "bytes": 22129,
+            "sha256": "ecb2333ff9d63f281d13585ac24839be9b2c520107717d7dd7b1ba82dd990ced",
+            "gitBlob": "1a4d9b08ef4865a2778a01fb0684b4562a3d7483"
+        }
+    ]
+}

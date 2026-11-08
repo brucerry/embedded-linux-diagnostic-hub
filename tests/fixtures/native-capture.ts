@@ -1,4 +1,5 @@
-import { expect, type ElectronApplication, type Page } from '@playwright/test';
+import assert from 'node:assert/strict';
+import type { ElectronApplication, Page } from '@playwright/test';
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -23,10 +24,10 @@ export async function captureNativeScreenshot(
                 fullPage: true,
                 timeout: remaining(),
             });
-            expect(image.length).toBeGreaterThan(33);
-            expect(image.subarray(0, 8)).toEqual(PNG_SIGNATURE);
-            expect(image.readUInt32BE(16)).toBeGreaterThan(0);
-            expect(image.readUInt32BE(20)).toBeGreaterThan(0);
+            assert.ok(image.length > 33);
+            assert.deepEqual(image.subarray(0, 8), PNG_SIGNATURE);
+            assert.ok(image.readUInt32BE(16) > 0);
+            assert.ok(image.readUInt32BE(20) > 0);
         };
         try {
             await capture();
@@ -53,13 +54,11 @@ export async function captureNativeScreenshot(
                 };
             });
             console.warn('Native screenshot capture recovery:', JSON.stringify(native));
-            expect(native).toMatchObject({
-                count: 1,
-                visible: true,
-                minimized: false,
-                loading: false,
-                crashed: false,
-            });
+            assert.equal(native.count, 1);
+            assert.equal(native.visible, true);
+            assert.equal(native.minimized, false);
+            assert.equal(native.loading, false);
+            assert.equal(native.crashed, false);
             // DOM visibility alone does not establish that the native capture surface exists.
             // Wait for two rendered frames with stable geometry, then require the same full-page
             // capture once more. A second protocol failure or any other error still fails the job.

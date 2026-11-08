@@ -3,7 +3,7 @@ import { Sprite, duck, pig } from '../terminal/TerminalPlayground';
 const palette: Record<string, string> = {
     o: '#95a7ac',
     y: '#ffe6a3',
-    q: '#e5bf75',
+    q: '#ffe6a3',
     w: '#fff9e4',
     b: '#91a3a8',
     r: '#efb187',
@@ -15,7 +15,39 @@ function Coconut({ x, y }: { x: number; y: number }) {
         <g className="serial-coconut" transform={'translate(' + x + ' ' + y + ')'}>
             <path d="M2 0h6v2h2v6H8v2H2V8H0V2h2z" fill="#b69a7b" />
             <path d="M2 1h5v2H3v3H1V2h1z" fill="#d0b796" />
-            <path d="M7 5h2v3H7v1H3V7h4z" fill="#92795f" />
+            <path d="M7 5h2v3H7v1H3V7h4z" fill="#b49a7a" />
+        </g>
+    );
+}
+function DistantIsland({ x, y, scale }: { x: number; y: number; scale: number }) {
+    return (
+        <g
+            className="serial-distant-island"
+            transform={'translate(' + x + ' ' + y + ') scale(' + scale + ')'}
+        >
+            <path d="M-28 6h6V3h11V1h22v2h12v3h6v3h-57z" fill="#b7cabc" />
+            <path d="M-22 5h12V3h21v2h12v2h-45z" fill="#d2d9be" />
+            {[-18, -7, 5, 17].map((tree, index) => (
+                <g key={tree} transform={'translate(' + tree + ' ' + (index % 2 ? -2 : 0) + ')'}>
+                    <path d="M0-3h2v8H0z" fill="#97afa4" />
+                    <path d="M-4-5h2v-4h3v-2h3v3h3v5H4v2H-4z" fill="#a3bdab" />
+                    <path d="M-2-8h3v-2h2v3h2v2H-2z" fill="#bfd0b6" />
+                </g>
+            ))}
+            <path d="M-32 11h64v2h-64zM-20 15h40v1h-40z" fill="#c7e0df" opacity=".65" />
+        </g>
+    );
+}
+function BeachCrab({ x, y }: { x: number; y: number }) {
+    return (
+        <g className="serial-crab" transform={'translate(' + x + ' ' + y + ')'}>
+            <path d="M-5 5h12v1H-5z" fill="#d9c29e" />
+            <path
+                d="M-3 1h2v1h6V1h2v3H5v1H-1V4h-2zM-5 0h2v1h-1v2h-2v-5h2zM7-2h2v5H7V1H6V0h1z"
+                fill="#cfa18b"
+            />
+            <path d="M-4 4h3v1h-2v1h-2zM5 4h3v2H6V5H5zM0 1h4v2H0z" fill="#e4baa0" />
+            <path d="M0-1h1v2H0zM3-1h1v2H3z" fill="#8d9c97" />
         </g>
     );
 }
@@ -53,7 +85,20 @@ export function SerialBeach({ active }: { active: boolean }) {
                 focusable="false"
             >
                 <rect width="640" height={height} fill="#d5e9ee" />
-                <rect y={horizon} width="640" height={shore - horizon + 8} fill="#a9ced7" />
+                <g className="serial-clouds" fill="#f3f8f4" opacity=".7">
+                    <path d={`M66 ${horizon * 0.27}h8v-4h14v-4h20v4h14v4h8v5H66z`} />
+                    <path d={`M280 ${horizon * 0.15}h10v-4h16v-5h22v5h16v4h10v5h-74z`} />
+                    <path d={`M430 ${horizon * 0.43}h8v-4h12v-4h18v4h12v4h8v4h-58z`} />
+                </g>
+                <rect
+                    className="serial-ocean"
+                    y={horizon}
+                    width="640"
+                    height={shore - horizon + 8}
+                    fill="#a9ced7"
+                />
+                <DistantIsland x={164} y={horizon + (shore - horizon) * 0.13} scale={0.72} />
+                <DistantIsland x={448} y={horizon + (shore - horizon) * 0.09} scale={0.54} />
                 <g className="serial-waves" fill="#d4edf0">
                     <g transform={'translate(0 ' + (horizon - 116) + ')'}>
                         <path d="M-32 128h80v3H-32zM80 132h94v3H80zM210 127h118v3H210zM374 134h82v3H374zM510 129h140v3H510z" />
@@ -75,8 +120,12 @@ export function SerialBeach({ active }: { active: boolean }) {
                         <rect x="306" y="231" width="20" height="2" />
                     </g>
                 </g>
-                {[52, 570].map((x) => (
-                    <g key={x} transform={'translate(' + x + ' ' + treeTop + ')'}>
+                {[570].map((x) => (
+                    <g
+                        className="serial-foreground-palm"
+                        key={x}
+                        transform={'translate(' + x + ' ' + treeTop + ')'}
+                    >
                         <path
                             d={
                                 'M0 ' +
@@ -103,21 +152,9 @@ export function SerialBeach({ active }: { active: boolean }) {
                         </g>
                     </g>
                 ))}
-                <Coconut x={43} y={shore + 24} />
-                <Coconut x={61} y={shore + 33} />
                 <Coconut x={582} y={shore + 28} />
-                {[52, 570, 68].map((x, i) => (
-                    <g key={'bird-' + i} transform={'translate(' + x + ' ' + (treeTop + 8) + ')'}>
-                        <g className={'serial-bird serial-bird-' + i}>
-                            <path d="M-3-2h6v4h-6zM3-1h3v2H3z" fill="#526b78" />
-                            <path
-                                className="serial-bird-wing"
-                                d="M-2-2h-5v-3h-3v-2h5v2h3zM2-2h5v-3h3v-2H5v2H2z"
-                                fill="#6f8992"
-                            />
-                        </g>
-                    </g>
-                ))}
+                <BeachCrab x={126} y={shore + (height - shore) * 0.62} />
+                <BeachCrab x={510} y={shore + (height - shore) * 0.68} />
                 <g transform={'translate(0 ' + sandOffset + ')'}>
                     <g fill="#9eabb0">
                         <path d="M320 147h4v70h-4zM318 146h8v3h-8z" />

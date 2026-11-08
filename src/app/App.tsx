@@ -1,4 +1,6 @@
 import { useSerialSession } from '../hooks/useSerialSession';
+import { reportExportMessage } from '../../shared/report-export';
+import { serialUiAdmission } from '../features/serial/admission';
 import {
     ArrowDown,
     ArrowUp,
@@ -20,6 +22,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useState, useRef, useLayoutEffect } from 'react';
 import { categoryLabels, probes } from '../../shared/diagnostics/probes';
+import { parseUptimeSeconds } from '../../shared/diagnostics/metrics';
 import { APP_VERSION, REPOSITORY_URL } from '../../shared/project';
 import type { Category, Probe } from '../../shared/types';
 import { RoundedIcon } from '../components/RoundedIcon';
@@ -39,6 +42,7 @@ import { EmptyOverview } from '../pages/EmptyOverview';
 import { OverviewPage } from '../pages/OverviewPage';
 import { message } from '../services/errors';
 import type { View } from './view';
+import { markRendererAppLayoutEffect } from '../launch-timing';
 const AutomationPage = lazy(() => import('../features/automation/AutomationPage'));
 const SerialPage = lazy(() => import('../features/serial/SerialPage'));
 const TerminalPage = lazy(() => import('../features/terminal/TerminalPage'));
@@ -51,7 +55,13 @@ function App() {
     const [showUpdates, setShowUpdates] = useState(false);
     const [view, setView] = useState<View>('overview');
     const workspaceMain = useRef<HTMLElement>(null);
+    const lastTransitionView = useRef<View>(view);
     useLayoutEffect(() => {
+        // First App layout effect only; not paint, visible-window or interactive proof.
+        markRendererAppLayoutEffect();
+        // CSS supplies the initial animation; replay only after a committed view change.
+        if (lastTransitionView.current === view) return;
+        lastTransitionView.current = view;
         // Replay the page transition without remounting a live terminal channel.
         const main = workspaceMain.current;
         if (!main) return;
@@ -98,19 +108,19 @@ function App() {
         disconnect,
         resetData,
         exportReport,
+        reportExport,
+        cancelReportExport,
         importReport,
     } = useDeviceSession(() => setView('overview'));
     const uptimeResult = snapshot?.results.find((result) => result.id === 'uptime');
     const uptimeValue =
-        uptimeResult?.status === 'collected'
-            ? Number(uptimeResult.stdout.trim().split(/\s+/)[0])
-            : NaN;
+        uptimeResult?.status === 'collected' ? parseUptimeSeconds(uptimeResult.stdout) : null;
     const clock = useDeviceClock({
         transport,
         generation: connected ? activeDevice?.generation : undefined,
         reset: clockReset,
         blocked: resetting || disconnecting,
-        uptime: Number.isFinite(uptimeValue) && uptimeValue >= 0 && !imported ? uptimeValue : null,
+        uptime: !imported ? uptimeValue : null,
     });
     const selectedResult = snapshot?.results.find((item) => item.id === selectedProbe?.id);
     async function inspectProbe(probe: Probe) {
@@ -285,6 +295,8 @@ function App() {
                                             onClick={exportReport}
                                             disabled={
                                                 !snapshot ||
+                                                (reportExport !== null &&
+                                                    reportExport.retirement !== 'acknowledged') ||
                                                 busy ||
                                                 resetting ||
                                                 connecting ||
@@ -379,7 +391,7 @@ function App() {
                                                 : 'Connect your target device to collect diagnostics, or import a saved report.'
                                             : imported
                                               ? `Historical ${snapshot.mode === 'demo' ? 'sample' : 'SSH'} evidence opened locally. No device connection or upload.`
-                                              : `${snapshot.username}@${snapshot.endpoint} · ${connected ? `${bridge ? 'Direct SSH connected.' : 'Gateway SSH connected.'} ${live ? `Live updates every ${interval}s after collection.` : 'Live updates paused.'}` : 'Disconnected. Displaying the last collected evidence.'}`}
+                                              : `Retained snapshot: ${snapshot.username}@${snapshot.endpoint} · ${connected ? `${bridge ? 'Direct' : 'Gateway'} SSH connected to ${activeDevice ? `${activeDevice.username}@${activeDevice.endpoint}` : 'the current target'}. ${live ? `Live updates every ${interval}s after collection.` : 'Live updates paused.'}` : 'SSH disconnected. Showing the last accepted snapshot.'}`}
                                     </span>
                                 </div>
                             </div>
@@ -437,6 +449,15 @@ function App() {
                             </div>
                         </>
                     )}
+                    {reportExport && (
+                        <div className="info-banner" role="status">
+                            <span>{reportExportMessage(reportExport)}</span>
+                            {reportExport.retirement !== 'acknowledged' &&
+                                !reportExport.cancelRequested && (
+                                    <button onClick={cancelReportExport}>Cancel export</button>
+                                )}
+                        </div>
+                    )}
                     {error && (
                         <div className="error-banner" role="alert">
                             <CircleAlert size={17} />
@@ -486,13 +507,13 @@ function App() {
                             <SerialPage
                                 session={serial}
                                 visible={view === 'serial'}
-                                blocked={
-                                    automationBusy ||
-                                    resetting ||
-                                    showConnect ||
-                                    showUpdates ||
-                                    Boolean(selectedProbe)
-                                }
+                                {...serialUiAdmission({
+                                    automationBusy,
+                                    resetting,
+                                    showConnect,
+                                    showUpdates,
+                                    selectedProbe: Boolean(selectedProbe),
+                                })}
                                 reset={terminalReset}
                             />
                         </Suspense>
@@ -502,6 +523,7 @@ function App() {
                             fallback={view === 'automation' ? <p>Loading automation…</p> : null}
                         >
                             <AutomationPage
+                                clockAdmission={clock}
                                 visible={view === 'automation'}
                                 serial={serial}
                                 transport={transport}

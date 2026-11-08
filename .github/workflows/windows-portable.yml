@@ -74,6 +74,8 @@ jobs:
               run: npx tsx tests/windows-update-handoff-smoke.ts
               env:
                   HUB_FEATURE_EVIDENCE: validation/update-handoff
+            - name: Build the approved version-gated assisted setup and descriptor
+              run: node scripts/staged-artifact-gate.mjs build-setup
             - run: npm run checksums
             - name: Record signing status
               shell: pwsh
@@ -92,6 +94,9 @@ jobs:
                       release/Diagnostic-Hub.exe
                       release/Diagnostic-Hub.exe.sha256
                       release/build-info.json
+                      release/Diagnostic-Hub-Windows-x64-Setup.exe
+                      release/Diagnostic-Hub-Windows-x64-Setup.exe.sha256
+                      release/Diagnostic-Hub-Windows-x64-Setup.exe.info.json
                   if-no-files-found: error
             - name: Retain isolated update handoff evidence separately
               uses: actions/upload-artifact@v4

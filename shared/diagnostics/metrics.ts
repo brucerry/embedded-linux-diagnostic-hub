@@ -5,22 +5,34 @@ export function evidence(snapshot: Snapshot | null, id: string): string {
     return result?.status === 'collected' ? result.stdout : '';
 }
 
+function integerCounter(token: string): number | null {
+    if (!/^\d+$/.test(token)) return null;
+    const value = Number(token);
+    return Number.isSafeInteger(value) ? value : null;
+}
+
 export function parseMemory(text: string) {
     const values: Record<string, number> = {};
     for (const line of text.split('\n')) {
-        const match = line.match(/^(\w+):\s+(\d+)\s+kB/);
-        if (match) values[match[1]] = Number(match[2]);
+        const match = line.match(/^(\w+):\s+(\d+)\s+kB\s*$/);
+        if (match) {
+            const value = integerCounter(match[2]);
+            if (value !== null) values[match[1]] = value;
+        }
     }
     const total = values.MemTotal ?? 0;
-    const available = values.MemAvailable ?? null;
-    const free = values.MemFree ?? null;
+    const withinTotal = (value: number | undefined, capacity: number): number | null =>
+        value === undefined || (capacity > 0 && value > capacity) ? null : value;
+    const available = withinTotal(values.MemAvailable, total);
+    const free = withinTotal(values.MemFree, total);
+    const swapTotal = values.SwapTotal ?? 0;
     return {
         total,
         available,
         free,
         usedPercent: total && available !== null ? Math.round((1 - available / total) * 100) : null,
-        swapTotal: values.SwapTotal ?? 0,
-        swapFree: values.SwapFree ?? 0,
+        swapTotal,
+        swapFree: withinTotal(values.SwapFree, swapTotal),
     };
 }
 
@@ -31,18 +43,14 @@ export function parseFilesystems(text: string) {
         .slice(1)
         .flatMap((line) => {
             const match = line.match(/^(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%\s+(.+)$/);
-            return match
-                ? [
-                      {
-                          name: match[1],
-                          total: +match[2],
-                          used: +match[3],
-                          available: +match[4],
-                          percent: +match[5],
-                          mount: match[6],
-                      },
-                  ]
-                : [];
+            if (!match) return [];
+            const total = integerCounter(match[2]),
+                used = integerCounter(match[3]),
+                available = integerCounter(match[4]),
+                percent = integerCounter(match[5]);
+            if (total === null || used === null || available === null || percent === null)
+                return [];
+            return [{ name: match[1], total, used, available, percent, mount: match[6] }];
         });
 }
 
@@ -60,9 +68,26 @@ export function parseRelease(text: string): string {
     );
 }
 
+// The uptime probe reads /proc/uptime. Its first field is non-negative decimal
+// seconds; missing/malformed evidence must not become a zero/boot observation.
+export function parseUptimeSeconds(text: string): number | null {
+    const token = text.trim().split(/\s+/)[0];
+    if (!/^\d+(?:\.\d+)?$/.test(token)) return null;
+    const seconds = Number(token);
+    const [whole, fraction = ''] = token.split('.');
+    if (
+        !Number.isFinite(seconds) ||
+        seconds > Number.MAX_SAFE_INTEGER ||
+        (Number(whole) === Number.MAX_SAFE_INTEGER && /[1-9]/.test(fraction)) ||
+        (seconds === 0 && /[1-9]/.test(token))
+    )
+        return null;
+    return seconds;
+}
+
 export function formatUptime(text: string): string {
-    const seconds = Number(text.trim().split(/\s+/)[0]);
-    if (!text || !Number.isFinite(seconds) || seconds < 0) return 'Unavailable';
+    const seconds = parseUptimeSeconds(text);
+    if (seconds === null) return 'Unavailable';
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -73,6 +98,14 @@ export function formatKiB(value: number): string {
     return value >= 1048576
         ? `${(value / 1048576).toFixed(1)} GiB`
         : `${Math.round(value / 1024)} MiB`;
+}
+
+export function formatMemoryDetail(memory: ReturnType<typeof parseMemory>): string {
+    if (!memory.total) return 'Memory data unavailable';
+    const remaining = memory.available ?? memory.free;
+    return remaining === null
+        ? `Availability unknown · ${formatKiB(memory.total)} total`
+        : `${formatKiB(remaining)} ${memory.available === null ? 'free' : 'available'} of ${formatKiB(memory.total)}`;
 }
 
 export function summarize(snapshot: Snapshot | null) {

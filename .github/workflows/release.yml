@@ -21,6 +21,11 @@ on:
             - scripts/verify-published-release.mjs
             - scripts/lib/published-release.mjs
             - tests/published-release.test.ts
+            - scripts/staged-artifact-gate.mjs
+            - scripts/lib/staged-artifact-gate.mjs
+            - tests/staged-artifact-native.mts
+            - tests/staged-artifact-gate.test.ts
+            - scripts/lib/release-assets.mjs
 
 permissions:
     contents: read
@@ -52,6 +57,8 @@ jobs:
               with:
                   node-version: '24'
                   package-manager-cache: false
+            - name: Install descriptor validation dependencies without building the app
+              run: npm ci --ignore-scripts
             - name: Download and validate the complete public release without publication
               id: audit
               run: node scripts/verify-published-release.mjs
@@ -119,6 +126,10 @@ jobs:
               with:
                   node-version: '24'
             - name: Require a version-matching tag
+              # The canonical setup descriptor validator uses the existing locked semver package.
+              # No application, addon build or signing step runs in this source gate.
+              run: npm ci --ignore-scripts
+            - name: Verify version-matching tag
               run: node scripts/verify-release.mjs
     draft:
         needs: version
@@ -131,6 +142,8 @@ jobs:
               with:
                   node-version: '24'
                   package-manager-cache: false
+            - name: Install descriptor validation dependencies without building the app
+              run: npm ci --ignore-scripts
             - name: Create only a new-tag source-bound unpublished draft
               run: node scripts/release-draft.mjs create
               env:
@@ -150,8 +163,115 @@ jobs:
         permissions:
             contents: write
         uses: ./.github/workflows/macos-release.yml
-    publish:
+    qualify-staged:
+        name: Consume final staged artifacts (${{ matrix.lane }})
         needs: [website, desktop, linux, macos]
+        if: github.event.repository.private == false
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: windows-latest
+                      lane: win32-x64
+                      platform: win32
+                    - runner: ubuntu-22.04
+                      lane: linux-x64
+                      platform: linux
+                    - runner: macos-15-intel
+                      lane: darwin-x64
+                      platform: darwin
+                    - runner: macos-15
+                      lane: darwin-arm64
+                      platform: darwin
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 30
+        permissions:
+            contents: read
+            actions: read
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - run: npm ci
+            - uses: actions/download-artifact@v4
+              with:
+                  pattern: Diagnostic-Hub-*
+                  merge-multiple: true
+                  path: release
+            - name: Read native Mac draft bytes directly (no Mac binary Actions artifact)
+              if: matrix.platform == 'darwin'
+              run: node scripts/release-draft.mjs download
+              env:
+                  GH_TOKEN: ${{ github.token }}
+            - name: Download required independently reviewed installer lifecycle evidence
+              # Producers must qualify this final source AND these exact staged package hashes.
+              # Missing evidence remains blocked; portable/model checks are not a substitute.
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: installer-qualification-${{ matrix.lane }}
+                  merge-multiple: true
+                  path: validation/installers
+            - name: Download required final packaged desktop product qualification
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: artifact-qualification-${{ matrix.lane }}
+                  merge-multiple: true
+                  path: validation/products
+            - name: Run exact staged package, runtime and installer gates
+              if: matrix.platform != 'linux'
+              run: node scripts/staged-artifact-gate.mjs consume ${{ matrix.lane }}
+            - name: Run exact staged Linux packages with the normal sandbox
+              if: matrix.platform == 'linux'
+              run: xvfb-run -a node scripts/staged-artifact-gate.mjs consume ${{ matrix.lane }}
+            - name: Retain source/artifact/runtime-bound receipts and failure evidence only
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: platform-qualification-${{ matrix.lane }}
+                  path: validation/platform/
+                  if-no-files-found: error
+    qualify-staged-producers:
+        name: Require final web and gateway artifact runtime qualification
+        needs: website
+        runs-on: ubuntu-22.04
+        timeout-minutes: 10
+        permissions:
+            contents: read
+            actions: read
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - run: npm ci --ignore-scripts
+            - uses: actions/download-artifact@v4
+              with:
+                  pattern: Diagnostic-Hub-*
+                  merge-multiple: true
+                  path: release
+            - name: Download required exact-archive product qualification receipts
+              # Primary-owned real drivers must produce these. No mock receipt is generated here.
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: artifact-qualification-*
+                  merge-multiple: true
+                  path: validation/platform
+            - run: node scripts/staged-artifact-gate.mjs verify-producers
+            - uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: platform-qualification-web-gateway
+                  path: validation/platform/
+                  if-no-files-found: error
+    publish:
+        needs: [website, desktop, linux, macos, qualify-staged, qualify-staged-producers]
         runs-on: ubuntu-latest
         timeout-minutes: 15
         permissions:
@@ -177,8 +297,16 @@ jobs:
               run: node scripts/release-draft.mjs download
               env:
                   GH_TOKEN: ${{ github.token }}
+            - uses: actions/download-artifact@v4
+              with:
+                  pattern: platform-qualification-*
+                  merge-multiple: true
+                  path: validation/platform
             - name: Check every release asset, checksum and source manifest
               run: node scripts/verify-release.mjs --assets
+            - name:
+                  Require all native installer and exact staged-artifact receipts before publication
+              run: node scripts/staged-artifact-gate.mjs verify
             - name: Prepare four-section release notes from the previous published release
               env:
                   GH_TOKEN: ${{ github.token }}
@@ -187,8 +315,29 @@ jobs:
               run: node scripts/release-draft.mjs publish
               env:
                   GH_TOKEN: ${{ github.token }}
-    published-macos:
+    published-assets:
         needs: publish
+        if: github.event.repository.private == false
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24'
+                  package-manager-cache: false
+            - run: npm ci --ignore-scripts
+            - name: Verify actual published URLs, complete inventory, source and downloaded bytes
+              run: node scripts/verify-published-release.mjs
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  HUB_PUBLISHED_TAG: ${{ github.ref_name }}
+    published-macos:
+        needs: published-assets
         if: github.event.repository.private == false
         strategy:
             fail-fast: false
@@ -202,6 +351,8 @@ jobs:
                       appDir: mac-arm64
         runs-on: ${{ matrix.runner }}
         timeout-minutes: 20
+        env:
+            HUB_PUBLISHED_TAG: ${{ github.ref_name }}
         steps:
             - uses: actions/checkout@v6
             - uses: actions/setup-node@v7

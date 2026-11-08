@@ -30,8 +30,8 @@ References:
 
 ## One-line commands
 
-These commands download, verify and launch the appropriate package. For a browser download, choose
-the same package and checksum from
+These commands download and verify the appropriate package, with each platform's review and launch
+choices described below. For a browser download, choose the same package and checksum from
 [the latest release](https://github.com/brucerry/embedded-linux-diagnostic-hub/releases/latest).
 
 ### Windows installation and launch
@@ -46,9 +46,19 @@ Windows packages include Electron and the application dependencies. Windows 10/1
 PowerShell, TLS and system facilities used by the helper; a separate JavaScript runtime is not
 required.
 
-The portable app is one `Diagnostic-Hub.exe`; no application installer or administrator launch is
-required. Unsigned builds may show an unknown-publisher warning. The helper retains the verified
-download under the current user's application data directory.
+In the v0.6.0 development candidate, this command defaults to a current-user setup wizard when
+verified setup, descriptor and checksum assets exist for the selected release. Installation still
+requires confirmation on the wizard's Review page. This source contract does not mean the candidate
+has been published or its installer qualified on Windows; historical releases retain their original
+helper and portable contracts. See the [Windows setup guide](windows-setup.md) for status and
+options.
+
+For the original single-file `Diagnostic-Hub.exe`, save the helper and pass `-Portable`, or
+`-DownloadOnly` to save without running it. The portable route needs no application installer or
+administrator launch. Missing setup assets stop with an explicit same-version portable/download-only
+option; the helper does not silently switch delivery or release. Unsigned builds may show an
+unknown-publisher warning. Verified downloads remain under the current user's application data
+directory.
 
 ### Linux installation and launch
 
@@ -58,9 +68,16 @@ Linux x86_64, from a terminal in a graphical desktop session:
 bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/main/public/download-run.sh | bash'
 ```
 
-The Linux helper extracts the AppImage for execution, avoiding FUSE installation and mount
-permissions. It removes that temporary extraction after the application closes. The verified
-AppImage remains available for later offline use.
+The Linux helper offers **Save portable package** or **Save portable package and Open** after
+verification. Open is optional and off by default; cancellation makes no launch request. When Open
+is available and explicitly selected, the helper extracts the AppImage for execution without FUSE
+installation or mount permissions, then removes its temporary extraction after the application
+closes. The verified AppImage remains available for later offline use.
+
+Permanent folder setup remains unavailable: its packaged front door supports review only, and the
+download helper refuses permanent setup options before downloading or installing. The portable
+helper adds no shortcuts or installed identity. Use `--portable` to select that route explicitly or
+`--download-only` to save without launching.
 
 Linux packages include Electron but still need a compatible glibc graphical desktop and its system
 libraries. The packaged `AppRun` checks missing shared libraries before starting. On Ubuntu/Debian
@@ -119,7 +136,7 @@ Download the helpers from the same repository or a release, then use their optio
 
 ```powershell
 ./download-run.ps1 -Version v0.3.1 -DownloadOnly
-./download-run.ps1 -Version v0.3.1 -Directory "$env:USERPROFILE\DiagnosticHub"
+./download-run.ps1 -Version v0.3.1 -Portable -Directory "$env:USERPROFILE\DiagnosticHub"
 ```
 
 ```sh

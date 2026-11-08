@@ -16,6 +16,83 @@ async function screenshot(
     await mkdir(path.dirname(output), { recursive: true });
     await page.screenshot({ path: output, fullPage: true });
 }
+function contrast(left: string, right: string) {
+    const luminance = (color: string) =>
+        color
+            .match(/[\d.]+/g)!
+            .slice(0, 3)
+            .map(Number)
+            .map((value) => {
+                const channel = value / 255;
+                return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+            })
+            .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    const a = luminance(left),
+        b = luminance(right);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+async function readableSecondary(button: import('@playwright/test').Locator, hover: boolean) {
+    await expect(button).toHaveCSS('color', 'rgb(32, 55, 67)');
+    await expect(button).toHaveCSS(
+        'background-color',
+        hover ? 'rgb(228, 238, 235)' : 'rgb(247, 250, 246)',
+    );
+    const colors = await button.evaluate((element) => ({
+        text: getComputedStyle(element).color,
+        background: getComputedStyle(element).backgroundColor,
+    }));
+    expect(contrast(colors.text, colors.background)).toBeGreaterThanOrEqual(4.5);
+}
+
+for (const connected of [false, true]) {
+    test(`Deselect restores controls and retains framing after ${connected ? 'connected' : 'selected-only'} Serial while SSH stays disconnected`, async ({
+        page,
+    }, testInfo) => {
+        await installDesktop(page);
+        await installSerial(page);
+        await page.goto('/');
+        await page.getByRole('button', { name: 'Serial', exact: true }).click();
+        const serial = page.getByRole('region', { name: 'Local serial terminal' });
+        const framing = connected
+            ? ['57600', '7', 'even', '2', 'hardware']
+            : ['115200', '8', 'none', '1', 'none'];
+        const labels = ['Baud rate', 'Data bits', 'Parity', 'Stop bits', 'Flow control'];
+        for (let index = 0; index < labels.length; index++)
+            await serial.getByLabel(labels[index], { exact: true }).selectOption(framing[index]);
+        const port = serial.getByLabel('Local serial port', { exact: true });
+        await port.selectOption('0');
+        if (connected) {
+            await serial.getByRole('button', { name: 'Connect', exact: true }).click();
+            await expect(serial.getByText('Ready', { exact: true })).toBeVisible();
+            await expect(
+                page.getByRole('region', { name: 'Device time', exact: true }),
+            ).toContainText('SSH disconnected');
+            expect(await page.evaluate(() => window.desktopTest.clock.calls)).toBe(0);
+        }
+        await serial.getByRole('button', { name: 'Deselect', exact: true }).click();
+        await expect(serial.getByText('No local port selected')).toBeVisible();
+        await expect(port).toBeEnabled();
+        await expect(port).toHaveValue('-1');
+        await expect(serial.getByRole('button', { name: /^Choose port/ })).toBeEnabled();
+        for (let index = 0; index < labels.length; index++) {
+            await expect(serial.getByLabel(labels[index], { exact: true })).toBeEnabled();
+            await expect(serial.getByLabel(labels[index], { exact: true })).toHaveValue(
+                framing[index],
+            );
+        }
+        await expect(serial.getByRole('button', { name: 'Connect', exact: true })).toBeDisabled();
+        expect(await page.evaluate(() => window.serialTest.opens)).toBe(connected ? 1 : 0);
+        expect(await page.evaluate(() => window.serialTest.closes)).toBe(connected ? 1 : 0);
+        await screenshot(
+            page,
+            `serial-deselected-${connected ? 'connected' : 'selected-only'}.png`,
+            testInfo,
+        );
+        await port.selectOption('0');
+        await expect(serial.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
+        expect(await page.evaluate(() => window.serialTest.opens)).toBe(connected ? 1 : 0);
+    });
+}
 test('local Serial uses explicit settings/open, byte input, retained reception and clean deselection', async ({
     page,
 }, testInfo) => {
@@ -73,6 +150,16 @@ test('Serial beach motion, reduced motion, resize and no pointer interception', 
     const beach = page.locator('.serial-beach'),
         ball = page.locator('.serial-volleyball');
     await expect(beach).toHaveAttribute('aria-hidden', 'true');
+    await expect(beach.locator('.serial-bird')).toHaveCount(0);
+    await expect(beach.locator('.serial-distant-island')).toHaveCount(2);
+    await expect(beach.locator('.serial-crab')).toHaveCount(2);
+    const ocean = await beach.locator('.serial-ocean').boundingBox();
+    expect(ocean).not.toBeNull();
+    for (const island of await beach.locator('.serial-distant-island').all()) {
+        const bounds = await island.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.y + bounds!.height).toBeLessThan(ocean!.y + ocean!.height * 0.42);
+    }
     await expect(page.locator('.serial-page .terminal-earth')).toHaveCount(0);
     expect(
         await page
@@ -207,9 +294,10 @@ test('desktop chooser reaches every metadata-optional COM identity with bounded 
         let listener: (chooser: SerialChooser | null) => void = () => {};
         let complete: ((port: LocalSerialPort) => void) | undefined;
         let known: LocalSerialPort[] = [];
-        const ports = Array.from({ length: 129 }, (_, index) => ({
+        const ports: SerialChooser['ports'] = Array.from({ length: 129 }, (_, index) => ({
             id: 'os-' + index,
             name: 'COM' + (index + 1),
+            displayName: index === 10 ? 'USB-Serial Controller' : undefined,
         }));
         ports.push(
             { id: 'builtin', name: '/dev/ttyS0' },
@@ -252,17 +340,59 @@ test('desktop chooser reaches every metadata-optional COM identity with bounded 
         };
     });
     await page.goto('/');
+    await page.getByRole('button', { name: 'Connect device', exact: true }).first().click();
+    const sshCancel = page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true });
+    await expect(sshCancel).toHaveCSS('color', 'rgb(236, 239, 245)');
+    await expect(sshCancel).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await sshCancel.hover();
+    await expect(sshCancel).toHaveCSS('background-color', 'rgb(38, 43, 53)');
+    await expect(sshCancel).toHaveCSS('color', 'rgb(236, 239, 245)');
+    await sshCancel.click();
     await page.getByRole('button', { name: 'Serial', exact: true }).click();
-    await page.getByRole('button', { name: 'Choose port…', exact: true }).click();
+    const choose = page.getByRole('button', { name: 'Choose port…', exact: true });
+    await page.mouse.move(0, 0);
+    await readableSecondary(choose, false);
+    await choose.hover();
+    await readableSecondary(choose, true);
+    await choose.click();
     const modal = page.getByRole('dialog', { name: 'Choose a local serial port' });
     await expect(modal.locator('.serial-chooser-list button')).toHaveCount(64);
-    await modal.getByRole('button', { name: 'Next ports', exact: true }).click();
+    const previous = modal.getByRole('button', { name: 'Previous ports', exact: true });
+    await expect(previous).toBeDisabled();
+    await previous.hover({ force: true });
+    await expect(previous).toHaveCSS('color', 'rgb(99, 119, 128)');
+    await expect(previous).toHaveCSS('background-color', 'rgb(233, 239, 235)');
+    await screenshot(page, 'serial-chooser-disabled.png', testInfo);
+    await page.keyboard.press('Tab');
+    await expect(modal.getByLabel('Find serial port')).toBeFocused();
+    await page.keyboard.press('Tab');
+    const firstChoice = modal.getByRole('button', { name: 'COM1', exact: true });
+    await expect(firstChoice).toBeFocused();
+    await expect(firstChoice).toHaveCSS('outline-color', 'rgb(155, 215, 235)');
+    expect(
+        contrast(
+            await firstChoice.evaluate((el) => getComputedStyle(el).outlineColor),
+            await modal.evaluate((el) => getComputedStyle(el).backgroundColor),
+        ),
+    ).toBeGreaterThanOrEqual(3);
+    await screenshot(page, 'serial-chooser-keyboard-focus.png', testInfo);
+    const com11 = modal.getByRole('button', { name: 'COM11 · USB-Serial Controller', exact: true });
+    await page.mouse.move(0, 0);
+    await readableSecondary(com11, false);
+    await screenshot(page, 'serial-chooser-normal.png', testInfo);
+    await com11.hover();
+    await readableSecondary(com11, true);
+    await screenshot(page, 'serial-chooser-com11-hover.png', testInfo);
+    const next = modal.getByRole('button', { name: 'Next ports', exact: true });
+    await next.hover();
+    await readableSecondary(next, true);
+    await next.click();
     await modal.getByRole('button', { name: 'Next ports', exact: true }).click();
     await expect(modal.getByRole('button', { name: 'COM129', exact: true })).toBeVisible();
     await expect(modal.getByRole('button', { name: 'COM4096', exact: true })).toBeVisible();
     await expect(modal.getByRole('button', { name: '/dev/ttyS0', exact: true })).toBeVisible();
     await modal.getByLabel('Find serial port').fill('COM11');
-    await expect(modal.getByRole('button', { name: 'COM11', exact: true })).toBeVisible();
+    await expect(com11).toBeVisible();
     await screenshot(page, 'serial-chooser-com11.png', testInfo);
     await page.evaluate(() =>
         (window as unknown as { shrinkSerialChooser(shrink: boolean): void }).shrinkSerialChooser(
@@ -279,7 +409,10 @@ test('desktop chooser reaches every metadata-optional COM identity with bounded 
         ),
     );
     await modal.getByLabel('Find serial port').fill('COM11');
-    await modal.getByRole('button', { name: 'COM11', exact: true }).click();
+    await modal.getByLabel('Find serial port').focus();
+    await page.keyboard.press('Tab');
+    await expect(com11).toBeFocused();
+    await page.keyboard.press('Enter');
     await expect(modal).not.toBeVisible();
     const selected = page.getByLabel('Local serial port', { exact: true });
     await expect(selected.locator('option')).toHaveCount(3);
@@ -287,6 +420,8 @@ test('desktop chooser reaches every metadata-optional COM identity with bounded 
     await expect(selected.locator('option').filter({ hasText: /Authorized port/ })).toHaveCount(1);
     expect(await page.evaluate(() => window.serialTest.opens)).toBe(0);
     await page.getByRole('button', { name: 'Deselect', exact: true }).click();
+    await expect(selected).toBeEnabled();
+    await expect(choose).toBeEnabled();
     expect(await page.evaluate(() => window.serialTest.opens)).toBe(0);
 });
 
@@ -319,12 +454,14 @@ test('recoverable target break keeps local Serial connected and its shared clipb
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
     await expect(page.getByLabel('Serial terminal input')).toBeFocused();
-    await expect(serial.locator('.serial-bird')).toHaveCount(3);
-    await expect(serial.locator('.serial-coconut')).toHaveCount(7);
+    await expect(serial.locator('.serial-bird')).toHaveCount(0);
+    await expect(serial.locator('.serial-distant-island')).toHaveCount(2);
+    await expect(serial.locator('.serial-crab')).toHaveCount(2);
+    await expect(serial.locator('.serial-coconut')).toHaveCount(3);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     expect(
         await serial
-            .locator('.serial-bird')
+            .locator('.serial-crab')
             .first()
             .evaluate((node) => getComputedStyle(node).animationName),
     ).toBe('none');

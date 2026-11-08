@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { releaseAssets } from './release-assets.mjs';
+import { releaseAssets, releaseCatalog, includesWindowsSetup } from './release-assets.mjs';
+import {
+    WINDOWS_SETUP_ASSET,
+    validateWindowsSetupInfo,
+    windowsSetupInfoName,
+} from './windows-setup-release.mjs';
 import { MAC_ARCHES, macManifest, validateMacManifest, macAsset } from './macos-release.mjs';
 import { SOURCE_SHA, MAC_DRAFT_ID, REUSED_MAC_ASSETS } from './release-recovery.mjs';
 
@@ -29,12 +34,7 @@ export function publicCommandTargets({ repository, tag, requestedTag = '' }) {
 }
 
 export function publishedCatalog(version) {
-    return [
-        ...releaseAssets(version).flatMap((name) => [name, name + '.sha256']),
-        'build-info.json',
-        'linux-build-info.json',
-        ...MAC_ARCHES.map(macManifest),
-    ].sort();
+    return releaseCatalog(version);
 }
 export function validatePublishedRelease(
     release,
@@ -127,6 +127,17 @@ export function validatePublishedFiles(files, { version, commit, minimumMacOSVer
         const digest = createHash('sha256').update(files[name]).digest('hex');
         assert.equal(files[name + '.sha256'].toString(), digest + '  ' + name + '\n');
     }
+    if (includesWindowsSetup(version))
+        validateWindowsSetupInfo(
+            JSON.parse(files[windowsSetupInfoName(WINDOWS_SETUP_ASSET)].toString()),
+            {
+                version,
+                commit,
+                asset: WINDOWS_SETUP_ASSET,
+                bytes: files[WINDOWS_SETUP_ASSET].length,
+                sha256: createHash('sha256').update(files[WINDOWS_SETUP_ASSET]).digest('hex'),
+            },
+        );
     for (const name of ['download-run.ps1', 'download-run.sh', 'download-run-macos.sh'])
         assert.ok(
             files[name].equals(tagBlob('public/' + name)),

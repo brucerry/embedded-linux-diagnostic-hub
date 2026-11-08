@@ -15,6 +15,81 @@ async function connectDesktop(page: Page) {
     await expect(modal).not.toBeVisible();
 }
 
+async function pasteDesktopClipboard(page: Page) {
+    const panel = page.getByRole('region', { name: 'Connected device terminal' });
+    await panel.locator('.terminal-screen').click({ button: 'right' });
+    await panel
+        .getByRole('menu', { name: 'Terminal clipboard' })
+        .getByRole('menuitem', { name: 'Paste', exact: true })
+        .click();
+}
+
+for (const outcome of ['text', 'failure', 'oversized'] as const) {
+    test(`desktop clipboard ${outcome} from an old connection cannot affect its replacement`, async ({
+        page,
+    }) => {
+        await installDesktop(page);
+        await page.goto('/');
+        await connectDesktop(page);
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+        const panel = page.getByRole('region', { name: 'Connected device terminal' });
+        await expect(panel.getByText('Ready', { exact: true })).toBeVisible();
+        const previous = await page.evaluate(() => window.desktopTest.terminal!.id);
+        await page.evaluate(() => {
+            window.desktopTest.clipboardRead.holdNext = true;
+        });
+        await pasteDesktopClipboard(page);
+        await expect
+            .poll(() => page.evaluate(() => window.desktopTest.clipboardRead.pending))
+            .toBe(true);
+
+        await page.evaluate(() => window.desktopTest.closeConnection!());
+        await expect(panel).toContainText('No device connected');
+        await connectDesktop(page);
+        await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+        await expect(panel.getByText('Ready', { exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.desktopTest.terminal!.id)).not.toBe(previous);
+
+        if (outcome === 'failure') {
+            await page.evaluate(() => {
+                window.desktopTest.clipboard = 'x'.repeat(256 * 1024 + 1);
+            });
+            await pasteDesktopClipboard(page);
+            await expect(panel.getByRole('alert')).toHaveText(
+                'Clipboard text exceeds the terminal paste limit.',
+            );
+        }
+        await page.evaluate((kind) => {
+            const read = window.desktopTest.clipboardRead;
+            if (kind === 'failure') read.reject('OLD_CLIPBOARD_FAILURE');
+            else
+                read.resolve(
+                    kind === 'oversized' ? 'x'.repeat(256 * 1024 + 1) : 'STALE_SESSION_ONLY\r',
+                );
+        }, outcome);
+
+        // A positively observed new-session paste follows settlement of the old callback.
+        // No timeout or absence-only check stands in for this interaction/queue barrier.
+        await page.evaluate(() => {
+            window.desktopTest.clipboard = 'CURRENT_SESSION_ONLY\r';
+        });
+        await pasteDesktopClipboard(page);
+        await expect
+            .poll(() => page.evaluate(() => window.desktopTest.terminal!.inputs.join('')))
+            .toBe('CURRENT_SESSION_ONLY\r');
+        if (outcome === 'failure')
+            await expect(panel.getByRole('alert')).toHaveText(
+                'Clipboard text exceeds the terminal paste limit.',
+            );
+        else await expect(panel.getByRole('alert')).toHaveCount(0);
+        expect(await page.evaluate(() => window.desktopTest.clipboardRead.pending)).toBe(false);
+        expect(await page.evaluate(() => window.desktopTest.clipboardRead.settled)).toBe(1);
+        expect(await page.evaluate(() => window.desktopTest.clipboardRead.calls)).toBe(
+            outcome === 'failure' ? 3 : 2,
+        );
+    });
+}
+
 test('desktop terminal is embedded, keyboard accessible and retained across tabs, reset and reports', async ({
     page,
 }) => {
@@ -855,9 +930,11 @@ test('SSH and Serial terminal layouts match, Earth stays anchored and background
         expect(ssh.duckBottom).toBeLessThanOrEqual(ssh.frameBottom);
         expect(ssh.earthTop).toBe('56px');
         expect(ssh.earthRight).toBe('32px');
-        expect(ssh.landscapeTransform).toBe(
-            viewport.width === 1440 ? 'matrix(1, 0, 0, 1, 0, 20)' : 'matrix(1, 0, 0, 1, 0, 8.24)',
-        );
+        const matrix = ssh.landscapeTransform.slice(7, -1).split(',').map(Number);
+        expect(matrix.slice(0, 5)).toEqual([1, 0, 0, 1, 0]);
+        // Firefox serializes layout-app-unit rounding (8.23333 for 2vw at 412px).
+        const expectedY = Math.min(20, Math.max(8, viewport.width * 0.02));
+        expect(Math.abs(matrix[5] - expectedY)).toBeLessThanOrEqual(1 / 60);
         expect(
             await terminal
                 .locator('.terminal-stars')

@@ -2,9 +2,24 @@ import { validateCapture } from '../shared/automation';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ConnectOptions, DesktopBridge, HostKeyVerification, Snapshot } from '../shared/types';
 import type { TerminalEvent } from '../shared/terminal';
+import { captureRpcRequest } from '../shared/capture-rpc';
+import { streamRequest } from '../shared/ssh-stream-rpc';
+import { consoleRpcRequest } from '../shared/console-rpc';
+import { consoleArchiveRequest } from '../shared/console-archive-rpc';
+
+// Diagnostic opt-in only; no IPC, process data or privileged methods are exposed.
+if (process.argv.includes('--hub-launch-timing'))
+    contextBridge.exposeInMainWorld('__hubLaunchTimingEnabled', true);
 
 let automationConnection = '';
 const bridge: DesktopBridge = {
+    consoleStorage: (request) =>
+        ipcRenderer.invoke('hub:console-storage', consoleArchiveRequest(request)),
+    automationConsole: (request) =>
+        ipcRenderer.invoke('hub:automation-console', consoleRpcRequest(request)),
+    automationStream: (request) =>
+        ipcRenderer.invoke('hub:automation-stream', streamRequest(request)),
+    captureStorage: (request) => ipcRenderer.invoke('hub:capture', captureRpcRequest(request)),
     acquireAutomationActivity: () => ipcRenderer.invoke('hub:automation-activity-acquire'),
     releaseAutomationActivity: (id) => ipcRenderer.invoke('hub:automation-activity-release', id),
     onAutomationInterrupted: (callback) => {
@@ -94,8 +109,18 @@ const bridge: DesktopBridge = {
     openRepository: () => ipcRenderer.invoke('hub:open-repository'),
     openReleases: () => ipcRenderer.invoke('hub:open-releases'),
     pickKey: () => ipcRenderer.invoke('hub:pick-key'),
-    exportReport: (importedSnapshot?: Snapshot) =>
-        ipcRenderer.invoke('hub:export', importedSnapshot),
+    exportReport: (importedSnapshot?: Snapshot, id?: string) =>
+        ipcRenderer.invoke('hub:export', importedSnapshot, id),
+    cancelReportExport: (id) => ipcRenderer.invoke('hub:cancel-report-export', id),
+    reportExportStatus: () => ipcRenderer.invoke('hub:report-export-status'),
+    onReportExportStatus: (callback) => {
+        const listener = (
+            _event: unknown,
+            status: import('../shared/report-export').ReportExportStatus,
+        ) => callback(status);
+        ipcRenderer.on('hub:report-export-status', listener);
+        return () => ipcRenderer.removeListener('hub:report-export-status', listener);
+    },
     onDisconnected: (callback) => {
         const listener = (_event: unknown, reason?: 'update') => {
             automationConnection = '';

@@ -406,6 +406,159 @@ test('optional local/device starts execute only at resolved due time; device sou
     assert.match(messages.at(-1)!, /Device clock changed/);
 });
 
+test('device schedule refreshes successfully and executes once at its device-time due instant', async () => {
+    const f = fakeClock(),
+        input = plan(),
+        hostOrigin = f.clock.local(),
+        deviceOrigin = hostOrigin - 90000,
+        connection = 'memory-device-clock',
+        calibration = {
+            source: 'synthetic fixed SSH clock',
+            connection,
+            deviceEpochMs: deviceOrigin,
+            sampledLocalMs: hostOrigin,
+            sampledMonoMs: 0,
+            uncertaintyMs: 1000,
+            zone: 'device UTC',
+        },
+        beforeCalibration = structuredClone(calibration),
+        due = deviceOrigin + 25000;
+    input.start = {
+        epochMs: due,
+        clock: 'device',
+        zone: 'UTC',
+        wallTime: new Date(due).toISOString().slice(0, 19),
+        utcOffset: '+00:00',
+        calibration,
+    };
+    const executions: number[] = [],
+        samples: (typeof calibration)[] = [],
+        records: AutomationRecord[] = [],
+        states: string[] = [],
+        timerKeys = ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] as const,
+        timers = timerKeys.map((key) => Object.getOwnPropertyDescriptor(globalThis, key));
+    let acquired = 0,
+        released = 0,
+        finishes = 0,
+        settled = false,
+        acknowledge!: () => void;
+    const closure = new Promise<void>((resolve) => {
+        acknowledge = resolve;
+    });
+    const originalSleep = f.clock.sleep;
+    f.clock.sleep = async (ms, signal) => {
+        assert.equal(executions.length, 0, 'no waiting tick may dispatch a command');
+        assert.ok(ms > 0 && ms <= 250);
+        assert.ok(f.sleeps.length < 128, 'logical waiting must remain bounded');
+        await originalSleep(ms, signal);
+    };
+    const runner = new FlowRunner(
+        (state) => states.push(state.state),
+        (record) => {
+            records.push(record);
+        },
+        f.clock,
+    );
+    const task = runner.start(input, {
+        connection: () => connection,
+        available: () => true,
+        target: { endpoint: 'synthetic memory target' },
+        acquire: () => {
+            acquired++;
+            return () => {
+                released++;
+            };
+        },
+        async sampleClock() {
+            assert.equal(executions.length, 0);
+            const local = f.clock.local(),
+                mono = f.clock.mono();
+            assert.ok(mono > 10000);
+            f.advance(250); // Bounded simulated read latency; never a real timer.
+            const fresh = {
+                ...calibration,
+                deviceEpochMs: deviceOrigin + mono + 125,
+                sampledLocalMs: local + 125,
+                sampledMonoMs: mono + 125,
+                uncertaintyMs: 1125,
+            };
+            assert.equal(
+                calibratedNow(fresh, f.clock.local(), f.clock.mono(), connection),
+                deviceOrigin + f.clock.mono(),
+            );
+            samples.push(fresh);
+            return fresh;
+        },
+        async execute() {
+            assert.equal(executions.length, 0, 'the scheduled command must not duplicate');
+            assert.equal(samples.length, 2);
+            assert.equal(f.clock.mono(), 25000);
+            assert.equal(
+                calibratedNow(samples.at(-1)!, f.clock.local(), f.clock.mono(), connection),
+                due,
+            );
+            executions.push(f.clock.local());
+            return {
+                stdout: 'synthetic',
+                stderr: '',
+                exitCode: 0,
+                completion: 'exit',
+                truncated: false,
+                chunks: [],
+            };
+        },
+        async finishFlow(reason) {
+            assert.equal(reason, 'complete');
+            finishes++;
+            await closure;
+        },
+    });
+    void task.then(
+        () => {
+            settled = true;
+        },
+        () => {
+            settled = true;
+        },
+    );
+    try {
+        for (let turns = 0; turns < 512 && finishes === 0; turns++) await Promise.resolve();
+        assert.equal(finishes, 1);
+        assert.equal(acquired, 1);
+        assert.equal(released, 0);
+        assert.equal(runner.busy, true);
+        assert.equal(settled, false, 'owned finish acknowledgement is still pending');
+        assert.deepEqual(executions, [hostOrigin + 25000]);
+        assert.notEqual(executions[0], due, 'host and device epoch origins differ');
+        assert.deepEqual(
+            samples.map((sample) => sample.sampledMonoMs),
+            [10375, 20625],
+        );
+        for (const sample of samples) {
+            assert.equal(sample.source, calibration.source);
+            assert.equal(sample.connection, connection);
+            assert.equal(sample.zone, calibration.zone);
+        }
+        assert.equal(records.length, 1);
+        assert.equal(records[0].execution?.scheduledStart?.epochMs, due);
+        assert.equal(records[0].execution?.scheduledStart?.clock, 'device');
+        assert.equal(records[0].startedAt, new Date(hostOrigin + 25000).toISOString());
+        acknowledge();
+        await task;
+        assert.equal(released, 1);
+        assert.equal(runner.busy, false);
+        assert.equal(runner.cleanupPending, false);
+        assert.equal(states.at(-1), 'finished');
+        assert.deepEqual(calibration, beforeCalibration);
+    } finally {
+        acknowledge();
+        await task;
+        timerKeys.forEach((key, i) =>
+            assert.deepEqual(Object.getOwnPropertyDescriptor(globalThis, key), timers[i]),
+        );
+    }
+});
+
 test('active-command heartbeat detects suspension and cancels later steps while retaining capture', async () => {
     const f = fakeClock(),
         p = plan(),

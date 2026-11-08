@@ -52,6 +52,61 @@ No companion setup or extension installation is required. Local Windows results 
 Linux compositor acceptance. Current builds require no Visual Studio C++ compiler or Koffi native
 window adapter.
 
+The private Gateway memory fixtures load historical production source from
+`tests/fixtures/gateway-ownership-production.blobs.gz`. This data-only archive concatenates the 213
+original Git blobs in the unchanged `gateway-ownership-production.json` inventory order. The loader
+checks the historical inventory identity, every blob's length, SHA256 and Git object ID before
+returning sources. Recreate it only from those exact locally available Git blob IDs, using gzip with
+a zero timestamp; current checkout bytes cannot replace the frozen inputs. This keeps shallow
+checkouts independent of old Git objects and network access. The archive is never executed, and
+memory fixture results do not qualify native Gateway execution or release acceptance. The separate
+`gateway-preimport-target.frozen` retains the original, hash-checked private wrapper from commit
+`4a88f528657e023e852b41847a80f471c053530b`; it is also read only as fixture data.
+
+The parent-toolchain memory fixture uses `preimport-esbuild-wrapper.frozen` for its modeled
+`esbuild/bin/esbuild`. These are the original esbuild 0.28.2 JavaScript wrapper bytes from a locally
+cached tarball whose SHA512 matched the existing lock/reference integrity. The loader also checks
+the unchanged parent-package length and SHA256 pins. This models the admitted `--ignore-scripts`
+installation even if the developer's normal postinstall replaced that entry with a native binary.
+The fixture bytes are never executed, and the installed dependency tree is not modified.
+
+The ordinary test glob also loads the desktop retirement and updater memory cases through scoped
+Node 24 loader wrappers. Their unchanged `.cases.ts` modules keep the alias-identity skip guards;
+the `.test.ts` wrappers install the matching SSH or filesystem memory ports for fixed production
+importers before loading cases, then deregister hooks. A canary and required-alias checks reject
+missing wiring rather than silently claiming coverage. Real SSH2 and unaudited filesystem imports
+are refused in those scopes. Native/platform and opt-in runtime skips remain separate.
+
+The original historical private product observer identities describe commit
+`96a56cdbb462320c54fe74022d7436e665a31d31`. Their pure source-admission and inverse tests use
+`memory-product-96a-sources.blobs.gz`, a data-only corpus of the 25 exact historical targets. The
+loader checks the manifest, archive, complete decoded bytes and each target hash before
+materializing bounded, read-only temporary source data. The historical observers and native build
+admission continue to reject changed checkout bytes; tests never compile or execute this corpus.
+
+`memory-product-current-source.json` defines a separate version-2 source-only subset: the 25
+explicit targets plus the browser export non-admission helper. Its verifier checks all 26 paths and
+carries the exact manifest, commit, realm and pins through a source-verification receipt. The
+mandatory `nativeAdmission: false`, `runtimeAttestation: false` and
+`completeDependencyClosure: false` fields cannot be promoted by a caller. This inventory omits
+runtime dependencies such as SSH channel custody and native update coordination. It therefore does
+not enable current-source runtime observers or establish shutdown, process retirement or release
+qualification. A future runtime binding needs reviewed ownership-producer dependency coverage and
+separate identity propagation through host, native-state and shutdown validators.
+
+The integrated checkout retains that `afd9260` source subset unchanged. The separate
+`memory-product-e5-source.json` records the newer `e5fb2fd` 26-file subset, including its changed
+main-process and quit-cleanup bytes, with the same three refusal flags. Neither manifest represents
+the complete integrated tree. The separately retained `current-e9bb9bc` runtime profile remains
+immutable: its unchanged renderer and Gateway guards can still be checked, while its older native
+main-process pins reject this checkout. These source/model checks do not requalify native execution.
+
+Updater temporary names are reservations until exclusive creation returns a handle. A collision does
+not authorize removing the existing entry, and a rejected create with an uncertain outcome retains
+blocked custody. A successful rename consumes the acquired source name; cleanup must not remove a
+later entry at that name. Fake filesystem controls cover these boundaries separately from descriptor
+closure, destination publication and application restart.
+
 ## Dependencies and generated assets
 
 Use Node.js 24 and `npm ci` for repeatable builds. Update dependencies intentionally, commit the

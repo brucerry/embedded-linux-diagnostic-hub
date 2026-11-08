@@ -1,0 +1,33 @@
+{
+    "schema": 1,
+    "purpose": "Exact retained afd9260 source reference for catalogue compatibility assertions; not old public v0.5.2 source, runtime qualification or release evidence.",
+    "sourceCommit": "afd9260d45a0c4af7c6bd5d36440ee1a08c259cd",
+    "files": [
+        {
+            "path": "release-assets.mjs",
+            "sourcePath": "scripts/lib/release-assets.mjs",
+            "gitBlob": "74f96ee937b351738302111426b48a309f031db7",
+            "bytes": 4323,
+            "sha256": "f4d7ca94becac3bd64caf3f9f93c8d4aac74b6b123aed6e32cc585ecf64ede3f",
+            "byteTransform": "none"
+        },
+        {
+            "path": "windows-setup-release.mjs",
+            "sourcePath": "scripts/lib/windows-setup-release.mjs",
+            "gitBlob": "815d956250c875d737c0653dcfe245153a14397c",
+            "bytes": 6411,
+            "sha256": "df1c6b51d4829fa5f58015d9b613cf698c8aeff5e821bd7ef34b96cf88453e18",
+            "byteTransform": "none"
+        }
+    ],
+    "relativeDependencyClosure": ["release-assets.mjs -> ./windows-setup-release.mjs"],
+    "externalDependencies": [
+        "node:assert/strict",
+        "node:crypto",
+        "node:fs",
+        "node:fs/promises",
+        "node:path",
+        "semver"
+    ],
+    "executionBoundary": "Imported module declarations only. Catalogue tests call releaseAssets/releaseMetadata/releaseCatalog/includesWindowsSetup; no native installer or filesystem writer is called."
+}

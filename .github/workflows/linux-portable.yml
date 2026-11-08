@@ -26,6 +26,30 @@ jobs:
                   cache: npm
             - run: npm ci
             - run: npm run verify
+            - name: Build isolated JS runtime and require reviewed memory policy
+              # No dependency mutation: the memory launcher derives and verifies its own JS-only SSH bundle.
+              # Policy must still come from final combined-candidate calibration and review.
+              env:
+                  HUB_MEMORY_POLICY: ${{ vars.HUB_MEMORY_POLICY }}
+                  HUB_MEMORY_POLICY_SHA256: ${{ vars.HUB_MEMORY_POLICY_SHA256 }}
+              run: |
+                  mkdir -p validation/memory
+                  if [ -z "$HUB_MEMORY_POLICY" ] || ! [[ "$HUB_MEMORY_POLICY_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+                      echo '{"status":"blocked","reason":"Reviewed exact-source/runtime memory policy and independent SHA256 are required"}' > validation/memory/ci-adoption-blocked.json
+                      echo '::error::Memory gate blocked: provide the exact reviewed Ubuntu policy and its independently approved SHA256 first.'
+                      exit 1
+                  fi
+                  npm run test:memory:fast -- --policy="$HUB_MEMORY_POLICY" --policy-sha256="$HUB_MEMORY_POLICY_SHA256"
+              timeout-minutes: 3
+            - name: Retain memory diagnostic receipt, including failures
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: linux-node-memory-resource
+                  path: |
+                      validation/memory/
+                      validation/memory-runtime/
+                  if-no-files-found: error
             - run: npx playwright install --with-deps chromium
             - run: npm run test:e2e
             - run: npm run package:linux

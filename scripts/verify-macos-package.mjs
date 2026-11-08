@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { extractFile, listPackage } from '@electron/asar';
+import { verifyDesktopPackageBundles } from './lib/desktop-package-bundles.mjs';
 
 assert.equal(process.platform, 'darwin', 'Mac package verification must run on macOS.');
 const [app, arch] = process.argv.slice(2);
@@ -57,17 +58,17 @@ assert.equal(
     false,
     'Retired effects must stay absent.',
 );
-for (const folder of ['dist/assets', 'dist-electron']) {
-    for (const file of readdirSync(folder)) {
-        if (folder === 'dist-electron' && !['main.cjs', 'preload.cjs'].includes(file)) continue;
-        assert.ok(
-            readFileSync(path.join(folder, file)).equals(
-                extractFile(archive, path.join(folder, file)),
-            ),
-            'Packaged bundle mismatch: ' + file,
-        );
-    }
-}
+await verifyDesktopPackageBundles({
+    readBuild: (file) => readFileSync(file),
+    readPackaged: (file) => extractFile(archive, file),
+});
+for (const file of readdirSync('dist/assets'))
+    assert.ok(
+        readFileSync(path.join('dist/assets', file)).equals(
+            extractFile(archive, path.join('dist/assets', file)),
+        ),
+        'Packaged bundle mismatch: ' + file,
+    );
 for (const file of ['app-icon.svg', 'app-icon.png', 'app-icon.ico'])
     assert.ok(
         readFileSync(path.join('public', file)).equals(

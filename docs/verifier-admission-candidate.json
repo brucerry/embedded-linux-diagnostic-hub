@@ -1,0 +1,75 @@
+{
+    "schemaVersion": 1,
+    "kind": "diagnostic-hub-verifier-admission-selection",
+    "binary": {
+        "platform": "linux",
+        "arch": "x64",
+        "version": "2.103.3",
+        "sourceCommit": "63837fb778d6a39f02be0ce76ff89f2bc8d74bdc",
+        "packageName": "gh_2.103.3_linux_amd64.deb",
+        "packageSHA256": "e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d",
+        "executableSHA256": "b768184570b12536be4ac1528893f6340d1c6a7b40b56ad45bca9cd0e87ad34d",
+        "provenanceReceiptSHA256": "4f9464a4d1751fbb0c80e63ebcb15dae7d730310331d5bbd61b15e13b128872a"
+    },
+    "root": {
+        "instance": "sigstore-public-good",
+        "mediaType": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+        "bootstrapSHA256": "a0dfcc5d51c1ce4a66b541a3fff0afa97225ccc40456b21140bb2e2f113122e2",
+        "exportSHA256": "3c2cc7f357dc064ec527fdcd78da6e9245c21a381e1abaa0f2b62b186bcac1a1",
+        "targetSHA256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+        "targetBytes": 6787,
+        "metadata": {
+            "root": {
+                "version": 16,
+                "sha256": "27aea7e372aa7864065174f0661784fcf8b0e28b1dbfebeada31a0f1fb19167f",
+                "expiresMs": 1808422051000
+            },
+            "timestamp": {
+                "version": 825,
+                "sha256": "8508c1a6f98204fa8aa82c73d264887f382036e4865c8c823b48f4f3757dffbd",
+                "expiresMs": 1794338395000
+            },
+            "snapshot": {
+                "version": 166,
+                "sha256": "6d61405faa993ba3d07556b79d1e319627cdc06ff879a7b5700967dc25d1d224",
+                "expiresMs": 2106723079000
+            },
+            "targets": {
+                "version": 14,
+                "sha256": "6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd",
+                "expiresMs": 2093936452000
+            }
+        },
+        "exportedAtMs": 1793842112706,
+        "tufReceiptSHA256": "39dd26836413f82b133dd1e0f8b7d5615cc4980baa1f5bb3b3afd4b3a3f2b61d",
+        "exportBindingReceiptSHA256": "0bfe857264f94980a0391a438d668f6907966f61ae0ef4288de2897a8e1487ee"
+    },
+    "freshness": {
+        "checkedAtMs": null,
+        "leaseUntilMs": null,
+        "advisorySnapshotSHA256": null,
+        "denylistSHA256": null,
+        "deniedDigests": [],
+        "versionFloors": {
+            "root": 14,
+            "timestamp": 0,
+            "snapshot": 0,
+            "targets": 0
+        }
+    },
+    "process": {
+        "ownerImplementationSHA256": null,
+        "requestBindingSHA256": null,
+        "mode": "owned-no-signals",
+        "commands": 4,
+        "maxAttempts": 1,
+        "workMs": 30000,
+        "closeReserveMs": 5000,
+        "totalMs": 180000,
+        "stdoutLimit": 16777216,
+        "stderrLimit": 1048576,
+        "signals": [],
+        "onUncertain": "retain-custody-no-retry",
+        "descendants": "independent-retirement-required"
+    }
+}

@@ -1,0 +1,197 @@
+.automation-intro.automation-guide-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.console-results {
+    display: grid;
+    gap: 16px;
+    color: var(--text, #dce6f3);
+    min-width: 0;
+}
+.console-results p {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+.console-results-toolbar,
+.console-results-export {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.console-results-filters {
+    display: grid;
+    grid-template-columns: 2fr 1.5fr 1fr;
+    gap: 12px;
+}
+.console-results label {
+    display: grid;
+    gap: 6px;
+    font-size: 0.88rem;
+}
+.console-results input:not([type='checkbox']),
+.console-results select {
+    min-width: 0;
+    width: 100%;
+    color: inherit;
+    border: 1px solid #738ba6;
+    background: #101b2a;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font: inherit;
+}
+.console-results input[type='checkbox'] {
+    accent-color: #80c7ff;
+    width: 18px;
+    height: 18px;
+}
+.console-results :focus-visible {
+    outline: 3px solid #80c7ff;
+    outline-offset: 3px;
+}
+.console-results .button {
+    max-width: 100%;
+    white-space: normal;
+}
+.console-results-catalog {
+    display: grid;
+    gap: 10px;
+}
+.console-result-card {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid #738ba6;
+    border-radius: 12px;
+    background: #101b2a;
+}
+.console-result-identity {
+    display: grid;
+    gap: 8px;
+}
+.console-result-identity label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.console-result-identity code,
+.console-results-note,
+.console-receive-provenance {
+    color: #b2c2d6;
+}
+.console-result-summary {
+    display: grid;
+    gap: 8px;
+}
+.console-result-summary dl {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    margin: 0;
+    font-size: 0.85rem;
+}
+.console-result-summary dt {
+    color: #b2c2d6;
+}
+.console-result-summary dd {
+    margin: 2px 0 0;
+}
+.console-capture-state {
+    width: fit-content;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.84rem;
+    border: 1px solid currentColor;
+}
+.console-capture-state.state-complete {
+    color: #89dfba;
+}
+.console-capture-state.state-active {
+    color: #a9ceff;
+}
+.console-capture-state.state-incomplete,
+.console-results-error,
+.console-preview-clipped {
+    color: #ffd199;
+}
+.console-preview {
+    display: grid;
+    gap: 14px;
+    min-width: 0;
+    border: 1px solid #738ba6;
+    border-radius: 12px;
+    padding: 16px;
+}
+.console-preview h4,
+.console-preview h5 {
+    margin: 0;
+    font-size: 1rem;
+    overflow-wrap: anywhere;
+}
+.console-preview pre {
+    margin: 0;
+    padding: 12px;
+    max-height: 360px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #09111c;
+    border-radius: 8px;
+    font-size: 0.84rem;
+    line-height: 1.5;
+}
+.console-context,
+.console-command {
+    min-width: 0;
+    display: grid;
+    gap: 10px;
+    border-left: 3px solid #80c7ff;
+    padding: 12px;
+    background: #101b2a;
+    border-radius: 6px;
+}
+.console-context {
+    border-color: #738ba6;
+}
+.console-receive-provenance,
+.console-results-note {
+    font-size: 0.82rem;
+    line-height: 1.6;
+}
+.console-results-export label {
+    min-width: 190px;
+}
+.console-delete-confirmation {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid #ffd199;
+    padding: 16px;
+    border-radius: 10px;
+}
+.console-delete-confirmation p {
+    flex-basis: 100%;
+}
+@media (max-width: 700px) {
+    .console-results-filters,
+    .console-result-card {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .console-result-identity {
+        display: flex;
+        justify-content: space-between;
+    }
+    .console-results-export label {
+        flex: 1 1 100%;
+    }
+    .console-preview {
+        padding: 12px;
+    }
+    .console-context,
+    .console-command {
+        padding: 10px;
+    }
+}

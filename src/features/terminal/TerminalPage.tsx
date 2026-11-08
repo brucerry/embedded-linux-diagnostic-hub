@@ -30,11 +30,21 @@ export default function TerminalPage(props: Props) {
     const clearButton = useRef<HTMLButtonElement>(null);
     const copyButton = useRef<HTMLButtonElement>(null);
     const terminal = useRef<Terminal | null>(null);
+    const terminalEpoch = useRef(0);
     const fit = useRef<FitAddon | null>(null);
     const promptColors = useRef<ReturnType<typeof colorPrompts> | null>(null);
     const id = useRef('');
+    const terminalConnection = useRef(-1);
     const input = useRef<TerminalInputQueue | null>(null);
     const latest = useRef(props);
+    const connectionEpoch = useRef(0);
+    // Invalidate pending terminal callbacks before passive connection cleanup runs.
+    if (
+        latest.current.transport !== props.transport ||
+        latest.current.connected !== props.connected ||
+        latest.current.device?.generation !== props.device?.generation
+    )
+        connectionEpoch.current++;
     latest.current = props;
     const [state, setState] = useState('idle');
     const [error, setError] = useState('');
@@ -70,25 +80,33 @@ export default function TerminalPage(props: Props) {
     }
 
     async function paste() {
-        const current = id.current;
+        const current = id.current,
+            epoch = terminalEpoch.current,
+            connection = connectionEpoch.current;
         setMenu(null);
+        if (!current || !terminal.current || terminalConnection.current !== connection) return;
         try {
             const text = window.diagnosticHub?.readClipboard
                 ? await window.diagnosticHub.readClipboard()
                 : await navigator.clipboard.readText();
-            if (new TextEncoder().encode(text).length > TERMINAL_QUEUE_BYTES)
-                throw Error('Clipboard text exceeds the terminal paste limit.');
             if (
-                !current ||
                 id.current !== current ||
-                !ready.current ||
-                latest.current.blocked ||
-                !latest.current.visible
+                terminalEpoch.current !== epoch ||
+                connectionEpoch.current !== connection
             )
                 return;
+            if (new TextEncoder().encode(text).length > TERMINAL_QUEUE_BYTES)
+                throw Error('Clipboard text exceeds the terminal paste limit.');
+            if (!ready.current || latest.current.blocked || !latest.current.visible) return;
             terminal.current?.focus();
             terminal.current?.paste(text);
         } catch (failure) {
+            if (
+                id.current !== current ||
+                terminalEpoch.current !== epoch ||
+                connectionEpoch.current !== connection
+            )
+                return;
             setError(
                 failure instanceof Error ? failure.message : 'Clipboard paste is unavailable.',
             );
@@ -186,12 +204,25 @@ export default function TerminalPage(props: Props) {
         const resize = term.onResize((size) => {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
-                if (ready.current && id.current)
-                    void latest.current.transport
-                        ?.resizeTerminal?.(id.current, size)
-                        .catch(() =>
-                            setError('Terminal resizing failed. Reconnect the device to retry.'),
-                        );
+                const current = id.current,
+                    epoch = terminalEpoch.current,
+                    connection = connectionEpoch.current,
+                    transport = latest.current.transport;
+                if (ready.current && current && terminalConnection.current === connection)
+                    void transport?.resizeTerminal?.(current, size).catch(() => {
+                        if (
+                            id.current !== current ||
+                            terminalEpoch.current !== epoch ||
+                            connectionEpoch.current !== connection ||
+                            terminalConnection.current !== connection ||
+                            latest.current.transport !== transport ||
+                            !latest.current.connected ||
+                            !ready.current ||
+                            !terminal.current
+                        )
+                            return;
+                        setError('Terminal resizing failed. Reconnect the device to retry.');
+                    });
             }, 100);
         });
         const observer = new ResizeObserver(() => {
@@ -210,6 +241,7 @@ export default function TerminalPage(props: Props) {
             prompts.dispose();
             promptColors.current = null;
             denied.forEach((handler) => handler.dispose());
+            terminalEpoch.current++;
             term.dispose();
             terminal.current = null;
             fit.current = null;
@@ -350,6 +382,7 @@ export default function TerminalPage(props: Props) {
         const transport = props.transport as TerminalTransport;
         const current = crypto.randomUUID();
         id.current = current;
+        terminalConnection.current = connectionEpoch.current;
         setState('opening');
         setError('');
         if (preserveHistory && terminal.current) {

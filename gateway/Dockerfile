@@ -6,6 +6,8 @@ RUN npm ci --omit=optional
 COPY gateway ./gateway
 COPY backend ./backend
 COPY shared ./shared
+# The SSH console reuses this UI-independent UTF-8/ANSI parser.
+COPY src/features/automation/serial-completion.ts ./src/features/automation/serial-completion.ts
 RUN npx esbuild gateway/main.ts --bundle --platform=node --format=cjs --outfile=dist-gateway/main.cjs --external:ssh2
 
 FROM node:24-bookworm-slim

@@ -1,3 +1,4 @@
+import { settleCleanup, throwCleanupFailures } from '../../shared/quit-cleanup';
 import { StringDecoder } from 'node:string_decoder';
 import { ExecSlots } from './exec-budget';
 import { NetworkCollector } from './network';
@@ -6,8 +7,16 @@ import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { Client } from 'ssh2';
+import { OwnedSshClient } from './owned-client';
 import { randomUUID } from 'node:crypto';
 import { captureCommand } from './automation';
+import { captureStreamingCommand } from './automation-stream';
+import { SshStreamHost } from './stream-host';
+import { PersistentSshConsole, interactiveShellBinding } from './persistent-console';
+import { SshConsoleHost } from './console-host';
+import type { ConsoleRepository, GatewayConsoleDisposal } from '../../shared/console-journal';
+import type { ConsoleOwner } from '../../shared/console-rpc';
+import type { CommandOutputSink, StreamedCommandCapture } from '../../shared/automation-stream';
 import { automationRequest, type AutomationRequest } from '../../shared/automation';
 import { probes } from '../../shared/diagnostics/probes';
 import type { ConnectOptions, ProbeResult, Snapshot } from '../../shared/types';
@@ -69,16 +78,184 @@ export function classifyExit(code: number | null): ProbeResult['status'] {
 
 export class SshSession {
     private client: Client | null = null;
+    private connections = new Set<OwnedSshClient>();
+    private pendingOperations = new Set<Promise<unknown>>();
+    private trackOperation<T>(task: Promise<T>): Promise<T> {
+        this.pendingOperations.add(task);
+        void task.finally(() => this.pendingOperations.delete(task)).catch(() => {});
+        return task;
+    }
     private options: ConnectOptions | null = null;
     private collecting = false;
     private connectionToken = '';
     private automation?: { id: string; controller: AbortController };
+    private consoleOwner?: { actor: PersistentSshConsole; controller: AbortController };
+    private consoleHost?: SshConsoleHost;
     private cancelledAutomation = new Map<string, number>();
     private ready = false;
     private terminal: SshTerminal | null = null;
+    private terminals = new Set<SshTerminal>();
     private cancelClock?: () => void;
     private slots = new ExecSlots();
     private network = new NetworkCollector();
+    private streams = new SshStreamHost(
+        (request, sink, complete, finalized) =>
+            this.runAutomationStream(request, sink, complete, finalized),
+        (id, connection) => this.cancelAutomation(id, connection),
+    );
+
+    automationStream(input: unknown, source: 'local-client' | 'gateway' = 'local-client') {
+        return this.streams.dispatch(input, source);
+    }
+    clearAutomationStream() {
+        this.streams.clear();
+        this.consoleHost?.invalidate();
+        this.consoleOwner?.controller.abort();
+    }
+    automationConsole(
+        input: unknown,
+        source: 'local-client' | 'gateway' = 'local-client',
+        localStore?: () => Promise<ConsoleRepository>,
+    ) {
+        this.consoleHost ??= new SshConsoleHost(this, localStore);
+        return this.consoleHost.dispatch(input, source);
+    }
+    consoleTransportLost(owner: ConsoleOwner) {
+        this.consoleHost?.transportLost(owner);
+    }
+    get consoleProtocolSnapshot() {
+        return this.consoleHost?.snapshot ?? null;
+    }
+    async shutdownConsole() {
+        const host = this.consoleHost;
+        await host?.shutdown();
+        if (this.consoleOwner) await this.consoleOwner.actor.cancel();
+        if (this.consoleHost === host) this.consoleHost = undefined;
+    }
+    async joinAutomationCleanup() {
+        const failures = await settleCleanup([
+            { stage: 'ssh-streams', run: () => this.streams.shutdown() },
+            { stage: 'ssh-console', run: () => this.shutdownConsole() },
+            ...[...this.terminals]
+                .filter((terminal) => terminal.ownershipSnapshot.closing)
+                .map((terminal, index) => ({
+                    stage: 'ssh-terminal-' + index,
+                    run: () => terminal.join(),
+                })),
+            ...[...this.connections]
+                .filter((client) => client !== this.client)
+                .map((client, index) => ({
+                    stage: 'ssh-connection-' + index,
+                    run: () => client.owners.join(),
+                })),
+            {
+                stage: 'ssh-operations',
+                run: async () => {
+                    while (this.pendingOperations.size)
+                        await Promise.allSettled([...this.pendingOperations]);
+                },
+            },
+        ]);
+        throwCleanupFailures(failures);
+    }
+    /** Test adapter reads this local module object, never a renderer bridge or HTTP route. */
+    get ownershipSnapshot() {
+        return {
+            connected: this.isConnected,
+            connections: [...this.connections].map((client) => ({
+                current: client === this.client,
+                ...client.owners.snapshot,
+            })),
+            collecting: this.collecting,
+            pendingOperations: this.pendingOperations.size,
+            independentExecution: this.automation ? 1 : 0,
+            consoleActor: this.consoleOwner ? 1 : 0,
+            console: this.consoleHost?.ownershipSnapshot ?? null,
+            streams: this.streams.ownershipSnapshot,
+            terminal: this.terminal
+                ? { present: true, pendingInput: this.terminal.hasPendingInput }
+                : null,
+            terminals: [...this.terminals].map((terminal) => terminal.ownershipSnapshot),
+            execSlots: this.slots.ownershipSnapshot,
+            clockRead: this.cancelClock ? 1 : 0,
+            cancelledCommandCache: this.cancelledAutomation.size,
+        };
+    }
+
+    get consoleBusy() {
+        return Boolean(this.consoleOwner);
+    }
+    get hasResources() {
+        return (
+            this.connections.size > 0 ||
+            this.terminals.size > 0 ||
+            this.pendingOperations.size > 0 ||
+            this.collecting ||
+            Boolean(this.automation || this.consoleOwner || this.cancelClock) ||
+            this.slots.ownershipSnapshot.active > 0 ||
+            this.slots.ownershipSnapshot.queued > 0
+        );
+    }
+    private get manualInputBusy() {
+        return [...this.terminals].some((terminal) => terminal.hasPendingInput);
+    }
+    /** A distinct normal shell with a lease lasting until actual channel, sink and store cleanup. */
+    createAutomationConsole(
+        store: ConsoleRepository,
+        connection: string,
+        assertFresh: () => void,
+        remoteDisposal?: () => GatewayConsoleDisposal | null,
+    ) {
+        const client = this.client,
+            options = this.options;
+        const current = () => {
+            if (
+                !client ||
+                client !== this.client ||
+                !this.isConnected ||
+                connection !== this.automationConnection
+            )
+                throw Error('Console connection changed. Arm explicitly to resume.');
+        };
+        current();
+        const controller = new AbortController();
+        const owner = { actor: undefined as unknown as PersistentSshConsole, controller };
+        owner.actor = new PersistentSshConsole(
+            interactiveShellBinding(
+                client!,
+                () => {
+                    current();
+                    if (
+                        this.collecting ||
+                        this.automation ||
+                        this.consoleOwner ||
+                        this.cancelClock ||
+                        this.manualInputBusy
+                    )
+                        throw Error(
+                            'Wait for collection, device clock, manual input or console cleanup.',
+                        );
+                    this.consoleOwner = owner;
+                    return () => {
+                        if (this.consoleOwner === owner) {
+                            this.consoleOwner = undefined;
+                            if (!this.isConnected) this.onDisconnected();
+                        }
+                    };
+                },
+                current,
+                assertFresh,
+            ),
+            store,
+            100,
+            remoteDisposal,
+        );
+        return {
+            actor: owner.actor,
+            signal: controller.signal,
+            target: { endpoint: options!.host + ':' + options!.port, username: options!.username },
+        };
+    }
 
     constructor(private readonly onDisconnected: () => void = () => {}) {}
 
@@ -90,7 +267,12 @@ export class SshSession {
     ): Promise<void> {
         if (signal?.aborted) throw new ConnectionFailure('cancelled', 'Connection cancelled.');
         this.disconnect();
-        const client = new Client();
+        const client = new OwnedSshClient();
+        this.connections.add(client);
+        void client.owners
+            .join()
+            .then(() => this.connections.delete(client))
+            .catch(() => {});
         this.client = client;
         this.options = { ...options, password: undefined, passphrase: undefined };
         return new Promise((resolve, reject) => {
@@ -151,6 +333,9 @@ export class SshSession {
                 if (!ready)
                     finish(new Error('SSH connection closed before authentication completed.'));
                 if (this.client === client) {
+                    this.streams.clear();
+                    this.consoleHost?.invalidate();
+                    this.consoleOwner?.controller.abort();
                     this.cancelClock?.();
                     this.terminal?.close();
                     this.ready = false;
@@ -201,6 +386,9 @@ export class SshSession {
     }
 
     disconnect(): void {
+        this.streams.clear();
+        this.consoleHost?.invalidate();
+        this.consoleOwner?.controller.abort();
         this.automation?.controller.abort();
         this.connectionToken = '';
         this.cancelledAutomation.clear();
@@ -227,12 +415,15 @@ export class SshSession {
         this.cancelledAutomation.set(id, Date.now() + 60000);
         if (this.automation?.id === id) this.automation.controller.abort();
     }
-    async runAutomation(input: AutomationRequest) {
+    runAutomation(input: AutomationRequest) {
+        return this.trackOperation(this.runAutomationOwned(input));
+    }
+    private async runAutomationOwned(input: AutomationRequest) {
         const request = automationRequest(input),
             client = this.client;
         if (!client || request.connection !== this.automationConnection)
             throw Error('Automation connection changed. Arm the flow again.');
-        if (this.collecting || this.automation || this.terminal?.hasPendingInput)
+        if (this.collecting || this.automation || this.consoleOwner || this.manualInputBusy)
             throw Error('Wait for current collection or automation to finish.');
         const controller = new AbortController(),
             owner = { id: request.id, controller };
@@ -257,11 +448,67 @@ export class SshSession {
             if (this.automation === owner) this.automation = undefined;
         }
     }
+    private async runAutomationStream(
+        input: AutomationRequest,
+        sink: CommandOutputSink,
+        complete: (result: StreamedCommandCapture) => void,
+        finalized: Promise<void>,
+    ) {
+        const request = automationRequest(input),
+            client = this.client;
+        if (!client || request.connection !== this.automationConnection)
+            throw Error('Automation connection changed. Arm again.');
+        if (this.collecting || this.automation || this.consoleOwner || this.manualInputBusy)
+            throw Error('Wait for collection or automation to finish.');
+        const controller = new AbortController(),
+            owner = { id: request.id, controller };
+        this.automation = owner;
+        if ((this.cancelledAutomation.get(request.id) ?? 0) > Date.now()) controller.abort();
+        const started = performance.now();
+        try {
+            const result = await this.slots
+                .run(
+                    () => {
+                        if (
+                            client !== this.client ||
+                            request.connection !== this.automationConnection
+                        )
+                            throw Error('Automation connection changed.');
+                        return captureStreamingCommand(
+                            client,
+                            request.command,
+                            Math.max(1, request.timeoutMs - (performance.now() - started)),
+                            controller.signal,
+                            sink,
+                        );
+                    },
+                    { signal: controller.signal, timeoutMs: request.timeoutMs },
+                )
+                .catch((error: unknown): StreamedCommandCapture => ({
+                    stdout: '',
+                    stderr:
+                        error instanceof Error ? error.message.slice(0, 512) : 'SSH stream failed.',
+                    exitCode: null,
+                    completion: controller.signal.aborted ? 'cancelled' : 'transport-error',
+                    chunks: [],
+                    truncated: false,
+                    previewClipped: false,
+                }));
+            complete(result);
+            // Exit is observable before the client commits raw seal and immutable outcome.
+            await finalized;
+        } finally {
+            if (this.automation === owner) this.automation = undefined;
+        }
+    }
     get isConnected(): boolean {
         return this.ready && this.client !== null && this.options !== null;
     }
 
-    async readClock(signal?: AbortSignal): Promise<DeviceClockResponse> {
+    readClock(signal?: AbortSignal): Promise<DeviceClockResponse> {
+        return this.trackOperation(this.readClockOwned(signal));
+    }
+    private async readClockOwned(signal?: AbortSignal): Promise<DeviceClockResponse> {
         const client = this.client;
         if (!this.isConnected || !client) throw Error('Connect to a device first.');
         if (this.cancelClock) throw Error('A device clock read is already running.');
@@ -318,10 +565,16 @@ export class SshSession {
                                 (error, stream) => {
                                     if (error) return cancel();
                                     channel = stream;
-                                    if (settled) return stream.close();
+                                    stream.on('error', cancel);
+                                    stream.stderr.on('error', cancel);
+                                    if (settled) {
+                                        stream.close();
+                                        stream.resume();
+                                        stream.stderr.resume();
+                                        return;
+                                    }
                                     stream.on('data', append);
                                     stream.stderr.on('data', countError);
-                                    stream.on('error', cancel);
                                     stream.on('close', (code: number | null) => {
                                         if (settled) return;
                                         if (code !== 0)
@@ -356,6 +609,7 @@ export class SshSession {
         const id = terminalId(input?.id);
         const size = terminalSize(input);
         if (!this.isConnected || !this.client) throw Error('Connect to a device first.');
+        if (this.consoleOwner) throw Error('Wait for the owned Automation console to finish.');
         if (this.terminal) throw Error('A terminal is already active for this device.');
         const terminal = new SshTerminal(
             { id, ...size },
@@ -364,9 +618,11 @@ export class SshSession {
                 if (this.terminal === terminal) this.terminal = null;
             },
             undefined,
-            () => Boolean(this.automation),
+            () => Boolean(this.automation || this.consoleOwner),
         );
         this.terminal = terminal;
+        this.terminals.add(terminal);
+        void terminal.join().then(() => this.terminals.delete(terminal));
         await terminal.open(this.client, size);
     }
 
@@ -376,8 +632,12 @@ export class SshSession {
         return this.terminal;
     }
 
-    async collect(input?: CollectOptions): Promise<Snapshot> {
-        if (this.automation) throw Error('Collection is paused for automation.');
+    collect(input?: CollectOptions): Promise<Snapshot> {
+        return this.trackOperation(this.collectOwned(input));
+    }
+    private async collectOwned(input?: CollectOptions): Promise<Snapshot> {
+        if (this.automation || this.consoleOwner)
+            throw Error('Collection is paused for automation.');
         const collection = collectOptions(input);
         const client = this.client;
         const options = this.options;
@@ -506,8 +766,13 @@ export class SshSession {
                         return;
                     }
                     channel = stream;
+                    const fail = (error: Error) => finish(null, error.message);
+                    stream.on('error', fail);
+                    stream.stderr.on('error', fail);
                     if (settled) {
                         stream.close();
+                        stream.resume();
+                        stream.stderr.resume();
                         return;
                     }
                     const append = (data: Buffer, isError: boolean) => {
@@ -522,7 +787,6 @@ export class SshSession {
                     };
                     stream.on('data', (data: Buffer) => append(data, false));
                     stream.stderr.on('data', (data: Buffer) => append(data, true));
-                    stream.on('error', (err: Error) => finish(null, err.message));
                     stream.on('close', (code: number | null, signal?: string) =>
                         finish(
                             typeof code === 'number' ? code : null,

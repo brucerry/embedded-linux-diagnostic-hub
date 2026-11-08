@@ -5,7 +5,9 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { listPackage, extractFile } from '@electron/asar';
+import { validateLinuxReviewCapability, reviewBundleHash } from './lib/linux-review-package.mjs';
 import { LINUX_ASSET, LINUX_ARCHIVE } from './lib/release-assets.mjs';
+import { verifyDesktopPackageBundles } from './lib/desktop-package-bundles.mjs';
 
 const directory = path.resolve(process.argv[2] ?? 'release');
 const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-linux-package-'));
@@ -18,23 +20,40 @@ async function verifyBundle(root) {
         'Production launcher must match the reviewed source.',
     );
     const archive = path.join(root, 'resources/app.asar');
+    const reviewEntry = await readFile('dist-electron/linux-setup-review.cjs');
+    const physicalReview = await readFile(path.join(root, 'resources/linux-setup-review.cjs'));
+    const appPackage = JSON.parse(extractFile(archive, 'package.json').toString('utf8'));
+    const reviewMetadata = validateLinuxReviewCapability(
+        JSON.parse(
+            (await readFile(path.join(root, 'resources/linux-setup-review.json'))).toString('utf8'),
+        ),
+        appPackage.version,
+    );
+    assert.ok(reviewEntry.equals(physicalReview), 'Stale physical read-only review entry.');
+    assert.equal(reviewMetadata.bytes, physicalReview.length);
+    assert.equal(reviewMetadata.sha256, reviewBundleHash(physicalReview));
+
     assert.ok(
         !listPackage(archive).some((file) =>
             /(?:genie|native-window|taskbar-query|koffi)/i.test(file),
         ),
         'Retired motion asset is packaged.',
     );
-    for (const folder of ['dist/assets', 'dist-electron']) {
-        for (const file of await readdir(folder)) {
-            if (folder === 'dist-electron' && !['main.cjs', 'preload.cjs'].includes(file)) continue;
-            assert.ok(
-                (await readFile(`${folder}/${file}`)).equals(
-                    extractFile(archive, `${folder}/${file}`),
-                ),
-                `Stale packaged bundle: ${file}`,
-            );
-        }
-    }
+    await verifyDesktopPackageBundles({
+        readBuild: (file) => readFile(file),
+        readPackaged: (file) => extractFile(archive, file),
+    });
+    assert.ok(
+        reviewEntry.equals(extractFile(archive, 'dist-electron/linux-setup-review.cjs')),
+        'Stale packaged bundle: linux-setup-review.cjs',
+    );
+    for (const file of await readdir('dist/assets'))
+        assert.ok(
+            (await readFile(`dist/assets/${file}`)).equals(
+                extractFile(archive, `dist/assets/${file}`),
+            ),
+            `Stale packaged bundle: ${file}`,
+        );
     for (const file of ['app-icon.svg', 'app-icon.png', 'app-icon.ico']) {
         assert.ok((await readFile(`public/${file}`)).equals(extractFile(archive, `dist/${file}`)));
     }

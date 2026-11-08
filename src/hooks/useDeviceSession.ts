@@ -12,6 +12,8 @@ import { prepareHistory } from '../services/history';
 
 import { message } from '../services/errors';
 import { ConnectionOperation } from '../services/connection-operation';
+import { ReportExportAction } from '../services/report-export-action';
+import type { ReportExportStatus } from '../../shared/report-export';
 
 // Own the shared desktop/web session lifecycle and in-memory evidence.
 export function useDeviceSession(onResetView: () => void) {
@@ -65,6 +67,18 @@ export function useDeviceSession(onResetView: () => void) {
     const [gateway, setGateway] = useState<GatewayClient | null>(null);
     const importInput = useRef<HTMLInputElement>(null);
     const bridge = window.diagnosticHub;
+    const [reportExport, setReportExport] = useState<ReportExportStatus | null>(null);
+    const reportAction = useRef<ReportExportAction | null>(null);
+    useEffect(() => {
+        if (!bridge) return;
+        const action = new ReportExportAction(bridge, setReportExport, () => crypto.randomUUID());
+        reportAction.current = action;
+        const detach = action.attach();
+        return () => {
+            detach();
+            if (reportAction.current === action) reportAction.current = null;
+        };
+    }, [bridge]);
     const transport = bridge ?? gateway;
 
     useEffect(() => {
@@ -72,6 +86,7 @@ export function useDeviceSession(onResetView: () => void) {
         let cancelled = false;
         const generation = dataGeneration.current;
         void (async () => {
+            let recoveryAvailable = false;
             try {
                 const recovery = await bridge.readUpdateReport();
                 if (cancelled || !recovery) return;
@@ -93,10 +108,15 @@ export function useDeviceSession(onResetView: () => void) {
                 } else {
                     setNotice(`Update complete · report saved: ${recovery.reportPath}`);
                 }
+                recoveryAvailable = true;
                 await bridge.acknowledgeUpdateReport(recovery.id);
             } catch (err) {
-                if (!cancelled)
-                    setError(`Could not reopen the saved update report: ${message(err)}`);
+                if (!cancelled && generation === dataGeneration.current)
+                    setError(
+                        recoveryAvailable
+                            ? `Saved update report remains available; recovery acknowledgement failed: ${message(err)}`
+                            : `Could not reopen the saved update report: ${message(err)}`,
+                    );
             }
         })();
         return () => {
@@ -198,7 +218,9 @@ export function useDeviceSession(onResetView: () => void) {
         } catch (err) {
             liveRef.current = false;
             setLiveState(false);
-            setError(`${message(err)} Live updates paused; the last snapshot is retained.`);
+            setError(
+                `${message(err)} Collection did not complete. Live updates paused; the previous snapshot, if any, is unchanged.`,
+            );
             return false;
         } finally {
             collectingRef.current = false;
@@ -255,12 +277,24 @@ export function useDeviceSession(onResetView: () => void) {
                 await retainSnapshot(data);
                 liveRef.current = livePreference.current;
                 setLiveState(livePreference.current);
-                setNotice('SSH connected — diagnostic snapshot collected');
+                setNotice(
+                    connectedRef.current
+                        ? 'SSH connected — diagnostic snapshot collected'
+                        : 'Diagnostic snapshot collected; SSH is disconnected.',
+                );
             } catch (err) {
                 if (generation === dataGeneration.current) {
                     pauseLiveUpdates();
+                    const stillConnected = connectedRef.current;
                     setError(
-                        `SSH is connected, but diagnostic collection failed: ${message(err)} The last snapshot is retained; collect again when ready.`,
+                        (stillConnected
+                            ? 'SSH is connected, but diagnostic collection failed: '
+                            : 'SSH disconnected before diagnostic collection completed: ') +
+                            message(err) +
+                            ' The previous snapshot, if any, is unchanged; ' +
+                            (stillConnected
+                                ? 'collect again when ready.'
+                                : 'reconnect to collect again.'),
                     );
                 }
             } finally {
@@ -376,7 +410,7 @@ export function useDeviceSession(onResetView: () => void) {
         if (!snapshot) return;
         try {
             if (bridge) {
-                if (await bridge.exportReport(snapshot)) setNotice('Diagnostic report saved');
+                await reportAction.current?.start(snapshot);
             } else {
                 const url = URL.createObjectURL(
                     new Blob([JSON.stringify(createReport(snapshot), null, 2)], {
@@ -398,7 +432,8 @@ export function useDeviceSession(onResetView: () => void) {
     async function importReport(file: File) {
         if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
         setError('');
-        const generation = dataGeneration.current;
+        const generation = ++dataGeneration.current;
+        let ownsDisconnect = false;
         try {
             if (file.size > MAX_REPORT_BYTES)
                 throw new Error('The report exceeds the 16 MiB import limit.');
@@ -406,7 +441,14 @@ export function useDeviceSession(onResetView: () => void) {
             const frame = await prepareHistory(data);
             if (generation !== dataGeneration.current) return;
             if (resettingRef.current || collectingRef.current || disconnectingRef.current) return;
-            if (connected && transport) await transport.disconnect();
+            if (connected && transport) {
+                disconnectingRef.current = true;
+                ownsDisconnect = true;
+                setDisconnecting(true);
+                await transport.disconnect();
+            }
+            if (generation !== dataGeneration.current) return;
+            if (resettingRef.current || collectingRef.current) return;
             setConnected(false);
             setActiveDevice(null);
             setLiveState(false);
@@ -430,9 +472,25 @@ export function useDeviceSession(onResetView: () => void) {
             onResetView();
             setNotice('Report opened locally · no device connection');
         } catch (err) {
-            setError(message(err));
+            if (generation === dataGeneration.current) {
+                if (
+                    ownsDisconnect &&
+                    transport instanceof GatewayClient &&
+                    !transport.automationConnection()
+                ) {
+                    setConnected(false);
+                    setActiveDevice(null);
+                    setLiveState(false);
+                }
+                setError(message(err));
+            }
         } finally {
-            if (importInput.current) importInput.current.value = '';
+            if (ownsDisconnect) {
+                disconnectingRef.current = false;
+                setDisconnecting(false);
+            }
+            if (generation === dataGeneration.current && importInput.current)
+                importInput.current.value = '';
         }
     }
 
@@ -473,6 +531,8 @@ export function useDeviceSession(onResetView: () => void) {
         disconnect,
         resetData,
         exportReport,
+        reportExport,
+        cancelReportExport: () => reportAction.current?.cancel(),
         importReport,
     };
 }

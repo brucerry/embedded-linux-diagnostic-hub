@@ -1,4 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import StoredSerialResults from './capture/StoredSerialResults';
+import StoredConsoleResults from './capture/StoredConsoleResults';
+import type { ConsoleResultsAdmission } from './capture/use-console-results';
+import { openCaptureRepository } from './capture/repository';
+import { serialCaptureBackend } from './capture/serial-backend';
+import { sshCaptureBackend } from './capture/ssh-backend';
+import { sshConsoleBackend } from './capture/console-backend';
+import { IndexedDbConsoleJournal } from './capture/indexeddb-console';
+import type { SshExecutionMode, ConsoleCompletion } from '../../../shared/ssh-console';
+import { outcomeOf } from '../../../shared/automation-result';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { BrushCleaning, Play } from 'lucide-react';
 import {
     AUTOMATION_LIMITS,
     armPlan,
@@ -17,9 +28,20 @@ import type { DesktopBridge } from '../../../shared/types';
 import type { DeviceClockResponse } from '../../../shared/diagnostics/device-clock';
 import { SerialSession } from '../serial/session';
 import { FlowRunner, ResultStore, type FlowBackend, type FlowState } from './runner';
+import { ActivityReleaseQueue } from './activity-release';
 import { downloadResults, exportResults, type ExportFormat } from './exports';
+import { draftIssues, type FieldIssue } from './draft-validation';
+import { formatReceivedOutput } from './received-output';
 import { observedDeviceTime } from './serial-completion';
+import FlowViewerEntry from './flow/FlowViewerEntry';
+import {
+    prepareInspection,
+    inspectionState,
+    inspectionRecord,
+    type FlowInspection,
+} from './flow/inspection';
 interface Props {
+    clockAdmission: { quiesce(): Promise<() => void> };
     visible: boolean;
     serial: SerialSession;
     transport:
@@ -35,6 +57,14 @@ interface Props {
     onConnect(): void;
     onSerial(): void;
 }
+interface ManualClockSample {
+    valid: boolean;
+    active: Props['transport'];
+    connection: string | undefined;
+    endpoint: string | undefined;
+    username: string | undefined;
+    connected: boolean;
+}
 const GUIDE_STEPS = ['Connection', 'Commands', 'Timing', 'Review & Run'];
 const step = (): CommandStep => ({
     id: crypto.randomUUID(),
@@ -43,7 +73,20 @@ const step = (): CommandStep => ({
     command: '',
     delaySeconds: 0,
 });
+function RequiredMark() {
+    return (
+        <span className="automation-required" aria-hidden="true">
+            {' '}
+            *
+        </span>
+    );
+}
 export default function AutomationPage(props: Props) {
+    const validationId = useId(),
+        pageRef = useRef<HTMLElement>(null);
+    const [touched, setTouched] = useState(new Set<string>()),
+        [attempted, setAttempted] = useState(new Set<number>()),
+        [pendingFocus, setPendingFocus] = useState<string | null>(null);
     const [guideStep, setGuideStep] = useState(0);
     const [headerOffset, setHeaderOffset] = useState(84);
     useEffect(() => {
@@ -65,6 +108,15 @@ export default function AutomationPage(props: Props) {
     }, [guideStep]);
     const [steps, setSteps] = useState<CommandStep[]>([step()]),
         [transport, setTransport] = useState<'ssh' | 'serial'>('ssh');
+    const [sshMode, setSshMode] = useState<SshExecutionMode>('independent-script'),
+        [consolePrompts, setConsolePrompts] = useState('');
+    const cleanupActivity = useRef<string | undefined>(undefined);
+    const cleanupActivityRetirement = useRef<(() => Promise<void>) | undefined>(undefined);
+    const activityRetirements = useRef<ActivityReleaseQueue | null>(null);
+    const [activityFailure, setActivityFailure] = useState('');
+    const cleanupClock = useRef<(() => void) | undefined>(undefined);
+    const manualClockSample = useRef<ManualClockSample | null>(null);
+    const pendingClockSamples = useRef(0);
     const [timeout, setTimeoutValue] = useState('60'),
         [repeat, setRepeat] = useState(false),
         [repeatSeconds, setRepeatSeconds] = useState('10'),
@@ -81,10 +133,20 @@ export default function AutomationPage(props: Props) {
     const dragScroll = useRef({ y: 0, timer: 0 as ReturnType<typeof setInterval> | 0 });
     const dragged = useRef<string | null>(null),
         activityEpoch = useRef(0),
-        arming = useRef(false);
+        arming = useRef(false),
+        armAttempt = useRef<symbol | null>(null);
     const zones = useMemo(
         () => [...new Set(['UTC', zone, ...Intl.supportedValuesOf('timeZone')])].sort(),
         [],
+    );
+    const zoneOptions = useMemo(
+        () =>
+            zones.map((z) => (
+                <option key={z} value={z}>
+                    {z}
+                </option>
+            )),
+        [zones],
     );
     const scheduleOptions = useMemo(() => {
         try {
@@ -110,6 +172,13 @@ export default function AutomationPage(props: Props) {
         }),
         [error, setError] = useState(''),
         [running, setRunning] = useState(false);
+    const captureOwners = useRef(new Set<string>());
+    const [flowInspection, setFlowInspection] = useState<FlowInspection | null>(null);
+    const flowInspectionId = useRef<string | null>(null);
+    const [catalogRevision, setCatalogRevision] = useState(0),
+        [captureActionBusy, setCaptureActionBusy] = useState(false);
+    const consoleResultsAdmission = useRef<ConsoleResultsAdmission | null>(null),
+        cleanupConsoleResults = useRef<(() => void) | undefined>(undefined);
     const [serialStatus, setSerialStatus] = useState(props.serial.current),
         [rows, setRows] = useState<AutomationRecord[]>([]),
         [selected, setSelected] = useState(new Set<string>()),
@@ -126,25 +195,57 @@ export default function AutomationPage(props: Props) {
         latest = useRef(props),
         runner = useRef<FlowRunner | null>(null);
     latest.current = props;
+    if (!activityRetirements.current)
+        activityRetirements.current = new ActivityReleaseQueue((message) => {
+            setActivityFailure(message);
+            const active =
+                arming.current ||
+                Boolean(runner.current?.busy) ||
+                Boolean(activityRetirements.current?.hasFailures);
+            setRunning(active);
+            latest.current.onBusy(active);
+        });
     if (!runner.current)
         runner.current = new FlowRunner(
             (next) => {
+                const inspected = flowInspectionId.current;
                 setState(next);
-                const active = ['waiting', 'running', 'delaying'].includes(next.state);
+                setFlowInspection((current) => inspectionState(current, inspected, next));
+                const active =
+                    Boolean(next.cleanupPending) ||
+                    ['waiting', 'running', 'delaying'].includes(next.state) ||
+                    Boolean(activityRetirements.current?.hasFailures);
                 setRunning(active);
                 latest.current.onBusy(active);
             },
-            (r) => {
-                store.current.add(r);
-                const retained = new Set(store.current.records.map((row) => row.id));
-                setSelected((previous) => new Set([...previous].filter((id) => retained.has(id))));
-                setRows([...store.current.records]);
-                if (follow.current)
-                    requestAnimationFrame(() => {
-                        if (viewport.current)
-                            viewport.current.scrollTop = viewport.current.scrollHeight;
-                    });
-                else setNewRows((n) => Math.min(AUTOMATION_LIMITS.rows, n + 1));
+            async (r) => {
+                const inspected = flowInspectionId.current;
+                if (r.consoleCapture) {
+                    setCatalogRevision((value) => value + 1);
+                    setFlowInspection((current) => inspectionRecord(current, inspected, r));
+                    return;
+                }
+                if (!r.stored) {
+                    const reason =
+                        r.stderr || 'Capture storage was unavailable before the command.';
+                    setError(reason);
+                    throw Error(reason);
+                }
+                try {
+                    const repository = await openCaptureRepository();
+                    if (!repository.record)
+                        throw Error('Stored command outcome support is unavailable.');
+                    await repository.record(r.stored.id, outcomeOf(r));
+                } catch (error) {
+                    setError(
+                        'Raw capture retained; execution metadata could not be saved: ' +
+                            (error instanceof Error ? error.message : String(error)),
+                    );
+                    setCatalogRevision((value) => value + 1);
+                    throw error;
+                }
+                setCatalogRevision((value) => value + 1);
+                setFlowInspection((current) => inspectionRecord(current, inspected, r));
             },
         );
     useEffect(() => props.serial.subscribe(setSerialStatus), [props.serial]);
@@ -165,6 +266,31 @@ export default function AutomationPage(props: Props) {
     useEffect(() => {
         if (props.blocked && runner.current?.busy) runner.current.cancel();
     }, [props.blocked]);
+    useEffect(() => {
+        const active = props.transport,
+            connection = active?.automationConnection?.(),
+            endpoint = props.target?.endpoint,
+            username = props.target?.username,
+            connected = props.connected;
+        return () => {
+            const attempt = manualClockSample.current;
+            if (
+                attempt &&
+                attempt.active === active &&
+                attempt.connection === connection &&
+                attempt.endpoint === endpoint &&
+                attempt.username === username &&
+                attempt.connected === connected
+            )
+                attempt.valid = false;
+        };
+    }, [
+        props.transport,
+        props.connected,
+        props.target?.endpoint,
+        props.target?.username,
+        props.transport?.automationConnection?.(),
+    ]);
     const connected =
         transport === 'serial'
             ? serialStatus.state === 'connected'
@@ -189,13 +315,46 @@ export default function AutomationPage(props: Props) {
             };
         }
         return validatePlan({
-            captureDeviceTime: captureClock,
+            captureDeviceTime: transport === 'ssh' && sshMode === 'console' ? false : captureClock,
             transport,
-            steps: steps.map((s, i) => ({ ...s, name: s.name.trim() || 'Step ' + (i + 1) })),
+            ...(transport === 'ssh'
+                ? {
+                      ssh:
+                          sshMode === 'console'
+                              ? {
+                                    mode: sshMode,
+                                    ready: {
+                                        role: 'shell-prompt' as const,
+                                        literals: consolePrompts.split(/\r?\n/),
+                                    },
+                                    completion: {
+                                        role: 'shell-prompt' as const,
+                                        literals: consolePrompts.split(/\r?\n/),
+                                    },
+                                }
+                              : { mode: sshMode },
+                  }
+                : {}),
+            steps: steps.map(({ ssh, ...s }, i) => ({
+                ...s,
+                name: s.name.trim() || 'Step ' + (i + 1),
+                ...(transport === 'ssh' && sshMode === 'console'
+                    ? {
+                          enterOnly: false,
+                          ssh: {
+                              intent: ssh?.intent ?? 'script',
+                              ...(ssh?.completion ? { completion: ssh.completion } : {}),
+                          },
+                      }
+                    : {}),
+            })),
             timeoutSeconds: value(timeout, 'Timeout'),
             repeatSeconds: repeat ? value(repeatSeconds, 'Repetition') : null,
             start,
-            serial: { lineEnding: ending, prompt, timestampPrefix: prefix },
+            serial:
+                transport === 'serial'
+                    ? { lineEnding: ending, prompt, timestampPrefix: prefix }
+                    : { lineEnding: ending, prompt: '', timestampPrefix: '' },
         });
     };
     let plan: AutomationPlan | undefined,
@@ -214,6 +373,86 @@ export default function AutomationPage(props: Props) {
     } catch (e) {
         validation = e instanceof Error ? e.message : String(e);
     }
+    const fieldIssues = draftIssues({
+        sshMode,
+        consolePrompts,
+        transport,
+        steps,
+        timeout,
+        repeat,
+        repeatSeconds,
+        scheduled,
+        date,
+        zone,
+        offset,
+        clockKind,
+        ending,
+        prompt,
+        prefix,
+        calibration,
+        // Pair current wall/elapsed observations; the display tick may be delayed.
+        local: Date.now(),
+        mono: performance.now(),
+        connection:
+            transport === 'ssh'
+                ? (props.transport?.automationConnection?.() ?? '')
+                : String(props.serial.current.generation),
+    });
+    const visibleIssue = (key: string) =>
+        fieldIssues.find(
+            (i) =>
+                i.key === key &&
+                (touched.has(key) ||
+                    attempted.has(i.stage) ||
+                    guideStep === 3 ||
+                    (key === 'offset' &&
+                        (touched.has('date') || touched.has('time') || touched.has('zone')))),
+        );
+    const fieldProps = (key: string, required = false) => ({
+        'data-validation-field': key,
+        style: { scrollMarginTop: headerOffset + 12, scrollMarginBottom: 80 },
+        'aria-required': required || undefined,
+        'aria-invalid': visibleIssue(key) ? true : undefined,
+        'aria-describedby': validationId + '-' + key,
+        onBlur: () => setTouched((previous) => new Set([...previous, key])),
+    });
+    const fieldError = (key: string) => (
+        <small id={validationId + '-' + key} className="automation-field-error" aria-live="polite">
+            {visibleIssue(key)?.message || ' '}
+        </small>
+    );
+    const focusIssue = (issue: FieldIssue) => {
+        setAttempted((previous) => new Set([...previous, issue.stage]));
+        setGuideStep(issue.stage);
+        setPendingFocus(issue.key);
+    };
+    useEffect(() => {
+        if (!pendingFocus) return;
+        const field = Array.from(
+            pageRef.current?.querySelectorAll<HTMLElement>('[data-validation-field]') ?? [],
+        ).find((el) => el.dataset.validationField === pendingFocus);
+        if (field) {
+            let ancestor = field.parentElement;
+            while (ancestor) {
+                if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+                ancestor = ancestor.parentElement;
+            }
+            field.focus({ preventScroll: true });
+            field.scrollIntoView({ block: 'nearest' });
+        }
+        setPendingFocus(null);
+    }, [pendingFocus, guideStep]);
+    const goToStage = (index: number) => {
+        if (index === 3) setAttempted(new Set([0, 1, 2]));
+        setGuideStep(index);
+    };
+    const nextStage = () => {
+        setAttempted((previous) => new Set([...previous, guideStep]));
+        const invalid = fieldIssues.find((i) => i.stage === guideStep);
+        if (invalid) focusIssue(invalid);
+        else goToStage(Math.min(3, guideStep + 1));
+    };
+    const summaryIssue = fieldIssues.find((i) => visibleIssue(i.key));
     const sample = async (active = props.transport): Promise<ClockCalibration> => {
         if (transport !== 'ssh' || !active?.readDeviceClock || !active.automationConnection)
             throw Error(
@@ -248,28 +487,169 @@ export default function AutomationPage(props: Props) {
                 ' minutes',
         };
     };
+    const invalidateManualClockSample = () => {
+        if (manualClockSample.current) manualClockSample.current.valid = false;
+    };
+    const changeTransport = (value: 'ssh' | 'serial') => {
+        invalidateManualClockSample();
+        setTransport(value);
+        setCalibration(undefined);
+    };
+    const changeClockKind = (value: 'local' | 'device') => {
+        invalidateManualClockSample();
+        setClockKind(value);
+    };
+    const changeScheduled = (value: boolean) => {
+        invalidateManualClockSample();
+        setScheduled(value);
+    };
     const sampleClicked = () => {
+        const attempt: ManualClockSample = {
+            valid: true,
+            active: props.transport,
+            connection: props.transport?.automationConnection?.(),
+            endpoint: props.target?.endpoint,
+            username: props.target?.username,
+            connected: props.connected,
+        };
+        manualClockSample.current = attempt;
+        const epoch = activityEpoch.current;
+        const current = () =>
+            manualClockSample.current === attempt &&
+            attempt.valid &&
+            activityEpoch.current === epoch &&
+            latest.current.transport === attempt.active &&
+            latest.current.connected &&
+            latest.current.target?.endpoint === attempt.endpoint &&
+            latest.current.target?.username === attempt.username &&
+            attempt.active?.automationConnection?.() === attempt.connection;
+        pendingClockSamples.current++;
         setSampling(true);
         setError('');
         void sample()
-            .then(setCalibration)
-            .catch((e) => setError(e.message))
-            .finally(() => setSampling(false));
+            .then((value) => {
+                if (current()) setCalibration(value);
+            })
+            .catch((e) => {
+                if (current()) setError(e.message);
+            })
+            .finally(() => {
+                pendingClockSamples.current--;
+                if (manualClockSample.current === attempt) manualClockSample.current = null;
+                setSampling(pendingClockSamples.current > 0);
+            });
+    };
+    const retireActivity = (
+        held: string | undefined,
+        desktop: Pick<DesktopBridge, 'releaseAutomationActivity'> | undefined,
+        resume: (() => void) | undefined,
+        resumeClock: (() => void) | undefined,
+        transportRetired: boolean,
+    ) => {
+        let retire!: () => Promise<void>;
+        const owned = activityRetirements.current!.create(
+            async () => {
+                if (!held) return;
+                if (!desktop?.releaseAutomationActivity)
+                    throw Error(
+                        'Background activity release is unavailable. Keep this window open.',
+                    );
+                await desktop.releaseAutomationActivity(held);
+            },
+            [
+                () => {
+                    if (cleanupConsoleResults.current === resume)
+                        cleanupConsoleResults.current = undefined;
+                    resume?.();
+                },
+                () => {
+                    if (cleanupClock.current === resumeClock) cleanupClock.current = undefined;
+                    resumeClock?.();
+                },
+                () => {
+                    if (cleanupActivityRetirement.current === retire)
+                        cleanupActivityRetirement.current = undefined;
+                },
+            ],
+            transportRetired,
+        );
+        retire = () => {
+            // The attempt closure retains the ID and resumes even after this current-owner slot moves on.
+            if (cleanupActivity.current === held) cleanupActivity.current = undefined;
+            return owned();
+        };
+        return retire;
+    };
+    const cancel = () => {
+        if (runner.current?.cleanupPending) {
+            const retire = cleanupActivityRetirement.current;
+            if (!retire) {
+                setError('The owned cleanup continuation is unavailable. Keep this window open.');
+                return;
+            }
+            void runner.current
+                .retryCleanup()
+                .then(retire)
+                .catch((error) => {
+                    if (!activityRetirements.current?.hasFailures)
+                        setError(error instanceof Error ? error.message : String(error));
+                });
+            return;
+        }
+        if (!arming.current && !runner.current?.busy && activityRetirements.current?.hasFailures) {
+            // Explicit retry joins the same retained IDs; it never repeats a command or starts a run.
+            void activityRetirements.current.retryFailures().catch(() => {});
+            return;
+        }
+        activityEpoch.current++;
+        runner.current!.cancel();
+        if (arming.current && !runner.current!.busy) {
+            // A pending host lease cannot be cancelled, but its continuation can be fenced.
+            // Its owner still releases any lease granted after this cancellation.
+            armAttempt.current = null;
+            arming.current = false;
+            flowInspectionId.current = null;
+            setFlowInspection(null);
+            // Cancelling this arm cannot retire an older failed activity release.
+            const active = Boolean(activityRetirements.current?.hasFailures);
+            setRunning(active);
+            latest.current.onBusy(active);
+            setState({
+                state: 'paused',
+                message: 'Flow cancelled before arming. Arm explicitly to resume.',
+            });
+        }
     };
     const start = async (once = false) => {
-        if (arming.current || runner.current?.busy) return;
+        if (arming.current || runner.current?.busy || activityRetirements.current?.hasFailures)
+            return;
+        if (fieldIssues[0]) {
+            focusIssue(fieldIssues[0]);
+            return;
+        }
         arming.current = true;
+        const attempt = Symbol('automation arming');
+        armAttempt.current = attempt;
+        let inspectionId: string | undefined,
+            flowStarted = false,
+            hasFlowFinalizer = false;
         let lease: string | undefined;
+        let resumeConsoleResults: (() => void) | undefined;
+        let resumeClock: (() => void) | undefined;
         const desktop = window.diagnosticHub;
-        const epoch = activityEpoch.current;
+        const epoch = ++activityEpoch.current;
         setError('');
         try {
             const snapshot = build();
             if (once) {
                 snapshot.repeatSeconds = null;
             }
-            if (document.hidden || !connected || props.busy || props.blocked)
+            if (document.hidden || !connected || props.busy || props.blocked || captureActionBusy)
                 throw Error('Wait for the selected transport and current collection.');
+            const inspection = prepareInspection(snapshot);
+            inspectionId = inspection.active.id;
+            flowInspectionId.current = inspectionId;
+            setFlowInspection(inspection);
             const active = props.transport,
                 serial = props.serial,
                 connection =
@@ -280,89 +660,54 @@ export default function AutomationPage(props: Props) {
                     snapshot.transport === 'ssh'
                         ? { ...(props.target ?? { endpoint: 'SSH target' }) }
                         : { endpoint: serial.current.label, serialSettings: serial.framing };
-            const backend: FlowBackend = {
-                connection: () =>
-                    snapshot.transport === 'ssh'
-                        ? active!.automationConnection!()
-                        : String(serial.current.generation),
-                available: () =>
-                    snapshot.transport === 'ssh'
-                        ? !latest.current.blocked &&
-                          latest.current.connected &&
-                          latest.current.transport === active
-                        : serial.current.state === 'connected',
-                acquire: () =>
-                    snapshot.transport === 'serial' ? serial.acquireAutomation() : () => {},
-                target,
-                sampleClock: snapshot.transport === 'ssh' ? () => sample(active) : undefined,
-                execute: async (s, p, signal, id) => {
-                    if (p.transport === 'serial') {
-                        const bytes = serialPayload(s.command, p.serial.lineEnding),
-                            capture = await serial.runAutomation(
-                                bytes,
-                                p.serial.prompt,
-                                p.timeoutSeconds * 1000,
-                                signal,
-                            );
-                        return {
-                            ...capture,
-                            requestBytes: bytesBase64(bytes),
-                            deviceTime: observedDeviceTime(
-                                capture.stdout,
-                                p.serial.timestampPrefix,
-                                capture.chunks.at(-1)?.receivedAt ?? new Date().toISOString(),
-                            ),
-                        };
-                    }
-                    let deviceTime: AutomationRecord['deviceTime'] = null;
-                    if (p.captureDeviceTime) {
-                        try {
-                            const c = await sample(active);
-                            deviceTime = {
-                                value: new Date(c.deviceEpochMs).toISOString(),
-                                source:
-                                    c.source +
-                                    ' before command · ±' +
-                                    Math.ceil(c.uncertaintyMs) +
-                                    ' ms',
-                                zone: c.zone,
-                                observedAt: new Date(c.sampledLocalMs).toISOString(),
-                            };
-                        } catch {}
-                    }
-                    if (signal.aborted)
-                        return {
-                            stdout: '',
-                            stderr: 'Cancelled before command.',
-                            exitCode: null,
-                            completion: 'cancelled',
-                            truncated: false,
-                            chunks: [],
-                            deviceTime,
-                        };
-                    const cancel = () => {
-                        void active!.cancelAutomation!(id, connection).catch(() => {});
-                    };
-                    signal.addEventListener('abort', cancel, { once: true });
-                    try {
-                        if (signal.aborted) cancel();
-                        return {
-                            ...(await active!.runAutomation!({
-                                id,
-                                connection,
-                                command: s.command,
-                                timeoutMs: p.timeoutSeconds * 1000,
-                            })),
-                            deviceTime,
-                        };
-                    } finally {
-                        signal.removeEventListener('abort', cancel);
-                    }
-                },
-            };
+            latest.current.onBusy(true);
+            setRunning(true);
+            resumeClock = await props.clockAdmission.quiesce();
+            if (armAttempt.current !== attempt) return;
+            const repository =
+                snapshot.transport === 'ssh' && snapshot.ssh?.mode === 'console'
+                    ? undefined
+                    : await openCaptureRepository();
+            if (armAttempt.current !== attempt) return;
+            const backend: FlowBackend =
+                snapshot.transport === 'serial'
+                    ? serialCaptureBackend(serial, repository!)
+                    : snapshot.ssh?.mode === 'console'
+                      ? sshConsoleBackend(
+                            active!,
+                            window.diagnosticHub ? 'local-client' : 'gateway',
+                            target,
+                            () =>
+                                !latest.current.blocked &&
+                                latest.current.connected &&
+                                latest.current.transport === active,
+                            () => IndexedDbConsoleJournal.open(),
+                            () => sample(active),
+                            async () => {
+                                if (!consoleResultsAdmission.current)
+                                    throw Error(
+                                        'Console results admission is unavailable. Arm explicitly to resume.',
+                                    );
+                                resumeConsoleResults =
+                                    await consoleResultsAdmission.current.quiesce();
+                            },
+                            () => resumeConsoleResults?.(),
+                        )
+                      : sshCaptureBackend(
+                            active!,
+                            repository!,
+                            window.diagnosticHub ? 'local-client' : 'gateway',
+                            target,
+                            () =>
+                                !latest.current.blocked &&
+                                latest.current.connected &&
+                                latest.current.transport === active,
+                            () => sample(active),
+                        );
             latest.current.onBusy(true);
             setRunning(true);
             lease = await desktop?.acquireAutomationActivity?.();
+            if (armAttempt.current !== attempt) return;
             if (
                 activityEpoch.current !== epoch ||
                 latest.current.blocked ||
@@ -372,20 +717,48 @@ export default function AutomationPage(props: Props) {
                 throw Error(
                     'Automation eligibility changed while arming. Arm explicitly to resume.',
                 );
-            await runner.current!.start(snapshot, backend);
+            hasFlowFinalizer = Boolean(backend.finishFlow);
+            const task = runner.current!.start(snapshot, backend);
+            flowStarted = true;
+            await task;
         } catch (e) {
-            setRunning(false);
-            latest.current.onBusy(false);
-            setError(e instanceof Error ? e.message : String(e));
+            if (armAttempt.current === attempt)
+                setError(e instanceof Error ? e.message : String(e));
         } finally {
-            if (lease) await desktop?.releaseAutomationActivity?.(lease).catch(() => {});
-            arming.current = false;
-            setRunning(false);
-            latest.current.onBusy(false);
+            if (!flowStarted && inspectionId && flowInspectionId.current === inspectionId) {
+                flowInspectionId.current = null;
+                setFlowInspection(null);
+            }
+            // Each host-release attempt retains its own ID/resumes, independently of later arms.
+            const pending = flowStarted && Boolean(runner.current?.cleanupPending);
+            const retire = retireActivity(
+                lease,
+                desktop,
+                resumeConsoleResults,
+                resumeClock,
+                flowStarted && hasFlowFinalizer,
+            );
+            if (pending) {
+                cleanupActivity.current = lease;
+                cleanupConsoleResults.current = resumeConsoleResults;
+                cleanupClock.current = resumeClock;
+                cleanupActivityRetirement.current = retire;
+            } else await retire().catch(() => {});
+            if (armAttempt.current === attempt) {
+                armAttempt.current = null;
+                arming.current = false;
+                const active = pending || Boolean(activityRetirements.current?.hasFailures);
+                setRunning(active);
+                latest.current.onBusy(active);
+            }
         }
     };
     const edit = (id: string, patch: Partial<CommandStep>) =>
         setSteps((list) => list.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+    const sendsEnter = (s: CommandStep) =>
+        transport === 'serial'
+            ? Boolean(s.enterOnly)
+            : sshMode === 'console' && s.ssh?.intent === 'send-enter';
     const move = (index: number, delta: number) => {
         if (
             running ||
@@ -505,9 +878,53 @@ export default function AutomationPage(props: Props) {
         }
     };
     return (
-        <section className="automation-page" hidden={!props.visible} aria-label="Automation">
+        <section
+            ref={pageRef}
+            className="automation-page"
+            hidden={!props.visible}
+            aria-label="Automation"
+        >
             <div className="automation-intro automation-guide-heading">
                 <h2>Ordered command flow</h2>
+                {props.visible && (
+                    <FlowViewerEntry
+                        draft={{
+                            transport,
+                            steps,
+                            timeoutSeconds: Number(timeout),
+                            repeatSeconds: repeat ? Number(repeatSeconds) : null,
+                            start: plan?.start ?? null,
+                            serial: { lineEnding: ending, prompt, timestampPrefix: prefix },
+                            ...(transport === 'ssh'
+                                ? {
+                                      ssh:
+                                          sshMode === 'console'
+                                              ? {
+                                                    mode: sshMode,
+                                                    ready: {
+                                                        role: 'shell-prompt',
+                                                        literals: consolePrompts.split(/\r?\n/),
+                                                    },
+                                                    completion: {
+                                                        role: 'shell-prompt',
+                                                        literals: consolePrompts.split(/\r?\n/),
+                                                    },
+                                                }
+                                              : { mode: sshMode },
+                                  }
+                                : {}),
+                        }}
+                        draftTiming={
+                            scheduled
+                                ? date + ' · ' + zone + ' · ' + clockKind + ' clock (draft)'
+                                : undefined
+                        }
+                        active={flowInspection?.active ?? null}
+                        busy={running}
+                        state={flowInspection?.state ?? state}
+                        evidence={flowInspection?.evidence ?? []}
+                    />
+                )}
                 <button
                     className="button secondary"
                     onClick={() => {
@@ -515,7 +932,11 @@ export default function AutomationPage(props: Props) {
                         resultsHeading.current?.focus({ preventScroll: true });
                     }}
                 >
-                    Results · {rows.length}
+                    {transport === 'serial'
+                        ? 'Stored Serial results'
+                        : sshMode === 'console'
+                          ? 'Stored SSH console results'
+                          : 'Stored SSH results'}
                 </button>
             </div>
             <nav className="automation-guide-nav" aria-label="Automation setup steps">
@@ -524,7 +945,7 @@ export default function AutomationPage(props: Props) {
                         key={name}
                         className={'automation-guide-tab ' + (guideStep === index ? 'active' : '')}
                         aria-current={guideStep === index ? 'step' : undefined}
-                        onClick={() => setGuideStep(index)}
+                        onClick={() => goToStage(index)}
                         disabled={props.blocked}
                     >
                         <span>{index + 1}</span>
@@ -538,25 +959,19 @@ export default function AutomationPage(props: Props) {
                     style={{ top: running ? headerOffset : undefined }}
                 >
                     <p className="automation-state" role="status">
-                        {state.message}
-                        {running ? ' · Draft frozen' : ''}
+                        {activityFailure
+                            ? activityFailure + ' Previous flow: ' + state.message
+                            : state.message}
+                        {running ? ' · Armed snapshot frozen; edits apply next run' : ''}
                     </p>
                     {running && (
                         <div className="automation-run-actions">
                             {' '}
-                            <button
-                                className="button"
-                                disabled={!running}
-                                onClick={() => runner.current!.stop()}
-                            >
-                                Stop
-                            </button>
-                            <button
-                                className="button danger"
-                                disabled={!running}
-                                onClick={() => runner.current!.cancel()}
-                            >
-                                Cancel run
+                            <button className="button danger" disabled={!running} onClick={cancel}>
+                                {state.cleanupPending ||
+                                (!arming.current && !runner.current?.busy && activityFailure)
+                                    ? 'Retry cleanup'
+                                    : 'Cancel run'}
                             </button>
                         </div>
                     )}
@@ -571,6 +986,9 @@ export default function AutomationPage(props: Props) {
                 >
                     {GUIDE_STEPS[guideStep]}
                 </h3>
+                <p className="automation-required-note">
+                    Required fields are marked <span aria-hidden="true">*</span>.
+                </p>
                 <div
                     className="automation-stage"
                     hidden={guideStep !== 0}
@@ -592,10 +1010,9 @@ export default function AutomationPage(props: Props) {
                             <select
                                 aria-label="Automation transport"
                                 value={transport}
-                                onChange={(e) => {
-                                    setTransport(e.target.value as 'ssh' | 'serial');
-                                    setCalibration(undefined);
-                                }}
+                                onChange={(e) =>
+                                    changeTransport(e.target.value as 'ssh' | 'serial')
+                                }
                             >
                                 <option value="ssh">SSH</option>
                                 <option value="serial">Serial</option>
@@ -610,14 +1027,63 @@ export default function AutomationPage(props: Props) {
                                 : 'Disconnected'}
                         </span>
                     </div>
+                    {transport === 'ssh' && (
+                        <div className="automation-fields">
+                            <label>
+                                SSH execution mode
+                                <select
+                                    aria-label="SSH execution mode"
+                                    value={sshMode}
+                                    onChange={(event) =>
+                                        setSshMode(event.target.value as SshExecutionMode)
+                                    }
+                                >
+                                    <option value="independent-script">Independent script</option>
+                                    <option value="console">Persistent console</option>
+                                </select>
+                            </label>
+                            {sshMode === 'console' && (
+                                <label>
+                                    Shell prompt alternatives (one per line)
+                                    <textarea
+                                        aria-label="SSH shell prompt alternatives"
+                                        {...fieldProps('console-prompts', true)}
+                                        rows={2}
+                                        value={consolePrompts}
+                                        spellCheck={false}
+                                        onChange={(event) => setConsolePrompts(event.target.value)}
+                                    />
+                                    {fieldError('console-prompts')}
+                                    <small className="automation-note">
+                                        Used for initial readiness and steps without an override.
+                                        Enter every expected prompt, including changes after cd.
+                                        Prompt observation does not establish an exit code.
+                                    </small>
+                                </label>
+                            )}
+                            {sshMode === 'console' && !props.transport?.automationConsole && (
+                                <p role="status" className="automation-warning">
+                                    Update the desktop app or gateway to enable persistent console
+                                    capture.
+                                </p>
+                            )}
+                        </div>
+                    )}
                     <div className="automation-fields automation-serial-fields">
                         {' '}
                         {transport === 'serial' && (
                             <>
                                 <label>
-                                    Append line ending
+                                    <span className="automation-field-label">
+                                        Append line ending{' '}
+                                        {steps.some((s) => s.enterOnly) && <RequiredMark />}
+                                    </span>
                                     <select
                                         aria-label="Serial automation line ending"
+                                        {...fieldProps(
+                                            'ending',
+                                            steps.some((s) => s.enterOnly),
+                                        )}
                                         value={ending}
                                         onChange={(e) => setEnding(e.target.value as typeof ending)}
                                     >
@@ -625,24 +1091,33 @@ export default function AutomationPage(props: Props) {
                                             <option key={x}>{x}</option>
                                         ))}
                                     </select>
+                                    {fieldError('ending')}
                                 </label>
                                 <label>
-                                    Completion prompt
+                                    <span className="automation-field-label">
+                                        Completion prompt <RequiredMark />
+                                    </span>
                                     <input
                                         aria-label="Serial completion prompt"
+                                        {...fieldProps('prompt', true)}
                                         value={prompt}
                                         onChange={(e) => setPrompt(e.target.value)}
                                     />
+                                    {fieldError('prompt')}
                                 </label>
                                 <details className="automation-more">
-                                    <summary>Timestamp capture</summary>{' '}
+                                    <summary>Advanced device timestamp extraction</summary>{' '}
                                     <label>
-                                        Received timestamp prefix
+                                        <span className="automation-field-label">
+                                            Optional device timestamp prefix
+                                        </span>
                                         <input
                                             aria-label="Serial timestamp prefix"
+                                            {...fieldProps('prefix', false)}
                                             value={prefix}
                                             onChange={(e) => setPrefix(e.target.value)}
                                         />
+                                        {fieldError('prefix')}
                                     </label>
                                 </details>
                                 <small className="automation-note">
@@ -731,6 +1206,7 @@ export default function AutomationPage(props: Props) {
                                     <label>
                                         <input
                                             type="checkbox"
+                                            {...fieldProps(s.id + '.enabled')}
                                             checked={s.enabled}
                                             onChange={(e) =>
                                                 edit(s.id, { enabled: e.target.checked })
@@ -740,6 +1216,7 @@ export default function AutomationPage(props: Props) {
                                     </label>
                                     <input
                                         aria-label={'Step ' + (i + 1) + ' name (optional)'}
+                                        {...fieldProps(s.id + '.name')}
                                         placeholder="Step name (optional)"
                                         value={s.name}
                                         maxLength={120}
@@ -794,21 +1271,155 @@ export default function AutomationPage(props: Props) {
                                         </button>
                                     </div>
                                 </div>
-                                <textarea
-                                    aria-label={'Command ' + (i + 1) + ' script'}
-                                    value={s.command}
-                                    rows={3}
-                                    spellCheck={false}
-                                    placeholder={
-                                        transport === 'ssh'
-                                            ? 'Type your script'
-                                            : 'Type the console payload'
-                                    }
-                                    disabled={transport === 'serial' && Boolean(s.enterOnly)}
-                                    onChange={(e) =>
-                                        edit(s.id, { command: e.target.value, enterOnly: false })
-                                    }
-                                />
+                                {fieldError(s.id + '.enabled')}
+                                {fieldError(s.id + '.name')}
+                                {transport === 'ssh' && sshMode === 'console' && (
+                                    <label>
+                                        SSH input
+                                        <select
+                                            aria-label={'Command ' + (i + 1) + ' SSH input'}
+                                            value={s.ssh?.intent ?? 'script'}
+                                            onChange={(event) =>
+                                                edit(s.id, {
+                                                    enterOnly: false,
+                                                    ssh: {
+                                                        ...s.ssh,
+                                                        intent: event.target.value as
+                                                            'script' | 'send-enter',
+                                                    },
+                                                    ...(event.target.value === 'send-enter'
+                                                        ? { command: '' }
+                                                        : {}),
+                                                })
+                                            }
+                                        >
+                                            <option value="script">Script (append CR)</option>
+                                            <option value="send-enter">Send Enter (one CR)</option>
+                                        </select>
+                                    </label>
+                                )}
+                                <label className="automation-command-label">
+                                    Command {i + 1} script{' '}
+                                    {s.enabled && !sendsEnter(s) && <RequiredMark />}
+                                    <textarea
+                                        {...fieldProps(
+                                            s.id + '.command',
+                                            s.enabled && !sendsEnter(s),
+                                        )}
+                                        aria-label={'Command ' + (i + 1) + ' script'}
+                                        value={s.command}
+                                        rows={3}
+                                        spellCheck={false}
+                                        placeholder={
+                                            transport === 'ssh'
+                                                ? 'Type your script'
+                                                : 'Type the console payload'
+                                        }
+                                        disabled={sendsEnter(s)}
+                                        onChange={(e) =>
+                                            edit(s.id, {
+                                                command: e.target.value,
+                                                enterOnly: false,
+                                            })
+                                        }
+                                    />
+                                    {fieldError(s.id + '.command')}
+                                </label>
+                                {transport === 'ssh' && sshMode === 'console' && (
+                                    <div className="automation-fields">
+                                        <label>
+                                            <input
+                                                type="checkbox"
+                                                aria-label={
+                                                    'Command ' + (i + 1) + ' override completion'
+                                                }
+                                                checked={Boolean(s.ssh?.completion)}
+                                                onChange={(event) =>
+                                                    edit(s.id, {
+                                                        ssh: {
+                                                            intent: s.ssh?.intent ?? 'script',
+                                                            ...(event.target.checked
+                                                                ? {
+                                                                      completion: {
+                                                                          role: 'shell-prompt',
+                                                                          literals:
+                                                                              consolePrompts.split(
+                                                                                  /\r?\n/,
+                                                                              ),
+                                                                      },
+                                                                  }
+                                                                : {}),
+                                                        },
+                                                    })
+                                                }
+                                            />
+                                            Override completion for this step
+                                        </label>
+                                        {s.ssh?.completion && (
+                                            <>
+                                                <label>
+                                                    Completion role
+                                                    <select
+                                                        aria-label={
+                                                            'Command ' +
+                                                            (i + 1) +
+                                                            ' completion role'
+                                                        }
+                                                        value={s.ssh.completion.role}
+                                                        onChange={(event) =>
+                                                            edit(s.id, {
+                                                                ssh: {
+                                                                    intent: s.ssh!.intent,
+                                                                    completion: {
+                                                                        ...s.ssh!.completion!,
+                                                                        role: event.target
+                                                                            .value as ConsoleCompletion['role'],
+                                                                    },
+                                                                },
+                                                            })
+                                                        }
+                                                    >
+                                                        <option value="shell-prompt">
+                                                            Shell prompt
+                                                        </option>
+                                                        <option value="intermediate-input-prompt">
+                                                            Intermediate input prompt
+                                                        </option>
+                                                    </select>
+                                                </label>
+                                                <label>
+                                                    Completion alternatives (one per line)
+                                                    <textarea
+                                                        aria-label={
+                                                            'Command ' +
+                                                            (i + 1) +
+                                                            ' completion alternatives'
+                                                        }
+                                                        {...fieldProps(s.id + '.completion', true)}
+                                                        value={s.ssh.completion.literals.join('\n')}
+                                                        rows={2}
+                                                        spellCheck={false}
+                                                        onChange={(event) =>
+                                                            edit(s.id, {
+                                                                ssh: {
+                                                                    intent: s.ssh!.intent,
+                                                                    completion: {
+                                                                        ...s.ssh!.completion!,
+                                                                        literals:
+                                                                            event.target.value.split(
+                                                                                /\r?\n/,
+                                                                            ),
+                                                                    },
+                                                                },
+                                                            })
+                                                        }
+                                                    />
+                                                    {fieldError(s.id + '.completion')}
+                                                </label>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
                                 {transport === 'serial' && (
                                     <label className="automation-enter-only">
                                         <input
@@ -846,12 +1457,16 @@ export default function AutomationPage(props: Props) {
                     <div className="automation-settings">
                         <div className="automation-fields">
                             <label>
-                                Timeout (s)
+                                <span className="automation-field-label">
+                                    Timeout (s) <RequiredMark />
+                                </span>
                                 <input
                                     aria-label="Command timeout"
+                                    {...fieldProps('timeout', true)}
                                     value={timeout}
                                     onChange={(e) => setTimeoutValue(e.target.value)}
                                 />
+                                {fieldError('timeout')}
                             </label>
                             <label>
                                 Run mode
@@ -859,7 +1474,9 @@ export default function AutomationPage(props: Props) {
                                     aria-label="Run mode"
                                     value={scheduled ? 'scheduled' : 'immediate'}
                                     disabled={running}
-                                    onChange={(e) => setScheduled(e.target.value === 'scheduled')}
+                                    onChange={(e) =>
+                                        changeScheduled(e.target.value === 'scheduled')
+                                    }
                                 >
                                     <option value="immediate">Start immediately</option>
                                     <option value="scheduled">Start at chosen date and time</option>
@@ -875,13 +1492,17 @@ export default function AutomationPage(props: Props) {
                                 Repeat completed flow
                             </label>
                             <label>
-                                Repeat delay (s)
+                                <span className="automation-field-label">
+                                    Repeat delay (s) {repeat && <RequiredMark />}
+                                </span>
                                 <input
                                     aria-label="Repetition delay"
+                                    {...fieldProps('repeat', repeat)}
                                     disabled={!repeat || running}
                                     value={repeatSeconds}
                                     onChange={(e) => setRepeatSeconds(e.target.value)}
                                 />
+                                {fieldError('repeat')}
                             </label>
                             <fieldset
                                 className="automation-schedule-fields"
@@ -889,27 +1510,32 @@ export default function AutomationPage(props: Props) {
                             >
                                 <legend>Chosen start</legend>
                                 <label>
-                                    Start date
+                                    <span className="automation-field-label">
+                                        Start date {scheduled && <RequiredMark />}
+                                    </span>
                                     <input
                                         type="date"
                                         aria-label="Scheduled start date"
+                                        {...fieldProps('date', scheduled)}
                                         value={date.split('T')[0]}
                                         onChange={(e) => {
                                             setDate(
-                                                e.target.value +
-                                                    'T' +
-                                                    (date.split('T')[1] || '00:00:00'),
+                                                e.target.value + 'T' + (date.split('T')[1] || ''),
                                             );
                                             setOffset('');
                                         }}
                                     />
+                                    {fieldError('date')}
                                 </label>
                                 <label>
-                                    Start time
+                                    <span className="automation-field-label">
+                                        Start time {scheduled && <RequiredMark />}
+                                    </span>
                                     <input
                                         type="time"
                                         step="1"
                                         aria-label="Scheduled start time"
+                                        {...fieldProps('time', scheduled)}
                                         value={date.split('T')[1] || ''}
                                         onChange={(e) => {
                                             setDate(
@@ -918,36 +1544,41 @@ export default function AutomationPage(props: Props) {
                                             setOffset('');
                                         }}
                                     />
+                                    {fieldError('time')}
                                 </label>
                                 <label>
-                                    Timezone
+                                    <span className="automation-field-label">
+                                        Timezone {scheduled && <RequiredMark />}
+                                    </span>
                                     <select
                                         aria-label="Start timezone"
+                                        {...fieldProps('zone', scheduled)}
                                         value={zone}
                                         onChange={(e) => {
                                             setZone(e.target.value);
                                             setOffset('');
                                         }}
                                     >
-                                        {zones.map((z) => (
-                                            <option key={z} value={z}>
-                                                {z}
-                                            </option>
-                                        ))}
+                                        {zoneOptions}
                                     </select>
+                                    {fieldError('zone')}
                                 </label>
                                 <label>
-                                    Start clock
+                                    <span className="automation-field-label">
+                                        Start clock {scheduled && <RequiredMark />}
+                                    </span>
                                     <select
                                         aria-label="Start clock"
+                                        {...fieldProps('clock', scheduled)}
                                         value={clockKind}
                                         onChange={(e) =>
-                                            setClockKind(e.target.value as 'local' | 'device')
+                                            changeClockKind(e.target.value as 'local' | 'device')
                                         }
                                     >
                                         <option value="local">Local host clock</option>
                                         <option value="device">Verified device clock</option>
                                     </select>
+                                    {fieldError('clock')}
                                 </label>
                                 <p className="automation-offset">
                                     {scheduleOptions.matches.length === 1
@@ -960,9 +1591,18 @@ export default function AutomationPage(props: Props) {
                                             : 'Choose a future calendar date and time.'}
                                 </p>
                                 <label>
-                                    Repeated time occurrence
+                                    <span className="automation-field-label">
+                                        Repeated time occurrence{' '}
+                                        {scheduled && scheduleOptions.matches.length > 1 && (
+                                            <RequiredMark />
+                                        )}
+                                    </span>
                                     <select
                                         aria-label="Repeated time occurrence"
+                                        {...fieldProps(
+                                            'offset',
+                                            scheduled && scheduleOptions.matches.length > 1,
+                                        )}
                                         disabled={scheduleOptions.matches.length < 2}
                                         value={offset}
                                         onChange={(e) => setOffset(e.target.value)}
@@ -974,6 +1614,7 @@ export default function AutomationPage(props: Props) {
                                             </option>
                                         ))}
                                     </select>
+                                    {fieldError('offset')}
                                 </label>
                                 <button
                                     className="button"
@@ -1005,7 +1646,7 @@ export default function AutomationPage(props: Props) {
                                 time in {zone}:{' '}
                                 <time aria-label="Current time reference">{reference}</time>.
                             </p>
-                            {transport === 'ssh' && (
+                            {transport === 'ssh' && sshMode !== 'console' && (
                                 <label>
                                     <input
                                         type="checkbox"
@@ -1015,15 +1656,24 @@ export default function AutomationPage(props: Props) {
                                     Capture device time
                                 </label>
                             )}
+                            {transport === 'ssh' && sshMode === 'console' && (
+                                <p className="automation-note">
+                                    Device time capture is unavailable in console mode. Console
+                                    records use local receive time.
+                                </p>
+                            )}
                         </div>
                     </div>
                     <div className="automation-delay-list">
                         <h4>Step delays</h4>
                         {steps.map((s, i) => (
                             <label key={s.id} className="automation-delay">
-                                {s.name || 'Command ' + (i + 1)} · delay (s)
+                                <span className="automation-field-label">
+                                    {s.name || 'Command ' + (i + 1)} · delay (s) <RequiredMark />
+                                </span>
                                 <input
                                     aria-label={'Command ' + (i + 1) + ' delay'}
+                                    {...fieldProps(s.id + '.delay', true)}
                                     type="text"
                                     inputMode="decimal"
                                     value={delayDraft[s.id] ?? String(s.delaySeconds)}
@@ -1037,6 +1687,7 @@ export default function AutomationPage(props: Props) {
                                         });
                                     }}
                                 />
+                                {fieldError(s.id + '.delay')}
                             </label>
                         ))}
                     </div>
@@ -1049,8 +1700,13 @@ export default function AutomationPage(props: Props) {
                 >
                     {' '}
                     <details className="automation-preview" open>
-                        <summary>Exact flow preview</summary>
+                        <summary>Next-run draft preview</summary>
                         <p>
+                            {transport === 'ssh'
+                                ? sshMode === 'console'
+                                    ? 'Persistent console · '
+                                    : 'Independent script · '
+                                : ''}
                             {plan?.start
                                 ? 'Start ' +
                                   new Date(plan.start.epochMs).toISOString() +
@@ -1089,23 +1745,60 @@ export default function AutomationPage(props: Props) {
                                                           LF: '\n',
                                                           CRLF: '\r\n',
                                                       }[ending]
-                                                    : ''),
+                                                    : sshMode === 'console'
+                                                      ? '\r'
+                                                      : ''),
                                         )}
                                     </pre>
+                                    {transport === 'ssh' && sshMode === 'console' && (
+                                        <small className="automation-note">
+                                            {s.ssh?.intent === 'send-enter'
+                                                ? 'Send Enter'
+                                                : 'Script + CR'}{' '}
+                                            ·{' '}
+                                            {(s.ssh?.completion?.role ?? 'shell-prompt') ===
+                                            'shell-prompt'
+                                                ? 'Shell prompt'
+                                                : 'Intermediate input prompt'}{' '}
+                                            ·{' '}
+                                            {JSON.stringify(
+                                                s.ssh?.completion?.literals ??
+                                                    consolePrompts.split(/\r?\n/),
+                                            )}
+                                        </small>
+                                    )}
                                 </div>
                             ))}
                         <small className="automation-note">
-                            Escapes shown above. Original text and the selected Serial ending are
-                            sent.
+                            {transport === 'ssh' && sshMode === 'console'
+                                ? 'Escapes show the exact console request. One owned shell spans every step and repeat. Prompt observation does not establish an exit status.'
+                                : 'Escapes shown above. Original text and the selected line ending are sent.'}
                         </small>
                     </details>
+                    {fieldIssues.length > 0 && (
+                        <div className="automation-validation-actions">
+                            <p>
+                                Fix {fieldIssues.length}{' '}
+                                {fieldIssues.length === 1 ? 'field' : 'fields'} to run.
+                            </p>
+                            <button
+                                className="button secondary"
+                                disabled={running || captureActionBusy || props.blocked}
+                                onClick={() => focusIssue(fieldIssues[0])}
+                            >
+                                Fix required fields
+                            </button>
+                        </div>
+                    )}
                     <div className="automation-run-actions">
                         {' '}
                         <button
                             className="button"
                             disabled={
                                 Boolean(validation) ||
+                                fieldIssues.length > 0 ||
                                 running ||
+                                captureActionBusy ||
                                 !connected ||
                                 props.busy ||
                                 props.blocked
@@ -1118,19 +1811,28 @@ export default function AutomationPage(props: Props) {
                             className="button primary"
                             disabled={
                                 Boolean(validation) ||
+                                fieldIssues.length > 0 ||
                                 running ||
+                                captureActionBusy ||
                                 !connected ||
                                 props.busy ||
                                 props.blocked
                             }
                             onClick={() => start()}
                         >
+                            <Play size={16} aria-hidden="true" focusable="false" />
                             Start flow
                         </button>
                     </div>
                     <small className="automation-note">
-                        Stop finishes the active command. Cancel cannot undo sent commands.
+                        Cancel disarms queued steps and repetitions and requests active
+                        cancellation. Commands already sent may continue on the device.
                     </small>
+                    {transport === 'ssh' && connected && !props.transport?.automationStream && (
+                        <p role="status" className="automation-warning">
+                            Update the desktop app or gateway to enable full SSH capture.
+                        </p>
+                    )}
                     {!connected && (
                         <button
                             className="button secondary"
@@ -1140,9 +1842,9 @@ export default function AutomationPage(props: Props) {
                         </button>
                     )}
                 </div>
-                {(error || (guideStep > 0 && validation)) && (
+                {(error || summaryIssue || (guideStep === 3 && validation)) && (
                     <p className="error-banner" role="alert">
-                        {error || validation}
+                        {error || summaryIssue?.message || validation}
                     </p>
                 )}
                 <div className="automation-guide-footer">
@@ -1157,262 +1859,345 @@ export default function AutomationPage(props: Props) {
                         <button
                             className="button primary"
                             disabled={props.blocked}
-                            onClick={() => setGuideStep((s) => Math.min(3, s + 1))}
+                            onClick={nextStage}
                         >
                             Next: {GUIDE_STEPS[guideStep + 1]}
                         </button>
                     )}
                 </div>
             </div>
-            <div className="automation-results-heading">
-                <h2
-                    id="automation-results-title"
-                    style={{ scrollMarginTop: headerOffset }}
-                    ref={resultsHeading}
-                    tabIndex={-1}
-                >
-                    Results
-                </h2>
-                <span>
-                    {rows.length} retained · {store.current.evicted} evicted · max{' '}
-                    {AUTOMATION_LIMITS.rows} rows / 8 MiB
-                </span>
-                <button
-                    className="button"
-                    disabled={running || !rows.length}
-                    onClick={() => {
-                        store.current.clear();
-                        setRows([]);
-                        setSelected(new Set());
-                    }}
-                >
-                    Clear retained results
-                </button>
-            </div>
-            <div className="automation-fields">
-                <label>
-                    Search
-                    <input
-                        aria-label="Search automation results"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                    />
-                </label>
-                <label>
-                    Status
-                    <select
-                        aria-label="Result completion filter"
-                        value={status}
-                        onChange={(e) => setStatus(e.target.value)}
-                    >
-                        <option value="all">All</option>
-                        {[
-                            'exit',
-                            'signalled',
-                            'uncertain-close',
-                            'prompt-observed',
-                            'timeout',
-                            'cancelled',
-                            'transport-error',
-                            'output-limit',
-                        ].map((x) => (
-                            <option key={x}>{x}</option>
-                        ))}
-                    </select>
-                </label>
-                <label>
-                    Command
-                    <select
-                        aria-label="Result command filter"
-                        value={commandFilter}
-                        onChange={(e) => setCommandFilter(e.target.value)}
-                    >
-                        <option value="all">All</option>
-                        {[...new Set(rows.map((r) => r.name))].map((x) => (
-                            <option key={x}>{x}</option>
-                        ))}
-                    </select>
-                </label>
-                <label>
-                    Display timestamps
-                    <select
-                        aria-label="Result timestamp clock"
-                        value={displayClock}
-                        onChange={(e) => setDisplayClock(e.target.value)}
-                    >
-                        <option value="local">Local host</option>
-                        <option value="device">Device observation</option>
-                    </select>
-                </label>
-            </div>
-            <div
-                className="automation-results"
-                ref={viewport}
-                onScroll={() => {
-                    const el = viewport.current!;
-                    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-                    if (follow.current) setNewRows(0);
+            <StoredSerialResults
+                visible={props.visible && transport === 'serial'}
+                running={running || (captureActionBusy && !captureOwners.current.has('serial'))}
+                epoch={catalogRevision}
+                headingRef={resultsHeading}
+                headerOffset={headerOffset}
+                onBusy={(value) => {
+                    if (value) captureOwners.current.add('serial');
+                    else captureOwners.current.delete('serial');
+                    setCaptureActionBusy(captureOwners.current.size > 0);
+                    latest.current.onBusy(
+                        captureOwners.current.size > 0 ||
+                            Boolean(runner.current?.busy) ||
+                            arming.current,
+                    );
                 }}
-            >
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Select</th>
-                            <th>Time</th>
-                            <th>Command</th>
-                            <th>Completion</th>
-                            <th>Duration</th>
-                            <th>Exit</th>
-                            <th>Output</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filtered.map((r) => (
-                            <tr key={r.id}>
-                                <td>
-                                    <input
-                                        aria-label={'Select result ' + r.name + ' ' + r.id}
-                                        type="checkbox"
-                                        checked={selected.has(r.id)}
-                                        onChange={(e) =>
-                                            setSelected((list) => {
-                                                const next = new Set(list);
-                                                if (e.target.checked) next.add(r.id);
-                                                else next.delete(r.id);
-                                                return next;
-                                            })
-                                        }
-                                    />
-                                </td>
-                                <td>
-                                    <time
-                                        dateTime={
-                                            displayClock === 'local'
-                                                ? r.startedAt
-                                                : r.deviceTime?.value
-                                        }
-                                        title={displayClock === 'local' ? r.startedAt : undefined}
-                                    >
-                                        {displayClock === 'local'
-                                            ? new Date(r.startedAt).toLocaleString(undefined, {
-                                                  timeZone: r.localZone,
-                                              })
-                                            : (r.deviceTime?.value ?? 'Unavailable')}
-                                    </time>
-                                    <small>
-                                        {displayClock === 'local'
-                                            ? r.localZone
-                                            : (r.deviceTime?.source ??
-                                              'No verified device observation')}
-                                    </small>
-                                </td>
-                                <td>
-                                    {r.name}
-                                    <small>
-                                        {r.transport} · flow step {r.ordinal}
-                                    </small>
-                                </td>
-                                <td>
-                                    {r.completion}
-                                    {r.termination ? ' · ' + r.termination.signal : ''}
-                                    {r.truncated ? ' · truncated' : ''}
-                                </td>
-                                <td>{Math.round(r.durationMs)} ms</td>
-                                <td>{r.exitCode ?? 'Unavailable'}</td>
-                                <td>
-                                    <details>
-                                        <summary>
-                                            {(r.stdout || r.stderr || 'No output').slice(0, 100)}
-                                        </summary>
-                                        {r.termination && (
-                                            <p>
-                                                Signal: {r.termination.signal} · core dump:{' '}
-                                                {r.termination.coreDumped === null
-                                                    ? 'unavailable'
-                                                    : String(r.termination.coreDumped)}{' '}
-                                                ·{' '}
-                                                {r.termination.message ??
-                                                    'No termination message reported'}
-                                                {r.termination.truncated
-                                                    ? ' (termination evidence truncated)'
-                                                    : ''}
-                                            </p>
-                                        )}
-                                        <strong>Command</strong>
-                                        <pre>{r.command}</pre>
-                                        <strong>Output</strong>
-                                        <pre>{r.stdout}</pre>
-                                        <strong>Error output</strong>
-                                        <pre>{r.stderr}</pre>
-                                        <button
-                                            className="button"
-                                            onClick={() => {
-                                                void (
-                                                    window.diagnosticHub?.copyText
-                                                        ? window.diagnosticHub.copyText(r.stdout)
-                                                        : navigator.clipboard.writeText(r.stdout)
-                                                ).catch((e) => setError(String(e)));
-                                            }}
-                                        >
-                                            Copy output
-                                        </button>
-                                    </details>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {!filtered.length && <p>No retained matching results.</p>}
-            </div>
-            {newRows > 0 && (
-                <button
-                    className="button"
-                    onClick={() => {
-                        follow.current = true;
-                        setNewRows(0);
-                        if (viewport.current)
-                            viewport.current.scrollTop = viewport.current.scrollHeight;
-                    }}
-                >
-                    {newRows} new results · jump to latest
-                </button>
+            />
+            <StoredSerialResults
+                transport="ssh"
+                visible={props.visible && transport === 'ssh' && sshMode !== 'console'}
+                running={running || (captureActionBusy && !captureOwners.current.has('ssh'))}
+                epoch={catalogRevision}
+                headingRef={resultsHeading}
+                headerOffset={headerOffset}
+                onBusy={(value) => {
+                    if (value) captureOwners.current.add('ssh');
+                    else captureOwners.current.delete('ssh');
+                    setCaptureActionBusy(captureOwners.current.size > 0);
+                    latest.current.onBusy(
+                        captureOwners.current.size > 0 ||
+                            Boolean(runner.current?.busy) ||
+                            arming.current,
+                    );
+                }}
+            />
+            <StoredConsoleResults
+                admissionRef={consoleResultsAdmission}
+                visible={props.visible && transport === 'ssh' && sshMode === 'console'}
+                running={running || (captureActionBusy && !captureOwners.current.has('console'))}
+                epoch={catalogRevision}
+                headingRef={resultsHeading}
+                headerOffset={headerOffset}
+                onBusy={(value) => {
+                    if (value) captureOwners.current.add('console');
+                    else captureOwners.current.delete('console');
+                    setCaptureActionBusy(captureOwners.current.size > 0);
+                    latest.current.onBusy(
+                        captureOwners.current.size > 0 ||
+                            Boolean(runner.current?.busy) ||
+                            arming.current,
+                    );
+                }}
+            />
+            {transport === 'ssh' && rows.length > 0 && (
+                <>
+                    <div className="automation-results-heading">
+                        <h2
+                            id="automation-results-title"
+                            style={{ scrollMarginTop: headerOffset }}
+                            ref={resultsHeading}
+                            tabIndex={-1}
+                        >
+                            Results
+                        </h2>
+                        <span>
+                            {rows.length} retained · {store.current.evicted} evicted · max{' '}
+                            {AUTOMATION_LIMITS.rows} rows / 8 MiB
+                        </span>
+                        <button
+                            className="button danger"
+                            disabled={running || !rows.length}
+                            onClick={() => {
+                                store.current.clear();
+                                setRows([]);
+                                setSelected(new Set());
+                            }}
+                        >
+                            <BrushCleaning size={16} aria-hidden="true" focusable="false" />
+                            Clear retained results
+                        </button>
+                    </div>
+                    <div className="automation-fields">
+                        <label>
+                            Search
+                            <input
+                                aria-label="Search automation results"
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                            />
+                        </label>
+                        <label>
+                            Status
+                            <select
+                                aria-label="Result completion filter"
+                                value={status}
+                                onChange={(e) => setStatus(e.target.value)}
+                            >
+                                <option value="all">All</option>
+                                {[
+                                    'exit',
+                                    'signalled',
+                                    'uncertain-close',
+                                    'prompt-observed',
+                                    'timeout',
+                                    'cancelled',
+                                    'transport-error',
+                                    'output-limit',
+                                ].map((x) => (
+                                    <option key={x}>{x}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <label>
+                            Command
+                            <select
+                                aria-label="Result command filter"
+                                value={commandFilter}
+                                onChange={(e) => setCommandFilter(e.target.value)}
+                            >
+                                <option value="all">All</option>
+                                {[...new Set(rows.map((r) => r.name))].map((x) => (
+                                    <option key={x}>{x}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <label>
+                            Display timestamps
+                            <select
+                                aria-label="Result timestamp clock"
+                                value={displayClock}
+                                onChange={(e) => setDisplayClock(e.target.value)}
+                            >
+                                <option value="local">Local host</option>
+                                <option value="device">Device observation</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div
+                        className="automation-results"
+                        ref={viewport}
+                        onScroll={() => {
+                            const el = viewport.current!;
+                            follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+                            if (follow.current) setNewRows(0);
+                        }}
+                    >
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Select</th>
+                                    <th>Time</th>
+                                    <th>Command</th>
+                                    <th>Completion</th>
+                                    <th>Duration</th>
+                                    <th>Exit</th>
+                                    <th>Output</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filtered.map((r) => (
+                                    <tr key={r.id}>
+                                        <td>
+                                            <input
+                                                aria-label={'Select result ' + r.name + ' ' + r.id}
+                                                type="checkbox"
+                                                checked={selected.has(r.id)}
+                                                onChange={(e) =>
+                                                    setSelected((list) => {
+                                                        const next = new Set(list);
+                                                        if (e.target.checked) next.add(r.id);
+                                                        else next.delete(r.id);
+                                                        return next;
+                                                    })
+                                                }
+                                            />
+                                        </td>
+                                        <td>
+                                            <time
+                                                dateTime={
+                                                    displayClock === 'local'
+                                                        ? r.startedAt
+                                                        : r.deviceTime?.value
+                                                }
+                                                title={
+                                                    displayClock === 'local'
+                                                        ? r.startedAt
+                                                        : undefined
+                                                }
+                                            >
+                                                {displayClock === 'local'
+                                                    ? new Date(r.startedAt).toLocaleString(
+                                                          undefined,
+                                                          {
+                                                              timeZone: r.localZone,
+                                                          },
+                                                      )
+                                                    : (r.deviceTime?.value ?? 'Unavailable')}
+                                            </time>
+                                            <small>
+                                                {displayClock === 'local'
+                                                    ? r.localZone
+                                                    : (r.deviceTime?.source ??
+                                                      'No verified device observation')}
+                                            </small>
+                                        </td>
+                                        <td>
+                                            {r.name}
+                                            <small>
+                                                {r.transport} · flow step {r.ordinal}
+                                            </small>
+                                        </td>
+                                        <td>
+                                            {r.completion}
+                                            {r.termination ? ' · ' + r.termination.signal : ''}
+                                            {r.truncated ? ' · truncated' : ''}
+                                        </td>
+                                        <td>{Math.round(r.durationMs)} ms</td>
+                                        <td>{r.exitCode ?? 'Unavailable'}</td>
+                                        <td>
+                                            <details>
+                                                <summary>
+                                                    {(r.stdout || r.stderr || 'No output').slice(
+                                                        0,
+                                                        100,
+                                                    )}
+                                                </summary>
+                                                {r.termination && (
+                                                    <p>
+                                                        Signal: {r.termination.signal} · core dump:{' '}
+                                                        {r.termination.coreDumped === null
+                                                            ? 'unavailable'
+                                                            : String(r.termination.coreDumped)}{' '}
+                                                        ·{' '}
+                                                        {r.termination.message ??
+                                                            'No termination message reported'}
+                                                        {r.termination.truncated
+                                                            ? ' (termination evidence truncated)'
+                                                            : ''}
+                                                    </p>
+                                                )}
+                                                <strong>Command</strong>
+                                                <pre>{r.command}</pre>
+                                                <strong>Received output</strong>
+                                                <pre className="automation-received-output">
+                                                    {formatReceivedOutput(r)}
+                                                </pre>
+                                                <details>
+                                                    <summary>Raw aggregate output</summary>
+                                                    <strong>Output</strong>
+                                                    <pre>{r.stdout}</pre>
+                                                    <strong>Error output</strong>
+                                                    <pre>{r.stderr}</pre>
+                                                </details>
+                                                <button
+                                                    className="button"
+                                                    onClick={() => {
+                                                        void (
+                                                            window.diagnosticHub?.copyText
+                                                                ? window.diagnosticHub.copyText(
+                                                                      r.stdout,
+                                                                  )
+                                                                : navigator.clipboard.writeText(
+                                                                      r.stdout,
+                                                                  )
+                                                        ).catch((e) => setError(String(e)));
+                                                    }}
+                                                >
+                                                    Copy output
+                                                </button>
+                                            </details>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {!filtered.length && <p>No retained matching results.</p>}
+                    </div>
+                    {newRows > 0 && (
+                        <button
+                            className="button"
+                            onClick={() => {
+                                follow.current = true;
+                                setNewRows(0);
+                                if (viewport.current)
+                                    viewport.current.scrollTop = viewport.current.scrollHeight;
+                            }}
+                        >
+                            {newRows} new results · jump to latest
+                        </button>
+                    )}
+                    <div className="automation-fields">
+                        <label>
+                            Export scope
+                            <select
+                                aria-label="Automation export scope"
+                                value={scope}
+                                onChange={(e) => setScope(e.target.value)}
+                            >
+                                <option value="filtered">Filtered ({filtered.length})</option>
+                                <option value="selected">
+                                    Selected ({rows.filter((r) => selected.has(r.id)).length})
+                                </option>
+                                <option value="all">All retained ({rows.length})</option>
+                            </select>
+                        </label>
+                        <label>
+                            Format
+                            <select
+                                aria-label="Automation export format"
+                                value={format}
+                                onChange={(e) => setFormat(e.target.value as ExportFormat)}
+                            >
+                                <option value="json">JSON · exact retained text/raw bytes</option>
+                                <option value="csv">CSV · formula-safe cells</option>
+                                <option value="markdown">Markdown</option>
+                                <option value="text">Plain text</option>
+                            </select>
+                        </label>
+                        <button
+                            className="button"
+                            disabled={!chosen.length}
+                            onClick={exportClicked}
+                        >
+                            Download QA results
+                        </button>
+                    </div>
+                    <p className="automation-warning">
+                        Review for secrets. Exports cover retained rows only; evicted rows cannot be
+                        recovered.
+                    </p>
+                </>
             )}
-            <div className="automation-fields">
-                <label>
-                    Export scope
-                    <select
-                        aria-label="Automation export scope"
-                        value={scope}
-                        onChange={(e) => setScope(e.target.value)}
-                    >
-                        <option value="filtered">Filtered ({filtered.length})</option>
-                        <option value="selected">
-                            Selected ({rows.filter((r) => selected.has(r.id)).length})
-                        </option>
-                        <option value="all">All retained ({rows.length})</option>
-                    </select>
-                </label>
-                <label>
-                    Format
-                    <select
-                        aria-label="Automation export format"
-                        value={format}
-                        onChange={(e) => setFormat(e.target.value as ExportFormat)}
-                    >
-                        <option value="json">JSON · exact retained text/raw bytes</option>
-                        <option value="csv">CSV · formula-safe cells</option>
-                        <option value="markdown">Markdown</option>
-                        <option value="text">Plain text</option>
-                    </select>
-                </label>
-                <button className="button" disabled={!chosen.length} onClick={exportClicked}>
-                    Download QA results
-                </button>
-            </div>
-            <p className="automation-warning">
-                Review for secrets. Exports cover retained rows only; evicted rows cannot be
-                recovered.
-            </p>
         </section>
     );
 }

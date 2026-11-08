@@ -21,6 +21,34 @@ export class DeviceMonitor {
     cancelAutomation(id: string, connection: string) {
         this.session.cancelAutomation(id, connection);
     }
+    automationStream(request: unknown) {
+        return this.session.automationStream(request);
+    }
+    automationConsole(
+        request: unknown,
+        store: () => Promise<import('../../shared/console-journal').ConsoleRepository>,
+    ) {
+        return this.session.automationConsole(request, 'local-client', store);
+    }
+    get consoleBusy() {
+        return this.session.consoleBusy;
+    }
+    get hasResources() {
+        return this.session.hasResources;
+    }
+    /** Local test adapter inspection; not exposed through IPC or HTTP. */
+    get ownershipSnapshot() {
+        return this.session.ownershipSnapshot;
+    }
+    shutdownConsole() {
+        return this.session.shutdownConsole();
+    }
+    joinCleanup() {
+        return this.session.joinAutomationCleanup();
+    }
+    clearAutomationStream() {
+        this.session.clearAutomationStream();
+    }
     get isCollecting(): boolean {
         return this.running;
     }

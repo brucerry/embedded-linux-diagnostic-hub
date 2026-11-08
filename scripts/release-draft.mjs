@@ -10,7 +10,7 @@ import {
     selectOwnedDraft,
     listAllReleases,
 } from './lib/release-draft.mjs';
-import { releaseAssets } from './lib/release-assets.mjs';
+import { releaseAssets, releaseCatalog } from './lib/release-assets.mjs';
 import { validateFinalReleaseNotes } from './lib/release-notes.mjs';
 import {
     EXISTING_RELEASE,
@@ -203,6 +203,12 @@ if (mode === 'create') {
         }
     console.log('Downloaded and verified native Mac draft bytes through authenticated API.');
 } else if (mode === 'publish' || mode === 'publish-existing') {
+    // Recovery retains its separately pinned historical gate. New releases must consume the
+    // final staged bytes on every required native platform before any publication upload/write.
+    if (mode === 'publish')
+        execFileSync(process.execPath, ['scripts/staged-artifact-gate.mjs', 'verify'], {
+            stdio: 'inherit',
+        });
     let receipt;
     async function qualifiedExistingSource() {
         const p = EXISTING_RELEASE;
@@ -231,12 +237,7 @@ if (mode === 'create') {
     let release = await draft();
     if (receipt) requireExistingInventory(release, receipt.inventory);
     await privateDraft(release);
-    const expected = [
-        ...releaseAssets(version).flatMap((file) => [file, file + '.sha256']),
-        'build-info.json',
-        'linux-build-info.json',
-        ...MAC_ARCHES.map(macManifest),
-    ].sort();
+    const expected = releaseCatalog(version);
     if (receipt)
         assert.deepEqual(
             release.assets.map((a) => a.name).sort(),
@@ -282,6 +283,10 @@ if (mode === 'create') {
     const finalNotes = await readFile('release/notes.md', 'utf8');
     validateFinalReleaseNotes(finalNotes, tag);
     if (receipt) await qualifiedExistingSource();
+    if (mode === 'publish')
+        execFileSync(process.execPath, ['scripts/staged-artifact-gate.mjs', 'verify'], {
+            stdio: 'inherit',
+        });
     release = await draft();
     // This is the final read immediately before the sole recovery write.
     if (receipt) requireExistingInventory(release, receipt.inventory);

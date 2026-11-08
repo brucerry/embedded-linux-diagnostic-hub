@@ -171,7 +171,18 @@ test('live tree updates retain expansion, focus and scroll positions', async ({ 
             openReleases: async () => {},
             openRepository: async () => {},
             copyText: async () => {},
-            exportReport: async () => true,
+            exportReport: async (_snapshot, id) => ({
+                id: id ?? 'fixture',
+                filename: 'diagnostic.json',
+                publication: 'published' as const,
+                retirement: 'acknowledged' as const,
+                cancelRequested: false,
+                cleanup: [],
+                outcome: 'saved' as const,
+            }),
+            cancelReportExport: async () => {},
+            reportExportStatus: async () => null,
+            onReportExportStatus: () => () => {},
             onDisconnected: () => () => {},
             collect: async () => {
                 const snapshot = structuredClone(data);
@@ -253,7 +264,18 @@ test('header repository link and computer/chip artwork stay clear at desktop siz
             openRepository: async () => {
                 (window as any).repositoryClicks++;
             },
-            exportReport: async () => true,
+            exportReport: async (_snapshot, id) => ({
+                id: id ?? 'fixture',
+                filename: 'diagnostic.json',
+                publication: 'published' as const,
+                retirement: 'acknowledged' as const,
+                cancelRequested: false,
+                cleanup: [],
+                outcome: 'saved' as const,
+            }),
+            cancelReportExport: async () => {},
+            reportExportStatus: async () => null,
+            onReportExportStatus: () => () => {},
             onDisconnected: () => () => {},
         };
     }, fixtures());
@@ -321,7 +343,18 @@ test('LAN warnings retain valid interfaces, parsed table, live graph and raw dia
             copyText: async () => {},
             openReleases: async () => {},
             openRepository: async () => {},
-            exportReport: async () => true,
+            exportReport: async (_snapshot, id) => ({
+                id: id ?? 'fixture',
+                filename: 'diagnostic.json',
+                publication: 'published' as const,
+                retirement: 'acknowledged' as const,
+                cancelRequested: false,
+                cleanup: [],
+                outcome: 'saved' as const,
+            }),
+            cancelReportExport: async () => {},
+            reportExportStatus: async () => null,
+            onReportExportStatus: () => () => {},
             onDisconnected: () => () => {},
         };
     }, fixture);

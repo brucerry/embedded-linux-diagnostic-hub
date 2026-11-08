@@ -135,8 +135,10 @@ test('Automation visual acceptance: four concise stages, back/edit, safe running
     await flow.getByLabel('Command 1 script').fill('next draft');
     await flow.getByRole('button', { name: 'Cancel run', exact: true }).click();
     await expect(flow.getByRole('status')).toContainText('cancel');
-    await flow.getByRole('button', { name: /Results ·/ }).click();
-    await expect(flow.getByRole('heading', { name: 'Results', exact: true })).toBeFocused();
+    await flow.getByRole('button', { name: 'Stored Serial results', exact: true }).click();
+    await expect(
+        flow.getByRole('heading', { name: 'Stored Serial results', exact: true }),
+    ).toBeFocused();
     await page.setViewportSize({ width: 412, height: 915 });
     await phase(flow, 'Commands');
     await expect

@@ -1,5 +1,7 @@
 import { SerialBeach } from './SerialBeach';
 import { serialTerminalOptions } from './theme';
+import { createSerialPortRefresh } from './port-refresh';
+import { serialCanDisconnect } from './admission';
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -26,6 +28,7 @@ interface Props {
     session: SerialSession;
     visible: boolean;
     blocked: boolean;
+    disconnectBlocked?: boolean;
     reset: number;
 }
 export default function SerialPage(props: Props) {
@@ -62,11 +65,13 @@ export default function SerialPage(props: Props) {
     }, []);
     const term = useRef<Terminal | null>(null),
         fit = useRef<FitAddon | null>(null);
+    const terminalEpoch = useRef(0);
     const container = useRef<HTMLDivElement>(null),
         frame = useRef<HTMLDivElement>(null);
     const clear = useRef<HTMLButtonElement>(null),
         copy = useRef<HTMLButtonElement>(null);
-    const labels = useRef(new Map<LocalSerialPort, string>()),
+    const labels = useRef(new WeakMap<LocalSerialPort, string>()),
+        labelOrdinal = useRef(0),
         pendingLabel = useRef('');
     const latest = useRef({ ...props, echo, enter });
     latest.current = { ...props, echo, enter };
@@ -81,7 +86,7 @@ export default function SerialPage(props: Props) {
             labels.current.set(
                 port,
                 'Authorized port ' +
-                    (labels.current.size + 1) +
+                    ++labelOrdinal.current +
                     (info.usbVendorId !== undefined
                         ? ' · USB ' +
                           info.usbVendorId.toString(16).padStart(4, '0') +
@@ -92,13 +97,7 @@ export default function SerialPage(props: Props) {
         }
         return labels.current.get(port)!;
     };
-    const refreshPorts = () => {
-        if (api)
-            void api
-                .getPorts()
-                .then(setPorts)
-                .catch(() => {});
-    };
+    const refreshPorts = useRef<(() => void) | null>(null);
     const action = (work: () => Promise<unknown>) => {
         setError('');
         void work().catch((error) => setError(serialFailure(error)));
@@ -106,16 +105,22 @@ export default function SerialPage(props: Props) {
     async function paste() {
         setMenu(null);
         const generation = session.current.generation,
-            inputEpoch = session.inputEpoch;
+            inputEpoch = session.inputEpoch,
+            epoch = terminalEpoch.current;
+        if (!term.current) return;
         try {
             const text = bridge?.readClipboard
                 ? await bridge.readClipboard()
                 : await navigator.clipboard.readText();
-            if (new TextEncoder().encode(text).length > SERIAL_QUEUE_BYTES)
-                throw Error('Clipboard text exceeds the serial paste limit.');
             if (
                 generation !== session.current.generation ||
                 inputEpoch !== session.inputEpoch ||
+                terminalEpoch.current !== epoch
+            )
+                return;
+            if (new TextEncoder().encode(text).length > SERIAL_QUEUE_BYTES)
+                throw Error('Clipboard text exceeds the serial paste limit.');
+            if (
                 session.current.state !== 'connected' ||
                 session.automationActive ||
                 !latest.current.visible ||
@@ -125,6 +130,12 @@ export default function SerialPage(props: Props) {
             term.current?.focus();
             term.current?.paste(text);
         } catch (error) {
+            if (
+                generation !== session.current.generation ||
+                inputEpoch !== session.inputEpoch ||
+                terminalEpoch.current !== epoch
+            )
+                return;
             setError(serialFailure(error));
         }
     }
@@ -140,12 +151,18 @@ export default function SerialPage(props: Props) {
 
     useEffect(() => session.subscribe(setStatus), [session]);
     useEffect(() => {
-        refreshPorts();
-        const refresh = () => refreshPorts();
+        const portRefresh = api ? createSerialPortRefresh(() => api.getPorts(), setPorts) : null;
+        const refresh = () => {
+            void portRefresh?.refresh();
+        };
+        refreshPorts.current = refresh;
+        refresh();
         api?.addEventListener('connect', refresh);
         api?.addEventListener('disconnect', refresh);
         const unsubscribe = bridge?.onSerialChooser?.(setChooser);
         return () => {
+            portRefresh?.dispose();
+            refreshPorts.current = null;
             unsubscribe?.();
             api?.removeEventListener('connect', refresh);
             api?.removeEventListener('disconnect', refresh);
@@ -249,6 +266,7 @@ export default function SerialPage(props: Props) {
             binary.dispose();
             guards.forEach((g) => g.dispose());
             wheel();
+            terminalEpoch.current++;
             terminal.dispose();
             term.current = null;
             fit.current = null;
@@ -329,11 +347,14 @@ export default function SerialPage(props: Props) {
                                     (port) => {
                                         const chosenName = pendingLabel.current;
                                         pendingLabel.current = '';
-                                        if (chosenName) labels.current.set(port, chosenName);
+                                        if (chosenName) {
+                                            if (!labels.current.has(port)) labelOrdinal.current++;
+                                            labels.current.set(port, chosenName);
+                                        }
                                         return label(port);
                                     },
                                 );
-                                refreshPorts();
+                                refreshPorts.current?.();
                             });
                         }}
                     >
@@ -344,6 +365,7 @@ export default function SerialPage(props: Props) {
                         disabled={
                             !supported ||
                             props.blocked ||
+                            session.isOwned ||
                             !session.selectedPort ||
                             !['selected', 'error'].includes(status.state)
                         }
@@ -362,8 +384,12 @@ export default function SerialPage(props: Props) {
                     <button
                         className="button secondary"
                         disabled={
-                            props.blocked ||
-                            !['opening', 'connected', 'error'].includes(status.state)
+                            !serialCanDisconnect(
+                                status.state,
+                                props.blocked,
+                                props.disconnectBlocked ?? true,
+                                session.automationQuarantined,
+                            )
                         }
                         onClick={() => action(() => session.close())}
                     >
@@ -382,7 +408,7 @@ export default function SerialPage(props: Props) {
                 </div>
                 <p className="terminal-description">
                     Choose port discovers ports reported by this computer. The dropdown lists only
-                    previously authorized ports. Selection never opens a port.
+                    previously authorized ports.
                 </p>
                 <fieldset className="serial-settings" disabled={locked}>
                     <legend>UART settings</legend>

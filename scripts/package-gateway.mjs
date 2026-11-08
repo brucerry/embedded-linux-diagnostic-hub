@@ -1,32 +1,29 @@
-import { readFile, writeFile, mkdtemp, mkdir, cp, rm } from 'node:fs/promises';
+import * as filesystem from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import { gzipSync } from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import {
+    GATEWAY_PAYLOAD_FILES,
+    projectGatewayLock,
+    validatePreparedGatewayLock,
+} from './lib/gateway-lock-plan.mjs';
+import { encodeGatewayTar, inspectOwnedGatewayTar } from './lib/gateway-tar.mjs';
+import { readStableArtifactFile } from './lib/stable-artifact-file.mjs';
+import { WEB_ARCHIVE_LIMITS } from './lib/web-archive-limits.mjs';
+
+const { readFile, writeFile, mkdtemp, mkdir, cp, rm } = filesystem;
 
 const root = process.cwd();
 const source = JSON.parse(await readFile('package.json', 'utf8'));
-const lock = JSON.parse(await readFile('package-lock.json', 'utf8'));
+const sourceLock = JSON.parse(await readFile('package-lock.json', 'utf8'));
+// Admit the committed closure before staging; npm may normalize this projection,
+// but must not introduce new identities or unrelated source dependencies.
+const { manifest, lock } = projectGatewayLock(source, sourceLock);
 const staged = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-gateway-'));
 try {
-    const manifest = {
-        name: `${source.name}-gateway`,
-        version: source.version,
-        private: true,
-        license: 'MIT',
-        main: 'dist-gateway/main.cjs',
-        engines: { node: '>=24' },
-        scripts: { start: 'node --env-file=.env.gateway dist-gateway/main.cjs' },
-        dependencies: { ssh2: lock.packages['node_modules/ssh2'].version },
-    };
     await writeFile(path.join(staged, 'package.json'), JSON.stringify(manifest, null, 2));
-    lock.name = manifest.name;
-    lock.packages[''] = {
-        name: manifest.name,
-        version: manifest.version,
-        license: 'MIT',
-        dependencies: manifest.dependencies,
-        engines: manifest.engines,
-    };
     await writeFile(path.join(staged, 'package-lock.json'), JSON.stringify(lock, null, 2));
     for (const file of [
         'dist-gateway',
@@ -57,16 +54,39 @@ try {
     );
     if (npm.status !== 0)
         throw new Error(`Could not prepare gateway dependency lock: ${npm.stderr}`);
+    // Check the actual npm result before archive publication. A zero
+    // exit alone cannot prove that package versions, URLs or integrities stayed pinned.
+    const files = new Map();
+    let payloadBytes = 0;
+    for (const name of GATEWAY_PAYLOAD_FILES) {
+        const { bytes } = await readStableArtifactFile(
+            staged,
+            name,
+            WEB_ARCHIVE_LIMITS.member,
+            filesystem,
+        );
+        payloadBytes += bytes.length;
+        assert.ok(payloadBytes <= WEB_ARCHIVE_LIMITS.expanded);
+        files.set(name, bytes);
+    }
+    assert.deepEqual(JSON.parse(files.get('package.json').toString('utf8')), manifest);
+    validatePreparedGatewayLock(
+        JSON.parse(files.get('package-lock.json').toString('utf8')),
+        manifest,
+        sourceLock,
+    );
     const destination = path.join(
         root,
         'release',
         `Diagnostic-Hub-Gateway-${source.version}.tar.gz`,
     );
     await mkdir(path.dirname(destination), { recursive: true });
-    const archive = spawnSync('tar', ['-czf', destination, '-C', staged, '.'], {
-        encoding: 'utf8',
-    });
-    if (archive.status !== 0) throw new Error(`Could not archive the gateway: ${archive.stderr}`);
+    // Share the producer's exact eight-file, normalized USTAR layout. GNU tar's
+    // default headers, root entry and record padding do not satisfy this contract.
+    const raw = encodeGatewayTar(files);
+    inspectOwnedGatewayTar(raw, files);
+    const archive = gzipSync(raw, { level: 9, maxOutputLength: WEB_ARCHIVE_LIMITS.archive });
+    await writeFile(destination, archive);
     console.log(`Gateway package: ${destination}`);
 } finally {
     await rm(staged, { recursive: true, force: true });

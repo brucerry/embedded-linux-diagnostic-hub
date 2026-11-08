@@ -1,5 +1,7 @@
+import { UpdateOwnership } from './update-ownership';
+import { writeUpdateFile, publishUpdateFile, removeUpdateFile } from './update-owned-file';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createReport, MAX_REPORT_BYTES, parseReport } from '../shared/report';
 import type { Snapshot, UpdateMode, UpdateRecovery } from '../shared/types';
@@ -14,7 +16,14 @@ interface PendingReport {
 export class UpdateReports {
     private pending: string;
 
-    constructor(private directory: string) {
+    private armedId: string | null | undefined;
+    isArmed(report: PendingReport | null) {
+        return report !== null && this.armedId === report.id;
+    }
+    constructor(
+        private directory: string,
+        private ownership = new UpdateOwnership(),
+    ) {
         this.pending = path.join(directory, 'pending.json');
     }
 
@@ -27,22 +36,27 @@ export class UpdateReports {
         parseReport(content);
         await mkdir(this.directory, { recursive: true, mode: 0o700 });
         const pending = { id: randomUUID(), mode };
-        await writeFile(this.reportPath(pending.id), content, { flag: 'wx', mode: 0o600 });
+        await writeUpdateFile(this.ownership, 'backup', this.reportPath(pending.id), content);
         return pending;
     }
 
     async arm(report: PendingReport | null): Promise<void> {
         if (!report) {
-            await rm(this.pending, { force: true });
+            await removeUpdateFile(this.ownership, 'restore marker removal', this.pending);
+            this.armedId = null;
             return;
         }
         const temporary = `${this.pending}.${randomUUID()}.part`;
-        try {
-            await writeFile(temporary, JSON.stringify(report), { flag: 'wx', mode: 0o600 });
-            await rename(temporary, this.pending);
-        } finally {
-            await rm(temporary, { force: true });
-        }
+        await publishUpdateFile(
+            this.ownership,
+            'restore marker',
+            temporary,
+            this.pending,
+            JSON.stringify(report),
+            () => {
+                this.armedId = report.id;
+            },
+        );
     }
 
     private reportPath(id: string): string {
@@ -85,6 +99,9 @@ export class UpdateReports {
 
     async acknowledge(id: string): Promise<void> {
         this.reportPath(id);
-        if ((await this.marker())?.id === id) await rm(this.pending, { force: true });
+        if ((await this.marker())?.id === id) {
+            await removeUpdateFile(this.ownership, 'restore marker removal', this.pending);
+            if (this.armedId === id) this.armedId = null;
+        }
     }
 }

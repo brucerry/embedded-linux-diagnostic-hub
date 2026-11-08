@@ -148,7 +148,7 @@ test('gateway terminal streams prompt/Unicode, preserves auth and diagnostic/rep
     }
 });
 
-test('gateway typing has a per-session budget and aborted streams release only their shell', async () => {
+test('gateway typing has a per-session budget and aborted streams release only their shell', async (test) => {
     const fixture = await gatewayFixture();
     let reader: Awaited<ReturnType<typeof streamReader>> | undefined;
     try {
@@ -178,12 +178,39 @@ test('gateway typing has a per-session budget and aborted streams release only t
             (await fixture.request(`/api/sessions/${sessionId}/heartbeat`, 'POST')).status,
             200,
         );
-        const overload = await Promise.all(
-            Array.from({ length: 180 }, () =>
-                fixture.request(`${route}/${id}/resize`, 'POST', { cols: 80, rows: 24 }),
-            ),
+        // Exercise the session budget independently of OS TCP connection admission.
+        // Four workers retain all 180 logical operations and consume each HTTP body.
+        const overload: number[] = [];
+        let next = 0;
+        await Promise.all(
+            Array.from({ length: 4 }, async () => {
+                while (next < 180) {
+                    const index = next++;
+                    const response = await fixture.request(`${route}/${id}/resize`, 'POST', {
+                        cols: 80,
+                        rows: 24,
+                    });
+                    const body = await response.json();
+                    if (response.status === 429)
+                        assert.match(body.error, /^Terminal input limit reached\./);
+                    overload[index] = response.status;
+                }
+            }),
         );
-        assert.ok(overload.some((response) => response.status === 429));
+        assert.equal(overload.length, 180);
+        assert.equal(
+            overload.every((status) => status === 200 || status === 429),
+            true,
+        );
+        assert.ok(overload.some((status) => status === 429));
+        test.diagnostic(
+            JSON.stringify({
+                logicalResizeRequests: 180,
+                maxInFlight: 4,
+                accepted: overload.filter((status) => status === 200).length,
+                rateLimited: overload.filter((status) => status === 429).length,
+            }),
+        );
         await reader.cancel();
         await consume;
         reader = undefined;

@@ -1,0 +1,24 @@
+{
+    "sourceCommit": "2f84f429214633374e56159296b87c188d64c5f2",
+    "purpose": "Exact published v0.5.2 source bytes used only as checked-in parser/isolated function test data; never imported as modules.",
+    "files": {
+        "main.ts": {
+            "sourcePath": "electron/main.ts",
+            "blob": "6cd9f28ba3766991d40c3c207fb1ff51e9b039b9",
+            "bytes": 18922,
+            "sha256": "f867d73253dd10d80cd22a224538b0398fa30fcbcf66bcf0f1bd076e4ecdbcb4"
+        },
+        "report.ts": {
+            "sourcePath": "shared/report.ts",
+            "blob": "692258549dc99d682ca0e7ab441e79be87aacebf",
+            "bytes": 5059,
+            "sha256": "5993b4b4c24d3690ad8c16c1686c93f4c50f5c7b0801603a95b983b5a5f5a5bb"
+        },
+        "probes.ts": {
+            "sourcePath": "shared/diagnostics/probes.ts",
+            "blob": "85f2cfad3082ffba636478fd191163db8056c7b1",
+            "bytes": 16930,
+            "sha256": "45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b"
+        }
+    }
+}

@@ -44,6 +44,8 @@ jobs:
               with:
                   node-version: '24'
                   package-manager-cache: false
+            - name: Install descriptor validation dependencies without building the app
+              run: npm ci --ignore-scripts
             - name: Download and validate the complete public release without publication
               id: audit
               run: node scripts/verify-published-release.mjs

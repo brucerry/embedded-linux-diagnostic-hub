@@ -1,0 +1,141 @@
+{
+    "version": 2,
+    "sourceCommit": "afd9260d45a0c4af7c6bd5d36440ee1a08c259cd",
+    "realm": "source-only",
+    "scope": "reviewed-source-subset-only",
+    "completeDependencyClosure": false,
+    "nativeAdmission": false,
+    "runtimeAttestation": false,
+    "files": [
+        {
+            "path": "backend/ssh/monitor.ts",
+            "bytes": 3161,
+            "sha256": "668d48ff0a8e817a3f419b5b8916059dafe6699abadb227985a24c38aec8aaac"
+        },
+        {
+            "path": "backend/ssh/session.ts",
+            "bytes": 34921,
+            "sha256": "8cae1798cf782af8e6afe95c111d8dd177f69d525bacdd09df70c62b9460520f"
+        },
+        {
+            "path": "backend/ssh/stream-host.ts",
+            "bytes": 12503,
+            "sha256": "224f9914811347f2b01de205b7c8d2664fdb5596a2524a38047109d1f7043e5c"
+        },
+        {
+            "path": "electron/automation-activity.ts",
+            "bytes": 1217,
+            "sha256": "1a3e969e9545476ca0157c6504e9df072ff1240e68e512ef4fc6370aa573d95c"
+        },
+        {
+            "path": "electron/capture-host.ts",
+            "bytes": 3684,
+            "sha256": "a939da5ab4819be7306427db68c34bfe6b07593f73bdc056b2a3661ac227b2e3"
+        },
+        {
+            "path": "electron/capture-store.ts",
+            "bytes": 42602,
+            "sha256": "6e96a463141882f7f292a72352b80ddcb5be64d64915a98c1fef482903097721"
+        },
+        {
+            "path": "electron/connection-attempts.ts",
+            "bytes": 5811,
+            "sha256": "5a32f0a7d165c02e7ca6177838addb37820115d25d4e59340d90163f02e7baa7"
+        },
+        {
+            "path": "electron/console-service.ts",
+            "bytes": 14031,
+            "sha256": "66db1bb327e50423aad6027fb2cd1de76caa193fec3811f4154bbae1222d2f2a"
+        },
+        {
+            "path": "electron/host-verification.ts",
+            "bytes": 1366,
+            "sha256": "2680a5d558f53eadfc5e680f2388d05b28349bf14ea1557171aef1fe4de23ff0"
+        },
+        {
+            "path": "electron/main.ts",
+            "bytes": 37138,
+            "sha256": "438abbc67d30de48c84f1c45eff2fe5362edb249ef83c53c38fd15f558b41d29"
+        },
+        {
+            "path": "electron/report-export.ts",
+            "bytes": 10548,
+            "sha256": "076fea3d89ffb3177d1a15fd49327da04e888fceee88b0d5571445cb0a15ca23"
+        },
+        {
+            "path": "electron/update-ownership.ts",
+            "bytes": 6369,
+            "sha256": "1a2e0a5b8622e6dd8e47e79cf33f467f282ecba63151b5b7ce0a4967c445e463"
+        },
+        {
+            "path": "gateway/server.ts",
+            "bytes": 36153,
+            "sha256": "5b3eac41a69a6e33c0761453618bf31dcb46d2a92294295f46026efecffd3fba"
+        },
+        {
+            "path": "shared/capture-rpc.ts",
+            "bytes": 19741,
+            "sha256": "255f7434b7bbadda2401f3245902fe2ac40add0dab610f7d154363e655fe9949"
+        },
+        {
+            "path": "shared/quit-cleanup.ts",
+            "bytes": 6188,
+            "sha256": "4561dc9bf71cae68807ff65524bb301b295839bb07825e3aad31fe115fdc8ee7"
+        },
+        {
+            "path": "src/features/automation/AutomationPage.tsx",
+            "bytes": 111913,
+            "sha256": "89fd638aa073619adb83d797bf56c7a200d39e0a251b1d39d630ec5f0d463a85"
+        },
+        {
+            "path": "src/features/automation/activity-release.ts",
+            "bytes": 5076,
+            "sha256": "6307b95353de119cf33df74d477b13e8cd3142c77db1e12f66307eff755c69a6"
+        },
+        {
+            "path": "src/features/automation/capture/browser-export.ts",
+            "bytes": 18098,
+            "sha256": "c6ea5f59bd89600e51fcc2432a635d063501778534e184aaf83233377df504d5"
+        },
+        {
+            "path": "src/features/automation/capture/export-admission.ts",
+            "bytes": 992,
+            "sha256": "e1a8357e39969fc629fb2f63b1337fb0c41adf96e915c06cba4478e6fa5ef805"
+        },
+        {
+            "path": "src/features/automation/capture/indexeddb-console.ts",
+            "bytes": 28411,
+            "sha256": "9d80bd2305f7427331a95c4783ce7f5c18a5c2e96e6b44f67e99b9f214e46450"
+        },
+        {
+            "path": "src/features/automation/capture/indexeddb-store.ts",
+            "bytes": 30570,
+            "sha256": "c7e5c7c9b6caa52552b1e566bfdc67d9db5057d4d2385eba18a1ff819bd34fee"
+        },
+        {
+            "path": "src/features/automation/capture/native-repository.ts",
+            "bytes": 7816,
+            "sha256": "31bb990c21c1c10af4cf98e38e6fe09688f5bfd232ce93e7d5b156b4ae19d52e"
+        },
+        {
+            "path": "src/features/automation/capture/ssh-stream-client.ts",
+            "bytes": 6181,
+            "sha256": "a1b81822296844c8ae3abe5a97a486ff5eb5d9ad53f6520594f6d9ecf15599a3"
+        },
+        {
+            "path": "src/features/automation/runner.ts",
+            "bytes": 21022,
+            "sha256": "cdb53f34a9c2a3bfd4cab64833b9f7f95c01bd4f7aba3d16a8944c5ddab5fa9a"
+        },
+        {
+            "path": "src/features/serial/session.ts",
+            "bytes": 35962,
+            "sha256": "979ef0a9175fa9d96f6f916599e17282d2271723ca843b3431e626b53e70d464"
+        },
+        {
+            "path": "src/services/GatewayClient.ts",
+            "bytes": 22129,
+            "sha256": "ecb2333ff9d63f281d13585ac24839be9b2c520107717d7dd7b1ba82dd990ced"
+        }
+    ]
+}

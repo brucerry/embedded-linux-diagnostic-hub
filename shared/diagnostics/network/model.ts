@@ -40,10 +40,27 @@ export interface NetworkSummary {
     groups: DetailGroup[];
     warnings: string[];
 }
-export const field = (label: string, value: unknown): DetailField[] =>
-    value === undefined || value === null
-        ? []
-        : [{ label, value: Array.isArray(value) ? value.join(', ') : String(value) }];
+export function interfaceLabel(
+    iface: Pick<InterfaceSummary, 'name' | 'ifindex' | 'phy' | 'kind'>,
+): string {
+    return (
+        iface.name +
+        (iface.ifindex !== undefined ? ' · ifindex ' + iface.ifindex : '') +
+        (iface.phy ? ' · ' + iface.phy : '') +
+        (iface.kind !== 'Unclassified' ? ' · ' + iface.kind : '')
+    );
+}
+const scalar = (value: unknown): value is string | number | boolean =>
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value));
+export function field(label: string, value: unknown): DetailField[] {
+    if (value === undefined || value === null) return [];
+    let readable = 'Not interpretable; inspect raw evidence.';
+    if (scalar(value)) readable = String(value);
+    else if (Array.isArray(value) && value.every(scalar)) readable = value.join(', ');
+    return [{ label, value: readable }];
+}
 export const result = (snapshot: Snapshot, id: string) => snapshot.results.find((r) => r.id === id);
 export function section(
     snapshot: Snapshot,

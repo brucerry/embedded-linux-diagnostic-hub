@@ -11,6 +11,12 @@ function main() {
     if (!Number.isInteger(port) || port < 1 || port > 65535)
         throw new Error('Invalid HUB_GATEWAY_PORT.');
     const host = process.env.HUB_GATEWAY_HOST || '127.0.0.1';
+    const requestClose = () => {
+        void gateway.close().catch((error) => {
+            console.error('Gateway cleanup failed:', error);
+            process.exitCode = 1;
+        });
+    };
     gateway.server.listen(port, host, () =>
         console.log(
             `Diagnostic Hub gateway listening on ${host}:${port}. Place behind HTTPS for website use.`,
@@ -18,13 +24,10 @@ function main() {
     );
     gateway.server.on('error', () => {
         console.error('Gateway could not bind its configured address.');
-        void gateway.close();
+        requestClose();
         process.exitCode = 1;
     });
-    for (const signal of ['SIGINT', 'SIGTERM'])
-        process.on(signal, () => {
-            void gateway.close();
-        });
+    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, requestClose);
 }
 
 try {

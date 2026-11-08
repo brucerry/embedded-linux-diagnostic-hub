@@ -3,7 +3,7 @@ import type { Snapshot } from '../../../shared/types';
 import { wirelessSummary } from '../../../shared/diagnostics/network/wireless';
 import { lanSummary } from '../../../shared/diagnostics/network/lan';
 import { evidenceReason } from '../../../shared/diagnostics/network/evidence';
-import type { DetailGroup } from '../../../shared/diagnostics/network/model';
+import { interfaceLabel, type DetailGroup } from '../../../shared/diagnostics/network/model';
 import { CopyButton } from '../../components/CopyButton';
 interface Props {
     id: 'wireless' | 'ethernet';
@@ -117,9 +117,7 @@ export function NetworkSummary({ id, snapshot, mode, onCopy, refreshCapabilities
                         >
                             {model.interfaces.map((i) => (
                                 <option key={i.id} value={i.id}>
-                                    {i.name}
-                                    {i.phy ? ' · ' + i.phy : ''}
-                                    {i.kind !== 'Unclassified' ? ' · ' + i.kind : ''}
+                                    {interfaceLabel(i)}
                                 </option>
                             ))}
                         </select>

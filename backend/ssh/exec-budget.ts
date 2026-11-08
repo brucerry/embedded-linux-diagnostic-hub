@@ -5,6 +5,9 @@ export interface SlotOptions {
 export class ExecSlots {
     private active = 0;
     private waiters: (() => void)[] = [];
+    get ownershipSnapshot() {
+        return { active: this.active, queued: this.waiters.length };
+    }
     async run<T>(work: () => Promise<T>, options: SlotOptions = {}): Promise<T> {
         if (options.signal?.aborted) throw Error('Queued diagnostic cancelled.');
         if (this.active >= 3)

@@ -270,7 +270,7 @@ export function EvidenceModal({
             </p>
             {result.truncated && (
                 <div className="context-note">
-                    Output was truncated at 256 KiB. The report records this limit.
+                    Output was truncated. This report contains only the retained output.
                 </div>
             )}
             <div className="evidence-footer">

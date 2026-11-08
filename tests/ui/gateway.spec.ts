@@ -37,7 +37,12 @@ test('website uses authenticated gateway, verifies fingerprint and collects real
         await modal.getByRole('button', { name: 'Connect via SSH' }).click();
         await expect(modal).not.toBeVisible({ timeout: 20_000 });
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
-        await expect(page.getByText('Gateway SSH connected.', { exact: false })).toBeVisible();
+        await expect(
+            page.getByText(
+                `Gateway SSH connected to ${gateway.options.username}@${gateway.options.host}:${gateway.options.port}.`,
+                { exact: false },
+            ),
+        ).toBeVisible();
         expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
             gateway.token,
         );
@@ -85,9 +90,9 @@ test('website heartbeat preserves paused sessions and page exit releases SSH', a
         await modal.getByLabel('I verified this fingerprint with a trusted source.').check();
         await modal.getByRole('button', { name: 'Connect via SSH' }).click();
         await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
-        await expect(
-            page.getByRole('dialog', { name: 'Connect a Linux device' }),
-        ).not.toBeVisible();
+        await expect(page.getByRole('dialog', { name: 'Connect a Linux device' })).not.toBeVisible({
+            timeout: 20_000,
+        });
         await page.getByRole('switch', { name: 'Live updates' }).click();
         const authenticationCount = gateway.authentications();
         const heartbeat = page.waitForRequest(
@@ -196,21 +201,21 @@ for (const enabled of [true, false]) {
                 await expect(page.getByText('SSH SESSION', { exact: true })).toBeVisible();
                 await expect(
                     page.getByRole('dialog', { name: 'Connect a Linux device' }),
-                ).not.toBeVisible();
+                ).not.toBeVisible({ timeout: 20_000 });
             };
             await connect();
             await page.getByRole('button', { name: 'Reset session data', exact: true }).click();
             await expect(
                 page.getByRole('dialog', { name: 'Resetting session data' }),
-            ).not.toBeVisible();
+            ).not.toBeVisible({ timeout: 20_000 });
             await expect(liveSwitch).toBeChecked({ checked: enabled });
             if (!enabled) {
                 const authentications = gateway.authentications();
                 await page.getByRole('button', { name: 'Memory', exact: true }).click();
                 await page.locator('.probe-card').first().click();
-                await expect(
-                    page.getByRole('dialog').getByRole('tab', { name: 'Standard output' }),
-                ).toBeVisible();
+                const evidence = page.getByRole('dialog', { name: 'Memory overview', exact: true });
+                await expect(evidence).toBeVisible({ timeout: 20_000 });
+                await expect(evidence.getByRole('tab', { name: 'Standard output' })).toBeVisible();
                 expect(gateway.authentications()).toBe(authentications);
                 await page
                     .getByRole('dialog')

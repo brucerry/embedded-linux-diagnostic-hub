@@ -39,7 +39,18 @@ async function connectFixture(page: Page) {
             copyText: async (text) => {
                 state.copied.push(text);
             },
-            exportReport: async () => true,
+            exportReport: async (_snapshot, id) => ({
+                id: id ?? 'fixture',
+                filename: 'diagnostic.json',
+                publication: 'published' as const,
+                retirement: 'acknowledged' as const,
+                cancelRequested: false,
+                cleanup: [],
+                outcome: 'saved' as const,
+            }),
+            cancelReportExport: async () => {},
+            reportExportStatus: async () => null,
+            onReportExportStatus: () => () => {},
             onDisconnected: () => () => {},
             collect: async () => {
                 state.collections++;

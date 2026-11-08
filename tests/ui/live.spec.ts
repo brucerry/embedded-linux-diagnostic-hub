@@ -28,7 +28,18 @@ test('failed live update pauses polling and retains the last snapshot without re
             openReleases: async () => {},
             openRepository: async () => {},
             copyText: async () => {},
-            exportReport: async () => true,
+            exportReport: async (_snapshot, id) => ({
+                id: id ?? 'fixture',
+                filename: 'diagnostic.json',
+                publication: 'published' as const,
+                retirement: 'acknowledged' as const,
+                cancelRequested: false,
+                cleanup: [],
+                outcome: 'saved' as const,
+            }),
+            cancelReportExport: async () => {},
+            reportExportStatus: async () => null,
+            onReportExportStatus: () => () => {},
             onDisconnected: () => () => {},
             collect: async () => {
                 collections++;
@@ -202,6 +213,10 @@ test('disconnect retains graph history without polling and reset removes the ret
     await inspectMemory();
     const graphTab = page.getByRole('tab', { name: 'Graph view' });
     await graphTab.click();
+    // Collection starts before its independent history Worker has prepared the frame.
+    await expect
+        .poll(() => page.getByRole('dialog').locator('.live-graph circle').count())
+        .toBeGreaterThan(2);
     const points = await page.getByRole('dialog').locator('.live-graph circle').count();
     expect(points).toBeGreaterThan(2);
     await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();

@@ -18,6 +18,14 @@ Package on the intended client platform, then generate checksums with `npm run c
 validation requires matching app, web, gateway and launcher assets with source identity. Historical
 releases may contain retired companion ZIPs; current builds use native window behavior.
 
+Run package verifiers and the standalone Windows setup producer from the repository root with
+matching local `dist-electron/main.cjs` and `dist-electron/preload.cjs` build outputs. Both files
+are compared byte-for-byte with the selected package; retain or reproduce the outputs for that
+package. The setup producer rejects missing or mismatched outputs before descriptor publication or
+compiler submission and does not rebuild automatically. External cloud build evidence does not
+populate these local paths. This scoped build-byte comparison does not authenticate the publisher or
+replace native runtime, installer and exact-artifact acceptance.
+
 ### Windows
 
 ```sh
@@ -45,7 +53,11 @@ system packages can require `sudo`. CI includes the seven-case GNOME compositor 
 
 ### macOS
 
-Native Mac packaging on the matching architecture (Node.js 24, for development/CI):
+Native Mac packaging on the matching architecture (Node.js 24, for development/CI). The
+icon-generation step below also requires the Chromium browser matching the locked Playwright
+version; `npm ci` alone does not establish that it is available. The shared Mac build action
+prepares Chromium before running this step. These are build prerequisites: install or run the
+browser only where browser installation and execution are permitted.
 
 ```sh
 npm ci
@@ -137,9 +149,15 @@ After source changes have been committed, reviewed and pushed:
    storage. Any gate failure leaves the draft unpublished. After all gates and complete validation
    it publishes `Diagnostic-Hub.exe`, Linux AppImage/archive, portable website ZIP, gateway archive,
    download helpers (including `download-run-macos.sh`), both complete Mac ZIPs and their SHA-256
-   checksums. All 24 files must match: ten payloads, ten sidecars and four manifests.
-   `build-info.json`, `linux-build-info.json` and both Mac manifests identify the source commit,
-   architecture and Windows signing status. Versions with prerelease suffixes are marked
+   checksums. Releases below the `0.6.0-0` version boundary retain the original 24-file catalog: ten
+   payloads, ten sidecars and four manifests. Starting with v0.6.0 prereleases, the source catalog
+   additionally requires `Diagnostic-Hub-Windows-x64-Setup.exe`, its `.sha256` sidecar and its
+   `.info.json` descriptor: 27 files, comprising eleven payloads, eleven sidecars and five metadata
+   files. This version-derived catalog does not mean the development candidate is published or its
+   setup qualified; see [Windows setup status](windows-setup.md) and
+   [artifact gates](platform-artifact-gates.md). `build-info.json`, `linux-build-info.json` and both
+   Mac manifests identify the source commit, architecture and Windows signing status; the setup
+   descriptor also binds its payload identity. Versions with prerelease suffixes are marked
    prereleases; a plain version tag publishes an official release. Release notes identify unsigned
    engineering builds explicitly.
 4. Dependent native Mac jobs test the actual published one-line command, normal launch, source,
@@ -239,13 +257,17 @@ current release verifier and never auto-runs on main changes.
 
 Update Pages through reviewed `main` changes; use a new version tag for desktop updates.
 
-- Windows: verified in-app EXE download and handoff, with per-user storage and no elevation.
-- Linux: verified in-app AppImage download and handoff, retaining the durable AppImage path.
+- Portable Windows EXE: verified in-app download and handoff, with per-user storage and no
+  elevation.
+- Portable Linux AppImage: verified in-app download and handoff, retaining the durable AppImage
+  path.
+- Installed Windows: automatic handoff is refused. Use verified setup for Update or Repair; see
+  [Windows setup](windows-setup.md). This source contract does not establish native qualification.
 - Mac: verified manual bundle replacement with the installer helper after quitting the app; in-app
   automatic installation is unsupported. See [Mac maintenance](macos-qualification.md).
 
-Windows and Linux in-app updates include prereleases by default and verify the published SHA-256
-checksum. Their report choices are:
+Portable Windows and Linux in-app updates include prereleases by default and verify the published
+SHA-256 checksum. Their report choices are:
 
 | Update choice                | Report behavior after restart                                                                                   |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |

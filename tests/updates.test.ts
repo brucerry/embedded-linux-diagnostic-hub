@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { ReleaseUpdater } from '../electron/updates';
+import { UpdateCoordinator } from '../electron/update-coordinator';
+import { UpdateReports } from '../electron/update-reports';
 
 const binary = Buffer.from('MZverified-portable-test-data');
 const sha = createHash('sha256').update(binary).digest('hex');
@@ -237,3 +239,69 @@ test('oversized response bodies are stopped before parsing metadata or checksums
         await rm(directory, { recursive: true, force: true });
     }
 });
+
+for (const platform of ['win32', 'linux']) {
+    for (const delivery of ['installed', 'unavailable'] as const) {
+        test(
+            platform +
+                ' native updater refuses ' +
+                delivery +
+                ' delivery before requests or install effects',
+            async () => {
+                let requests = 0;
+                const updater = new ReleaseUpdater(
+                    '0.5.2',
+                    '/not-created',
+                    platform,
+                    'x64',
+                    true,
+                    async () => {
+                        requests++;
+                        throw Error('Unexpected network request');
+                    },
+                    delivery,
+                );
+                const result = await updater.check(false);
+                assert.equal(result.installable, false);
+                assert.equal(result.release, null);
+                assert.ok(result.installationUnavailableReason);
+                assert.throws(() => updater.assertCanDownload(), /Automatic updates/);
+                await assert.rejects(() => updater.download(), /Automatic updates/);
+                assert.throws(() => updater.handoffInfo(), /Automatic updates/);
+                await assert.rejects(() => updater.executable(), /Automatic updates/);
+                const effects: string[] = [];
+                const coordinator = new UpdateCoordinator(
+                    updater,
+                    new UpdateReports('/not-created'),
+                    {
+                        isConnecting: () => false,
+                        isConnected: () => false,
+                        quiesceSerial: async () => {
+                            effects.push('serial');
+                        },
+                        waitForCollection: async () => {
+                            effects.push('collection');
+                        },
+                        latestSnapshot: () => null,
+                        disconnect: () => {
+                            effects.push('disconnect');
+                        },
+                        progress: () => {
+                            effects.push('progress');
+                        },
+                        restart: () => {
+                            effects.push('restart');
+                        },
+                    },
+                );
+                await assert.rejects(
+                    () => coordinator.start({ mode: 'clean' }),
+                    /Automatic updates/,
+                );
+                assert.equal(coordinator.active, false);
+                assert.equal(requests, 0);
+                assert.deepEqual(effects, []);
+            },
+        );
+    }
+}

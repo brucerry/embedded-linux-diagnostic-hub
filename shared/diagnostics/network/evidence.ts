@@ -1,4 +1,5 @@
 import type { ProbeResult } from '../../types';
+import { isReportInstant } from '../../report-time';
 export const NETWORK_OPERATIONS = [
     'ip-address-json',
     'ip-link-json',
@@ -80,6 +81,7 @@ export function validateNetworkEvidence(
         return invalid();
     const text = (v: unknown, limit: number): v is string =>
         typeof v === 'string' && v.length <= limit;
+    const date = isReportInstant;
     const operation = (v: unknown): v is NetworkOperation =>
         NETWORK_OPERATIONS.includes(v as NetworkOperation);
     const scope = (v: unknown): v is string => text(v, 128) && !/[\x00-\x1f\x7f]/.test(v);
@@ -99,8 +101,7 @@ export function validateNetworkEvidence(
             !text(s.stdout, 262144) ||
             !text(s.stderr, 262144) ||
             !['live', 'cached'].includes(s.source) ||
-            !text(s.collectedAt, 40) ||
-            !Number.isFinite(Date.parse(s.collectedAt)) ||
+            !date(s.collectedAt) ||
             !Number.isFinite(s.durationMs) ||
             s.durationMs < 0 ||
             typeof s.truncated !== 'boolean' ||

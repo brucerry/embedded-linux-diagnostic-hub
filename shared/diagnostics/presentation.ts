@@ -126,7 +126,10 @@ export function graphReadings(
             ...(m.available !== null && m.free !== null
                 ? [make('available', 'Available RAM', m.available / 1024, 'MiB')]
                 : []),
-            ...(m.swapTotal > 0 && m.swapFree >= 0 && m.swapFree <= m.swapTotal
+            ...(m.swapTotal > 0 &&
+            m.swapFree !== null &&
+            m.swapFree >= 0 &&
+            m.swapFree <= m.swapTotal
                 ? pair('swap', 'Swap', m.swapTotal - m.swapFree, m.swapFree)
                 : []),
         ];

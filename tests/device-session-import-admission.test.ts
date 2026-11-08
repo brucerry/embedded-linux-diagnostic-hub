@@ -1,0 +1,361 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { GatewayClient } from '../src/services/GatewayClient';
+import { bindImport, importSpan } from './fixtures/device-session-import-callbacks';
+const hook = readFileSync('src/hooks/useDeviceSession.ts', 'utf8');
+assert.ok(hook.includes(importSpan));
+function gate() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((yes) => {
+        resolve = yes;
+    });
+    return { promise, resolve };
+}
+async function until(f: () => boolean) {
+    for (let n = 0; n < 256; n++) {
+        if (f()) return;
+        await Promise.resolve();
+    }
+    assert.fail('Bounded import fixture did not settle');
+}
+async function memoryScope(
+    options: { connected?: boolean; failDelete?: boolean },
+    verify: (f: any) => Promise<void>,
+) {
+    const keys = [
+            'fetch',
+            'window',
+            'location',
+            'setInterval',
+            'clearInterval',
+            'setTimeout',
+            'clearTimeout',
+        ] as const,
+        before = keys.map((k) => Object.getOwnPropertyDescriptor(globalThis, k)),
+        timeout = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout')!;
+    const timers = new Set<number>(),
+        listeners = new Set<unknown>();
+    let next = 0,
+        deletes = 0;
+    const close = gate(),
+        tasks: Promise<void>[] = [];
+    const ui = {
+        connected: options.connected !== false,
+        disconnecting: false,
+        live: true,
+        activeDevice: { endpoint: 'prior.invalid:22' } as object | null,
+        error: '',
+        endpoint: 'prior.invalid:22',
+        inputClears: 0,
+        imports: [] as string[],
+        history: [] as any[],
+    };
+    let client: GatewayClient | undefined;
+    try {
+        const set = () => {
+            assert.ok(++next < 16);
+            timers.add(next);
+            return next;
+        };
+        const clear = (id: number) => assert.ok(timers.delete(id));
+        const fetchMemory: typeof fetch = async (input, init) => {
+            const u = new URL(String(input));
+            assert.equal(u.origin, 'https://memory.invalid');
+            if (u.pathname === '/api/health')
+                return Response.json({ connectionCancellation: true });
+            if (u.pathname === '/api/sessions' && init?.method === 'POST')
+                return Response.json({ sessionId: 'a'.repeat(32) });
+            assert.equal(u.pathname, '/api/sessions/' + 'a'.repeat(32));
+            assert.equal(init?.method, 'DELETE');
+            assert.ok(++deletes <= 1);
+            await close.promise;
+            return options.failDelete
+                ? Response.json({ code: 'network' }, { status: 503 })
+                : Response.json({});
+        };
+        const values = [
+            fetchMemory,
+            {
+                addEventListener(_t: string, f: unknown) {
+                    listeners.add(f);
+                },
+                removeEventListener(_t: string, f: unknown) {
+                    listeners.delete(f);
+                },
+            },
+            { protocol: 'https:' },
+            set,
+            clear,
+            set,
+            clear,
+        ];
+        keys.forEach((k, i) =>
+            Object.defineProperty(globalThis, k, {
+                configurable: true,
+                writable: true,
+                value: values[i],
+            }),
+        );
+        Object.defineProperty(AbortSignal, 'timeout', {
+            configurable: true,
+            writable: true,
+            value: () => new AbortController().signal,
+        });
+        client = new GatewayClient({
+            url: 'https://memory.invalid',
+            token: 'SYNTHETIC_PLACEHOLDER_TOKEN_'.repeat(2),
+        });
+        if (options.connected !== false)
+            await client.connect(
+                {
+                    host: 'synthetic.invalid',
+                    port: 22,
+                    username: 'synthetic',
+                    auth: 'password',
+                    password: 'SYNTHETIC_PLACEHOLDER',
+                },
+                '1'.repeat(32),
+            );
+        const ctx = {
+            resettingRef: { current: false },
+            collectingRef: { current: false },
+            disconnectingRef: { current: false },
+            dataGeneration: { current: 0 },
+            connectionGeneration: { current: 1 },
+            previousFrame: { current: undefined },
+            connected: options.connected !== false,
+            transport: client,
+            prepareHistory: async (data: any) => ({ capturedAt: data.capturedAt, readings: {} }),
+            setError: (s: string) => {
+                ui.error = s;
+            },
+            setConnected: (v: boolean) => {
+                ui.connected = v;
+            },
+            setDisconnecting: (v: boolean) => {
+                ui.disconnecting = v;
+            },
+            setActiveDevice: (v: object | null) => {
+                ui.activeDevice = v;
+            },
+            setLiveState: (v: boolean) => {
+                ui.live = v;
+            },
+            setHistory: (f: (xs: any[]) => any[]) => {
+                ui.history = f(ui.history);
+            },
+            setGateway: () => {},
+            setWorkspaceReady: () => {},
+            setSnapshot: (data: any) => {
+                ui.endpoint = data.endpoint;
+                ui.imports.push(data.endpoint);
+            },
+            setImported: () => {},
+            setUpdateReport: () => {},
+            onResetView: () => {},
+            setNotice: () => {},
+            importInput: {
+                current: {
+                    get value() {
+                        return '';
+                    },
+                    set value(_s: string) {
+                        ui.inputClears++;
+                    },
+                },
+            },
+        };
+        const file = (label: string) => {
+            const content = JSON.stringify({
+                schemaVersion: 1,
+                mode: 'ssh',
+                endpoint: label + '.invalid:22',
+                username: 'synthetic',
+                capturedAt: '2028-02-29T12:00:00Z',
+                results: [
+                    {
+                        id: 'identity',
+                        status: 'collected',
+                        exitCode: 0,
+                        stdout: 'Linux\nsynthetic\n',
+                        stderr: '',
+                        durationMs: 1,
+                        collectedAt: '2028-02-29T12:00:00Z',
+                        truncated: false,
+                    },
+                ],
+            });
+            return { size: content.length, text: async () => content } as File;
+        };
+        const startFile = (input: File) => {
+            ctx.connected = ui.connected;
+            const p = bindImport(ctx)(input);
+            tasks.push(p);
+            return p;
+        };
+        const start = (label: string) => startFile(file(label));
+        await verify({
+            ctx,
+            ui,
+            client,
+            close,
+            start,
+            startFile,
+            file,
+            get deletes() {
+                return deletes;
+            },
+        });
+    } finally {
+        try {
+            close.resolve();
+            await Promise.all(tasks);
+            await client?.disconnect();
+            assert.equal(timers.size, 0);
+            assert.equal(listeners.size, 0);
+        } finally {
+            keys.forEach((k, i) => {
+                if (before[i]) Object.defineProperty(globalThis, k, before[i]!);
+                else Reflect.deleteProperty(globalThis, k);
+            });
+            Object.defineProperty(AbortSignal, 'timeout', timeout);
+            keys.forEach((k, i) =>
+                assert.deepEqual(Object.getOwnPropertyDescriptor(globalThis, k), before[i]),
+            );
+            assert.deepEqual(Object.getOwnPropertyDescriptor(AbortSignal, 'timeout'), timeout);
+        }
+    }
+}
+
+test('import holds disconnect admission until actual Gateway acknowledgement, then later import can replace it', async () =>
+    memoryScope({}, async (f) => {
+        const first = f.start('first');
+        await until(() => f.deletes === 1);
+        assert.equal(f.ui.disconnecting, true);
+        assert.equal(f.ctx.disconnectingRef.current, true);
+        assert.equal(f.ui.imports.length, 0);
+        let secondRead = false;
+        const blocked = {
+            size: 1,
+            text: async () => {
+                secondRead = true;
+                return '';
+            },
+        } as File;
+        await f.startFile(blocked);
+        assert.equal(secondRead, false);
+        assert.equal(f.ctx.dataGeneration.current, 1);
+        assert.equal(f.deletes, 1);
+        f.close.resolve();
+        await first;
+        assert.equal(f.ui.endpoint, 'first.invalid:22');
+        assert.equal(f.ctx.disconnectingRef.current, false);
+        assert.equal(f.ui.disconnecting, false);
+        await f.start('second');
+        assert.equal(f.ui.endpoint, 'second.invalid:22');
+        assert.deepEqual(f.ui.imports, ['first.invalid:22', 'second.invalid:22']);
+        assert.equal(f.ui.error, '');
+        assert.equal(f.deletes, 1);
+    }));
+test('newer import fences older pending history preparation without another disconnect or publication', async () =>
+    memoryScope({ connected: false }, async (f) => {
+        const history = gate();
+        let entered = false;
+        const original = f.ctx.prepareHistory;
+        f.ctx.prepareHistory = async (data: any) => {
+            entered = true;
+            await history.promise;
+            return original(data);
+        };
+        const first = f.start('first');
+        try {
+            await until(() => entered);
+            f.ctx.prepareHistory = original;
+            await f.start('second');
+            assert.equal(f.ui.endpoint, 'second.invalid:22');
+            history.resolve();
+            await first;
+            assert.deepEqual(f.ui.imports, ['second.invalid:22']);
+            assert.equal(f.ui.history.length, 1);
+            assert.equal(f.ui.inputClears, 1);
+            assert.equal(f.deletes, 0);
+        } finally {
+            history.resolve();
+            await first;
+        }
+    }));
+test('retired file read failure cannot overwrite a newer import diagnostic or clear its input', async () =>
+    memoryScope({ connected: false }, async (f) => {
+        const read = gate();
+        let entered = false;
+        const first = f.startFile({
+            size: 1,
+            text: async (): Promise<string> => {
+                entered = true;
+                await read.promise;
+                throw Error('Old synthetic file read failed');
+            },
+        } as File);
+        try {
+            await until(() => entered);
+            await f.start('second');
+            f.ui.error = 'Current owner diagnostic';
+            read.resolve();
+            await first;
+            assert.equal(f.ui.endpoint, 'second.invalid:22');
+            assert.equal(f.ui.error, 'Current owner diagnostic');
+            assert.equal(f.ui.inputClears, 1);
+            assert.equal(f.deletes, 0);
+        } finally {
+            read.resolve();
+            await first;
+        }
+    }));
+test('failed disconnect retains prior evidence and original error while releasing only its UI admission', async () =>
+    memoryScope({ failDelete: true }, async (f) => {
+        const work = f.start('failed');
+        await until(() => f.deletes === 1);
+        assert.equal(f.ui.disconnecting, true);
+        f.close.resolve();
+        await work;
+        assert.equal(f.ui.endpoint, 'prior.invalid:22');
+        assert.equal(f.ui.imports.length, 0);
+        assert.match(f.ui.error, /SSH connection failed/);
+        assert.equal(f.client.automationConnection(), '');
+        assert.equal(f.ui.connected, false);
+        assert.equal(f.ui.activeDevice, null);
+        assert.equal(f.ui.live, false);
+        assert.equal(f.ctx.disconnectingRef.current, false);
+        assert.equal(f.ui.disconnecting, false);
+    }));
+
+test('parse failure and unproven non-Gateway disconnect rejection preserve the existing connection state', async () => {
+    await memoryScope({}, async (f) => {
+        await f.startFile({ size: 1, text: async () => '{' } as File);
+        assert.equal(f.deletes, 0);
+        assert.equal(f.ui.connected, true);
+        assert.equal(f.ui.live, true);
+        assert.equal(f.ui.imports.length, 0);
+        assert.notEqual(f.client.automationConnection(), '');
+        assert.ok(f.ui.error);
+        assert.equal(f.ctx.disconnectingRef.current, false);
+    });
+    await memoryScope({ connected: false }, async (f) => {
+        const failure = Error('Synthetic desktop admission refusal');
+        f.ui.connected = true;
+        f.ctx.transport = {
+            disconnect: async () => {
+                throw failure;
+            },
+        };
+        await f.start('refused');
+        assert.equal(f.ui.connected, true);
+        assert.equal(f.ui.live, true);
+        assert.notEqual(f.ui.activeDevice, null);
+        assert.equal(f.ui.endpoint, 'prior.invalid:22');
+        assert.equal(f.ui.imports.length, 0);
+        assert.equal(f.ui.error, failure.message);
+        assert.equal(f.ctx.disconnectingRef.current, false);
+    });
+});
