@@ -3,7 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digest, installerCases } from './staged-artifact-gate.mjs';
 import { assertMacInstallerHelperReturn } from './macos-installer-observation.mjs';
-import { NATIVE_LIMITS } from './macos-native-contract.mjs';
+import {
+    NATIVE_LIMITS,
+    MAC_INSTALL_ONLY_CASE,
+    MAC_INSTALL_ONLY_EFFECTS,
+} from './macos-native-contract.mjs';
 import { captureMacHelperOperation } from './macos-installer-child.mjs';
 import {
     macIdentityFromTreeSamples,
@@ -125,16 +129,25 @@ const after=fs.fstatSync(source);if(total!==before.size||before.dev!==after.dev|
 fs.fsyncSync(target);fs.closeSync(target);fs.closeSync(source);
 `;
 const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
-export function offlineHelperSource(bytes) {
+export function offlineHelperSource(bytes, { installOnly = false } = {}) {
     const original = bytes.toString('utf8');
     const fallback =
         "        printf '%s\\n' 'Native review is unavailable; trying the controlling terminal.' >&2";
     assert.equal(original.split(fallback).length, 2);
     // Fixed fixture consent must never fall back to an unrelated controlling terminal.
+    const derived = original.replace(
+        fallback,
+        '        return 1 # isolated fixture: consent shim unavailable; refuse directly',
+    );
+    if (!installOnly) return Buffer.from(derived);
+    const existingTarget = 'if [ -e "$target" ]; then';
+    assert.equal(derived.split(existingTarget).length, 5);
+    // Current-only installation never consents to replacement, even if a target appears
+    // after the adapter's absence check. Unknown paths/stages remain retained on refusal.
     return Buffer.from(
-        original.replace(
-            fallback,
-            '        return 1 # isolated fixture: consent shim unavailable; refuse directly',
+        derived.replaceAll(
+            existingTarget,
+            existingTarget + "\n    fail 'Install-only fixture refuses an existing target.'",
         ),
     );
 }
@@ -146,6 +159,16 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
     assert.equal(admission.approval.approved, true);
     assert.equal(io.state.root, admission.parsed.root);
     assert.equal(io.state.rootAllocated, true);
+    const installOnly = admission.parsed.case === MAC_INSTALL_ONLY_CASE;
+    if (installOnly) {
+        assert.equal(admission.approval.operation, 'macos-native-install-only');
+        assert.equal(admission.approval.case, MAC_INSTALL_ONLY_CASE);
+        assert.deepEqual(
+            [...admission.approval.effects].sort(),
+            [...MAC_INSTALL_ONLY_EFFECTS].sort(),
+        );
+        assert.deepEqual(Object.keys(admission.packages), ['current']);
+    }
     const admitted = structuredClone(admission),
         root = admitted.parsed.root;
     const selectedNode = admitted.approval.pins.find((pin) => pin.role === 'node');
@@ -160,6 +183,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
     let initialized = false,
         Desktop = dependencies.Desktop;
     const helper = path.join(root, 'bin/download-run-macos.sh');
+    const packageRoles = installOnly ? ['current'] : ['current', 'prior'];
     const packageIdentity = (value) => ({
         version: value.version,
         sourceCommit: value.sourceCommit,
@@ -168,9 +192,9 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
         asarSHA256: value.asarSHA256,
     });
     const selectedPackage = (input) => {
-        const found = [admitted.packages.current, admitted.packages.prior].find(
-            (item) => item.zipSHA256 === input.zipSHA256,
-        );
+        const found = packageRoles
+            .map((role) => admitted.packages[role])
+            .find((item) => item.zipSHA256 === input.zipSHA256);
         assert.ok(found);
         assert.deepEqual(packageIdentity(input), packageIdentity(found));
         return found;
@@ -262,7 +286,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 path.join(NATIVE_WORKSPACE, 'public/download-run-macos.sh'),
                 65536,
             );
-            io.publish(helper, offlineHelperSource(helperBytes), 65536, 0o700);
+            io.publish(helper, offlineHelperSource(helperBytes, { installOnly }), 65536, 0o700);
             io.publish(path.join(root, 'bin/curl.mjs'), Buffer.from(mirrorProgram), 65536);
             io.publish(
                 path.join(root, 'bin/curl'),
@@ -282,15 +306,16 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 65536,
                 0o700,
             );
-            io.publish(
-                path.join(root, 'bin/mv'),
-                Buffer.from(
-                    '#!/bin/bash\nset -eu\nif [ "${HUB_NATIVE_FAULT:-}" = activation-return-failure ] && [ "$2" = "$HUB_NATIVE_TARGET" ]; then\n case "$1" in "$HUB_NATIVE_APPS"/.DiagnosticHub-stage.????????/extracted/"Diagnostic Hub.app") (set -C; printf "activation-return-failure\\n" > "$HUB_NATIVE_FAULT_MARKER"); exit 70;; esac\nfi\nexec /bin/mv "$@"\n',
-                ),
-                65536,
-                0o700,
-            );
-            for (const role of ['current', 'prior']) {
+            if (!installOnly)
+                io.publish(
+                    path.join(root, 'bin/mv'),
+                    Buffer.from(
+                        '#!/bin/bash\nset -eu\nif [ "${HUB_NATIVE_FAULT:-}" = activation-return-failure ] && [ "$2" = "$HUB_NATIVE_TARGET" ]; then\n case "$1" in "$HUB_NATIVE_APPS"/.DiagnosticHub-stage.????????/extracted/"Diagnostic Hub.app") (set -C; printf "activation-return-failure\\n" > "$HUB_NATIVE_FAULT_MARKER"); exit 70;; esac\nfi\nexec /bin/mv "$@"\n',
+                    ),
+                    65536,
+                    0o700,
+                );
+            for (const role of packageRoles) {
                 const selected = admitted.packages[role],
                     dir = path.join(root, 'mirrors', role);
                 io.mkdir(dir);
@@ -332,6 +357,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
             assert.ok(
                 initialized &&
                     installerCases('darwin-' + admitted.metadata.arch).includes(id) &&
+                    (!installOnly || id === MAC_INSTALL_ONLY_CASE) &&
                     !fixtures.has(id),
             );
             const dir = path.join(root, id.slice('macos-bundle:'.length));
@@ -368,6 +394,18 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
         async install(fixture, input, options) {
             const value = record(fixture),
                 selected = selectedPackage(input);
+            if (installOnly) {
+                assert.equal(fixture.id, MAC_INSTALL_ONLY_CASE);
+                assert.equal(selected, admitted.packages.current);
+                assert.deepEqual(options, {});
+                assert.equal(value.helperCalls, 0, 'Install-only helper can be submitted once.');
+                assert.equal(value.installed, null);
+                assert.equal(
+                    io.absent(fixture.target),
+                    true,
+                    'Install-only target must be absent.',
+                );
+            }
             assert.ok(Object.keys(options).every((key) => ['expectBusy', 'fault'].includes(key)));
             if (options.fault) assert.equal(options.fault, 'activation-return-failure');
             const env = {
@@ -422,6 +460,19 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 signal: returned.signal,
                 expectedReturn: expectation,
             });
+            if (installOnly) {
+                const children = io.state.children.filter(
+                    (child) => child.request?.operation?.operationId === operation.operationId,
+                );
+                assert.equal(children.length, 1);
+                const child = children[0];
+                assert.deepEqual(child.request.operation, operation);
+                for (const key of ['exitObserved', 'closeObserved', 'stdoutEOF', 'stderrEOF'])
+                    assert.equal(child[key], true, 'Install-only helper closure is incomplete.');
+                assert.equal(child.exitCode, 0);
+                assert.equal(child.signal, null);
+                assert.equal(child.error, 'none');
+            }
             const result = {
                 command: returned.command,
                 exitObserved: returned.exitObserved,
@@ -814,5 +865,14 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
             };
         },
     };
-    return Object.freeze(effects);
+    return Object.freeze(
+        installOnly
+            ? Object.fromEntries(
+                  ['kind', 'initialize', 'prepare', 'install', 'snapshot'].map((name) => [
+                      name,
+                      effects[name],
+                  ]),
+              )
+            : effects,
+    );
 }

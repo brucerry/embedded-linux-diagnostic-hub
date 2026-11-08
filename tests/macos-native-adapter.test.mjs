@@ -13,6 +13,8 @@ import {
     normalizeMacTree,
     NATIVE_EFFECTS,
     NATIVE_LIMITS,
+    MAC_INSTALL_ONLY_CASE,
+    MAC_INSTALL_ONLY_EFFECTS,
 } from '../scripts/lib/macos-native-contract.mjs';
 import {
     createMacNativeEffects,
@@ -29,6 +31,8 @@ import {
 import {
     runMacInstallerActions,
     validateMacInstallerActionResult,
+    runMacInstallOnlyActions,
+    validateMacInstallOnlyAction,
 } from '../scripts/lib/macos-installer-actions.mjs';
 import { createMacNativeIO } from '../scripts/lib/macos-native-io.mjs';
 import { captureMacHelperOperation } from '../scripts/lib/macos-installer-child.mjs';
@@ -538,6 +542,392 @@ const noActors = (m) =>
         m.log.filter(([name]) => actorNames.has(name)),
         [],
     );
+
+// The same actual contract/adapter/CLI below receive only the existing memory ports.
+function installOnlyModel() {
+    const m = model(),
+        original = m.argv('--run');
+    const approvalPath = original[original.indexOf('--approval') + 1];
+    m.approval.operation = 'macos-native-install-only';
+    m.approval.case = MAC_INSTALL_ONLY_CASE;
+    m.approval.effects = [...MAC_INSTALL_ONLY_EFFECTS];
+    delete m.approval.inputs.prior;
+    const info = JSON.parse(m.files.get(m.inputs.current.info));
+    Object.assign(info, {
+        source: m.approval.sourceCommit,
+        packagedSourceMatches: true,
+        distribution: true,
+    });
+    m.json(m.inputs.current.info, info);
+    m.inputs.current.infoSHA256 = digest(m.files.get(m.inputs.current.info));
+    m.refresh();
+    m.argv = (mode = '--validate') => {
+        const argv = [mode];
+        for (let index = 1; index < original.length; index += 2) {
+            const flag = original[index];
+            if (flag.startsWith('--prior-')) continue;
+            argv.push(
+                flag,
+                flag === '--approval-sha256'
+                    ? digest(m.files.get(approvalPath))
+                    : original[index + 1],
+            );
+        }
+        return [...argv, '--case', MAC_INSTALL_ONLY_CASE];
+    };
+    return m;
+}
+
+test('install-only selector rejects other cases and prior flags before native IO', async () => {
+    for (const modify of [
+        (args) => {
+            args[args.length - 1] = 'macos-bundle:remove';
+        },
+        (args) => args.push('--prior-zip', NATIVE_TASK + '/unused.zip'),
+        (args) => args.push('--case', MAC_INSTALL_ONLY_CASE),
+    ]) {
+        const m = installOnlyModel(),
+            args = m.argv('--run');
+        modify(args);
+        const result = await runMacNativeCLI(args, m.deps);
+        assert.equal(result.exitCode, 2);
+        assert.equal(result.state.io, null);
+        noActors(m);
+    }
+});
+
+test('install-only actual adapter publishes one current case and raw references without an application or prior', async () => {
+    const m = installOnlyModel(),
+        result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 0, result.output + (result.state.failure?.stack ?? ''));
+    const output = JSON.parse(result.output);
+    assert.equal(output.status, 'INSTALL_ONLY_OBSERVED_REVIEW_REQUIRED');
+    assert.equal(output.qualificationStatus, 'unverified');
+    assert.equal(output.fullLifecycle, false);
+    assert.equal(output.releaseAcceptance, false);
+    assert.deepEqual(
+        result.state.actions.result.cases.map((item) => item.id),
+        [MAC_INSTALL_ONLY_CASE],
+    );
+    assert.equal(m.log.filter(([name]) => name === 'child').length, 1);
+    assert.ok(!m.log.some(([name]) => ['app-launch', 'normal-quit', 'removeTree'].includes(name)));
+    assert.equal(m.io.state.desktops.length, 0);
+    assert.ok(![...m.files.keys()].some((name) => name.startsWith(m.root + '/mirrors/prior/')));
+    assert.ok(!m.files.has(m.root + '/bin/mv'));
+    for (const ref of Object.values(output.records)) {
+        const bytes = m.files.get(path.join(m.root, ref.path));
+        assert.equal(bytes.length, ref.bytes);
+        assert.equal(digest(bytes), ref.sha256);
+    }
+    const actionCase = JSON.parse(m.files.get(path.join(m.root, output.records.actionCase.path)));
+    assert.deepEqual(
+        actionCase.actions.map((action) => action.method),
+        ['prepare', 'snapshot', 'install', 'snapshot'],
+    );
+    assert.equal(
+        validateMacInstallOnlyAction(actionCase, {
+            version: '0.6.0',
+            sourceCommit: m.approval.sourceCommit,
+            zipSHA256: m.inputs.current.zipSHA256,
+            asarSHA256: digest('asar'),
+        }),
+        'macos-install-only-actions-consistent-unqualified',
+    );
+    const child = JSON.parse(m.files.get(path.join(m.root, output.records.helperChild.path)));
+    assert.equal(child.operation.operationId, output.operationId);
+    assert.equal(child.operation.caseId, MAC_INSTALL_ONLY_CASE);
+    assert.equal(child.operation.operationId, m.nonce + ':' + MAC_INSTALL_ONLY_CASE + ':helper:1');
+    assert.equal(output.records.installedPayload.path, 'install/evidence/installed-payload-1.json');
+    assert.equal(
+        output.records.shippingBuildInfo.path,
+        'evidence/current-shipping-build-info.json',
+    );
+    assert.equal(output.helperFixture.transport, 'locally-derived-offline-mirror');
+    assert.equal(output.helperFixture.diskIdentityOnly, true);
+    assert.equal(output.helperFixture.physicalLoadedBytesVerified, false);
+    assert.equal(output.helperFixture.consent, 'fixed-install-substitution-not-human-dialog');
+    assert.equal(
+        output.helperFixture.executedHelper.sha256,
+        digest(m.files.get(m.root + '/bin/download-run-macos.sh')),
+    );
+    assert.notEqual(
+        output.helperFixture.executedHelper.sha256,
+        output.helperFixture.originalHelperSHA256,
+    );
+    assert.ok(!m.files.has(m.root + '/evidence/stages.json'));
+    assert.ok(!m.files.has(m.root + '/evidence/observation.json'));
+});
+
+test('install-only admission rejects broader approvals and contradictory current shipping facts before effects', async () => {
+    for (const mutate of [
+        (m) => {
+            m.approval.operation = 'macos-native-installer-lifecycle';
+        },
+        (m) => {
+            m.approval.case = 'macos-bundle:repair';
+        },
+        (m) => {
+            m.approval.effects = [...NATIVE_EFFECTS];
+        },
+        (m) => {
+            m.approval.inputs.prior = { ...m.inputs.current };
+        },
+        ...['source', 'packagedSourceMatches', 'distribution'].map((key) => (m) => {
+            const info = JSON.parse(m.files.get(m.inputs.current.info));
+            info[key] = key === 'source' ? 'f'.repeat(40) : false;
+            m.json(m.inputs.current.info, info);
+            m.inputs.current.infoSHA256 = digest(m.files.get(m.inputs.current.info));
+        }),
+    ]) {
+        const m = installOnlyModel();
+        mutate(m);
+        m.refresh();
+        const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.equal(result.exitCode, 2);
+        noActors(m);
+    }
+});
+
+test('install-only adapter exposes four methods and refuses other cases options and a second helper', async () => {
+    const m = installOnlyModel(),
+        parsed = parseMacNativeArgs(m.argv('--run'));
+    const admitted = await validateMacNativeRequest(parsed, m.io, m.sourcePins);
+    await m.io.claim(admitted);
+    m.io.allocateRoot();
+    const effects = await createMacNativeEffects(admitted, m.io, {
+        Desktop: class {
+            constructor() {
+                throw Error('No application in install-only.');
+            }
+        },
+    });
+    assert.deepEqual(Object.keys(effects).sort(), [
+        'initialize',
+        'install',
+        'kind',
+        'prepare',
+        'snapshot',
+    ]);
+    await effects.initialize();
+    await assert.rejects(effects.prepare('macos-bundle:remove'));
+    const fixture = await effects.prepare(MAC_INSTALL_ONLY_CASE);
+    const current = {
+        version: '0.6.0',
+        sourceCommit: m.approval.sourceCommit,
+        zipPath: m.inputs.current.zip,
+        zipSHA256: m.inputs.current.zipSHA256,
+        asarSHA256: digest('asar'),
+    };
+    await assert.rejects(effects.install(fixture, current, { expectBusy: true }));
+    assert.equal(m.log.filter(([name]) => name === 'child').length, 0);
+    await effects.install(fixture, current, {});
+    await assert.rejects(effects.install(fixture, current, {}));
+    assert.equal(m.log.filter(([name]) => name === 'child').length, 1);
+});
+
+test('install-only appeared target refuses before helper and derived source cannot select replacement', async () => {
+    const m = installOnlyModel();
+    m.deps.createEffects = async (admitted) => {
+        const effects = await createMacNativeEffects(admitted, m.io, { Desktop: m.Desktop });
+        return {
+            ...effects,
+            snapshot: async (fixture) => {
+                const result = await effects.snapshot(fixture);
+                if (!result.exists) m.trees.set(fixture.target, {});
+                return result;
+            },
+        };
+    };
+    const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.state.holdRequired, true);
+    assert.equal(m.log.filter(([name]) => name === 'child').length, 0);
+    const original = readFileSync(new URL('../public/download-run-macos.sh', import.meta.url));
+    const ordinary = offlineHelperSource(original),
+        scoped = offlineHelperSource(original, { installOnly: true });
+    assert.ok(!ordinary.includes(Buffer.from('Install-only fixture refuses an existing target.')));
+    assert.equal(
+        scoped.toString().split("fail 'Install-only fixture refuses an existing target.'").length -
+            1,
+        4,
+    );
+    assert.ok(
+        ![...m.files.keys()].some((name) => /installed-payload-|install-only-case/.test(name)),
+    );
+});
+
+test('install-only helper failures and missing close or EOF stop before payload and case publication', async () => {
+    for (const fault of ['nonzero', 'closeObserved', 'stdoutEOF', 'stderrEOF']) {
+        const m = installOnlyModel(),
+            child = m.io.child;
+        m.io.child = async (...args) => {
+            const result = await child(...args),
+                record = m.io.state.children.at(-1);
+            if (fault === 'nonzero') {
+                result.exitCode = 7;
+                record.exitCode = 7;
+            } else record[fault] = false;
+            return result;
+        };
+        const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.equal(result.exitCode, 2);
+        assert.equal(result.state.holdRequired, true);
+        assert.equal(m.log.filter(([name]) => name === 'child').length, 1);
+        assert.ok(
+            ![...m.files.keys()].some((name) => /installed-payload-|install-only-case/.test(name)),
+        );
+    }
+});
+
+test('install-only full tree plist and payload contradictions cannot publish a successful case', async () => {
+    for (const fault of ['tree', 'plist', 'payload']) {
+        const m = installOnlyModel();
+        if (fault === 'plist') {
+            const child = m.io.child;
+            m.io.child = async (...args) => {
+                const result = await child(...args);
+                m.write(
+                    path.join(args[2].HUB_NATIVE_TARGET, 'Contents/Info.plist'),
+                    '<plist><dict><key>CFBundleShortVersionString</key><string>9.9.9</string><key>CFBundleIdentifier</key><string>dev.diagnostichub.desktop</string></dict></plist>',
+                );
+                return result;
+            };
+        } else {
+            const tree = m.io.tree;
+            m.io.tree = (file, inventory) => {
+                if (fault === 'tree') throw Error('Inert tree mismatch.');
+                return tree(file, inventory).map((row) =>
+                    row.path === 'Contents/MacOS/Diagnostic Hub'
+                        ? { ...row, sha256: 'f'.repeat(64) }
+                        : row,
+                );
+            };
+        }
+        const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.equal(result.exitCode, 2);
+        assert.ok(!m.files.has(m.root + '/evidence/install-only-case.json'));
+        assert.ok(!m.files.has(m.root + '/install/evidence/installed-payload-1.json'));
+    }
+});
+
+test('install-only package option mutation and unknown returns retain custody without later publication', async () => {
+    for (const fault of ['package', 'options', 'reject']) {
+        const m = installOnlyModel();
+        m.deps.createEffects = async (admitted) => {
+            const effects = await createMacNativeEffects(admitted, m.io, { Desktop: m.Desktop });
+            return {
+                ...effects,
+                install: async (fixture, input, options) => {
+                    if (fault === 'package') input.sourceCommit = 'f'.repeat(40);
+                    if (fault === 'options') options.expectBusy = true;
+                    if (fault === 'reject') {
+                        await Promise.resolve();
+                        throw Error('Inert unknown return.');
+                    }
+                    return effects.install(fixture, input, options);
+                },
+            };
+        };
+        const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.equal(result.exitCode, 2);
+        assert.equal(result.state.holdRequired, true);
+        assert.ok(result.state.actions.custody.pending);
+        assert.equal(m.log.filter(([name]) => name === 'child').length, 0);
+        assert.ok(
+            ![...m.files.keys()].some((name) => /installed-payload-|install-only-case/.test(name)),
+        );
+    }
+});
+
+test('install-only raw case validator rejects reordered extra substituted and malformed facts', async () => {
+    const m = installOnlyModel(),
+        result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 0);
+    const item = result.state.actions.result.cases[0],
+        binding = {
+            version: '0.6.0',
+            sourceCommit: m.approval.sourceCommit,
+            zipSHA256: m.inputs.current.zipSHA256,
+            asarSHA256: digest('asar'),
+        };
+    for (const mutate of [
+        (value) => {
+            value.id = 'macos-bundle:repair';
+        },
+        (value) => {
+            value.priorVersion = '0.5.2';
+        },
+        (value) => value.actions.push(structuredClone(value.actions[3])),
+        (value) => value.actions.reverse(),
+        (value) => {
+            value.actions[2].facts.command[1] = '/unowned/helper';
+        },
+        (value) => {
+            value.actions[2].facts.exitCode = 7;
+        },
+        (value) => {
+            value.actions[2].facts.extra = 'unsupported';
+        },
+        (value) => {
+            value.actions[0].facts.target = '/unowned/target';
+        },
+        (value) => {
+            value.actions[3].facts.asarSHA256 = 'f'.repeat(64);
+        },
+    ]) {
+        const changed = structuredClone(item);
+        mutate(changed);
+        assert.throws(() => validateMacInstallOnlyAction(changed, binding));
+    }
+});
+
+test('install-only action inputs stay bound while an actual prepare return is pending', async () => {
+    const m = installOnlyModel(),
+        parsed = parseMacNativeArgs(m.argv('--run'));
+    const admitted = await validateMacNativeRequest(parsed, m.io, m.sourcePins);
+    await m.io.claim(admitted);
+    m.io.allocateRoot();
+    const effects = await createMacNativeEffects(admitted, m.io, { Desktop: m.Desktop });
+    await effects.initialize();
+    let release;
+    const pending = new Promise((resolve) => {
+        release = resolve;
+    });
+    const input = {
+        lane: 'darwin-arm64',
+        fixtureParent: m.root,
+        bundleIdentifier: 'dev.diagnostichub.desktop',
+        current: {
+            version: '0.6.0',
+            sourceCommit: m.approval.sourceCommit,
+            zipPath: m.inputs.current.zip,
+            zipSHA256: m.inputs.current.zipSHA256,
+            asarSHA256: digest('asar'),
+        },
+    };
+    const work = runMacInstallOnlyActions({
+        inputs: input,
+        effects: {
+            ...effects,
+            prepare: async (id) => {
+                const fixture = await effects.prepare(id);
+                await pending;
+                return fixture;
+            },
+        },
+    });
+    let result;
+    try {
+        input.fixtureParent = '/unowned';
+        input.current.version = '9.9.9';
+    } finally {
+        release();
+        result = await work;
+    }
+    assert.equal(result.result.status, 'verified');
+    assert.equal(result.custody.fixtures[0].root, m.root + '/install');
+    assert.equal(result.custody.pending, null);
+});
 
 test('current installed payload samples bind shipping metadata and remain unqualified', async () => {
     const m = model(),

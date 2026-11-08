@@ -11,6 +11,7 @@ import {
     macHelperRecordPath,
     MAC_HELPER_RECORD_LIMIT,
 } from './macos-installer-child.mjs';
+import { inspectMacInstallPayload, readMacInstallRecords } from './macos-install-lifecycle.mjs';
 
 export const INSTALLER_CASE_LIMIT = 128 * 1024;
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -128,6 +129,12 @@ export function inspectInstallerCaseObservation(value, item, expected) {
     if (
         expected.lane.startsWith('darwin-') &&
         item.id === 'macos-bundle:install' &&
+        value.observation?.kind === 'macos-owned-install/v1'
+    )
+        return inspectMacInstallPayload(value.observation, item, expected);
+    if (
+        expected.lane.startsWith('darwin-') &&
+        item.id === 'macos-bundle:install' &&
         value.observation?.kind === 'fixed-child'
     ) {
         const status = inspectMacInstallHelper(value.observation, expected);
@@ -169,6 +176,11 @@ export async function consumeInstallerLifecycleEvidence(rawReceipt, rawExpected,
             'Require canonical complete installer case JSON.',
         );
         const status = inspectInstallerCaseObservation(value, item, expected);
+        if (
+            item.id === 'macos-bundle:install' &&
+            value.observation?.kind === 'macos-owned-install/v1'
+        )
+            await readMacInstallRecords(value.observation, readBytes);
         if (value.observation?.kind === 'macos-owned-offline-launch/v2')
             await readMacOfflineRecords(value.observation, readBytes);
         if (item.id === 'macos-bundle:install' && value.observation?.kind === 'fixed-child')

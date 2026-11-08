@@ -5,19 +5,26 @@ import {
     parseMacNativeArgs,
     validateMacNativeRequest,
     NATIVE_LIMITS,
+    MAC_INSTALL_ONLY_CASE,
 } from '../scripts/lib/macos-native-contract.mjs';
 import {
     createMacNativeEffects,
     macNativeSourcePins,
     NATIVE_WORKSPACE,
 } from '../scripts/lib/macos-native-adapter.mjs';
-import { runMacInstallerActions } from '../scripts/lib/macos-installer-actions.mjs';
+import {
+    runMacInstallerActions,
+    runMacInstallOnlyActions,
+    validateMacInstallOnlyAction,
+} from '../scripts/lib/macos-installer-actions.mjs';
 import { createMacInstallerObservation } from '../scripts/lib/macos-installer-observation.mjs';
 import { digest, laneFiles } from '../scripts/lib/staged-artifact-gate.mjs';
 import {
     projectMacHelperChild,
     macHelperRecordPath,
+    inspectMacInstallHelper,
 } from '../scripts/lib/macos-installer-child.mjs';
+import { validateMacInstalledPayloadSample } from '../scripts/lib/macos-payload-identity.mjs';
 
 export const MAC_NATIVE_HELP = `Usage: node --import <pinned-tsx> tests/macos-installer-native-cli.mjs --validate|--run
   --task-root <explicit-owned-task-directory> --node <selected-node> --tsx <selected-loader>
@@ -26,6 +33,10 @@ export const MAC_NATIVE_HELP = `Usage: node --import <pinned-tsx> tests/macos-in
   --root <fresh-task-run-root> --source-root <matching-clean-committed-source>
   --current-zip <ZIP> --current-info <build-info.json> --current-tree <bundle-inventory.json>
   --prior-zip <ZIP> --prior-info <build-info.json> --prior-tree <bundle-inventory.json>
+  Optional --case macos-bundle:install selects current-only install; omit every prior-* flag.
+  It requires macos-native-install-only approval, the exact case and only install/helper-stage-disposal.
+  It retains a partial case, helper child/streams, installed payload and shipping build info;
+  it cannot produce an all-nine observation or release acceptance.
 No default execution. --validate reads bindings only; it does not claim a run or execute helpers.
 Host paths are explicit configuration, not execution permission. Missing configuration refuses before IO.
 The source-local Playwright path is a nominal dependency pin, not proof of the loaded SDK closure.
@@ -101,6 +112,120 @@ function publishTerminalFacts(io, root) {
         0o600,
         true,
     );
+    return rows;
+}
+
+async function publishInstallOnly(admitted, io, actions) {
+    const root = admitted.parsed.root,
+        selected = admitted.packages.current;
+    assert.equal(actions.result.status, 'verified');
+    assert.equal(actions.custody.pending, null);
+    assert.equal(actions.result.cases.length, 1);
+    const actionCase = actions.result.cases[0];
+    validateMacInstallOnlyAction(actionCase, {
+        version: selected.version,
+        sourceCommit: selected.sourceCommit,
+        zipSHA256: selected.zipSHA256,
+        asarSHA256: selected.asarSHA256,
+    });
+    assert.equal(io.state.desktops.length, 0);
+    assert.equal(io.needsHold(), false);
+    const rows = publishTerminalFacts(io, root);
+    const helpers = rows.filter((row) => row.operation?.caseId === MAC_INSTALL_ONLY_CASE);
+    assert.equal(helpers.length, 1);
+    const child = helpers[0];
+    inspectMacInstallHelper(child, {
+        lane: 'darwin-' + admitted.metadata.arch,
+        version: selected.version,
+        sourceCommit: admitted.approval.sourceCommit,
+        sourceTree: admitted.approval.sourceTree,
+        artifacts: [
+            {
+                name: selected.info.asset,
+                bytes: selected.identity.zipBytes,
+                sha256: selected.zipSHA256,
+            },
+        ],
+    });
+    const reference = async (relative, cap) => {
+        const bytes = await io.read(path.join(root, relative), cap);
+        return { bytes, ref: { path: relative, bytes: bytes.length, sha256: digest(bytes) } };
+    };
+    const helperChild = await reference(macHelperRecordPath(child.index), NATIVE_LIMITS.stageBytes);
+    assert.deepEqual(JSON.parse(helperChild.bytes.toString()), child);
+    const installedPayload = await reference(
+        'install/evidence/installed-payload-1.json',
+        NATIVE_LIMITS.resultBytes,
+    );
+    validateMacInstalledPayloadSample(JSON.parse(installedPayload.bytes.toString()), {
+        caseId: MAC_INSTALL_ONLY_CASE,
+        version: selected.version,
+        sourceCommit: selected.sourceCommit,
+        sourceTree: admitted.approval.sourceTree,
+        archive: {
+            name: selected.info.asset,
+            bytes: selected.identity.zipBytes,
+            sha256: selected.zipSHA256,
+        },
+        payloadIdentity: selected.payloadIdentity,
+    });
+    const infoBytes = await io.read(selected.identity.info, 65536);
+    assert.equal(digest(infoBytes), selected.identity.infoSHA256);
+    const shippingPath = 'evidence/current-shipping-build-info.json';
+    io.publish(path.join(root, shippingPath), infoBytes, 65536, 0o600, true);
+    const shippingBuildInfo = await reference(shippingPath, 65536);
+    assert.ok(shippingBuildInfo.bytes.equals(infoBytes));
+    const casePath = 'evidence/install-only-case.json';
+    io.publish(
+        path.join(root, casePath),
+        bounded(actionCase, NATIVE_LIMITS.stageBytes),
+        NATIVE_LIMITS.stageBytes,
+        0o600,
+        true,
+    );
+    const caseRecord = await reference(casePath, NATIVE_LIMITS.stageBytes);
+    validateMacInstallOnlyAction(JSON.parse(caseRecord.bytes.toString()), {
+        version: selected.version,
+        sourceCommit: selected.sourceCommit,
+        zipSHA256: selected.zipSHA256,
+        asarSHA256: selected.asarSHA256,
+    });
+    const helperBytes = await io.read(path.join(root, 'bin/download-run-macos.sh'), 65536);
+    io.gate();
+    assert.equal(io.needsHold(), false);
+    return bounded({
+        status: 'INSTALL_ONLY_OBSERVED_REVIEW_REQUIRED',
+        case: MAC_INSTALL_ONLY_CASE,
+        qualificationStatus: 'unverified',
+        sourceCommit: admitted.approval.sourceCommit,
+        sourceTree: admitted.approval.sourceTree,
+        root,
+        operationId: child.operation.operationId,
+        records: {
+            actionCase: caseRecord.ref,
+            helperChild: helperChild.ref,
+            installedPayload: installedPayload.ref,
+            shippingBuildInfo: shippingBuildInfo.ref,
+        },
+        helperFixture: {
+            diskIdentityOnly: true,
+            physicalLoadedBytesVerified: false,
+            transport: 'locally-derived-offline-mirror',
+            consent: 'fixed-install-substitution-not-human-dialog',
+            originalHelperSHA256: admitted.approval.pins.find((pin) => pin.role === 'helper')
+                .sha256,
+            executedHelper: {
+                path: 'bin/download-run-macos.sh',
+                bytes: helperBytes.length,
+                sha256: digest(helperBytes),
+            },
+            disposal: 'guarded-helper-owned-download-and-install-stages-only',
+        },
+        nativeEffects: true,
+        fullLifecycle: false,
+        descendantClosure: 'UNKNOWN',
+        releaseAcceptance: false,
+    }).toString();
 }
 
 async function artifactRecords(admitted, io) {
@@ -159,6 +284,7 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
             io,
             (dependencies.sourcePins ?? macNativeSourcePins)(parsed),
         ));
+        const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE;
         io.gate();
         if (parsed.mode === 'validate')
             return {
@@ -171,7 +297,9 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
                     root: parsed.root,
                     sourceCommit: admitted.approval.sourceCommit,
                     current: identity(admitted.packages.current),
-                    prior: identity(admitted.packages.prior),
+                    ...(installOnly
+                        ? { case: MAC_INSTALL_ONLY_CASE }
+                        : { prior: identity(admitted.packages.prior) }),
                 }).toString(),
                 state,
             };
@@ -191,6 +319,23 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
             0o600,
             true,
         );
+        if (installOnly) {
+            state.phase = 'install-only-case';
+            state.actions = await (dependencies.runInstallOnlyActions ?? runMacInstallOnlyActions)({
+                inputs: {
+                    lane: 'darwin-' + admitted.metadata.arch,
+                    fixtureParent: parsed.root,
+                    bundleIdentifier: 'dev.diagnostichub.desktop',
+                    current: identity(admitted.packages.current),
+                },
+                effects,
+            });
+            state.phase = 'install-only-publication';
+            const output = await publishInstallOnly(admitted, io, state.actions);
+            state.publicationComplete = true;
+            state.phase = 'completed-install-only-unqualified';
+            return { exitCode: 0, output, state };
+        }
         state.phase = 'nine-lifecycle-cases';
         state.actions = await (dependencies.runActions ?? runMacInstallerActions)({
             inputs: {
