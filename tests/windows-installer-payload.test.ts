@@ -9,6 +9,8 @@ import {
     compareWindowsInstalledPayload,
     nodeWindowsPayloadIo,
     WINDOWS_PAYLOAD_LIMITS,
+    WindowsPayloadCloseError,
+    type PayloadFileHandle,
     type PinnedPayloadFile,
     type WindowsPayloadIo,
 } from './fixtures/windows-installer-payload.ts';
@@ -338,7 +340,8 @@ test('inventory count and total-size limits reject before any filesystem activit
 test('invalid reads, read errors and close errors cannot produce successful comparison or retry', async () => {
     for (const mode of ['negative', 'oversized', 'nan', 'read-error', 'close-error']) {
         const f = memoryIo(),
-            originalOpen = f.io.open;
+            originalOpen = f.io.open,
+            closeFailure = Error('fake close failure');
         f.io.open = async (file) => {
             const handle = await originalOpen(file);
             return {
@@ -352,17 +355,214 @@ test('invalid reads, read errors and close errors cannot produce successful comp
                 },
                 async close() {
                     await handle.close();
-                    if (mode === 'close-error') throw Error('fake close failure');
+                    if (mode === 'close-error') throw closeFailure;
                 },
             };
         };
         await assert.rejects(
             compareWindowsInstalledPayload('C:\\Hub', pins(), f.io),
-            /READ_INVALID|fake read failure|fake close failure/,
+            (error: unknown) => {
+                if (mode === 'close-error') {
+                    assert.ok(error instanceof WindowsPayloadCloseError);
+                    assert.equal(error.cause, closeFailure);
+                    assert.deepEqual(error.errors, [closeFailure]);
+                    assert.equal(error.custody.closeObserved, false);
+                } else assert.match(String(error), /READ_INVALID|fake read failure/);
+                return true;
+            },
         );
         assert.equal(f.counts().opens, 1);
         assert.equal(f.counts().closes, 1);
     }
+});
+
+test('combined read and close failures preserve the exact primary, including undefined', async () => {
+    for (const primary of [Error('private read failure'), undefined]) {
+        for (const closeFails of [false, true]) {
+            const f = memoryIo(),
+                originalOpen = f.io.open,
+                closeFailure = Error('private close failure');
+            let returned: PayloadFileHandle | null = null,
+                closeCalls = 0;
+            f.io.open = async (file) => {
+                const handle = await originalOpen(file);
+                returned = {
+                    ...handle,
+                    async read() {
+                        throw primary;
+                    },
+                    async close() {
+                        closeCalls++;
+                        if (closeFails) throw closeFailure;
+                        await handle.close();
+                    },
+                };
+                return returned;
+            };
+            await assert.rejects(
+                compareWindowsInstalledPayload('C:\\Hub', pins(), f.io),
+                (error) => {
+                    if (!closeFails) assert.equal(error, primary);
+                    else {
+                        assert.ok(error instanceof WindowsPayloadCloseError);
+                        assert.equal(error.message, 'WINDOWS_PAYLOAD_CLOSE_UNCONFIRMED');
+                        assert.equal(error.cause, primary);
+                        assert.deepEqual(error.errors, [primary, closeFailure]);
+                        assert.equal(error.custody.handle, returned);
+                        assert.equal(error.custody.file, f.opened[0]);
+                        assert.equal(error.custody.acquisitionSubmitted, true);
+                        assert.equal(error.custody.acquisitionReturned, true);
+                        assert.equal(error.custody.closeRequested, true);
+                        assert.equal(error.custody.closeObserved, false);
+                    }
+                    return true;
+                },
+            );
+            assert.equal(closeCalls, 1);
+            assert.equal(f.counts().opens, 1);
+            assert.equal(f.counts().closes, closeFails ? 0 : 1);
+        }
+    }
+});
+
+test('a pre-read descriptor failure and rejected close retain the actual handle without retry', async () => {
+    const f = memoryIo(),
+        originalOpen = f.io.open,
+        primary = Error('private descriptor failure'),
+        closeFailure = Error('private close failure');
+    let returned: PayloadFileHandle | null = null,
+        closeCalls = 0;
+    f.io.open = async (file) => {
+        const handle = await originalOpen(file);
+        returned = {
+            ...handle,
+            async stat() {
+                throw primary;
+            },
+            async close() {
+                closeCalls++;
+                throw closeFailure;
+            },
+        };
+        return returned;
+    };
+    await assert.rejects(compareWindowsInstalledPayload('C:\\Hub', pins(), f.io), (error) => {
+        assert.ok(error instanceof WindowsPayloadCloseError);
+        assert.deepEqual(error.errors, [primary, closeFailure]);
+        assert.equal(error.cause, primary);
+        assert.equal(error.custody.handle, returned);
+        assert.equal(error.custody.closeObserved, false);
+        return true;
+    });
+    assert.equal(closeCalls, 1);
+    assert.equal(f.counts().reads, 0);
+    assert.equal(f.counts().closes, 0);
+});
+
+test('unconfirmed close custody is private and cannot serialize raw handles or paths', async () => {
+    const f = memoryIo(),
+        originalOpen = f.io.open,
+        closeFailure = Object.freeze(Error('private close failure'));
+    let returned: PayloadFileHandle | null = null,
+        closeCalls = 0;
+    f.io.open = async (file) => {
+        const handle = await originalOpen(file);
+        returned = {
+            ...handle,
+            async close() {
+                closeCalls++;
+                throw closeFailure;
+            },
+        };
+        return returned;
+    };
+    await assert.rejects(compareWindowsInstalledPayload('C:\\Hub', pins(), f.io), (error) => {
+        assert.ok(error instanceof WindowsPayloadCloseError);
+        assert.equal(error.cause, closeFailure);
+        assert.deepEqual(error.errors, [closeFailure]);
+        assert.equal(error.custody.handle, returned);
+        assert.ok(Object.isFrozen(error.custody));
+        assert.equal(Object.getOwnPropertyDescriptor(error, 'custody')?.enumerable, false);
+        assert.deepEqual(Object.keys(error), []);
+        assert.equal(JSON.stringify(error), '{}');
+        assert.equal(error.custody.closeObserved, false);
+        return true;
+    });
+    assert.equal(closeCalls, 1);
+    assert.equal(f.counts().opens, 1);
+    assert.equal(f.counts().closes, 0);
+});
+
+test('delayed acquisition and pending close remain unsettled until the actual close outcome', async () => {
+    const f = memoryIo(),
+        originalOpen = f.io.open,
+        closeFailure = Error('private delayed close failure');
+    let releaseOpen!: (handle: PayloadFileHandle) => void,
+        rejectClose!: (error: unknown) => void,
+        noteOpen!: () => void,
+        noteClose!: () => void;
+    const delayedOpen = new Promise<PayloadFileHandle>((resolve) => {
+        releaseOpen = resolve;
+    });
+    const delayedClose = new Promise<void>((_resolve, reject) => {
+        rejectClose = reject;
+    });
+    void delayedClose.catch(() => {});
+    const openRequested = new Promise<void>((resolve) => {
+        noteOpen = resolve;
+    });
+    const closeRequested = new Promise<void>((resolve) => {
+        noteClose = resolve;
+    });
+    let returned!: PayloadFileHandle,
+        closeCalls = 0,
+        settled = false;
+    f.io.open = async (file) => {
+        const handle = await originalOpen(file);
+        returned = {
+            ...handle,
+            async close() {
+                closeCalls++;
+                noteClose();
+                await delayedClose;
+            },
+        };
+        noteOpen();
+        return delayedOpen;
+    };
+    const comparison = compareWindowsInstalledPayload('C:\\Hub', pins(), f.io);
+    void comparison.then(
+        () => (settled = true),
+        () => (settled = true),
+    );
+    try {
+        await openRequested;
+        assert.equal(settled, false);
+        assert.equal(closeCalls, 0);
+        releaseOpen(returned);
+        await closeRequested;
+        assert.equal(settled, false);
+        assert.equal(closeCalls, 1);
+        assert.equal(f.counts().opens, 1);
+        assert.equal(f.counts().closes, 0);
+        rejectClose(closeFailure);
+        await assert.rejects(comparison, (error) => {
+            assert.ok(error instanceof WindowsPayloadCloseError);
+            assert.equal(error.custody.handle, returned);
+            assert.equal(error.custody.acquisitionReturned, true);
+            assert.equal(error.custody.closeRequested, true);
+            assert.equal(error.custody.closeObserved, false);
+            assert.deepEqual(error.errors, [closeFailure]);
+            assert.equal(error.cause, closeFailure);
+            return true;
+        });
+    } finally {
+        releaseOpen(returned);
+        rejectClose(closeFailure);
+        await comparison.catch(() => {});
+    }
+    assert.equal(closeCalls, 1);
+    assert.equal(f.counts().closes, 0);
 });
 
 test('the real Node filesystem adapter hashes controlled disk bytes without launching them', async () => {

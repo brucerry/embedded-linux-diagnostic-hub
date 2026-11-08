@@ -28,6 +28,31 @@ export interface WindowsPayloadIo {
     open(file: string): Promise<PayloadFileHandle>;
 }
 
+export interface WindowsPayloadFileCustody {
+    readonly file: string;
+    readonly acquisitionSubmitted: boolean;
+    readonly acquisitionReturned: boolean;
+    readonly handle: PayloadFileHandle | null;
+    readonly closeRequested: boolean;
+    readonly closeObserved: boolean;
+}
+
+/** An unacknowledged close is not retirement. Keep its exact handle and errors
+ * available to the caller without including them in a serialized diagnostic. */
+export class WindowsPayloadCloseError extends AggregateError {
+    declare readonly custody: Readonly<WindowsPayloadFileCustody>;
+
+    constructor(
+        custody: WindowsPayloadFileCustody,
+        failures: readonly unknown[],
+        primary: unknown,
+    ) {
+        super(failures, 'WINDOWS_PAYLOAD_CLOSE_UNCONFIRMED', { cause: primary });
+        Object.defineProperty(this, 'name', { value: 'WindowsPayloadCloseError' });
+        Object.defineProperty(this, 'custody', { value: Object.freeze({ ...custody }) });
+    }
+}
+
 // Real, read-only Node filesystem operations. This adapter cannot pin Windows
 // directories or deny replacement through CreateProcess. It is not admission.
 export function nodeWindowsPayloadIo(): WindowsPayloadIo {
@@ -195,8 +220,21 @@ export async function compareWindowsInstalledPayload(
             }
             const pinned = expectedNode.file;
             if (stat.size !== BigInt(pinned.size)) fail('SIZE_MISMATCH');
+            const custody = {
+                file,
+                acquisitionSubmitted: false,
+                acquisitionReturned: false,
+                handle: null as PayloadFileHandle | null,
+                closeRequested: false,
+                closeObserved: false,
+            };
+            custody.acquisitionSubmitted = true;
             const handle = await io.open(file);
-            let digest: string;
+            custody.handle = handle; // Adopt a late return before any descriptor observation.
+            custody.acquisitionReturned = true;
+            let digest!: string;
+            let readFailed = false,
+                primary: unknown;
             try {
                 if (!sameStat(stat, await handle.stat())) fail('OPEN_IDENTITY_CHANGED');
                 const hash = createHash('sha256'),
@@ -215,9 +253,23 @@ export async function compareWindowsInstalledPayload(
                 digest = hash.digest('hex');
                 if (digest !== pinned.sha256) fail('DIGEST_MISMATCH');
                 if (!sameStat(stat, await handle.stat())) fail('READ_IDENTITY_CHANGED');
-            } finally {
-                await handle.close();
+            } catch (error) {
+                readFailed = true;
+                primary = error;
             }
+            custody.closeRequested = true;
+            try {
+                await handle.close();
+                custody.closeObserved = true;
+            } catch (error) {
+                // No retry or assumption that a rejecting close released the handle.
+                throw new WindowsPayloadCloseError(
+                    custody,
+                    readFailed ? [primary, error] : [error],
+                    readFailed ? primary : error,
+                );
+            }
+            if (readFailed) throw primary;
             observedFiles.push(
                 Object.freeze({
                     relativePath: rel,
