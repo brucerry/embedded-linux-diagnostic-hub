@@ -1,0 +1,334 @@
+# PROPOSAL ONLY: do not publish without fresh approval of privileged actions.
+name: Functional systemd feasibility proposal
+'on':
+  push:
+    branches: [ci/supervisor-functional-proposal-20261108]
+    paths: [.github/workflows/supervisor-functional-proposal.yml]
+permissions: {}
+jobs:
+  feasibility:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.event.repository.private == false &&
+      github.event_name == 'push' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Same-run preflight and proposed supervisor pilot
+        id: pilot
+        shell: python
+        run: |
+          #!/usr/bin/python3
+          """PROPOSAL ONLY. Privileged execution needs separate action-time approval.
+          A real systemd feasibility test, NOT Diagnostic Hub retirement qualification.
+          """
+          import os
+          import re
+          import select
+          import subprocess as sp
+          import time
+          from pathlib import Path
+          
+          
+          def phase(label):
+              # Fixed bookkeeping labels only; requests never assert successful actions.
+              assert label in ('boot-wait', 'preflight-ready', 'launch-requested',
+                               'service-active-verified', 'main-exited-child-present',
+                               'scope-empty-verified', 'disposal-requested',
+                               'wrapper-closed', 'pipes-closed')
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='ascii') as output:
+                  output.write('phase=' + label + '\n')
+          
+          
+          def command(args, seconds=3, accepted=(0,), with_status=False):
+              # Hard 32 KiB combined retention cap plus one overflow-detection byte.
+              end = time.monotonic() + seconds
+              p = sp.Popen(args, stdin=sp.DEVNULL, stdout=sp.PIPE, stderr=sp.PIPE)
+              streams = [p.stdout, p.stderr]
+              buffers = {stream: bytearray() for stream in streams}
+              total = 0
+              try:
+                  while streams:
+                      remaining = end - time.monotonic()
+                      if remaining <= 0:
+                          raise TimeoutError('command observation deadline')
+                      ready, _, _ = select.select(streams, [], [], remaining)
+                      if not ready:
+                          raise TimeoutError('command observation deadline')
+                      for stream in ready:
+                          block = os.read(stream.fileno(), min(4096, 32768 - total + 1))
+                          total += len(block)
+                          if total > 32768:
+                              raise RuntimeError('command capture cap exceeded')
+                          if block:
+                              buffers[stream].extend(block)
+                          else:
+                              streams.remove(stream)
+                  remaining = end - time.monotonic()
+                  if remaining <= 0:
+                      raise TimeoutError('command observation deadline')
+                  code = p.wait(timeout=remaining)
+                  if code not in accepted:
+                      raise RuntimeError('command failed: ' + args[0])
+                  output = buffers[p.stdout].decode().strip()
+                  return (code, output) if with_status else output
+              except BaseException:
+                  # Only this query/client process, never the service or process group.
+                  # A timed-out stop client has an uncertain outcome and is never retried.
+                  if p.poll() is None:
+                      p.kill()
+                  raise
+              finally:
+                  p.stdout.close(); p.stderr.close()
+          
+          
+          def show(unit=None, seconds=3, allow_not_loaded=False):
+              keys = ('Id LoadState InvocationID ControlGroup MainPID ExecMainCode ExecMainStatus '
+                      'ExecMainExitTimestampMonotonic ActiveState SubState Result '
+                      'Type ExitType RemainAfterExit Restart NRestarts KillMode Delegate '
+                      'DynamicUser NoNewPrivileges ProtectControlGroups RestrictNamespaces '
+                      'CapabilityBoundingSet AmbientCapabilities OOMPolicy RestrictAddressFamilies '
+                      'ProtectSystem ProtectHome PrivateTmp PrivateNetwork InaccessiblePaths '
+                      'MemoryMax TasksMax RuntimeMaxUSec TimeoutStartUSec TimeoutStopUSec '
+                      'SendSIGKILL').split()
+              args = ['/usr/bin/systemctl', '--system', 'show', '--no-pager']
+              if unit:
+                  args += [unit] + ['--property=' + k for k in keys]
+              else:
+                  args += ['--property=Version', '--property=SystemState']
+              code, text = command(args, seconds, (0, 4) if allow_not_loaded else (0,), True)
+              values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
+              if allow_not_loaded and values.get('LoadState') == 'not-found':
+                  assert values.get('Id') == unit
+                  assert values.get('ActiveState') == 'inactive'
+                  assert values.get('MainPID') == '0'
+                  assert not values.get('InvocationID') and not values.get('ControlGroup')
+                  return None
+              if code:
+                  raise RuntimeError('unit query failed without verified not-loaded state')
+              if unit:
+                  assert values.get('LoadState') == 'loaded'
+              return values
+          
+          
+          def until(test, seconds=5):
+              end = time.monotonic() + seconds
+              while True:
+                  remaining = end - time.monotonic()
+                  if remaining <= 0:
+                      raise TimeoutError('observation deadline; not normal completion')
+                  value = test(min(3, remaining))
+                  remaining = end - time.monotonic()
+                  if remaining <= 0:
+                      raise TimeoutError('observation deadline; not normal completion')
+                  if value:
+                      return value
+                  time.sleep(min(.1, remaining))
+          
+          
+          def bounded_text(path, limit=16384):
+              with open(path, 'rb') as source:
+                  data = source.read(limit + 1)
+              assert len(data) <= limit
+              return data.decode('ascii')
+          
+          
+          def observer_events(unit):
+              # Unified hierarchy only, bounded input, non-root canonical component path.
+              with open('/proc/self/cgroup', 'rb') as source:
+                  record = source.read(4097)
+              assert len(record) <= 4096
+              text = record.decode('ascii')
+              assert text.endswith('\n') and text.count('\n') == 1
+              assert text.startswith('0::/')
+              path = text[3:-1]
+              assert 1 < len(path) <= 4092
+              parts = path[1:].split('/')
+              assert all(0 < len(part) <= 255 and part not in ('.', '..') and
+                         re.fullmatch(r'[A-Za-z0-9_.:@\\-]+', part) for part in parts)
+              future = '/system.slice/' + unit
+              assert path != future and not path.startswith(future + '/')
+              # Resolve each real directory without following symlinks or fallback paths.
+              fd = os.open('/sys/fs/cgroup', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  for part in parts:
+                      child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                      dir_fd=fd)
+                      os.close(fd)
+                      fd = child
+                  events = os.open('cgroup.events', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+                  try:
+                      value = os.pread(events, 1025, 0)
+                      assert len(value) <= 1024
+                      assert re.search(rb'^populated 1$', value, re.MULTILINE)
+                  finally:
+                      os.close(events)
+              finally:
+                  os.close(fd)
+              return path
+          
+          
+          def preflight(unit):
+              wanted = {'GITHUB_ACTIONS': 'true', 'GITHUB_EVENT_NAME': 'push',
+                        'GITHUB_RUN_ATTEMPT': '1', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                        'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'X64',
+                        'GITHUB_REPOSITORY': 'brucerry/embedded-linux-diagnostic-hub',
+                        'GITHUB_REF': 'refs/heads/ci/supervisor-functional-proposal-20261108'}
+              assert all(os.environ.get(k) == v for k, v in wanted.items())
+              assert os.getuid() != 0
+              release = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
+              assert release['ID'].strip('"') == 'ubuntu' and release['VERSION_ID'].strip('"') == '24.04'
+              assert Path('/proc/1/comm').read_text().strip() == 'systemd'
+              assert command(['/usr/bin/stat', '-fc', '%T', '/sys/fs/cgroup']) == 'cgroup2fs'
+              assert Path('/sys/fs/cgroup/cgroup.controllers').is_file()
+              observer = observer_events(unit)
+              manager = show()
+              assert 0 < len(manager['Version']) <= 256
+              # Major-version gate only: Ubuntu patches are not upstream-byte identity.
+              # The proposed run must still establish actual installed behavior.
+              assert re.match(r'^255(?:\D|$)', manager['Version'])
+              # --wait has documented boot-completion semantics. Never accept starting.
+              phase('boot-wait')
+              state = command(['/usr/bin/systemctl', '--system', 'is-system-running', '--wait'],
+                              30, (0, 1))
+              assert state in ('running', 'degraded')
+              assert show()['SystemState'] in ('running', 'degraded')
+              assert Path('/run/systemd/private').is_socket()
+              assert Path('/run/dbus/system_bus_socket').is_socket()
+              # Listing does not establish invocation permission or functionality.
+              command(['/usr/bin/sudo', '-n', '-l', '/usr/bin/systemd-run'])
+              return observer
+          
+          
+          FIXTURE = '''import os
+          if os.read(0, 1) != b'A': os._exit(71)
+          if os.fork() != 0: os._exit(0)
+          if os.read(0, 1) != b'B': os._exit(72)
+          os._exit(0)
+          '''
+          
+          
+          def pilot():
+              runid = os.environ['GITHUB_RUN_ID']
+              assert re.fullmatch(r'[0-9]{1,24}', runid)
+              unit = 'dh-feasibility-' + runid + '.service'
+              observer = preflight(unit)
+              phase('preflight-ready')
+              # All properties and both sudo calls below are proposed consequential actions.
+              properties = [
+                  'Type=exec', 'ExitType=cgroup', 'RemainAfterExit=yes', 'Restart=no',
+                  'KillMode=control-group', 'SendSIGKILL=yes', 'RuntimeMaxSec=20s', 'TimeoutStartSec=5s',
+                  'TimeoutStopSec=2s', 'OOMPolicy=stop', 'MemoryMax=64M', 'TasksMax=8',
+                  'Delegate=no', 'DynamicUser=yes', 'NoNewPrivileges=yes',
+                  'CapabilityBoundingSet=', 'AmbientCapabilities=', 'RestrictNamespaces=yes',
+                  'ProtectControlGroups=yes', 'ProtectSystem=strict', 'ProtectHome=yes',
+                  'PrivateTmp=yes', 'PrivateNetwork=yes', 'RestrictAddressFamilies=',
+                  'InaccessiblePaths=/run/systemd/private /run/dbus/system_bus_socket',
+              ]
+              args = ['/usr/bin/sudo', '-n', '/usr/bin/systemd-run', '--system',
+                      '--quiet', '--pipe', '--unit=' + unit]
+              args += ['--property=' + p for p in properties]
+              args += ['/usr/bin/python3', '-I', '-S', '-c', FIXTURE]
+              phase('launch-requested')
+              p = sp.Popen(args, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+              # No retry, no automatic cleanup, and no stop on failure: systemd's approved
+              # runtime limit triggers running-fixture teardown; stop timeout schedules
+              # escalation, not guaranteed task disappearance. Neither bounds exited state
+              # or the outside --pipe wrapper. Those may remain until VM disposal after
+              # observer failure. VM disposal is never normal-completion evidence.
+              def first_observation(remaining):
+                  assert p.poll() is None, 'activation wrapper exited before observation'
+                  state = show(unit, remaining, allow_not_loaded=True)
+                  assert p.poll() is None, 'activation wrapper exited during observation'
+                  if state is None:  # Positively identified asynchronous not-loaded state.
+                      return None
+                  assert state['ActiveState'] in ('activating', 'active')
+                  if state['ActiveState'] == 'activating':
+                      return None
+                  assert state['SubState'] == 'running' and state['MainPID'] != '0'
+                  return state
+              first = until(first_observation)
+              inv, cg = first['InvocationID'], first['ControlGroup']
+              assert re.fullmatch('[0-9a-f]{32}', inv) and int(inv, 16)
+              assert cg == '/system.slice/' + unit
+              assert observer != cg and not observer.startswith(cg + '/')
+              assert observer_events(unit) == observer
+              assert first['Id'] == unit
+              assert first['ActiveState'] == 'active' and first['SubState'] == 'running'
+              required = {'Type': 'exec', 'ExitType': 'cgroup', 'RemainAfterExit': 'yes', 'Restart': 'no',
+                          'KillMode': 'control-group', 'Delegate': 'no', 'DynamicUser': 'yes',
+                          'NoNewPrivileges': 'yes', 'ProtectControlGroups': 'yes',
+                          'CapabilityBoundingSet': '', 'OOMPolicy': 'stop',
+                          'RestrictNamespaces': 'yes', 'RestrictAddressFamilies': '',
+                          'AmbientCapabilities': '', 'SendSIGKILL': 'yes',
+                          'ProtectSystem': 'strict', 'ProtectHome': 'yes',
+                          'PrivateTmp': 'yes', 'PrivateNetwork': 'yes',
+                          'InaccessiblePaths': '/run/systemd/private /run/dbus/system_bus_socket',
+                          'MemoryMax': '67108864', 'TasksMax': '8', 'RuntimeMaxUSec': '20s',
+                          'TimeoutStartUSec': '5s', 'TimeoutStopUSec': '2s'}
+              assert all(first.get(k) == v for k, v in required.items())
+              proc = '/proc/' + first['MainPID']
+              assert bounded_text(proc + '/cgroup', 4096).strip() == '0::' + cg
+              effective = dict(line.split(':', 1) for line in bounded_text(proc + '/status').splitlines() if ':' in line)
+              uids = effective['Uid'].split()
+              assert len(uids) == 4 and all(int(uid) != 0 and int(uid) != os.getuid() for uid in uids)
+              assert all(int(effective[key].strip(), 16) == 0 for key in
+                         ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb'))
+              assert effective['NoNewPrivs'].strip() == '1'
+              directory = os.open('/sys/fs/cgroup' + cg, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              identity = os.fstat(directory)
+              events = os.open('cgroup.events', os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+              assert b'populated 1\n' in os.pread(events, 1024, 0)
+              phase('service-active-verified')
+              # The only fixture work allowed before capture is the trusted blocking shim.
+              p.stdin.write(b'A'); p.stdin.flush()
+              middle = until(lambda remaining: (s if (s := show(unit, remaining)).get('ExecMainExitTimestampMonotonic', '0') != '0' else None))
+              assert middle['InvocationID'] == inv and middle['ControlGroup'] == cg
+              assert middle['MainPID'] == '0' and middle['ExecMainCode'] == '1' and middle['ExecMainStatus'] == '0'
+              assert middle['ActiveState'] == 'active' and middle['SubState'] == 'running'
+              assert middle['Result'] == 'success' and middle['NRestarts'] == '0'
+              now = os.stat('/sys/fs/cgroup' + cg, follow_symlinks=False)
+              assert (now.st_dev, now.st_ino) == (identity.st_dev, identity.st_ino)
+              assert b'populated 1\n' in os.pread(events, 1024, 0)
+              phase('main-exited-child-present')
+              p.stdin.write(b'B'); p.stdin.flush(); p.stdin.close()
+              final = until(lambda remaining: (s if (s := show(unit, remaining)).get('SubState') == 'exited' else None))
+              assert final['InvocationID'] == inv and final['Id'] == unit
+              assert final['ActiveState'] == 'active' and final['Result'] == 'success'
+              assert final['MainPID'] == '0' and final['ExecMainCode'] == '1' and final['ExecMainStatus'] == '0'
+              assert final['NRestarts'] == '0'
+              assert all(final.get(k) == v for k, v in required.items())
+              assert final['ControlGroup'] in ('', cg)  # Cleanup may clear it; never evidence of emptiness.
+              # Normal scope emptiness evidence is the retained manager state, not ENOENT
+              # and not a fabricated populated=0 read from a dead kernfs descriptor.
+              os.close(events); os.close(directory)
+              assert show()['SystemState'] in ('running', 'degraded')
+              phase('scope-empty-verified')
+              # Only now stop the proven-empty retained unit so the --pipe wrapper exits.
+              # This disposal is NOT the normal-empty evidence and must be approved too.
+              phase('disposal-requested')
+              command(['/usr/bin/sudo', '-n', '/usr/bin/systemctl', '--system', 'stop', unit], 5)
+              assert p.wait(timeout=5) == 0
+              phase('wrapper-closed')
+              # Bounded wrapper stream drain, explicitly after empty-unit disposal.
+              for stream in (p.stdout, p.stderr):
+                  data = b''
+                  end = time.monotonic() + 3
+                  while True:
+                      remaining = end - time.monotonic()
+                      assert remaining > 0 and select.select([stream], [], [], remaining)[0]
+                      block = os.read(stream.fileno(), 4096 - len(data) + 1)
+                      data += block
+                      assert len(data) <= 4096
+                      if not block: break
+                  stream.close()
+              phase('pipes-closed')
+              print('SUPERVISOR_FEASIBILITY_PASS; PRODUCT_RETIREMENT_NOT_QUALIFIED')
+          
+          
+          if __name__ == '__main__':
+              pilot()
+      - name: "Last supervisor phase: ${{ steps.pilot.outputs.phase || 'not-started' }}"
+        if: ${{ always() }}
+        shell: bash
+        run: ':'
