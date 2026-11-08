@@ -66,6 +66,7 @@ jobs:
               run: |
                   $ErrorActionPreference = 'Stop'
                   $PSNativeCommandUseErrorActionPreference = $false
+                  $stage = 'source'; $reason = 'prepare'
                   try {
                     $program = @'
                   import assert from 'node:assert/strict';
@@ -91,28 +92,64 @@ jobs:
                   const text=JSON.stringify(record);assert.ok(text.length<2048&&!/[\r\n%]/.test(text));
                   console.log('::notice title=Windows authority source::'+text);
                   '@
+                    $stage = 'source'; $reason = 'invoke'
                     $program | node --input-type=module 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/source-error.log')
+                    $reason = 'exit'
                     if ($LASTEXITCODE -ne 0) { throw 'Source' }
+                    $stage = 'vs-discovery'; $reason = 'locate'
                     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+                    $reason = 'invoke'
                     $installed = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/vswhere-error.log')
+                    $reason = 'exit'
                     if ($LASTEXITCODE -ne 0) { throw 'MSVC discovery' }
+                    $stage = 'vs-json-shape'; $reason = 'parse'
                     $instances = @($installed | ConvertFrom-Json)
+                    $reason = 'count'
                     if ($instances.Count -ne 1) { throw 'MSVC selection' }
+                    $reason = 'canonical-path'
                     $vs = [IO.Path]::GetFullPath($instances[0].installationPath)
+                    $stage = 'vs-version'; $reason = 'read'
                     $vcVersion = [IO.File]::ReadAllText((Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt')).Trim()
+                    $reason = 'version-format'
                     if ($vcVersion -cnotmatch '^14\.\d+\.\d+$') { throw 'MSVC version' }
+                    $stage = 'compiler-path'; $reason = 'construct'
                     $cl = Join-Path $vs ('VC/Tools/MSVC/' + $vcVersion + '/bin/Hostx64/x64/cl.exe')
+                    $stage = 'linker-path'
                     $link = Join-Path $vs ('VC/Tools/MSVC/' + $vcVersion + '/bin/Hostx64/x64/link.exe')
+                    $stage = 'devcmd-path'
                     $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
+                    $stage = 'python-selection'; $reason = 'select'
                     $python = (Get-Command python.exe -CommandType Application).Source
+                    $pathStages = @('compiler-path','linker-path','devcmd-path','python-path')
+                    $pathIndex = 0
                     foreach ($file in @($cl,$link,$devcmd,$python)) {
-                      if (-not [IO.Path]::IsPathFullyQualified($file) -or -not [IO.File]::Exists($file) -or $file -match '[%!&|<>^"\r\n]' -or ($file -match '\\WindowsApps\\')) { throw 'Tool path' }
+                      $stage = $pathStages[[Math]::Min($pathIndex,3)]; $pathIndex++
+                      $reason = 'fully-qualified'
+                      if (-not [IO.Path]::IsPathFullyQualified($file)) { throw 'Tool path' }
+                      $reason = 'file-exists'
+                      if (-not [IO.File]::Exists($file)) { throw 'Tool path' }
+                      $reason = 'metacharacters'
+                      if ($file -match '[%!&|<>^"\r\n]') { throw 'Tool path' }
+                      $reason = 'windows-app-alias'
+                      if ($file -match '\\WindowsApps\\') { throw 'Tool path' }
                     }
+                    $stage = 'python-version'; $reason = 'invoke'
                     $pythonVersion = & $python -I -c 'import sys; assert sys.version_info >= (3, 11); print(".".join(map(str,sys.version_info[:3])))' 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/python-error.log')
+                    $reason = 'version-exit'
                     if ($LASTEXITCODE -ne 0 -or $pythonVersion -cnotmatch '^3\.\d+\.\d+$') { throw 'Python' }
+                    $stage = 'probe-record'; $reason = 'serialize'
                     $tools = @{ cl=$cl; link=$link; devcmd=$devcmd; python=$python; vcVersion=$vcVersion; pythonVersion=$pythonVersion }
-                    [IO.File]::WriteAllText((Join-Path $env:HUB_COMPILE_ROOT 'tools.json'),($tools | ConvertTo-Json -Compress))
-                  } catch { Write-Output '::error title=Windows authority compile::Source or existing build-tool admission failed; no addon was loaded.'; exit 1 }
+                    $toolsJSON = $tools | ConvertTo-Json -Compress
+                    $reason = 'write'
+                    [IO.File]::WriteAllText((Join-Path $env:HUB_COMPILE_ROOT 'tools.json'),$toolsJSON)
+                  } catch {
+                    $allowedStages = @('source','vs-discovery','vs-json-shape','vs-version','compiler-path','linker-path','devcmd-path','python-selection','python-path','python-version','probe-record','tool-admission')
+                    $allowedReasons = @('prepare','invoke','exit','locate','parse','count','canonical-path','read','version-format','construct','select','fully-qualified','file-exists','metacharacters','windows-app-alias','version-exit','serialize','write','unknown-category')
+                    if ($stage -cnotin $allowedStages -or $reason -cnotin $allowedReasons) { $stage = 'tool-admission'; $reason = 'unknown-category' }
+                    $category = '{"stage":"' + $stage + '","reason":"' + $reason + '"}'
+                    Write-Output ('::error title=Windows authority tool admission::' + $category)
+                    exit 1
+                  }
             - name: Acquire only verified official Node headers and x64 import library
               run: |
                   $ErrorActionPreference = 'Stop'
@@ -201,7 +238,7 @@ jobs:
                       'if errorlevel 1 exit /b 1',
                       ('"' + $tools.python + '" -I "' + $versionFile + '" >"' + (Join-Path $root 'tool-versions.json') + '" 2>"' + (Join-Path $root 'logs/tool-version-error.log') + '"'),
                       'if errorlevel 1 exit /b 1',
-                      ('"' + $tools.cl + '" /nologo /std:c++17 /EHsc /MD /LD /DNAPI_VERSION=8 /DNODE_GYP_MODULE_NAME=windows_installer_authority /DUNICODE /D_UNICODE /I"' + (Join-Path $root 'include') + '" /Fo"' + (Join-Path $root 'build/authority.obj') + '" /Fd"' + (Join-Path $root 'build/authority.pdb') + '" "' + $source + '" /link /OUT:"' + $output + '" /IMPLIB:"' + (Join-Path $root 'build/windows_installer_authority.lib') + '" "' + (Join-Path $root 'inputs/node.lib') + '" bcrypt.lib advapi32.lib user32.lib'),
+                      ('"' + $tools.cl + '" /nologo /TP /std:c++17 /EHsc /MD /LD /DNAPI_VERSION=8 /DNODE_GYP_MODULE_NAME=windows_installer_authority /DUNICODE /D_UNICODE /I"' + (Join-Path $root 'include') + '" /Fo"' + (Join-Path $root 'build/authority.obj') + '" /Fd"' + (Join-Path $root 'build/authority.pdb') + '" "' + $source + '" /link /OUT:"' + $output + '" /IMPLIB:"' + (Join-Path $root 'build/windows_installer_authority.lib') + '" "' + (Join-Path $root 'inputs/node.lib') + '" bcrypt.lib advapi32.lib user32.lib'),
                       'exit /b %errorlevel%'
                     ) -join "`r`n"
                     $commandFile = Join-Path $root 'compile.cmd'
