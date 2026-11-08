@@ -9,6 +9,7 @@
 #include <bcrypt.h>
 #include <node_api.h>
 #include <atomic>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -43,6 +44,12 @@ struct File { std::wstring relative; uint64_t size; std::string expected; HANDLE
 struct Crypto { BCRYPT_ALG_HANDLE algorithm = nullptr; BCRYPT_HASH_HANDLE hash = nullptr; bool hashAcquired = false, providerAcquired = false, hashCloseAttempted = false, providerCloseAttempted = false; std::vector<UCHAR> object; };
 struct Lease { HANDLE handle; bool acquired = false; bool closeAttempted = false, closeAcknowledged = false; DWORD closeError = 0; };
 struct Window { uintptr_t handle; DWORD pid; DWORD thread; bool visible; };
+constexpr size_t streamLimit = 65536;
+struct StreamCapture {
+  Lease* reader = nullptr; Lease* writer = nullptr;
+  std::array<unsigned char, streamLimit> bytes{}; size_t used = 0;
+  bool eof = false, overflow = false, readFailed = false;
+};
 struct Owner {
   napi_env env; std::wstring root; std::array<File, 2> files;
   std::array<Lease, 64> handles{}; size_t handleSlots = 0; std::vector<std::unique_ptr<Crypto>> crypto;
@@ -60,6 +67,13 @@ struct Owner {
   bool profileEmptyObserved = false, createdExitObserved = false; DWORD createdExitCode = 0;
   uint64_t createdTime = 0; std::wstring profileGuid, launchCwd;
   std::vector<wchar_t> launchCommand, launchEnvironment;
+  StreamCapture standardOutput, standardError;
+  Lease* stdinReader = nullptr; Lease* stdinWriter = nullptr;
+  bool pipeAcquisitionUnknown = false, stdioConfigured = false;
+  std::vector<std::max_align_t> attributeStorage;
+  LPPROC_THREAD_ATTRIBUTE_LIST attributes = nullptr;
+  std::array<HANDLE, 3> inheritedStdio{};
+  bool attributeInitialized = false, attributeAcquisitionUnknown = false, attributeDeleteSubmitted = false, attributeDeleted = false;
   // A referenced TSFN owns normal event-loop liveness, not the whole host or
   // application. Never reuse its pointer after the once-only release call.
   napi_threadsafe_function hostLifetime = nullptr; napi_ref hostCapRef = nullptr;
@@ -252,6 +266,119 @@ void observeEmptyProfile(Owner* o, HANDLE h) {
   }
   fail("PROFILE_ENUMERATION_BOUND", 0); // No EOF means no empty observation.
 }
+bool closeLease(Owner* o, Lease* lease) {
+  if (!lease || !lease->acquired) return false;
+  if (!lease->closeAttempted) {
+    lease->closeAttempted = true;
+    if (CloseHandle(lease->handle)) lease->closeAcknowledged = true;
+    else { lease->closeError = GetLastError(); o->closeErrors.push_back(lease->closeError); }
+  }
+  return lease->closeAcknowledged;
+}
+void pipePair(Owner* o, Lease*& reader, Lease*& writer, bool childReads) {
+  o->check();
+  reader = &o->slot(); writer = &o->slot();
+  SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+  const BOOL ok = CreatePipe(&reader->handle, &writer->handle, &security, 65536);
+  const auto error = ok ? 0 : GetLastError();
+  // The API documents indeterminate outputs on FALSE, including null outputs.
+  // Never infer no acquisition, or close an unconfirmed output by its value.
+  if (!ok) { o->pipeAcquisitionUnknown = true; fail("PIPE_ACQUISITION_UNCONFIRMED", error); }
+  reader->acquired = reader->handle && reader->handle != INVALID_HANDLE_VALUE;
+  writer->acquired = writer->handle && writer->handle != INVALID_HANDLE_VALUE;
+  if (!reader->acquired || !writer->acquired) { o->pipeAcquisitionUnknown = true; fail("PIPE_OUTPUT_UNCONFIRMED", 0); }
+  HANDLE parent = childReads ? writer->handle : reader->handle;
+  if (!SetHandleInformation(parent, HANDLE_FLAG_INHERIT, 0)) fail("PIPE_PARENT_INHERITANCE");
+}
+void deleteAttributes(Owner* o) {
+  need(!o->attributeAcquisitionUnknown, "ATTRIBUTE_ACQUISITION_UNCONFIRMED");
+  if (!o->attributeInitialized || o->attributeDeleted) return;
+  need(!o->attributeDeleteSubmitted, "ATTRIBUTE_DELETE_UNCONFIRMED");
+  o->attributeDeleteSubmitted = true;
+  DeleteProcThreadAttributeList(o->attributes); // Void API: only normal return is observed.
+  o->attributeDeleted = true;
+}
+void prepareStdio(Owner* o) {
+  need(o->handleSlots + 6 <= o->handles.size(), "HANDLE_SLOT_LIMIT");
+  SIZE_T size = 0; SetLastError(0);
+  const auto queried = InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+  need(!queried && GetLastError() == ERROR_INSUFFICIENT_BUFFER && size > 0 && size <= 65536, "ATTRIBUTE_SIZE");
+  o->attributeStorage.resize((size + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+  o->attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(o->attributeStorage.data());
+  if (!InitializeProcThreadAttributeList(o->attributes, 1, 0, &size)) {
+    o->attributeAcquisitionUnknown = true; fail("ATTRIBUTE_ACQUISITION_UNCONFIRMED");
+  }
+  o->attributeInitialized = true;
+  pipePair(o, o->stdinReader, o->stdinWriter, true);
+  pipePair(o, o->standardOutput.reader, o->standardOutput.writer, false);
+  pipePair(o, o->standardError.reader, o->standardError.writer, false);
+  need(closeLease(o, o->stdinWriter), "STDIN_EOF_CLOSE_UNCONFIRMED");
+  o->inheritedStdio = {o->stdinReader->handle, o->standardOutput.writer->handle, o->standardError.writer->handle};
+  if (!UpdateProcThreadAttribute(o->attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+      o->inheritedStdio.data(), sizeof(o->inheritedStdio), nullptr, nullptr)) fail("STDIO_HANDLE_LIST");
+  o->stdioConfigured = true;
+}
+bool parentChildCopiesClosed(Owner* o) {
+  return o->stdioConfigured && o->stdinReader->closeAcknowledged &&
+    o->standardOutput.writer->closeAcknowledged && o->standardError.writer->closeAcknowledged;
+}
+std::string base64(const unsigned char* bytes, size_t size) {
+  static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string result; result.reserve(4 * ((size + 2) / 3));
+  for (size_t i = 0; i < size; i += 3) {
+    const auto left = size - i; const uint32_t word = uint32_t(bytes[i]) << 16 |
+      (left > 1 ? uint32_t(bytes[i + 1]) << 8 : 0) | (left > 2 ? bytes[i + 2] : 0);
+    result.push_back(alphabet[(word >> 18) & 63]); result.push_back(alphabet[(word >> 12) & 63]);
+    result.push_back(left > 1 ? alphabet[(word >> 6) & 63] : '='); result.push_back(left > 2 ? alphabet[word & 63] : '=');
+  }
+  return result;
+}
+void drainStream(Owner* o, StreamCapture& stream) {
+  if (stream.eof || !stream.reader) return;
+  need(stream.reader->acquired && !stream.reader->closeAttempted && !stream.readFailed, "STDIO_READ_CUSTODY_UNKNOWN");
+  std::array<unsigned char, 4096> bytes{}; size_t consumed = 0;
+  try {
+    // One reader, serial owned Work. This bounds bytes/calls, not synchronous
+    // Windows I/O latency; no blocking-pool waiter, timeout, or poller is added.
+    for (size_t call = 0; call < 17 && consumed < streamLimit; ++call) {
+      DWORD available = 0;
+      if (!PeekNamedPipe(stream.reader->handle, nullptr, 0, nullptr, &available, nullptr)) {
+        const auto error = GetLastError();
+        if (error == ERROR_BROKEN_PIPE) { stream.eof = true; return; }
+        fail("STDIO_PEEK_FAILED", error);
+      }
+      if (!available) return; // No data is not EOF, including after root exit.
+      const auto wanted = DWORD((std::min)(size_t(available), (std::min)(bytes.size(), streamLimit - consumed)));
+      DWORD got = 0;
+      if (!ReadFile(stream.reader->handle, bytes.data(), wanted, &got, nullptr)) {
+        const auto error = GetLastError();
+        if (error == ERROR_BROKEN_PIPE && got == 0) { stream.eof = true; return; }
+        fail("STDIO_READ_FAILED", error);
+      }
+      need(got <= wanted, "STDIO_READ_RESULT_UNKNOWN");
+      if (!got) return; // A successful zero-byte write/read is not writer closure.
+      consumed += got;
+      const auto keep = (std::min)(size_t(got), streamLimit - stream.used);
+      memcpy(stream.bytes.data() + stream.used, bytes.data(), keep); stream.used += keep;
+      if (keep != got) stream.overflow = true;
+    }
+  } catch (...) { stream.readFailed = true; throw; }
+}
+std::string drainStdio(Owner* o) {
+  need(!o->pipeAcquisitionUnknown && !o->attributeAcquisitionUnknown, "STDIO_ACQUISITION_UNCONFIRMED");
+  if (o->creationSucceeded) need(parentChildCopiesClosed(o), "STDIO_CHILD_COPY_CLOSE_UNCONFIRMED");
+  if (o->stdioConfigured) { drainStream(o, o->standardOutput); drainStream(o, o->standardError); }
+  std::ostringstream s;
+  s << "{\"configured\":" << (o->stdioConfigured ? "true" : "false")
+    << ",\"parentChildCopiesClosed\":" << (parentChildCopiesClosed(o) ? "true" : "false")
+    << ",\"acquisitionUnknown\":false";
+  for (const auto& item : {std::make_pair("stdout", &o->standardOutput), std::make_pair("stderr", &o->standardError)}) {
+    const auto* stream = item.second;
+    s << ",\"" << item.first << "\":{\"base64\":\"" << base64(stream->bytes.data(), stream->used)
+      << "\",\"eof\":" << (stream->eof ? "true" : "false") << ",\"overflow\":" << (stream->overflow ? "true" : "false") << '}';
+  }
+  s << '}'; return s.str();
+}
 void launchPinned(Owner* o, const std::wstring& profile) {
   o->check(); need(o->pins && !o->processObserved, "FILE_PINS_REQUIRED");
   need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
@@ -267,7 +394,7 @@ void launchPinned(Owner* o, const std::wstring& profile) {
   need(GetDriveTypeW(windowsDirectory.substr(0, 3).c_str()) == DRIVE_FIXED, "WINDOWS_DIRECTORY_NOT_LOCAL");
   const std::wstring executable = o->rootGuid + L"\\Diagnostic Hub.exe";
   // These are requested launch inputs, not observations of the child environment.
-  const std::wstring command = L"\"" + executable + L"\" \"--user-data-dir=" + o->profileGuid + L"\"";
+  const std::wstring command = L"\"" + executable + L"\" --inspect=127.0.0.1:0 \"--user-data-dir=" + o->profileGuid + L"\"";
   need(command.size() < 2048 && o->rootGuid.size() < MAX_PATH, "LAUNCH_INPUT_BOUND");
   o->launchCommand.assign(command.begin(), command.end()); o->launchCommand.push_back(0);
   o->launchCwd = o->rootGuid; o->launchEnvironment.clear();
@@ -281,20 +408,32 @@ void launchPinned(Owner* o, const std::wstring& profile) {
   o->launchEnvironment.push_back(0); need(o->launchEnvironment.size() <= 4096, "LAUNCH_ENVIRONMENT_BOUND");
   // Recheck the actual executing worker's token immediately before creation.
   // All buffers and fixed handle slots are owned before the creation effect.
-  need(o->handleSlots + 4 <= o->handles.size(), "HANDLE_SLOT_LIMIT"); fitToken(o);
+  need(o->handleSlots + 10 <= o->handles.size(), "HANDLE_SLOT_LIMIT"); fitToken(o);
   o->createdProcess = &o->slot(); o->createdThread = &o->slot();
+  prepareStdio(o);
   need(sameId(fileId(o->files[0].handle, false), o->files[0].id) && sameId(fileId(o->files[1].handle, false), o->files[1].id), "PIN_CHANGED_BEFORE_CREATION");
-  STARTUPINFOW startup{}; startup.cb = sizeof(startup); o->check();
+  STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = o->stdinReader->handle;
+  startup.StartupInfo.hStdOutput = o->standardOutput.writer->handle;
+  startup.StartupInfo.hStdError = o->standardError.writer->handle;
+  startup.lpAttributeList = o->attributes; o->check();
   need(o->hostReferenceAcknowledged && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
   o->creationAttempted = true;
-  const BOOL ok = CreateProcessW(executable.c_str(), o->launchCommand.data(), nullptr, nullptr, FALSE,
-    CREATE_UNICODE_ENVIRONMENT, o->launchEnvironment.data(), o->launchCwd.c_str(), &startup, &o->launched);
+  const BOOL ok = CreateProcessW(executable.c_str(), o->launchCommand.data(), nullptr, nullptr, TRUE,
+    CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT, o->launchEnvironment.data(), o->launchCwd.c_str(), &startup.StartupInfo, &o->launched);
   const auto error = ok ? 0 : GetLastError();
   // No allocation/check/cancellation may precede adoption of BOTH outputs.
   o->createdProcess->handle = o->launched.hProcess; o->createdThread->handle = o->launched.hThread;
   o->createdProcess->acquired = ok && o->launched.hProcess && o->launched.hProcess != INVALID_HANDLE_VALUE;
   o->createdThread->acquired = ok && o->launched.hThread && o->launched.hThread != INVALID_HANDLE_VALUE;
   o->creationReturned = true; o->creationSucceeded = ok != FALSE;
+  if (!ok) o->note({"CREATE_PROCESS_FAILED_RETAINED", error});
+  deleteAttributes(o);
+  const bool inputClosed = closeLease(o, o->stdinReader);
+  const bool outputClosed = closeLease(o, o->standardOutput.writer);
+  const bool errorClosed = closeLease(o, o->standardError.writer);
+  need(inputClosed && outputClosed && errorClosed, "STDIO_CHILD_COPY_CLOSE_UNCONFIRMED");
   if (!ok) fail("CREATE_PROCESS_FAILED_RETAINED", error);
   need(o->createdProcess->acquired && o->createdThread->acquired, "CREATION_OUTPUT_UNCONFIRMED");
   o->check(); // A late cancelled success stays retained, not silently closed.
@@ -329,10 +468,12 @@ std::string ownedFacts(Owner* o) {
     << ",\"stdioObserved\":false,\"physicalLoadedBytesVerified\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false}"; return s.str();
 }
 void requireCreatedTerminal(Owner* o) {
+  need(!o->pipeAcquisitionUnknown && !o->attributeAcquisitionUnknown, "STDIO_ACQUISITION_UNCONFIRMED");
   need(!o->creationAttempted || o->creationReturned, "CREATION_RETURN_UNKNOWN");
   if (o->creationSucceeded) {
     need(o->createdProcess && o->createdProcess->acquired && o->createdThread && o->createdThread->acquired, "CREATION_HANDLE_CUSTODY_UNKNOWN");
     need(WaitForSingleObject(o->launched.hProcess, 0) == WAIT_OBJECT_0, "CREATED_PROCESS_STILL_LIVE_OR_UNKNOWN");
+    need(parentChildCopiesClosed(o) && o->standardOutput.eof && o->standardError.eof, "STDIO_EOF_REQUIRED");
     o->createdExitObserved = true;
   } else need(!o->launched.hProcess && !o->launched.hThread, "CREATION_OUTPUT_UNCONFIRMED");
 }
@@ -351,6 +492,7 @@ std::string releaseFacts(Owner* o, bool owned) {
 }
 std::string releaseHandles(Owner* o, bool owned = false) {
   if (owned) requireCreatedTerminal(o); else need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
+  deleteAttributes(o);
   for (auto& state : o->crypto) {
     if (state->hash && state->hashAcquired && !state->hashCloseAttempted) { state->hashCloseAttempted = true; auto status = BCryptDestroyHash(state->hash); if (status == 0) state->hash = nullptr; else o->closeErrors.push_back(static_cast<DWORD>(status)); }
     if (!state->hash && state->algorithm && state->providerAcquired && !state->providerCloseAttempted) { state->providerCloseAttempted = true; auto status = BCryptCloseAlgorithmProvider(state->algorithm, 0); if (status == 0) state->algorithm = nullptr; else o->closeErrors.push_back(static_cast<DWORD>(status)); }
@@ -369,7 +511,7 @@ std::string releaseHandles(Owner* o, bool owned = false) {
   o->releaseClosedCount = closed; o->releaseTotalCount = total;
   return releaseFacts(o, owned);
 }
-enum class Operation { Pin, Observe, ReleaseRead, Launch, SampleOwned, ReleaseOwned };
+enum class Operation { Pin, Observe, ReleaseRead, Launch, SampleOwned, DrainStdio, ReleaseOwned };
 struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; };
 void hostCleanupMarker(void* data) noexcept {
   auto* o = static_cast<Owner*>(data); o->hostHookFired.store(true); o->hostEnvironmentClosing.store(true);
@@ -413,6 +555,7 @@ void execute(napi_env, void* raw) {
       case Operation::Observe: process(w->o, w->pid, w->creation); w->result = processFacts(w->o); break;
       case Operation::Launch: launchPinned(w->o, w->profile); w->result = ownedFacts(w->o); break;
       case Operation::SampleOwned: w->result = ownedFacts(w->o); break;
+      case Operation::DrainStdio: w->result = drainStdio(w->o); break;
       case Operation::Pin: pin(w->o); w->result = fileFacts(w->o); break;
     }
   } catch (const Fault& f) { w->failure = f.code; w->o->note(f); }
@@ -426,7 +569,7 @@ void complete(napi_env e, napi_status status, void* raw) {
     // after deleting the strong reference, through the final settlement call.
     napi_value localCap; api(e, napi_get_reference_value(e, w->cap, &localCap));
     need(localCap != nullptr, "COMPLETION_CAP_MISSING");
-    const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
+    const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::DrainStdio || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
     const bool resolve = status == napi_ok && !w->failure && !w->result.empty() && (terminal || (!w->o->failure && !w->o->cancelled.load()));
     const bool joinHost = resolve && w->operation == Operation::ReleaseOwned && w->o->released &&
       w->o->hostAcquireSubmitted && w->o->hostCreateAcknowledged && w->o->hostReferenceAcknowledged &&
@@ -513,7 +656,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
   try {
     const bool observe = operation == Operation::Observe, launch = operation == Operation::Launch;
     const bool release = operation == Operation::ReleaseRead || operation == Operation::ReleaseOwned;
-    const bool terminal = operation == Operation::SampleOwned || operation == Operation::ReleaseOwned;
+    const bool terminal = operation == Operation::SampleOwned || operation == Operation::DrainStdio || operation == Operation::ReleaseOwned;
     size_t n = 3; napi_value a[3]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr));
     need(n == (observe ? 3u : launch ? 2u : 1u), "OP_ARGUMENTS"); auto* o = owner(e, a[0]);
     need(!o->busy.load() && !o->releaseSubmitted, "CAPABILITY_NOT_ACTIVE");
@@ -524,7 +667,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
       need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
       need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted.load() && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
     }
-    if (operation == Operation::SampleOwned) need(o->pins, "FILE_PINS_REQUIRED");
+    if (operation == Operation::SampleOwned || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
     if (operation == Operation::ReleaseRead) need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
     // Refusal here precedes release submission/invalidation and closes nothing.
     if (operation == Operation::ReleaseOwned) requireCreatedTerminal(o);
@@ -551,12 +694,13 @@ napi_value processCall(napi_env e, napi_callback_info i) { return start(e, i, Op
 napi_value releaseCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseRead); }
 napi_value launchCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::Launch); }
 napi_value sampleOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SampleOwned); }
+napi_value drainStdioCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::DrainStdio); }
 napi_value releaseOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseOwned); }
 napi_value assertCap(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = owner(e, a[0]); need(!o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->hostLifetimeUnknown.load(), "CAPABILITY_INVALIDATED"); napi_value yes; api(e, napi_get_boolean(e, true, &yes)); return yes; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
 napi_value cancel(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); owner(e, a[0])->cancelled.store(true); napi_value v; napi_get_undefined(e, &v); return v; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
 napi_value refuseClose(napi_env e, napi_callback_info) { napi_throw_error(e, "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE", "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE"); return nullptr; }
 napi_value init(napi_env e, napi_value exports) {
-  napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"acquireLaunchLifetime", nullptr, acquireHostLifetime, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
+  napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"acquireLaunchLifetime", nullptr, acquireHostLifetime, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"drainOwnedStdio", nullptr, drainStdioCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
   if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
 }
 } // namespace

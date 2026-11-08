@@ -65,35 +65,40 @@ including a thrown `undefined`, remain available through ordinary causes or aggr
 failures cannot overwrite the first. A custody snapshot cannot admit an operation, recover a native
 capability, or attest current resource closure.
 
-The requested executable is the leased volume-GUID executable name, cwd is the pinned installation
-root, and the sole argument selects that profile through the existing `--user-data-dir` route.
-Native code owns a writable quoted command buffer and explicit double-NUL Unicode environment before
-creation. APPDATA, LOCALAPPDATA, TEMP, TMP, and USERPROFILE use the pinned profile; SystemRoot and
-WINDIR use the bounded actual local Windows-directory query. There is no arbitrary inherited
-environment or caller-selected executable. These are requested inputs, not observations of the
-running application's environment, effective profile, or initialized runtime. The current process
-and executing worker's thread-token eligibility are rechecked before creation.
+The requested executable is the leased volume-GUID executable name and cwd is the pinned
+installation root. Fixed arguments select `--inspect=127.0.0.1:0` for the main-process inspector and
+the profile through the existing `--user-data-dir` route. There is no browser-debugging switch or
+caller-selected inspector address/port. Native code owns a writable quoted command buffer and
+explicit double-NUL Unicode environment before creation. APPDATA, LOCALAPPDATA, TEMP, TMP, and
+USERPROFILE use the pinned profile; SystemRoot and WINDIR use the bounded actual local
+Windows-directory query. There is no arbitrary inherited environment or caller-selected executable.
+These are requested inputs, not observations of the running application's environment, effective
+profile, or initialized runtime. The current process and executing worker's thread-token eligibility
+are rechecked before creation.
 
-`CreateProcessW` receives an explicit application name, no inherited HANDLEs, no suspension, no job,
-and no stdio redirection. The owner and fixed process/thread output slots precede the call; both
-outputs are adopted before any allocation, validation, or cancellation check. A false return with
-unexpected non-null outputs remains unknown and cannot be released as a successful creation.
-Cancellation reserves no retry and never terminates anything. If creation was already submitted, a
-late returned process remains retained. Creation returns before application initialization, so it
-establishes no ready, visible-window, installer, or loaded-code result. Holding named-file leases is
-not a public CreateProcess-from-file-HANDLE API or proof of the mapped image section.
+`CreateProcessW` receives an explicit application name, no suspension and no job. An extended
+startup attribute list admits exactly the three stdio HANDLEs described below; no other
+observer/host HANDLE is in that list. The owner and fixed process/thread output slots precede the
+call; both outputs are adopted before any allocation, validation, or cancellation check. A false
+return with unexpected non-null outputs remains unknown and cannot be released as a successful
+creation. Cancellation reserves no retry and never terminates anything. If creation was already
+submitted, a late returned process remains retained. Creation returns before application
+initialization, so it establishes no ready, visible-window, installer, or loaded-code result.
+Holding named-file leases is not a public CreateProcess-from-file-HANDLE API or proof of the mapped
+image section.
 
 `sampleOwnedProcess` can observe the already returned HANDLE even after cancellation or the first
 error; it never accepts a replacement PID or acquires another process. It uses a zero-duration wait,
 creation time, and exit-code query. A signaled wait establishes root termination; numeric exit code
-259 alone never decides liveness. There are no pipes, output EOF observations, stable HWND
-capabilities, normal-close requests, automatic process control, or descendant observations.
+259 alone never decides liveness. Pipe observations are a separate operation. There are no stable
+HWND capabilities, normal-close requests, automatic process control, or descendant observations.
 `releaseOwnedProcessHandles` refuses a live or unknown root before release submission. After actual
-non-creation or root termination, it closes only its own HANDLEs once and joins acknowledged
-async-work/reference cleanup. Only then does it request TSFN release once; that pointer is never
-used again. The existing Promise waits for the normal finalizer callback plus marker-removal and
-remaining bookkeeping ACK. HANDLE closure, release request, release ACK and finalizer observation
-are distinct facts. The finalizer is not proof that every TSFN allocation or namespace is retired.
+non-creation or root termination plus both actual output EOF observations, it closes only its own
+HANDLEs once and joins acknowledged async-work/reference cleanup. Only then does it request TSFN
+release once; that pointer is never used again. The existing Promise waits for the normal finalizer
+callback plus marker-removal and remaining bookkeeping ACK. HANDLE closure, release request, release
+ACK and finalizer observation are distinct facts. The finalizer is not proof that every TSFN
+allocation or namespace is retired.
 
 Created-process `/v2` rows add the actual reference acknowledgment; historical `/v1` records remain
 unchanged. Release results distinguish HANDLE closure from acquisition, release, finalizer,
@@ -104,16 +109,72 @@ No-acquisition cancellation is different from submitted-but-unconfirmed acquisit
 Forced/null-environment or premature finalization never acknowledges graceful closure. A failure in
 finalizer cleanup or Promise settlement leaves lifetime/bookkeeping UNKNOWN. Once the last reference
 is closing, retained C++/JS data or an unresolved Promise cannot guarantee the loop stays alive; no
-recursive keeper, forced shutdown or cleanup fallback is added. Stdio/EOF, safe app close, loaded
-code and descendant retirement remain unproved, and full native/release gates stay closed.
-Successful normal release acknowledges only the owner's component resources.
+recursive keeper, forced shutdown or cleanup fallback is added. Safe app close, loaded code and
+descendant retirement remain unproved, and full native/release gates stay closed. Successful normal
+release acknowledges only the owner's component resources.
 
 The direct JavaScript controls execute the actual wrapper in a bounded VM with closed in-memory
 filesystem/native-port substitutes. Those model objects are not Node-API capabilities and never
 enter the production module's private capability map. Tests do not compile or execute this new C++
-branch. The preserved `b769e0d` creation source compiled successfully without addon loading. That
-build evidence remains separate: this TSFN extension has not been compiled or executed. Its
-source/VM controls do not test actual loop liveness, N-API finalization or Windows runtime behavior.
+branch. The preserved `b769e0d` creation source compiled successfully without addon loading. Its
+build evidence remains separate from this source/VM preparation. These controls do not test actual
+loop liveness, N-API finalization, pipe behavior or Windows runtime behavior; this stdio addition
+has not been compiled or executed by them.
+
+## Owned stdio and main-inspector discovery
+
+The existing owner reserves every output slot before creating three anonymous pipes. Stdin is
+EOF-only: the parent closes its writer before creation. Stdout and stderr have separate private
+readers. Parent-facing ends are noninheritable; `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` contains only
+the three child-facing ends. Attribute storage and its fixed handle array stay owned through
+creation, followed by one explicit attribute-list deletion. The `DeleteProcThreadAttributeList` API
+returns no status; the recorded fact is its normal return, not a stronger destruction proof. After
+adopting **both** process/thread outputs, the parent closes its copies of the child ends once.
+Unacknowledged closes remain retained. Any failed `CreatePipe` is an unknown acquisition even if its
+outputs look null: Microsoft documents those outputs as indeterminate. No retry, GC close or
+inferred no-effect release is used.
+
+`drainOwnedStdio` runs in the same serial async-work owner as existing observations. Each explicit
+call consumes at most 64 KiB per stream, retaining only the first 64 KiB of each. Those are capture
+bounds, not the operating system's anonymous-pipe capacity. The operation does not wait in a loop
+for data or add a background poller. `PeekNamedPipe` followed by `ReadFile` uses the sole owned
+reader and consumes only available bytes. These synchronous APIs do **not** provide an absolute
+wall-clock deadline in a multithreaded host; an external custodian is still needed for an unknown OS
+call or forced host exit. A caller must explicitly drain often enough to avoid child backpressure.
+No native activation is granted by this source preparation.
+
+Only `ERROR_BROKEN_PIPE` from the actual pipe read/peek records EOF. Zero available bytes, a
+successful zero-byte read, and root termination do not. A descendant may retain an inherited writer
+after root termination. Overflow is sticky and fails capture; later explicit calls can discard
+bounded excess until real EOF so that component resources can still be released. Read errors retain
+unknown custody without retrying that reader. A created root cannot release its handles or TSFN
+until root termination **and both EOF observations**; non-creation can release confirmed resources
+without pretending an application ran.
+
+The wrapper validates bounded canonical base64, exact cumulative byte prefixes, and sticky
+EOF/overflow before adopting each observation. The two 64 KiB raw buffers need at most 174,768
+base64 bytes combined; the complete internal JSON result is bounded to that amount plus 4,096 bytes.
+Raw bytes, returned data and inspector URLs stay in private owner state. Public process `/v2` rows
+remain unchanged with `stdioObserved:false`: that row alone is not stdio evidence. The explicit
+drain API returns only frozen counts/flags and whether an endpoint was observed, never log bytes or
+its token.
+
+Submission makes the current capture observation unknown until the returned shape, bytes and
+monotonic facts validate. A rejected or contradictory drain cannot reuse an earlier EOF snapshot to
+release resources. Only an explicitly requested later valid drain can re-establish that current
+observation; it cannot bypass a native read-failure/busy fence. Overflow or endpoint parsing can
+still fail after valid EOF adoption, without erasing that component closure fact or the first error.
+
+Complete stderr lines matching `Debugger listening on ws://127.0.0.1:<port>/<UUID>` supply a private
+main-inspector endpoint. Fragmented lines wait for a newline or actual EOF; malformed, duplicate,
+non-loopback or credential/query/fragment-bearing candidates refuse. Endpoint lookup requires the
+original active capability, with no pending operation, cancellation or primary failure. The endpoint
+is **owned-stderr provenance**, not proof that only the root emitted it, kernel socket ownership,
+server authentication, physically loaded bytes or normal-close authority. A descendant can inherit
+the writer. This code neither connects to that endpoint nor schedules `app.quit`. A future reviewed
+cooperative caller must own the connection, fixed command and its scheduling ACK, disconnect the
+debugger, then separately join root/pipes/transports and existing application cleanup. The synthetic
+HWND close delegate and all native/full lifecycle acceptance gates remain refused.
 
 Explicit `release` attempts to close each newly owned observer HANDLE once, and closes owned CNG
 objects. It invalidates the capability when submitted. A failed close keeps private custody and is

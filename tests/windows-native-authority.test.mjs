@@ -22,6 +22,8 @@ import {
     sampleWindowsNativeOwnedProcess,
     readWindowsNativeOwnedProcess,
     releaseWindowsNativeOwnedProcessHandles,
+    drainWindowsNativeOwnedStdio,
+    readWindowsNativeMainInspectorEndpoint,
 } from '../scripts/lib/windows-native-authority.mjs';
 
 const request = () => ({
@@ -224,6 +226,8 @@ test('explicit launch inputs are confined data and cannot issue native authority
         () => launchWindowsNativePinnedProcess({}, selected),
         () => sampleWindowsNativeOwnedProcess({}),
         () => readWindowsNativeOwnedProcess({}),
+        () => drainWindowsNativeOwnedStdio({}),
+        () => readWindowsNativeMainInspectorEndpoint({}),
         () => releaseWindowsNativeOwnedProcessHandles({}),
     ])
         assert.throws(call, /CAPABILITY_UNISSUED/);
@@ -313,6 +317,7 @@ function launchMemory() {
         acquire: 0,
         launch: 0,
         sample: 0,
+        drain: 0,
         release: 0,
     };
     const deferred = () => {
@@ -325,7 +330,8 @@ function launchMemory() {
     const acquisitionStarted = deferred(),
         launchStarted = deferred(),
         handleReleaseStarted = deferred(),
-        finalizerObserved = deferred();
+        finalizerObserved = deferred(),
+        drainStarted = deferred();
     const events = [];
     const readFailure = { enabled: false, error: undefined };
     const io = Object.freeze({
@@ -375,6 +381,35 @@ function launchMemory() {
         hostFinalizerObserved: false,
         hostFinalizerAcknowledged: false,
         hostEnvironmentClosing: false,
+    };
+    // Authored pipe facts, not observations of Windows HANDLEs or CreatePipe order.
+    // End-of-stream is explicit and independent of the model root's exited flag.
+    const capture = {
+        configured: false,
+        parentChildCopiesClosed: false,
+        acquisitionUnknown: false,
+        stdout: { bytes: Buffer.alloc(0), eof: false, overflow: false },
+        stderr: { bytes: Buffer.alloc(0), eof: false, overflow: false },
+    };
+    const captureEvents = [];
+    const captureFacts = () => ({
+        configured: capture.configured,
+        parentChildCopiesClosed: capture.parentChildCopiesClosed,
+        acquisitionUnknown: capture.acquisitionUnknown,
+        stdout: {
+            base64: capture.stdout.bytes.toString('base64'),
+            eof: capture.stdout.eof,
+            overflow: capture.stdout.overflow,
+        },
+        stderr: {
+            base64: capture.stderr.bytes.toString('base64'),
+            eof: capture.stderr.eof,
+            overflow: capture.stderr.overflow,
+        },
+    });
+    const endStdio = () => {
+        capture.stdout.eof = true;
+        capture.stderr.eof = true;
     };
     const facts = () => ({
         creationAttempted: state.attempted,
@@ -475,11 +510,24 @@ function launchMemory() {
             events.push('creation-submitted');
             launchStarted.resolve();
             assert.equal(state.hostReferenceAcknowledged, true);
+            capture.configured = true;
+            capture.parentChildCopiesClosed = true;
+            captureEvents.push('model-capture-configured-before-creation');
+            native.onCaptureConfigured?.();
             state.attempted = true;
             if (native.launchGate) await native.launchGate;
             state.created = true;
             state.returned = true;
             return JSON.stringify(facts());
+        },
+        async drainOwnedStdio(value) {
+            assert.equal(value, raw);
+            counts.drain++;
+            drainStarted.resolve();
+            if (native.drainGate) await native.drainGate;
+            return Object.hasOwn(native, 'drainOutput')
+                ? native.drainOutput
+                : JSON.stringify(captureFacts());
         },
         async sampleOwnedProcess(value) {
             assert.equal(value, raw);
@@ -563,6 +611,11 @@ function launchMemory() {
         launchStarted,
         handleReleaseStarted,
         finalizerObserved,
+        drainStarted,
+        capture,
+        captureFacts,
+        captureEvents,
+        endStdio,
         events,
         inside,
         async prepare() {
@@ -617,6 +670,8 @@ test('memory launch uses the actual wrapper snapshot and never represents full l
         true,
     );
     m.state.exited = true;
+    m.endStdio();
+    await m.api.drainWindowsNativeOwnedStdio(cap);
     await m.api.sampleWindowsNativeOwnedProcess(cap);
     const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
     assert.equal(ack.physicalDescendantClosure, false);
@@ -669,6 +724,8 @@ test('memory late creation after cancellation retains returned handles until a r
         assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
         assert.equal(m.counts.release, 0);
         m.state.exited = true;
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
         assert.equal(
             JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap)).observation.exitCode,
             259,
@@ -793,6 +850,8 @@ test('memory failed or unknown handle release remains once-only and cannot becom
             cap = await m.prepare();
         await m.api.launchWindowsNativePinnedProcess(cap, m.input());
         m.state.exited = true;
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
         await m.api.sampleWindowsNativeOwnedProcess(cap);
         m.native.releaseOwnedProcessHandles = async () => {
             m.counts.release++;
@@ -928,6 +987,8 @@ test('memory host lifetime acquisition precedes creation for synchronous and hel
                 /LIVE_OR_UNKNOWN/,
             );
             m.state.exited = true;
+            m.endStdio();
+            await m.api.drainWindowsNativeOwnedStdio(cap);
             await m.api.sampleWindowsNativeOwnedProcess(cap);
             const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
             assert.equal(ack.hostLifetimeFinalizerAcknowledged, true);
@@ -1071,6 +1132,8 @@ test('memory handle acknowledgement alone cannot release private custody before 
         cap = await m.prepare();
     await m.api.launchWindowsNativePinnedProcess(cap, m.input());
     m.state.exited = true;
+    m.endStdio();
+    await m.api.drainWindowsNativeOwnedStdio(cap);
     await m.api.sampleWindowsNativeOwnedProcess(cap);
     let finishFinalizer;
     m.native.finalizerGate = new Promise((resolve) => {
@@ -1136,6 +1199,8 @@ test('memory forced unknown and contradictory finalizer acknowledgements never p
             cap = await m.prepare();
         await m.api.launchWindowsNativePinnedProcess(cap, m.input());
         m.state.exited = true;
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
         await m.api.sampleWindowsNativeOwnedProcess(cap);
         const later = Error('private finalizer error');
         m.native.releaseOwnedProcessHandles = async () => {
@@ -1276,6 +1341,8 @@ test('memory created process observations require the acknowledged host referenc
         assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
         m.native.sampleOwnedProcess = async () => JSON.stringify(m.facts());
         m.state.exited = true;
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
         const row = JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap));
         assert.equal(row.observation.hostEventLoopReferenceAcknowledged, true);
         assert.equal(row.observation.physicalLoadedBytesVerified, false);
@@ -1285,6 +1352,533 @@ test('memory created process observations require the acknowledged host referenc
         assert.equal(ack.hostLifetimeFinalizerAcknowledged, true);
         assert.equal(ack.processOwnership, false);
         assert.equal(ack.releaseAcceptance, false);
+        assert.equal(m.counts.launch, 1);
+    }
+});
+
+// These tests execute the actual JS wrapper with authored pipe/owner facts only.
+// They do not test CreatePipe/ReadFile ordering, native handles, TSFN, or a target.
+test('memory owned stdio needs explicit independent EOF as well as a terminal root sample', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    m.native.onCaptureConfigured = () => {
+        assert.equal(m.state.attempted, false);
+        assert.equal(m.capture.configured, true);
+        assert.equal(m.capture.parentChildCopiesClosed, true);
+    };
+    await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    assert.deepEqual(m.captureEvents, ['model-capture-configured-before-creation']);
+    assert.equal(m.counts.drain, 0); // Creation and sampling do not poll pipes.
+    const empty = await m.api.drainWindowsNativeOwnedStdio(cap);
+    assert.deepEqual(JSON.parse(JSON.stringify(empty)), {
+        configured: true,
+        parentChildCopiesClosed: true,
+        acquisitionUnknown: false,
+        stdout: { bytesRetained: 0, eof: false, overflow: false },
+        stderr: { bytesRetained: 0, eof: false, overflow: false },
+        mainInspectorEndpointObserved: false,
+    });
+    assert.ok(
+        Object.isFrozen(empty) && Object.isFrozen(empty.stdout) && Object.isFrozen(empty.stderr),
+    );
+    m.endStdio();
+    await m.api.drainWindowsNativeOwnedStdio(cap);
+    assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+    assert.equal(m.counts.release, 0); // EOF is not root exit.
+    m.state.exited = true;
+    await m.api.sampleWindowsNativeOwnedProcess(cap);
+    const release = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), release);
+    assert.equal((await release).releaseAcceptance, false);
+    assert.equal(m.counts.release, 1);
+
+    const n = launchMemory(),
+        other = await n.prepare();
+    await n.api.launchWindowsNativePinnedProcess(other, n.input());
+    n.state.exited = true;
+    await n.api.sampleWindowsNativeOwnedProcess(other);
+    assert.throws(() => n.api.releaseWindowsNativeOwnedProcessHandles(other), /STDIO_EOF_REQUIRED/);
+    await n.api.drainWindowsNativeOwnedStdio(other);
+    assert.throws(() => n.api.releaseWindowsNativeOwnedProcessHandles(other), /STDIO_EOF_REQUIRED/);
+    n.capture.stdout.eof = true;
+    await n.api.drainWindowsNativeOwnedStdio(other);
+    assert.throws(() => n.api.releaseWindowsNativeOwnedProcessHandles(other), /STDIO_EOF_REQUIRED/);
+    assert.equal(n.counts.release, 0); // Root exit and one EOF are insufficient.
+    n.capture.stderr.eof = true;
+    await n.api.drainWindowsNativeOwnedStdio(other);
+    assert.equal(
+        (await n.api.releaseWindowsNativeOwnedProcessHandles(other)).retainedUnknown,
+        false,
+    );
+});
+
+test('memory partial null or unknown pipe observations cannot authorize owned release', async () => {
+    for (const mode of ['partial', 'null', 'unknown', 'noncreation-unknown']) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        const launch = m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        let originalCancellation;
+        if (mode === 'noncreation-unknown') {
+            m.api.cancelWindowsNativeAuthority(cap);
+            const cancelled = await launch.then(
+                () => assert.fail('launch must be cancelled'),
+                (error) => error,
+            );
+            originalCancellation = cancelled.cause ?? cancelled;
+            assert.match(originalCancellation.message, /LAUNCH_CANCELLED_RETAINED/);
+        } else {
+            await launch;
+            m.state.exited = true;
+        }
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        if (mode === 'partial') m.capture.parentChildCopiesClosed = false;
+        if (mode === 'null') m.native.drainOutput = 'null';
+        if (mode.endsWith('unknown')) m.capture.acquisitionUnknown = true;
+        const failure = await m.api.drainWindowsNativeOwnedStdio(cap).then(
+            () => assert.fail('partial/unknown capture must refuse'),
+            (error) => error,
+        );
+        assert.equal(failure.nativeAuthorityCustody.retainedAtCapture, true);
+        if (mode === 'noncreation-unknown') {
+            assert.equal(failure.cause, originalCancellation);
+            assert.equal(failure.errors[0], originalCancellation);
+            assert.match(failure.errors[1].message, /STDIO_ACQUISITION_UNKNOWN/);
+        } else
+            assert.match(
+                (failure.cause ?? failure).message,
+                mode === 'partial'
+                    ? /CHILD_COPY_UNKNOWN/
+                    : mode === 'null'
+                      ? /STDIO_SHAPE/
+                      : /STDIO_ACQUISITION_UNKNOWN/,
+            );
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /STDIO_OBSERVATION_UNKNOWN/,
+        );
+        assert.equal(m.counts.release, 0);
+        assert.throws(() => m.api.launchWindowsNativePinnedProcess(cap, m.input()));
+        if (mode.endsWith('unknown')) {
+            m.capture.acquisitionUnknown = false;
+            const later = await m.api.drainWindowsNativeOwnedStdio(cap).then(
+                () => assert.fail('unknown acquisition must not reset'),
+                (error) => error,
+            );
+            assert.match(later.errors[1].message, /STDIO_UNKNOWN_CHANGED/);
+            assert.equal(later.errors[0], originalCancellation ?? failure.cause ?? failure);
+            assert.throws(
+                () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                /STDIO_OBSERVATION_UNKNOWN/,
+            );
+            assert.equal(m.counts.release, 0);
+        }
+        assert.equal(JSON.stringify(failure), '{}');
+    }
+});
+
+test('memory cumulative stdio validates both 64KiB bounds canonical base64 and retained prefixes', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    m.capture.stdout.bytes = Buffer.alloc(65536, 65);
+    m.capture.stderr.bytes = Buffer.alloc(65536, 66);
+    const full = await m.api.drainWindowsNativeOwnedStdio(cap);
+    assert.equal(full.stdout.bytesRetained, 65536);
+    assert.equal(full.stderr.bytesRetained, 65536);
+    assert.equal(full.stdout.overflow, false);
+    assert.equal(m.api.readWindowsNativeOwnedProcess(cap).includes(Buffer.from('AAAAAA')), false);
+    m.endStdio();
+    await m.api.drainWindowsNativeOwnedStdio(cap);
+    m.state.exited = true;
+    await m.api.sampleWindowsNativeOwnedProcess(cap);
+    assert.equal(
+        (await m.api.releaseWindowsNativeOwnedProcessHandles(cap)).releaseAcceptance,
+        false,
+    );
+    for (const [change, code] of [
+        [
+            (row) => {
+                row.stdout.base64 = Buffer.alloc(65537).toString('base64');
+            },
+            /STDIO_BOUND/,
+        ],
+        [
+            (row) => {
+                row.stderr.base64 = Buffer.alloc(65537).toString('base64');
+            },
+            /STDIO_BOUND/,
+        ],
+        [
+            (row) => {
+                row.stdout.base64 = 'AB==';
+            },
+            /STDIO_ENCODING/,
+        ],
+        [
+            (row) => {
+                row.stderr.base64 = 'YQ';
+            },
+            /STDIO_ENCODING/,
+        ],
+        [
+            (row) => {
+                row.stdout.base64 = 'YQ==\n';
+            },
+            /STDIO_ENCODING/,
+        ],
+        [
+            (row) => {
+                row.stdout.overflow = true;
+            },
+            /STDIO_OVERFLOW_SHAPE/,
+        ],
+        [
+            (row) => {
+                row.stderr.extra = true;
+            },
+            /STDIO_SHAPE/,
+        ],
+        [
+            (row) => {
+                row.configured = 1;
+            },
+            /STDIO_SHAPE/,
+        ],
+    ]) {
+        const n = launchMemory(),
+            other = await n.prepare();
+        await n.api.launchWindowsNativePinnedProcess(other, n.input());
+        const row = n.captureFacts();
+        change(row);
+        n.native.drainOutput = JSON.stringify(row);
+        await assert.rejects(n.api.drainWindowsNativeOwnedStdio(other), (error) => {
+            assert.match((error.cause ?? error).message, code);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            return true;
+        });
+        assert.equal(n.counts.release, 0);
+    }
+    for (const replacement of [Buffer.from('xb'), Buffer.from('a')]) {
+        const n = launchMemory(),
+            other = await n.prepare();
+        await n.api.launchWindowsNativePinnedProcess(other, n.input());
+        n.capture.stdout.bytes = Buffer.from('ab');
+        n.capture.stderr.bytes = Buffer.from('stderr is independent');
+        await n.api.drainWindowsNativeOwnedStdio(other);
+        n.capture.stdout.bytes = replacement;
+        await assert.rejects(n.api.drainWindowsNativeOwnedStdio(other), (error) => {
+            assert.match((error.cause ?? error).message, /STDIO_PREFIX_CHANGED/);
+            return true;
+        });
+    }
+});
+
+test('memory EOF and overflow stay sticky while overflow may later join component-only release', async () => {
+    for (const change of [
+        (stream) => {
+            stream.eof = false;
+        },
+        (stream) => {
+            stream.bytes = Buffer.from('ab');
+        },
+    ]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.capture.stdout.bytes = Buffer.from('a');
+        m.capture.stdout.eof = true;
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        change(m.capture.stdout);
+        await assert.rejects(m.api.drainWindowsNativeOwnedStdio(cap), (error) => {
+            assert.match((error.cause ?? error).message, /STDIO_EOF_CHANGED/);
+            return true;
+        });
+    }
+    for (const rollback of [false, true]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.capture.stdout.bytes = Buffer.alloc(65536, 65);
+        m.capture.stdout.overflow = true;
+        const first = await m.api.drainWindowsNativeOwnedStdio(cap).then(
+            () => assert.fail('overflow must fail capture'),
+            (error) => error,
+        );
+        const primary = first.cause ?? first;
+        assert.match(primary.message, /STDIO_CAPTURE_OVERFLOW/);
+        assert.equal(first.nativeAuthorityCustody.retainedAtCapture, true);
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /NOT_ACTIVE/);
+        m.state.exited = true;
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /STDIO_EOF_REQUIRED/,
+        );
+        m.endStdio();
+        if (rollback) {
+            m.capture.stdout.overflow = false;
+            await assert.rejects(m.api.drainWindowsNativeOwnedStdio(cap), (error) => {
+                assert.equal(error.cause, primary);
+                assert.equal(error.errors[0], primary);
+                assert.match(error.errors[1].message, /STDIO_OVERFLOW_CHANGED/);
+                return true;
+            });
+            assert.throws(
+                () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                /STDIO_OBSERVATION_UNKNOWN/,
+            );
+            m.capture.stdout.overflow = true;
+        }
+        await assert.rejects(m.api.drainWindowsNativeOwnedStdio(cap), (error) => {
+            assert.equal(error.cause, primary);
+            assert.match(error.errors[1].message, /STDIO_CAPTURE_OVERFLOW/);
+            return true;
+        });
+        assert.equal(m.counts.release, 0);
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /NOT_ACTIVE/);
+        const task = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
+        const ack = await task;
+        assert.equal(ack.retainedUnknown, false); // Only component HANDLE/finalizer ACK.
+        assert.equal(ack.releaseAcceptance, false);
+        assert.equal(ack.physicalDescendantClosure, false);
+        assert.equal(m.counts.release, 1);
+        assert.equal(first.nativeAuthorityCustody.failedAtCapture, true);
+    }
+});
+
+test('memory private inspector parsing handles fragmented CRLF without publishing raw bytes or reparsing lines', async () => {
+    const endpoint = 'ws://127.0.0.1:43123/01234567-89ab-cdef-0123-456789abcdef';
+    const line = 'Debugger listening on ' + endpoint;
+    for (const ending of ['\r\n', '']) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.capture.stderr.bytes = Buffer.from(line.slice(0, 37));
+        const partial = await m.api.drainWindowsNativeOwnedStdio(cap);
+        assert.equal(partial.mainInspectorEndpointObserved, false);
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /ENDPOINT_MISSING/);
+        m.capture.stderr.bytes = Buffer.from(line + ending);
+        if (!ending) m.capture.stderr.eof = true;
+        const complete = await m.api.drainWindowsNativeOwnedStdio(cap);
+        assert.equal(complete.mainInspectorEndpointObserved, true);
+        assert.equal(m.api.readWindowsNativeMainInspectorEndpoint(cap), endpoint);
+        const repeated = await m.api.drainWindowsNativeOwnedStdio(cap);
+        assert.equal(repeated.mainInspectorEndpointObserved, true); // Same cumulative line is not duplicate.
+        m.capture.stderr.bytes = Buffer.from(line + ending + (ending ? 'ordinary log\r\n' : ''));
+        const later = await m.api.drainWindowsNativeOwnedStdio(cap);
+        assert.equal(later.mainInspectorEndpointObserved, true);
+        assert.ok(Object.isFrozen(later) && Object.isFrozen(later.stderr));
+        const publicBytes =
+            JSON.stringify(later) + m.api.readWindowsNativeOwnedProcess(cap).toString();
+        for (const secret of [
+            endpoint,
+            '01234567-89ab-cdef-0123-456789abcdef',
+            'Debugger listening on',
+            line,
+            Buffer.from(line).toString('base64'),
+        ])
+            assert.equal(publicBytes.includes(secret), false);
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        m.state.exited = true;
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        assert.equal(
+            (await m.api.releaseWindowsNativeOwnedProcessHandles(cap)).releaseAcceptance,
+            false,
+        );
+    }
+});
+
+test('memory malformed duplicate and conflicting inspector candidates refuse without leaking private endpoints', async () => {
+    const endpoint = 'ws://127.0.0.1:43123/01234567-89ab-cdef-0123-456789abcdef';
+    const prefix = 'Debugger listening on ';
+    const candidates = [
+        endpoint.replace('127.0.0.1', 'localhost'),
+        endpoint.replace('127.0.0.1', '[::1]'),
+        endpoint.replace('43123', '0'),
+        endpoint.replace('43123', '65536'),
+        endpoint.replace('43123', '043123'),
+        endpoint.replace('127.0.0.1', 'user:PRIVATE@127.0.0.1'),
+        endpoint + '?PRIVATE=1',
+        endpoint + '#PRIVATE',
+        endpoint.replace('ws:', 'wss:'),
+        endpoint.replace('abcdef', 'abcdeg'),
+        endpoint + '/PRIVATE',
+        endpoint + '\r',
+        endpoint + '\u0000PRIVATE',
+    ];
+    for (const candidate of candidates) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.capture.stderr.bytes = Buffer.from(prefix + candidate + '\r\n');
+        await assert.rejects(m.api.drainWindowsNativeOwnedStdio(cap), (error) => {
+            assert.match((error.cause ?? error).message, /INSPECTOR_ENDPOINT_INVALID/);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.equal(error.message.includes(candidate), false);
+            assert.equal(JSON.stringify(error), '{}');
+            return true;
+        });
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /NOT_ACTIVE/);
+        assert.equal(
+            m.api.readWindowsNativeOwnedProcess(cap).includes(Buffer.from('Debugger listening on')),
+            false,
+        );
+    }
+    for (const second of [endpoint, endpoint.replace('43123', '43124')]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.capture.stderr.bytes = Buffer.from(prefix + endpoint + '\n');
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        m.capture.stderr.bytes = Buffer.from(prefix + endpoint + '\n' + prefix + second + '\n');
+        await assert.rejects(m.api.drainWindowsNativeOwnedStdio(cap), (error) => {
+            assert.match((error.cause ?? error).message, /INSPECTOR_ENDPOINT_DUPLICATE/);
+            assert.equal(JSON.stringify(error), '{}');
+            return true;
+        });
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /NOT_ACTIVE/);
+    }
+});
+
+test('memory explicit serial drains retain late results after cancellation without polling or releasing early', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    let acknowledge;
+    m.native.drainGate = new Promise((resolve) => {
+        acknowledge = resolve;
+    });
+    const task = m.api.drainWindowsNativeOwnedStdio(cap);
+    void task.catch(() => {});
+    try {
+        await m.drainStarted.promise;
+        assert.equal(m.counts.drain, 1);
+        assert.throws(() => m.api.drainWindowsNativeOwnedStdio(cap), /OPERATION_PENDING/);
+        assert.throws(() => m.api.sampleWindowsNativeOwnedProcess(cap), /OPERATION_PENDING/);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /OPERATION_PENDING/,
+        );
+        m.api.cancelWindowsNativeAuthority(cap);
+        m.capture.stdout.bytes = Buffer.from('late private stdout');
+        m.endStdio();
+        acknowledge();
+        const late = await task;
+        assert.equal(late.stdout.bytesRetained, 19);
+        assert.equal(late.stdout.eof, true);
+        assert.equal(late.stderr.eof, true);
+        assert.equal(m.counts.drain, 1);
+        assert.equal(m.counts.release, 0);
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /NOT_ACTIVE/);
+        assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+        m.state.exited = true;
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        const release = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), release);
+        const ack = await release;
+        assert.equal(ack.retainedUnknown, false);
+        assert.equal(ack.releaseAcceptance, false);
+        assert.equal(m.counts.release, 1);
+        assert.equal(m.counts.drain, 1); // No implicit final drain or automatic retry.
+    } finally {
+        acknowledge();
+        await task.catch(() => {});
+    }
+});
+
+test('memory later failed drains invalidate stale EOF and preserve the first error through once-only release', async () => {
+    for (const mode of ['reject', 'malformed', 'prefix']) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.capture.stdout.bytes = Buffer.from('retained');
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        m.state.exited = true;
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        const originalDrain = m.native.drainOwnedStdio;
+        const primary = Error('private rejected read');
+        if (mode === 'reject')
+            m.native.drainOwnedStdio = async () => {
+                m.counts.drain++;
+                throw primary;
+            };
+        if (mode === 'malformed') m.native.drainOutput = '{PRIVATE';
+        if (mode === 'prefix') m.capture.stdout.bytes = Buffer.from('replaced');
+        const first = await m.api.drainWindowsNativeOwnedStdio(cap).then(
+            () => assert.fail('new unknown read must invalidate stale EOF'),
+            (error) => error,
+        );
+        const cause = first.cause ?? first;
+        if (mode === 'reject') assert.equal(cause, primary);
+        else
+            assert.match(
+                cause.message,
+                mode === 'malformed' ? /STDIO_JSON/ : /STDIO_PREFIX_CHANGED/,
+            );
+        assert.equal(first.nativeAuthorityCustody.retainedAtCapture, true);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /STDIO_OBSERVATION_UNKNOWN/,
+        );
+        assert.equal(m.counts.release, 0);
+        assert.throws(() => m.api.readWindowsNativeMainInspectorEndpoint(cap), /NOT_ACTIVE/);
+        m.native.drainOwnedStdio = originalDrain;
+        delete m.native.drainOutput;
+        m.capture.stdout.bytes = Buffer.from('retained');
+        await m.api.drainWindowsNativeOwnedStdio(cap); // Explicit reviewed current observation, never automatic retry.
+        const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(ack.retainedUnknown, false);
+        assert.equal(ack.releaseAcceptance, false);
+        assert.equal(first.nativeAuthorityCustody.failedAtCapture, true);
+        assert.equal(JSON.stringify(first), '{}');
+    }
+    for (const primary of [Error('original private drain failure'), undefined]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.endStdio();
+        m.state.exited = true;
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        const drain = m.native.drainOwnedStdio;
+        m.native.drainOwnedStdio = () => {
+            m.counts.drain++;
+            throw primary;
+        };
+        const first = await m.api.drainWindowsNativeOwnedStdio(cap).then(
+            () => assert.fail('read must fail'),
+            (error) => error,
+        );
+        assert.equal(Object.hasOwn(first, 'cause'), true);
+        assert.equal(first.cause, primary);
+        assert.equal(first.nativeAuthorityCustody.retainedAtCapture, true);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /STDIO_OBSERVATION_UNKNOWN/,
+        );
+        m.native.drainOwnedStdio = drain;
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        const later = Error('later private release failure');
+        m.native.releaseOwnedProcessHandles = () => {
+            m.counts.release++;
+            throw later;
+        };
+        const task = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
+        await assert.rejects(task, (error) => {
+            assert.equal(Object.hasOwn(error, 'cause'), true);
+            assert.equal(error.cause, primary);
+            assert.equal(Object.hasOwn(error.errors, '0'), true);
+            assert.equal(error.errors[0], primary);
+            assert.equal(error.errors[1], later);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.equal(JSON.stringify(error), '{}');
+            return true;
+        });
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
+        assert.equal(m.counts.release, 1);
         assert.equal(m.counts.launch, 1);
     }
 });

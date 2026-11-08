@@ -282,6 +282,7 @@ export async function prepareWindowsNativeAuthority(request, expectedBuild) {
             'launchPinnedProcess',
             'acquireLaunchLifetime',
             'sampleOwnedProcess',
+            'drainOwnedStdio',
             'releaseOwnedProcessHandles',
         ])
             assert.equal(typeof native[name], 'function');
@@ -554,6 +555,10 @@ export function launchWindowsNativePinnedProcess(cap, input) {
         release: null,
         lifetimeAcquisitionSubmitted: false,
         lifetimeAcquisitionAcknowledged: false,
+        stdio: null,
+        stdioObservationUnknown: false,
+        stderrParsedBytes: 0,
+        mainInspectorEndpoint: null,
     };
     const task = Promise.resolve().then(async () => {
         // Cancellation between reservation and submission grants no new effect.
@@ -612,8 +617,186 @@ export function readWindowsNativeOwnedProcess(cap) {
     assert.ok(record.launch.bytes, 'WINDOWS_NATIVE_OWNED_OBSERVATION_MISSING');
     return Buffer.from(record.launch.bytes);
 }
+const streamLimit = 65536;
+const stdioResultLimit = 2 * 4 * Math.ceil(streamLimit / 3) + 4096;
+function stdioFields(value, keys) {
+    assert.ok(
+        value && typeof value === 'object' && !Array.isArray(value),
+        'WINDOWS_NATIVE_STDIO_SHAPE',
+    );
+    const own = Object.keys(value).sort();
+    assert.ok(
+        own.length === keys.length && own.every((key, index) => key === [...keys].sort()[index]),
+        'WINDOWS_NATIVE_STDIO_SHAPE',
+    );
+}
+function captureStream(value, previous) {
+    stdioFields(value, ['base64', 'eof', 'overflow']);
+    assert.ok(
+        typeof value.eof === 'boolean' && typeof value.overflow === 'boolean',
+        'WINDOWS_NATIVE_STDIO_SHAPE',
+    );
+    assert.ok(
+        typeof value.base64 === 'string' && value.base64.length <= 4 * Math.ceil(streamLimit / 3),
+        'WINDOWS_NATIVE_STDIO_BOUND',
+    );
+    assert.ok(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.base64),
+        'WINDOWS_NATIVE_STDIO_ENCODING',
+    );
+    const padding = value.base64.endsWith('==') ? 2 : value.base64.endsWith('=') ? 1 : 0;
+    assert.ok((value.base64.length / 4) * 3 - padding <= streamLimit, 'WINDOWS_NATIVE_STDIO_BOUND');
+    const bytes = Buffer.from(value.base64, 'base64');
+    assert.ok(
+        bytes.length <= streamLimit && bytes.toString('base64') === value.base64,
+        'WINDOWS_NATIVE_STDIO_ENCODING',
+    );
+    if (previous) {
+        assert.ok(
+            bytes.length >= previous.bytes.length &&
+                bytes.subarray(0, previous.bytes.length).equals(previous.bytes),
+            'WINDOWS_NATIVE_STDIO_PREFIX_CHANGED',
+        );
+        assert.ok(
+            !previous.eof || (value.eof && bytes.length === previous.bytes.length),
+            'WINDOWS_NATIVE_STDIO_EOF_CHANGED',
+        );
+        assert.ok(!previous.overflow || value.overflow, 'WINDOWS_NATIVE_STDIO_OVERFLOW_CHANGED');
+    }
+    assert.ok(
+        !value.overflow || bytes.length === streamLimit,
+        'WINDOWS_NATIVE_STDIO_OVERFLOW_SHAPE',
+    );
+    return { bytes, eof: value.eof, overflow: value.overflow };
+}
+function parseInspectorLines(record) {
+    const capture = record.launch.stdio.stderr;
+    let at = record.launch.stderrParsedBytes;
+    while (at < capture.bytes.length) {
+        const newline = capture.bytes.indexOf(10, at);
+        if (newline < 0 && !capture.eof) break;
+        const end = newline < 0 ? capture.bytes.length : newline;
+        const line = capture.bytes.subarray(at, end).toString('utf8').replace(/\r$/, '');
+        at = newline < 0 ? end : end + 1;
+        record.launch.stderrParsedBytes = at;
+        if (!line.startsWith('Debugger listening on ')) continue;
+        const raw = line.slice('Debugger listening on '.length);
+        const match =
+            /^ws:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})\/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/.exec(
+                raw,
+            );
+        assert.ok(match && Number(match[1]) <= 65535, 'WINDOWS_NATIVE_INSPECTOR_ENDPOINT_INVALID');
+        assert.ok(
+            record.launch.mainInspectorEndpoint === null,
+            'WINDOWS_NATIVE_INSPECTOR_ENDPOINT_DUPLICATE',
+        );
+        record.launch.mainInspectorEndpoint = raw;
+    }
+}
+function captureStdio(record, output) {
+    assert.ok(
+        typeof output === 'string' && Buffer.byteLength(output) <= stdioResultLimit,
+        'WINDOWS_NATIVE_STDIO_RESULT_BOUND',
+    );
+    let value;
+    try {
+        value = JSON.parse(output);
+    } catch {
+        throw Error('WINDOWS_NATIVE_STDIO_JSON');
+    }
+    stdioFields(value, [
+        'configured',
+        'parentChildCopiesClosed',
+        'acquisitionUnknown',
+        'stdout',
+        'stderr',
+    ]);
+    for (const key of ['configured', 'parentChildCopiesClosed', 'acquisitionUnknown'])
+        assert.ok(typeof value[key] === 'boolean', 'WINDOWS_NATIVE_STDIO_SHAPE');
+    const previous = record.launch.stdio;
+    if (previous) {
+        assert.ok(
+            !previous.configured || value.configured,
+            'WINDOWS_NATIVE_STDIO_CONFIGURATION_CHANGED',
+        );
+        assert.ok(
+            !previous.parentChildCopiesClosed || value.parentChildCopiesClosed,
+            'WINDOWS_NATIVE_STDIO_CHILD_COPY_CHANGED',
+        );
+        assert.ok(
+            !previous.acquisitionUnknown || value.acquisitionUnknown,
+            'WINDOWS_NATIVE_STDIO_UNKNOWN_CHANGED',
+        );
+    }
+    const stdout = captureStream(value.stdout, previous?.stdout),
+        stderr = captureStream(value.stderr, previous?.stderr);
+    assert.ok(
+        !value.parentChildCopiesClosed || value.configured,
+        'WINDOWS_NATIVE_STDIO_CONFIGURATION',
+    );
+    if (!value.configured)
+        assert.ok(
+            !value.parentChildCopiesClosed &&
+                !stdout.bytes.length &&
+                !stderr.bytes.length &&
+                !stdout.eof &&
+                !stderr.eof &&
+                !stdout.overflow &&
+                !stderr.overflow,
+            'WINDOWS_NATIVE_STDIO_CONFIGURATION',
+        );
+    if (record.launch.latest?.createdByThisOwner)
+        assert.ok(
+            value.configured && value.parentChildCopiesClosed,
+            'WINDOWS_NATIVE_STDIO_CHILD_COPY_UNKNOWN',
+        );
+    record.launch.stdio = {
+        configured: value.configured,
+        parentChildCopiesClosed: value.parentChildCopiesClosed,
+        acquisitionUnknown: value.acquisitionUnknown,
+        stdout,
+        stderr,
+    };
+    assert.ok(!value.acquisitionUnknown, 'WINDOWS_NATIVE_STDIO_ACQUISITION_UNKNOWN');
+    record.launch.stdioObservationUnknown = false;
+    assert.ok(!stdout.overflow && !stderr.overflow, 'WINDOWS_NATIVE_STDIO_CAPTURE_OVERFLOW');
+    parseInspectorLines(record);
+    return frozen({
+        configured: value.configured,
+        parentChildCopiesClosed: value.parentChildCopiesClosed,
+        acquisitionUnknown: value.acquisitionUnknown,
+        stdout: { bytesRetained: stdout.bytes.length, eof: stdout.eof, overflow: stdout.overflow },
+        stderr: { bytesRetained: stderr.bytes.length, eof: stderr.eof, overflow: stderr.overflow },
+        mainInspectorEndpointObserved: record.launch.mainInspectorEndpoint !== null,
+    });
+}
+/** Explicit bounded reads of this owner's private pipes, also after cancellation
+ * or a primary error. No polling, socket connection, or normal-close command. */
+export function drainWindowsNativeOwnedStdio(cap) {
+    const record = launchRecord(cap);
+    record.launch.stdioObservationUnknown = true;
+    const task = Promise.resolve().then(() => record.native.drainOwnedStdio(record.raw));
+    record.pending.add(task);
+    return task
+        .then((output) => {
+            record.launch.stdioReturned = output; // Retain even a malformed/late native result.
+            return captureStdio(record, output);
+        })
+        .catch((error) => {
+            throw retainLaunchFailure(record, error);
+        })
+        .finally(() => record.pending.delete(task));
+}
+/** Private owned-stderr provenance only. An inherited writer can be used by a
+ * descendant; this is not kernel socket-owner or physical loaded-image proof. */
+export function readWindowsNativeMainInspectorEndpoint(cap) {
+    const record = active(cap);
+    assert.ok(record.launch?.mainInspectorEndpoint, 'WINDOWS_NATIVE_INSPECTOR_ENDPOINT_MISSING');
+    return record.launch.mainInspectorEndpoint;
+}
 /** Join own-HANDLE closure and the native lifetime finalizer, once, after an actual
- * terminal/non-creation sample. Stdio, all app owners and descendants stay unknown. */
+ * terminal/non-creation sample and created-child pipe EOF. This does not establish
+ * closure of every app owner or descendant. */
 export function releaseWindowsNativeOwnedProcessHandles(cap) {
     const record = state(cap);
     assert.ok(record.launch, 'WINDOWS_NATIVE_LAUNCH_NOT_RESERVED');
@@ -628,6 +811,17 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
                 : !last.creationAttempted || last.creationReturned),
         'WINDOWS_NATIVE_CREATED_PROCESS_LIVE_OR_UNKNOWN',
     );
+    const stdio = record.launch.stdio;
+    assert.ok(!record.launch.stdioObservationUnknown, 'WINDOWS_NATIVE_STDIO_OBSERVATION_UNKNOWN');
+    assert.ok(!stdio?.acquisitionUnknown, 'WINDOWS_NATIVE_STDIO_ACQUISITION_UNKNOWN');
+    if (last.createdByThisOwner)
+        assert.ok(
+            stdio?.configured &&
+                stdio.parentChildCopiesClosed &&
+                stdio.stdout.eof &&
+                stdio.stderr.eof,
+            'WINDOWS_NATIVE_STDIO_EOF_REQUIRED',
+        );
     record.invalidated = true;
     record.launch.release = Promise.resolve()
         .then(() => record.native.releaseOwnedProcessHandles(record.raw))
