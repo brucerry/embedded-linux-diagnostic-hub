@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { types } from 'node:util';
 import {
     parseMacNativeArgs,
     validateMacNativeRequest,
@@ -51,6 +52,140 @@ The source-local Playwright path is a nominal dependency pin, not proof of the l
 --run requires separate explicit effects approval; a JSON flag does not confer authority.
 Future native observations remain unqualified until external exit/evidence review.
 `;
+// Diagnostic observations only: these are the last entered driver checkpoints, not
+// causes, successful operations, permission, resource closure or qualification.
+const busyDiagnosticPhases = new Set([
+    'arguments',
+    'input-validation',
+    'space-and-once-only-claim',
+    'source-identity',
+    'adapter-initialization',
+    'busy-only-case',
+    'busy-only-publication',
+    'completed-busy-only-unqualified',
+]);
+const busyPublicationStages = new Set([
+    'not-started',
+    'action-validation',
+    'terminal-records',
+    'helper-originals',
+    'helper-diagnostic',
+    'payload-originals',
+    'app-originals',
+    'shipping-original',
+    'case-original',
+    'helper-disk',
+    'final-gate',
+]);
+const busyDiagnosticMethods = Object.freeze([
+    'prepare',
+    'snapshot',
+    'install',
+    'snapshot',
+    'launchOwned',
+    'snapshot',
+    'install',
+    'snapshot',
+    'quitOwned',
+]);
+function diagnosticData(value, key) {
+    if (value === null || typeof value !== 'object' || types.isProxy(value)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+}
+const diagnosticEnum = (value, allowed) =>
+    typeof value === 'string' && allowed.includes(value) ? value : 'unclassified';
+
+/** Pure bounded projection of retained busy-driver state. Never inspect errors, facts,
+ * handles, identities, paths or streams, and never invoke input accessors or Proxy traps. */
+export function classifyMacBusyFailure(state) {
+    const actions = diagnosticData(state, 'actions');
+    const result = diagnosticData(actions, 'result');
+    const cases = diagnosticData(result, 'cases');
+    const oneCase =
+        cases !== null &&
+        typeof cases === 'object' &&
+        !types.isProxy(cases) &&
+        Array.isArray(cases) &&
+        diagnosticData(cases, 'length') === 1;
+    const item = oneCase ? diagnosticData(cases, '0') : undefined;
+    const rows = diagnosticData(item, 'actions');
+    let returnedActions = null,
+        lastMethod = 'unclassified';
+    if (rows !== null && typeof rows === 'object' && !types.isProxy(rows) && Array.isArray(rows)) {
+        const length = diagnosticData(rows, 'length');
+        if (Number.isSafeInteger(length) && length >= 0 && length <= 9) {
+            returnedActions = length;
+            lastMethod = length === 0 ? 'none' : busyDiagnosticMethods[length - 1];
+            for (let index = 0; index < length; index++) {
+                const row = diagnosticData(rows, String(index));
+                if (
+                    diagnosticData(row, 'returned') !== true ||
+                    diagnosticData(row, 'method') !== busyDiagnosticMethods[index]
+                ) {
+                    returnedActions = null;
+                    lastMethod = 'unclassified';
+                    break;
+                }
+            }
+        }
+    }
+    const pending = diagnosticData(diagnosticData(actions, 'custody'), 'pending');
+    let pendingMethod = pending === null ? 'none' : 'unclassified';
+    let pendingPhase = pending === null ? 'none' : 'unclassified';
+    if (pending !== null && returnedActions !== null) {
+        const candidatePhase = diagnosticData(pending, 'phase');
+        const expectedMethod =
+            candidatePhase === 'submitted' && returnedActions < 9
+                ? busyDiagnosticMethods[returnedActions]
+                : candidatePhase === 'returned' && returnedActions > 0
+                  ? busyDiagnosticMethods[returnedActions - 1]
+                  : undefined;
+        if (expectedMethod !== undefined && diagnosticData(pending, 'method') === expectedMethod) {
+            pendingMethod = expectedMethod;
+            pendingPhase = candidatePhase;
+        }
+    }
+    const stage = diagnosticData(state, 'busyPublicationStage');
+    const publicationStage =
+        typeof stage === 'string' && busyPublicationStages.has(stage) ? stage : 'unclassified';
+    const rawItem = diagnosticData(state, 'busyPublicationItem');
+    return Object.freeze({
+        case: MAC_BUSY_ONLY_CASE,
+        status: 'nonpassing',
+        phase: busyDiagnosticPhases.has(diagnosticData(state, 'phase'))
+            ? diagnosticData(state, 'phase')
+            : 'unclassified',
+        resultStatus: diagnosticEnum(diagnosticData(result, 'status'), [
+            'unavailable',
+            'verified',
+            'failed',
+            'unknown',
+        ]),
+        caseStatus: diagnosticEnum(diagnosticData(item, 'status'), [
+            'unexecuted',
+            'running',
+            'verified',
+            'failed',
+            'unknown',
+        ]),
+        returnedActions,
+        lastMethod,
+        pendingMethod,
+        pendingPhase,
+        publicationStage,
+        publicationItem:
+            publicationStage !== 'unclassified' &&
+            Number.isSafeInteger(rawItem) &&
+            rawItem >= 0 &&
+            rawItem <= 2
+                ? rawItem
+                : null,
+        retainedUnknown: diagnosticData(state, 'holdRequired') !== false,
+        releaseAcceptance: false,
+    });
+}
+
 const bounded = (value, cap = NATIVE_LIMITS.resultBytes) => {
     const bytes = Buffer.from(JSON.stringify(value, null, 2) + '\n');
     assert.ok(bytes.length <= cap);
@@ -236,7 +371,12 @@ async function publishInstallOnly(admitted, io, actions) {
     }).toString();
 }
 
-async function publishBusyOnly(admitted, io, actions) {
+async function publishBusyOnly(admitted, io, actions, state) {
+    const checkpoint = (stage, item = 0) => {
+        state.busyPublicationStage = stage;
+        state.busyPublicationItem = item;
+    };
+    checkpoint('action-validation');
     const root = admitted.parsed.root,
         selected = admitted.packages.current;
     const currentBinding = {
@@ -255,6 +395,7 @@ async function publishBusyOnly(admitted, io, actions) {
     assert.equal(io.state.desktops.length, 1);
     assert.equal(io.state.desktops[0].closed, true);
     assert.equal(io.needsHold(), false);
+    checkpoint('terminal-records');
     const rows = publishTerminalFacts(io, root);
     const helpers = rows.filter((row) => row.operation?.caseId === MAC_BUSY_ONLY_CASE);
     assert.equal(helpers.length, 2);
@@ -265,6 +406,7 @@ async function publishBusyOnly(admitted, io, actions) {
     const helperRefs = [],
         streams = [];
     for (const [ordinal, child] of helpers.entries()) {
+        checkpoint('helper-originals', ordinal + 1);
         assert.equal(
             child.operation.operationId,
             admitted.approval.nonce + ':' + MAC_BUSY_ONLY_CASE + ':helper:' + (ordinal + 1),
@@ -314,6 +456,7 @@ async function publishBusyOnly(admitted, io, actions) {
         }
         streams.push(original);
     }
+    checkpoint('helper-diagnostic');
     const diagnostics = streams[1].stderr
         .split('\n')
         .filter((line) =>
@@ -326,6 +469,7 @@ async function publishBusyOnly(admitted, io, actions) {
     const payloadRefs = [],
         payloads = [];
     for (const [index, phase] of ['installed-before-busy', 'unchanged-after-busy'].entries()) {
+        checkpoint('payload-originals', index + 1);
         const saved = await reference(
             'busy-refusal/evidence/installed-payload-' + (index + 1) + '.json',
             NATIVE_LIMITS.resultBytes,
@@ -351,10 +495,12 @@ async function publishBusyOnly(admitted, io, actions) {
         payloadRefs.push(saved.ref);
     }
     assert.deepEqual(payloads[0], payloads[1]);
+    checkpoint('app-originals', 1);
     const appPrequit = await reference(
         'busy-refusal/evidence/app-1-prequit.json',
         NATIVE_LIMITS.resultBytes,
     );
+    checkpoint('app-originals', 2);
     const appClosure = await reference(
         'busy-refusal/evidence/app-1-closure.json',
         NATIVE_LIMITS.resultBytes,
@@ -387,12 +533,14 @@ async function publishBusyOnly(admitted, io, actions) {
     for (const key of ['stdoutComplete', 'stderrComplete', 'stdoutEOF', 'stderrEOF'])
         assert.equal(closed.closure.streams[key], true);
     assert.equal(closed.closure.physicalDescendantClosure, false);
+    checkpoint('shipping-original');
     const infoBytes = await io.read(selected.identity.info, 65536);
     assert.equal(digest(infoBytes), selected.identity.infoSHA256);
     const shippingPath = 'evidence/current-shipping-build-info.json';
     io.publish(path.join(root, shippingPath), infoBytes, 65536, 0o600, true);
     const shippingBuildInfo = await reference(shippingPath, 65536);
     assert.ok(shippingBuildInfo.bytes.equals(infoBytes));
+    checkpoint('case-original');
     const casePath = 'evidence/busy-only-case.json';
     io.publish(
         path.join(root, casePath),
@@ -403,7 +551,9 @@ async function publishBusyOnly(admitted, io, actions) {
     );
     const caseRecord = await reference(casePath, NATIVE_LIMITS.stageBytes);
     validateMacBusyOnlyAction(JSON.parse(caseRecord.bytes.toString()), currentBinding);
+    checkpoint('helper-disk');
     const helperBytes = await io.read(path.join(root, 'bin/download-run-macos.sh'), 65536);
+    checkpoint('final-gate');
     io.gate();
     assert.equal(io.needsHold(), false);
     return bounded({
@@ -486,6 +636,8 @@ async function artifactRecords(admitted, io) {
 export async function runMacNativeCLI(argv, dependencies = {}) {
     const state = {
         phase: 'arguments',
+        busyPublicationStage: 'not-started',
+        busyPublicationItem: 0,
         io: null,
         admitted: null,
         actions: null,
@@ -574,7 +726,7 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
                 effects,
             });
             state.phase = 'busy-only-publication';
-            const output = await publishBusyOnly(admitted, io, state.actions);
+            const output = await publishBusyOnly(admitted, io, state.actions, state);
             state.publicationComplete = true;
             state.phase = 'completed-busy-only-unqualified';
             return { exitCode: 0, output, state };

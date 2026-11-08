@@ -333,7 +333,7 @@ jobs:
                   import assert from 'node:assert/strict';
                   import path from 'node:path';
                   import { writeSync } from 'node:fs';
-                  import { runMacNativeCLI, finishMacNativeEntry } from './tests/macos-installer-native-cli.mjs';
+                  import { runMacNativeCLI, finishMacNativeEntry, classifyMacBusyFailure } from './tests/macos-installer-native-cli.mjs';
                   const prefix = process.env.HUB_MAC_PREFIX, source = process.cwd(), root = process.env.HUB_MAC_BUSY_ROOT;
                   assert.equal(process.platform, 'darwin');
                   assert.equal(process.arch, 'arm64');
@@ -353,11 +353,7 @@ jobs:
                   globalThis.__hubNativeRetained = result.state;
                   if (result.exitCode !== 0) {
                     try {
-                      const stages = new Set(['arguments', 'input-validation', 'space-and-once-only-claim', 'source-identity',
-                        'adapter-initialization', 'busy-only-case', 'busy-only-publication']);
-                      const diagnostic = { case: 'macos-bundle:busy-refusal', status: 'nonpassing',
-                        phase: stages.has(result.state.phase) ? result.state.phase : 'unclassified',
-                        retainedUnknown: result.state.holdRequired === true, releaseAcceptance: false };
+                      const diagnostic = classifyMacBusyFailure(result.state);
                       const bytes = Buffer.from('::error title=Mac current busy diagnostic::' + JSON.stringify(diagnostic) + '\n');
                       assert.ok(bytes.length <= 2048);
                       const written = writeSync(3, bytes);
