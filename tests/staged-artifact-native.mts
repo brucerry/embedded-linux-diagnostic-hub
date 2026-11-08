@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile, mkdtemp, realpath, mkdir, open, lstat } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, writeSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 if (process.platform === 'darwin') {
-    const { runStagedMacRuntime, assertMacRuntimeEnvironment } =
+    const { runStagedMacRuntime, assertMacRuntimeEnvironment, emitMacRuntimeFailure } =
         await import('./fixtures/staged-mac-runtime');
     assertMacRuntimeEnvironment(process.env);
     // Reject connection/debug overrides before importing the SDK or existing owner.
@@ -42,10 +42,10 @@ if (process.platform === 'darwin') {
                 await expect(page.getByRole('heading', { name: 'Device overview' })).toBeVisible();
             },
             retain: parkRetained,
-            reportFailure: () =>
-                console.error(
-                    '::error title=Mac runtime phase::Owned runtime did not establish a complete normal outcome; custody and files retained.',
-                ),
+            // FD 3 is borrowed from the workflow; the actual app receives only 0..2.
+            // Existing catch retains primary custody if this one bounded write fails.
+            reportFailure: (diagnostic) =>
+                emitMacRuntimeFailure(diagnostic, (line) => writeSync(3, line)),
         },
     );
 } else {

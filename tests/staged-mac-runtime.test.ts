@@ -4,6 +4,9 @@ import { createHash } from 'node:crypto';
 import vm from 'node:vm';
 import {
     runStagedMacRuntime,
+    macRuntimeFailureDiagnostic,
+    formatMacRuntimeFailure,
+    emitMacRuntimeFailure,
     type MacRuntimeInput,
     type MacRuntimePorts,
 } from './fixtures/staged-mac-runtime.ts';
@@ -136,7 +139,7 @@ function fixture(options: Options = {}) {
             record.task = task;
             void task.catch(() => {});
             if (options.freezeBefore && phase === 'runtime-root') {
-                this.freeze('deadline');
+                this.freeze('phase-deadline');
                 return Promise.reject(primary);
             }
             if (
@@ -147,7 +150,7 @@ function fixture(options: Options = {}) {
             ) {
                 return new Promise((_resolve, reject) =>
                     queueMicrotask(() => {
-                        this.freeze('deadline');
+                        this.freeze('phase-deadline');
                         reject(primary);
                     }),
                 );
@@ -179,12 +182,14 @@ function fixture(options: Options = {}) {
         options: undefined,
         launch() {
             owner.active();
+            owner.child = { kind: 'fake-owned-child' };
             events.push('launch');
         },
         process() {
             return { pid: 1001 };
         },
         async attach() {
+            owner.attachReturned = true;
             events.push('attach');
         },
         async firstWindow() {
@@ -247,6 +252,7 @@ function fixture(options: Options = {}) {
             return Object.assign(observed, options.identity);
         },
         async normalQuit() {
+            owner.quitIntent = true;
             events.push('quit');
             assert.equal(owner.preQuitReceiptVerified, true);
             assert.equal(owner.publicationFDs.size, 0);
@@ -545,4 +551,148 @@ test('owned Mac runtime snapshots caller destinations and environment before pen
     assert.ok(f.files.has(destination));
     assert.ok(!f.files.has('/foreign/mutated.json'));
     assert.equal(f.desktop.options.env.HTTPS_PROXY, 'test-proxy');
+});
+
+test('owned Mac retained diagnostic exposes only finite data without getters proxies or exception strings', () => {
+    let touched = 0;
+    const owner = {
+        reason: 'main-evaluate-exception',
+        pendingWaits: new Map([[1, { phase: 'main-response', error: 'private exception' }]]),
+        shutdownPending: new Map(),
+        mainPendingCount: 1000,
+        child: {},
+        attachReturned: true,
+        quitIntent: false,
+        exitObserved: false,
+        closeObserved: false,
+        streams: { stdoutEOF: false, stderrEOF: false },
+        get error() {
+            touched++;
+            throw Error('secret');
+        },
+    };
+    const diagnostic = macRuntimeFailureDiagnostic('runtime-identity', owner, 1000);
+    assert.equal(diagnostic.reason, 'main-evaluation');
+    assert.equal(diagnostic.waitingStage, 'main-response');
+    assert.equal(diagnostic.pendingMain, 17);
+    assert.equal(diagnostic.openFiles, 33);
+    const candidate = {
+        ...diagnostic,
+        secret: 'private path /Users/private/token',
+        toJSON() {
+            touched++;
+            return 'secret';
+        },
+    };
+    const text = formatMacRuntimeFailure(candidate);
+    assert.ok(Buffer.byteLength(text) <= 2048);
+    assert.ok(!/secret|private|Users|token/.test(text));
+    assert.equal(touched, 0);
+    const getter = Object.defineProperty({}, 'reason', {
+        get() {
+            touched++;
+            return 'secret';
+        },
+    });
+    assert.equal(macRuntimeFailureDiagnostic('not-a-stage', getter, 0).reason, 'operation');
+    const proxy = new Proxy(
+        {},
+        {
+            getOwnPropertyDescriptor() {
+                touched++;
+                throw Error('secret');
+            },
+        },
+    );
+    assert.equal(macRuntimeFailureDiagnostic('prepare', proxy, 0).childObserved, false);
+    assert.equal(touched, 0);
+    assert.equal(
+        macRuntimeFailureDiagnostic('prepare', { reason: 'secret arbitrary error' }, 0).reason,
+        'other',
+    );
+    const shutdown = macRuntimeFailureDiagnostic(
+        'normal-quit',
+        {
+            reason: 'shutdown-deadline',
+            pendingWaits: new Map(),
+            shutdownPending: new Map([[1, { phase: 'transport-close' }]]),
+        },
+        0,
+    );
+    assert.equal(shutdown.reason, 'deadline');
+    assert.equal(shutdown.waitingStage, 'transport-close');
+    assert.equal(shutdown.pendingShutdown, 1);
+});
+
+test('owned Mac retained diagnostic reports the failing stage once before parking without new owner work', async () => {
+    const f = fixture({ fail: 'close:/source/package.json' });
+    const diagnostics: unknown[] = [];
+    f.ports.reportFailure = (value) => {
+        diagnostics.push(value);
+        f.events.push('public-diagnostic');
+    };
+    f.ports.retain = async (context) => {
+        f.events.push('retained');
+        throw new Retained(context);
+    };
+    await assert.rejects(runStagedMacRuntime(f.input, f.ports), (error: unknown) => {
+        assert.ok(error instanceof Retained);
+        assert.equal(error.context.error, f.primary);
+        return true;
+    });
+    assert.equal(diagnostics.length, 1);
+    const diagnostic = diagnostics[0] as ReturnType<typeof macRuntimeFailureDiagnostic>;
+    assert.equal(diagnostic.stage, 'file-close');
+    assert.equal(diagnostic.openFiles, 1);
+    assert.equal(diagnostic.retainedUnknown, true);
+    assert.equal(diagnostic.releaseAcceptance, false);
+    assert.ok(f.events.indexOf('public-diagnostic') < f.events.indexOf('retained'));
+    assert.ok(!f.events.includes('quit'));
+});
+
+test('owned Mac retained diagnostic preserves timeout stage and late handle custody without a second report', async () => {
+    const f = fixture({ late: 'open:/source/package.json' });
+    const diagnostics: ReturnType<typeof macRuntimeFailureDiagnostic>[] = [];
+    f.ports.reportFailure = (value) => {
+        diagnostics.push(value);
+    };
+    await assert.rejects(runStagedMacRuntime(f.input, f.ports), Retained);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].reason, 'deadline');
+    assert.equal(diagnostics[0].waitingStage, 'file-open');
+    assert.equal(diagnostics[0].pendingOperations, 1);
+    assert.equal(diagnostics[0].openFiles, 0);
+    f.resolveLate();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.owner.publicationFDs.size, 1);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].openFiles, 0); // Immutable facts at report time.
+    assert.ok(!f.events.includes('stat:/source/package.json'));
+    assert.ok(!f.events.includes('close:/source/package.json'));
+});
+
+test('owned Mac diagnostic uses one bounded write and preserves primary custody on short or failed writes', async () => {
+    for (const mode of ['success', 'short', 'throw']) {
+        const f = fixture({ fail: 'close:/source/package.json' });
+        let writes = 0;
+        f.ports.reportFailure = (diagnostic) =>
+            emitMacRuntimeFailure(diagnostic, (line) => {
+                writes++;
+                assert.ok(line.startsWith('::error title=Mac retained runtime diagnostic::'));
+                const message = line.slice(line.indexOf('::', 2) + 2, -1);
+                assert.ok(Buffer.byteLength(message) <= 2048);
+                assert.equal(JSON.parse(message).retainedUnknown, true);
+                if (mode === 'throw') throw Error('reporter failure must remain secondary');
+                return Buffer.byteLength(line) - (mode === 'short' ? 1 : 0);
+            });
+        await assert.rejects(runStagedMacRuntime(f.input, f.ports), (error: unknown) => {
+            assert.ok(error instanceof Retained);
+            assert.equal(error.context.error, f.primary);
+            assert.equal(error.context.handles.size, 1);
+            return true;
+        });
+        assert.equal(writes, 1);
+        assert.ok(!f.events.includes('quit'));
+        assert.equal(f.owner.publicationFDs.size, 1);
+    }
 });

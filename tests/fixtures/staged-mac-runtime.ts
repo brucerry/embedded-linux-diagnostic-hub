@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { types as utilTypes } from 'node:util';
 import { validateMacManifest } from '../../scripts/lib/macos-release.mjs';
 import {
     sampleMacArchive,
@@ -28,6 +29,242 @@ export function assertMacRuntimeEnvironment(environment: NodeJS.ProcessEnv) {
         !Object.keys(environment).some((name) => name.startsWith('PW_TEST_')),
         'Runtime test override is not admitted.',
     );
+}
+
+const runtimeStages = [
+    'prepare',
+    'canonical-input',
+    'runtime-root',
+    'runtime-profile',
+    'runtime-artifacts',
+    'runtime-home',
+    'runtime-temp',
+    'file-open',
+    'file-stat',
+    'file-read',
+    'file-close',
+    'hash-realpath',
+    'hash-lstat',
+    'hash-stat',
+    'hash-read',
+    'package-binding',
+    'launch',
+    'runtime-attach',
+    'runtime-window',
+    'runtime-url',
+    'runtime-overview',
+    'runtime-identity',
+    'identity-binding',
+    'publication-write',
+    'publication-sync',
+    'normal-quit',
+    'closure-binding',
+    'unclassified',
+] as const;
+type RuntimeStage = (typeof runtimeStages)[number];
+const waitingStages = [
+    ...runtimeStages,
+    'node-endpoint',
+    'node-connect',
+    'main-initialize',
+    'main-response',
+    'main-context',
+    'browser-endpoint',
+    'browser-connect',
+    'renderer-attach',
+    'first-window',
+    'normal-root-close',
+    'stdout-eof',
+    'stderr-eof',
+    'transport-close',
+] as const;
+const failureReasons = [
+    'deadline',
+    'process',
+    'transport',
+    'stream',
+    'main-evaluation',
+    'operation',
+    'other',
+] as const;
+const ownData = (object: unknown, key: string): unknown => {
+    if (object === null || typeof object !== 'object' || utilTypes.isProxy(object))
+        return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+};
+const count = (value: unknown, maximum: number) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+        ? Math.min(value, maximum + 1)
+        : null;
+const mapCount = (value: unknown, maximum: number) => {
+    if (value === null || typeof value !== 'object' || utilTypes.isProxy(value)) return null;
+    try {
+        return count(
+            Object.getOwnPropertyDescriptor(Map.prototype, 'size')!.get!.call(value),
+            maximum,
+        );
+    } catch {
+        return null;
+    }
+};
+const pendingStage = (value: unknown) => {
+    if (value === null || typeof value !== 'object' || utilTypes.isProxy(value))
+        return 'unclassified';
+    let result = 'unclassified',
+        seen = 0;
+    try {
+        for (const record of Map.prototype.values.call(value)) {
+            if (++seen > 32) break;
+            const phase = ownData(record, 'phase');
+            if (typeof phase === 'string' && (waitingStages as readonly string[]).includes(phase))
+                result = phase;
+        }
+    } catch {
+        /* Unknown map shape is diagnostic data, never new owner work. */
+    }
+    return result;
+};
+
+/** Memory-only finite facts. No exception, path, PID, descriptor value, endpoint,
+ * environment or stream content is read or serialized. Counts use cap+1 for overflow. */
+export function macRuntimeFailureDiagnostic(stage: string, owner: unknown, openFiles: number) {
+    const rawReason = ownData(owner, 'reason');
+    const reason =
+        typeof rawReason !== 'string'
+            ? 'operation'
+            : [
+                    'phase-deadline',
+                    'owner-phase-deadline',
+                    'owner-deadline',
+                    'shutdown-deadline',
+                ].includes(rawReason)
+              ? 'deadline'
+              : [
+                      'child-error',
+                      'unexpected-root-exit',
+                      'root-exit-not-normal',
+                      'root-close-not-normal',
+                      'spawn-failed',
+                  ].includes(rawReason)
+                ? 'process'
+                : [
+                        'node-socket-error',
+                        'browser-socket-error',
+                        'node-socket-disconnected',
+                        'browser-socket-disconnected',
+                        'main-inspector-disconnected',
+                        'attach-failed',
+                        'forbidden-termination-command',
+                        'framework-transport-close-refused',
+                    ].includes(rawReason)
+                  ? 'transport'
+                  : [
+                          'root-stream-error',
+                          'root-stream-cap',
+                          'endpoint-line-cap',
+                          'endpoint-conflict',
+                      ].includes(rawReason)
+                    ? 'stream'
+                    : ['main-evaluate-exception', 'main-inspector-response-error'].includes(
+                            rawReason,
+                        )
+                      ? 'main-evaluation'
+                      : rawReason === 'staged-mac-runtime-failed' ||
+                          (runtimeStages as readonly string[]).some(
+                              (phase) => rawReason === phase + '-failed',
+                          )
+                        ? 'operation'
+                        : 'other';
+    const streams = ownData(owner, 'streams');
+    const genericWaitingStage = pendingStage(ownData(owner, 'pendingWaits'));
+    return Object.freeze({
+        stage: (runtimeStages as readonly string[]).includes(stage) ? stage : 'unclassified',
+        reason,
+        waitingStage:
+            genericWaitingStage === 'unclassified'
+                ? pendingStage(ownData(owner, 'shutdownPending'))
+                : genericWaitingStage,
+        pendingOperations: mapCount(ownData(owner, 'pendingWaits'), 32),
+        pendingShutdown: mapCount(ownData(owner, 'shutdownPending'), 8),
+        pendingMain: count(ownData(owner, 'mainPendingCount'), 16),
+        openFiles: count(openFiles, 32),
+        childObserved: ownData(owner, 'child') !== undefined,
+        attachReturned: ownData(owner, 'attachReturned') === true,
+        quitRequested: ownData(owner, 'quitIntent') === true,
+        rootExitObserved: ownData(owner, 'exitObserved') === true,
+        rootCloseObserved: ownData(owner, 'closeObserved') === true,
+        bothEOFObserved:
+            ownData(streams, 'stdoutEOF') === true && ownData(streams, 'stderrEOF') === true,
+        retainedUnknown: true,
+        releaseAcceptance: false,
+    });
+}
+export type MacRuntimeFailureDiagnostic = ReturnType<typeof macRuntimeFailureDiagnostic>;
+
+export function formatMacRuntimeFailure(diagnostic: MacRuntimeFailureDiagnostic) {
+    // Rebuild only fixed data fields; never consult a getter, toJSON or extra field.
+    diagnostic = Object.fromEntries(
+        [
+            'stage',
+            'reason',
+            'waitingStage',
+            'pendingOperations',
+            'pendingShutdown',
+            'pendingMain',
+            'openFiles',
+            'childObserved',
+            'attachReturned',
+            'quitRequested',
+            'rootExitObserved',
+            'rootCloseObserved',
+            'bothEOFObserved',
+            'retainedUnknown',
+            'releaseAcceptance',
+        ].map((key) => [key, ownData(diagnostic, key)]),
+    ) as MacRuntimeFailureDiagnostic;
+    assert.ok((runtimeStages as readonly string[]).includes(diagnostic.stage));
+    assert.ok((failureReasons as readonly string[]).includes(diagnostic.reason));
+    assert.ok((waitingStages as readonly string[]).includes(diagnostic.waitingStage));
+    for (const [key, maximum] of [
+        ['pendingOperations', 33],
+        ['pendingShutdown', 9],
+        ['pendingMain', 17],
+        ['openFiles', 33],
+    ] as const)
+        assert.ok(
+            diagnostic[key] === null ||
+                (Number.isSafeInteger(diagnostic[key]) &&
+                    diagnostic[key]! >= 0 &&
+                    diagnostic[key]! <= maximum),
+        );
+    for (const key of [
+        'childObserved',
+        'attachReturned',
+        'quitRequested',
+        'rootExitObserved',
+        'rootCloseObserved',
+        'bothEOFObserved',
+    ] as const)
+        assert.equal(typeof diagnostic[key], 'boolean');
+    assert.equal(diagnostic.retainedUnknown, true);
+    assert.equal(diagnostic.releaseAcceptance, false);
+    const text = JSON.stringify(diagnostic);
+    assert.ok(Buffer.byteLength(text) <= 2048 && !/[\r\n%]/.test(text));
+    return text;
+}
+
+export function emitMacRuntimeFailure(
+    diagnostic: MacRuntimeFailureDiagnostic,
+    write: (line: string) => number,
+) {
+    const line =
+        '::error title=Mac retained runtime diagnostic::' +
+        formatMacRuntimeFailure(diagnostic) +
+        '\n';
+    // One borrowed-channel write only. A short/failed write authorizes no retry,
+    // fallback, owner operation, cleanup or claim that GitHub accepted an annotation.
+    assert.equal(write(line), Buffer.byteLength(line), 'Bounded diagnostic write incomplete.');
 }
 
 type Handle = {
@@ -74,7 +311,7 @@ export type MacRuntimePorts = {
     open(file: string, mode: 'read' | 'create'): Promise<Handle>;
     overview(page: Awaited<ReturnType<Desktop['firstWindow']>>): Promise<void>;
     retain(context: unknown): Promise<never>;
-    reportFailure(): void;
+    reportFailure(diagnostic: MacRuntimeFailureDiagnostic): void;
 };
 
 /** One existing packaged-Mac observation. All actual IO and the existing owner are
@@ -139,7 +376,11 @@ export async function runStagedMacRuntime(input: MacRuntimeInput, ports: MacRunt
         error: undefined as unknown,
         identity: undefined as unknown,
     };
+    let stage: RuntimeStage = 'prepare';
     const effect = <T>(phase: string, operation: () => Promise<T>) => {
+        stage = (runtimeStages as readonly string[]).includes(phase)
+            ? (phase as RuntimeStage)
+            : 'unclassified';
         owner.active();
         // Register the promise with existing custody before the operation's microtask.
         // Late returns/rejections remain in owner.pendingWaits after a deadline.
@@ -241,6 +482,7 @@ export async function runStagedMacRuntime(input: MacRuntimeInput, ports: MacRunt
         const pkg = await json(path.join(input.cwd, 'package.json'), 65536);
         const lock = await json(path.join(input.cwd, 'package-lock.json'), 1048576);
         const info = await json(input.buildInfo, 65536);
+        stage = 'package-binding';
         assert.equal(pkg.version, lock.version);
         assert.equal(pkg.version, lock.packages[''].version);
         assert.equal(pkg.devDependencies.electron, lock.packages['node_modules/electron'].version);
@@ -264,6 +506,7 @@ export async function runStagedMacRuntime(input: MacRuntimeInput, ports: MacRunt
             return { executableSHA256: executable.sha256, asarSHA256: archive.sha256 };
         };
         await disk();
+        stage = 'launch';
         desktop.launch();
         await effect('runtime-attach', () => desktop.attach());
         const page = await effect('runtime-window', () => desktop.firstWindow());
@@ -325,6 +568,7 @@ export async function runStagedMacRuntime(input: MacRuntimeInput, ports: MacRunt
                 '__stagedQualification_' + randomUUID().replaceAll('-', ''),
             ),
         );
+        stage = 'identity-binding';
         identity.sandbox = identity.sandbox && identity.osSandboxed === true;
         assert.equal(identity.packaged, true);
         assert.equal(identity.version, pkg.version);
@@ -365,7 +609,9 @@ export async function runStagedMacRuntime(input: MacRuntimeInput, ports: MacRunt
         assert.equal(owner.publicationFDs.size, 0);
         assert.equal(owner.pendingWaits.size, 0);
         owner.preQuitReceiptVerified = true;
+        stage = 'normal-quit';
         await desktop.normalQuit();
+        stage = 'closure-binding';
         assert.ok(owner.quitComplete && owner.exitObserved && owner.closeObserved);
         assert.equal(owner.exitCode, 0);
         assert.equal(owner.signal, null);
@@ -386,7 +632,7 @@ export async function runStagedMacRuntime(input: MacRuntimeInput, ports: MacRunt
         context.error = error;
         owner.freeze('staged-mac-runtime-failed');
         try {
-            ports.reportFailure();
+            ports.reportFailure(macRuntimeFailureDiagnostic(stage, owner, handles.size));
         } catch {
             /* Reporting cannot replace retained custody. */
         }

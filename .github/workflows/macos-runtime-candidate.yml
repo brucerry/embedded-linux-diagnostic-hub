@@ -5,7 +5,7 @@ name: Mac owned runtime candidate
 # Direct root/pipe/socket closure is not descendant or release acceptance.
 on:
     push:
-        branches: [ci/v060-macos-runtime-20261108]
+        branches: [ci/v060-macos-runtime-diagnostic-20261108]
 
 permissions:
     contents: read
@@ -19,7 +19,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-macos-runtime-20261108' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-macos-runtime-diagnostic-20261108' && github.run_attempt == 1 }}
         runs-on: macos-15
         timeout-minutes: 30
         defaults:
@@ -60,7 +60,7 @@ jobs:
               working-directory: ${{ github.workspace }}
               run: |
                   fail() { printf '%s\n' '::error title=Mac package phase::Runner and owned-prefix admission failed.'; exit 1; }
-                  test "$GITHUB_EVENT_NAME" = push && test "$GITHUB_RUN_ATTEMPT" = 1 && test "$GITHUB_REF" = refs/heads/ci/v060-macos-runtime-20261108 && test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub || fail
+                  test "$GITHUB_EVENT_NAME" = push && test "$GITHUB_RUN_ATTEMPT" = 1 && test "$GITHUB_REF" = refs/heads/ci/v060-macos-runtime-diagnostic-20261108 && test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub || fail
                   test "$RUNNER_ENVIRONMENT" = github-hosted && test "$RUNNER_OS" = macOS && test "$RUNNER_ARCH" = "$HUB_MAC_RUNNER_ARCH" || fail
                   for name in NODE_OPTIONS NODE_PATH ELECTRON_RUN_AS_NODE TSX_TSCONFIG_PATH TSX_DISABLE_CACHE ESBUILD_BINARY_PATH PWDEBUG PW_INSTRUMENT_MODULES PLAYWRIGHT_DRIVER_URL PW_TEST_CONNECT_WS_ENDPOINT SELENIUM_REMOTE_URL PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; do
                     if declare -p "$name" > /dev/null 2>&1; then fail; fi
@@ -284,7 +284,8 @@ jobs:
                   HUB_STAGED_RUNTIME_ROOT: ${{ env.HUB_MAC_PREFIX }}/runtime
               # The existing owner has a 90-second phase deadline and observes normal
               # quit, root exit/close, both EOFs and transport closes. Unknown custody
-              # parks nonpassing with files retained; this job's timeout proves no
+              # parks nonpassing with files retained. FD 3 borrows the public output only
+              # for one fixed finite diagnostic; raw stdout/stderr stay private. This job's timeout proves no
               # descendant or loaded-code retirement and issues no cleanup command.
               run: |
                   fail() { printf '%s\n' '::error title=Mac runtime phase::Owned runtime did not establish a complete normal outcome; custody and files retained.'; exit 1; }
@@ -293,7 +294,7 @@ jobs:
                   done
                   for name in ${!PW_TEST_@}; do fail; done
                   test ! -e "$HUB_STAGED_RUNTIME_ROOT" && test ! -L "$HUB_STAGED_RUNTIME_ROOT" && test ! -e "$HUB_STAGED_IDENTITY" && test ! -L "$HUB_STAGED_IDENTITY" || fail
-                  node --import ./node_modules/tsx/dist/loader.mjs tests/staged-artifact-native.mts > "$HUB_MAC_PREFIX/logs/owned-runtime.log" 2>&1 || fail
+                  node --import ./node_modules/tsx/dist/loader.mjs tests/staged-artifact-native.mts 3>&1 > "$HUB_MAC_PREFIX/logs/owned-runtime.log" 2>&1 || fail
             - name: Read back the actual bounded runtime identity and closure
               run: |
                   node --input-type=module 2> "$HUB_MAC_PREFIX/logs/runtime-readback-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac runtime phase::Runtime identity and closure readback failed.'; exit 1; }
