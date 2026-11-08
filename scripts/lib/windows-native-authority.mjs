@@ -234,6 +234,7 @@ export async function prepareWindowsNativeAuthority(request, expectedBuild) {
         cancelled: false,
         release: null,
         invalidated: false,
+        launch: null,
     };
     capabilities.set(cap, record);
     retained.add(record); // Owner exists before the first IO/load.
@@ -262,6 +263,9 @@ export async function prepareWindowsNativeAuthority(request, expectedBuild) {
             'cancel',
             'release',
             'refuseNormalClose',
+            'launchPinnedProcess',
+            'sampleOwnedProcess',
+            'releaseOwnedProcessHandles',
         ])
             assert.equal(typeof native[name], 'function');
         record.native = native;
@@ -336,9 +340,10 @@ export function observeWindowsNativeProcess(cap, process) {
     );
     const pid = process.pid,
         creation = process.creationTime100ns;
-    return operation(cap, 'process', (record) =>
-        record.native.observeProcess(record.raw, pid, creation),
-    );
+    return operation(cap, 'process', (record) => {
+        assert.ok(!record.launch, 'WINDOWS_NATIVE_OWNED_PROCESS_ALREADY_RESERVED');
+        return record.native.observeProcess(record.raw, pid, creation);
+    });
 }
 export function readWindowsNativeObservation(cap, role) {
     const record = active(cap);
@@ -355,6 +360,7 @@ export function cancelWindowsNativeAuthority(cap) {
 /** Release only our new read/query handles. This never closes or retires the app. */
 export function releaseWindowsNativeAuthority(cap) {
     const record = state(cap);
+    assert.ok(!record.launch, 'WINDOWS_NATIVE_OWNED_RELEASE_REQUIRED');
     if (record.release) return record.release;
     assert.ok(record.raw && record.pending.size === 0, 'WINDOWS_NATIVE_RELEASE_PENDING');
     record.invalidated = true;
@@ -397,4 +403,219 @@ export function refuseWindowsNativeNormalClose(cap) {
     const record = state(cap);
     if (record.raw) return record.native.refuseNormalClose(record.raw);
     throw Error('WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE');
+}
+
+/** Explicit requested inputs only. Neither this data nor an empty directory
+ * establishes fresh/exclusive staging, authorization, or native launch admission. */
+export function validateWindowsNativeLaunch(value, selected) {
+    const binding = validateWindowsNativeRequest(selected);
+    fields(value, ['action', 'profile']);
+    assert.equal(value.action, 'launch-pinned-installed');
+    assert.equal(value.profile, binding.root + '\\native-launch-profile');
+    return Object.freeze({ action: value.action, profile: value.profile });
+}
+function launchRecord(cap) {
+    const record = state(cap);
+    assert.ok(record.launch && record.native && record.raw && !record.invalidated);
+    assert.equal(record.pending.size, 0, 'WINDOWS_NATIVE_LAUNCH_OPERATION_PENDING');
+    return record;
+}
+function ownedObservation(output) {
+    assert.ok(typeof output === 'string' && Buffer.byteLength(output) <= 65536);
+    const value = JSON.parse(output);
+    const flags = [
+        'creationAttempted',
+        'creationReturned',
+        'createdByThisOwner',
+        'processHandleRetained',
+        'threadHandleRetained',
+        'unconfirmedHandleOutput',
+        'processExitObserved',
+        'profileEmptyAtPreflight',
+        'stdioObserved',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+    ];
+    fields(value, [...flags, 'pid', 'threadId', 'creationTime100ns', 'exitCode']);
+    for (const key of flags) assert.equal(typeof value[key], 'boolean');
+    for (const key of [
+        'stdioObserved',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+    ])
+        assert.equal(value[key], false);
+    assert.ok(!value.creationReturned || value.creationAttempted);
+    if (value.createdByThisOwner) {
+        assert.ok(
+            value.creationAttempted && value.creationReturned && value.profileEmptyAtPreflight,
+        );
+        assert.ok(
+            value.processHandleRetained &&
+                value.threadHandleRetained &&
+                !value.unconfirmedHandleOutput,
+        );
+        for (const key of ['pid', 'threadId'])
+            assert.ok(Number.isInteger(value[key]) && value[key] > 0 && value[key] <= 0xffffffff);
+        assert.ok(
+            typeof value.creationTime100ns === 'string' &&
+                /^[1-9][0-9]{0,19}$/.test(value.creationTime100ns),
+        );
+        assert.ok(BigInt(value.creationTime100ns) <= 0xffffffffffffffffn);
+    } else {
+        assert.equal(value.pid, null);
+        assert.equal(value.threadId, null);
+        assert.equal(value.creationTime100ns, null);
+        assert.equal(value.processExitObserved, false);
+        assert.equal(value.processHandleRetained, false);
+        assert.equal(value.threadHandleRetained, false);
+    }
+    if (value.processExitObserved)
+        assert.ok(
+            Number.isInteger(value.exitCode) && value.exitCode >= 0 && value.exitCode <= 0xffffffff,
+        );
+    else assert.equal(value.exitCode, null);
+    return Object.freeze(value);
+}
+function retainLaunchFailure(record, error) {
+    record.failed = true;
+    if (!record.launch.firstFailureSet) {
+        record.launch.firstFailureSet = true;
+        record.launch.firstFailure = error;
+    }
+    return retainedError(record, error);
+}
+function saveOwnedObservation(record, output) {
+    const observation = ownedObservation(output);
+    record.launch.latest = observation;
+    const bytes = Buffer.from(
+        JSON.stringify({
+            schemaVersion: 1,
+            kind: 'windows-native-created-process/v1',
+            binding: record.binding,
+            requestedLaunch: record.launch.request,
+            observation,
+        }) + '\n',
+    );
+    assert.ok(bytes.length <= 65536);
+    record.launch.bytes = bytes;
+    return Buffer.from(bytes);
+}
+/** One explicit future native creation, never activated by import or a read-only
+ * lifecycle caller. The owner and one-use reservation precede the submitted task.
+ * An independent live host/caller lifetime must precede this call and continue
+ * through terminal observation and HANDLE-release ACK. Retained JS/native objects,
+ * raw HANDLEs and pending promises do not themselves keep Node's event loop alive. */
+export function launchWindowsNativePinnedProcess(cap, input) {
+    const record = active(cap),
+        request = validateWindowsNativeLaunch(input, record.binding);
+    assert.ok(
+        record.rows.has('file-pins') && !record.rows.has('process'),
+        'WINDOWS_NATIVE_FILE_PINS_REQUIRED',
+    );
+    assert.ok(!record.launch, 'WINDOWS_NATIVE_LAUNCH_ALREADY_RESERVED');
+    record.launch = {
+        request,
+        firstFailureSet: false,
+        firstFailure: undefined,
+        latest: null,
+        bytes: null,
+        release: null,
+    };
+    const task = Promise.resolve().then(() => {
+        // Cancellation between reservation and submission grants no new effect.
+        assert.ok(
+            !record.cancelled && !record.invalidated,
+            'WINDOWS_NATIVE_LAUNCH_CANCELLED_RETAINED',
+        );
+        return record.native.launchPinnedProcess(record.raw, request.profile);
+    });
+    record.pending.add(task);
+    return task
+        .then((output) => {
+            record.launch.returned = output; // Adopt before validation or a late cancellation.
+            const bytes = saveOwnedObservation(record, output);
+            assert.ok(
+                !record.cancelled && !record.invalidated,
+                'WINDOWS_NATIVE_LAUNCH_CANCELLED_RETAINED',
+            );
+            return bytes;
+        })
+        .catch((error) => {
+            throw retainLaunchFailure(record, error);
+        })
+        .finally(() => record.pending.delete(task));
+}
+/** Terminal observation is available after cancellation/primary failure. It only
+ * samples the native owner's returned HANDLE and cannot acquire or launch a PID. */
+export function sampleWindowsNativeOwnedProcess(cap) {
+    const record = launchRecord(cap);
+    const task = Promise.resolve().then(() => record.native.sampleOwnedProcess(record.raw));
+    record.pending.add(task);
+    return task
+        .then((output) => saveOwnedObservation(record, output))
+        .catch((error) => {
+            throw retainLaunchFailure(record, error);
+        })
+        .finally(() => record.pending.delete(task));
+}
+export function readWindowsNativeOwnedProcess(cap) {
+    const record = launchRecord(cap);
+    assert.ok(record.launch.bytes, 'WINDOWS_NATIVE_OWNED_OBSERVATION_MISSING');
+    return Buffer.from(record.launch.bytes);
+}
+/** Release only our HANDLEs, once, after a genuine native terminal sample or a
+ * confirmed non-creation. Stdio, all app owners and descendants remain unknown. */
+export function releaseWindowsNativeOwnedProcessHandles(cap) {
+    const record = state(cap);
+    assert.ok(record.launch, 'WINDOWS_NATIVE_LAUNCH_NOT_RESERVED');
+    if (record.launch.release) return record.launch.release;
+    launchRecord(cap);
+    const last = record.launch.latest;
+    assert.ok(
+        last &&
+            !last.unconfirmedHandleOutput &&
+            (last.createdByThisOwner
+                ? last.processExitObserved
+                : !last.creationAttempted || last.creationReturned),
+        'WINDOWS_NATIVE_CREATED_PROCESS_LIVE_OR_UNKNOWN',
+    );
+    record.invalidated = true;
+    record.launch.release = Promise.resolve()
+        .then(() => record.native.releaseOwnedProcessHandles(record.raw))
+        .then((output) => {
+            assert.ok(typeof output === 'string' && Buffer.byteLength(output) <= 4096);
+            const value = JSON.parse(output);
+            fields(value, [
+                'ownedHandlesClosed',
+                'retainedUnknown',
+                'closedCount',
+                'totalCount',
+                'processOwnership',
+                'physicalDescendantClosure',
+                'releaseAcceptance',
+            ]);
+            assert.equal(typeof value.ownedHandlesClosed, 'boolean');
+            assert.equal(value.retainedUnknown, !value.ownedHandlesClosed);
+            for (const key of ['closedCount', 'totalCount'])
+                assert.ok(Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 64);
+            assert.ok(value.closedCount <= value.totalCount);
+            for (const key of [
+                'processOwnership',
+                'physicalDescendantClosure',
+                'releaseAcceptance',
+            ])
+                assert.equal(value[key], false);
+            if (value.ownedHandlesClosed) {
+                assert.equal(value.closedCount, value.totalCount);
+                retained.delete(record);
+            }
+            return Object.freeze(value);
+        })
+        .catch((error) => {
+            throw retainLaunchFailure(record, error);
+        });
+    void record.launch.release.catch(() => {});
+    return record.launch.release;
 }

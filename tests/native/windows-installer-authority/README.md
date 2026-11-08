@@ -1,8 +1,10 @@
-# Windows read-handle authority (source preparation)
+# Windows file handles and explicit process creation (source preparation)
 
-This Node-API v8 addon implements read-only native observations. It does not launch, install, close
-a window, own an observed process, verify originally loaded code, or retire descendants. The
-existing native offline-launch entry and full release gates remain closed.
+This Node-API v8 addon implements read-only observations and a separately requested process-creation
+operation. Opening an existing PID never becomes ownership of that process. Only a successful
+`CreateProcessW` return supplies the new operation's process and thread HANDLEs. Neither route
+installs, closes a window, verifies originally loaded code, or retires descendants. The existing
+native offline-launch entry, shared lifecycle consumer, and full release gates remain closed.
 
 `prepare` allocates an opaque, type-tagged native wrapper before any Windows effect. The JavaScript
 wrapper retains that owner before loader IO. It bypasses the CommonJS cache/extension hooks with the
@@ -28,6 +30,63 @@ bounded observations of that PID, not stable capabilities. `refuseNormalClose` a
 HWND/PID/path sampling is represented as atomic close authority. A reviewed
 owned-app-thread/authenticated IPC protocol, actual installer consent/offline/UI facts, and
 independent retirement observations are still missing.
+
+## Explicit creation and returned-handle custody
+
+`launchPinnedProcess` is an explicit operation, never called by the read-only producer or existing
+native offline-launch CLI. Its JavaScript wrapper requires the exact data action
+`launch-pinned-installed` and profile `binding.root + "\\native-launch-profile"`. These inputs are
+configuration, not authorization. Native code opens that existing profile through the held local
+volume-GUID parent, retains a no-reparse directory HANDLE without write/delete sharing, and reads
+bounded directory pages with list access until actual enumeration EOF. Unsupported, truncated,
+nonempty, or nonterminal enumeration refuses before creation. An empty observation does not prove
+freshness, exclusivity, ACL ownership, or containment of every write the application may make. A
+genuine externally established fresh, exclusively owned staging/profile and action authorization
+remain prerequisites for any future activation. No boolean, receipt, or caller-supplied mode can
+supply those facts. The backend creates, deletes, or changes permissions on no directory.
+
+An independently owned live host/caller lifetime must also exist before `CreateProcessW` and
+continue through terminal observation and resource-release acknowledgment. Retaining a native
+HANDLE, owner registry, JavaScript Set, or unresolved Promise does not itself keep Node's event loop
+alive after the async work settles. This slice retains creation/capture-time HANDLE custody while
+its host lives; it is not a complete host-lifetime owner and is not eligible for standalone native
+activation. No keepalive, supervisor, forced shutdown, or process framework is added here.
+
+The requested executable is the leased volume-GUID executable name, cwd is the pinned installation
+root, and the sole argument selects that profile through the existing `--user-data-dir` route.
+Native code owns a writable quoted command buffer and explicit double-NUL Unicode environment before
+creation. APPDATA, LOCALAPPDATA, TEMP, TMP, and USERPROFILE use the pinned profile; SystemRoot and
+WINDIR use the bounded actual local Windows-directory query. There is no arbitrary inherited
+environment or caller-selected executable. These are requested inputs, not observations of the
+running application's environment, effective profile, or initialized runtime. The current process
+and executing worker's thread-token eligibility are rechecked before creation.
+
+`CreateProcessW` receives an explicit application name, no inherited HANDLEs, no suspension, no job,
+and no stdio redirection. The owner and fixed process/thread output slots precede the call; both
+outputs are adopted before any allocation, validation, or cancellation check. A false return with
+unexpected non-null outputs remains unknown and cannot be released as a successful creation.
+Cancellation reserves no retry and never terminates anything. If creation was already submitted, a
+late returned process remains retained. Creation returns before application initialization, so it
+establishes no ready, visible-window, installer, or loaded-code result. Holding named-file leases is
+not a public CreateProcess-from-file-HANDLE API or proof of the mapped image section.
+
+`sampleOwnedProcess` can observe the already returned HANDLE even after cancellation or the first
+error; it never accepts a replacement PID or acquires another process. It uses a zero-duration wait,
+creation time, and exit-code query. A signaled wait establishes root termination; numeric exit code
+259 alone never decides liveness. There are no pipes, output EOF observations, stable HWND
+capabilities, normal-close requests, automatic process control, or descendant observations.
+`releaseOwnedProcessHandles` refuses a live or unknown root before release submission. After a
+confirmed non-creation or observed terminal root, it closes only this owner's HANDLEs once. A
+CloseHandle or N-API bookkeeping failure keeps custody and cannot become successful release. There
+is deliberately no full `closed`/retired promise. The old query-release API refuses a creation
+owner, and successful own-HANDLE release never means application or group closure.
+
+The direct JavaScript controls execute the actual wrapper in a bounded VM with closed in-memory
+filesystem/native-port substitutes. Those model objects are not Node-API capabilities and never
+enter the production module's private capability map. Tests do not compile or execute this new C++
+branch. The earlier compiled read-only source and its binary evidence remain separate; this creation
+extension needs its own future, explicitly authorized Windows compilation and controlled runtime
+evidence before any native qualification.
 
 Explicit `release` attempts to close each newly owned observer HANDLE once, and closes owned CNG
 objects. It invalidates the capability when submitted. A failed close keeps private custody and is
@@ -56,6 +115,9 @@ expected only at `build/Release/windows_installer_authority.node`. Compilation a
 behavior remain unverified until that Windows build and controlled host work occur.
 
 The implementation follows the public contracts for
+[CreateProcessW](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw),
+[GetFileInformationByHandleEx](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex),
+[WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject),
 [CreateFileW share modes](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew),
 [GetFinalPathNameByHandleW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew),
 [GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes),

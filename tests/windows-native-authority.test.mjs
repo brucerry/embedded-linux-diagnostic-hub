@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import vm from 'node:vm';
+import ts from 'typescript';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
     validateWindowsNativeRequest,
     validateWindowsNativeBuild,
@@ -11,6 +17,11 @@ import {
     cancelWindowsNativeAuthority,
     releaseWindowsNativeAuthority,
     refuseWindowsNativeNormalClose,
+    validateWindowsNativeLaunch,
+    launchWindowsNativePinnedProcess,
+    sampleWindowsNativeOwnedProcess,
+    readWindowsNativeOwnedProcess,
+    releaseWindowsNativeOwnedProcessHandles,
 } from '../scripts/lib/windows-native-authority.mjs';
 
 const request = () => ({
@@ -181,4 +192,504 @@ test('process observations reject rounded PIDs and overflowing creation identifi
         '9'.repeat(21),
     ])
         assert.throws(() => observeWindowsNativeProcess({}, { pid: 4, creationTime100ns }));
+});
+
+test('explicit launch inputs are confined data and cannot issue native authority', () => {
+    const input = {
+        action: 'launch-pinned-installed',
+        profile: request().root + '\\native-launch-profile',
+    };
+    const selected = validateWindowsNativeLaunch(input, request());
+    input.profile = 'C:\\elsewhere';
+    assert.ok(Object.isFrozen(selected));
+    assert.equal(selected.profile, request().root + '\\native-launch-profile');
+    for (const change of [
+        { action: 'install' },
+        { profile: 'C:\\existing-profile' },
+        { authorized: true },
+    ])
+        assert.throws(() => validateWindowsNativeLaunch({ ...selected, ...change }, request()));
+    let reads = 0;
+    const getter = { ...selected };
+    Object.defineProperty(getter, 'profile', {
+        enumerable: true,
+        get() {
+            reads++;
+            throw Error('getter');
+        },
+    });
+    assert.throws(() => validateWindowsNativeLaunch(getter, request()));
+    assert.equal(reads, 0);
+    for (const call of [
+        () => launchWindowsNativePinnedProcess({}, selected),
+        () => sampleWindowsNativeOwnedProcess({}),
+        () => readWindowsNativeOwnedProcess({}),
+        () => releaseWindowsNativeOwnedProcessHandles({}),
+    ])
+        assert.throws(call, /CAPABILITY_UNISSUED/);
+});
+
+// Execute this actual wrapper's JS ownership paths with a closed VM import map.
+// Model-native objects are NOT Node-API caps and never enter the production module.
+// No target executable/addon/SDK is imported, loaded, compiled, or invoked.
+function launchMemory() {
+    const source = readFileSync(
+        new URL('../scripts/lib/windows-native-authority.mjs', import.meta.url),
+        'utf8',
+    );
+    let replacements = 0;
+    const compiled = ts.transpileModule(source, {
+        fileName: 'windows-native-authority.cjs',
+        compilerOptions: {
+            module: ts.ModuleKind.CommonJS,
+            target: ts.ScriptTarget.ES2022,
+            esModuleInterop: true,
+        },
+        transformers: {
+            before: [
+                (context) => (file) => {
+                    const visit = (node) => {
+                        if (
+                            ts.isPropertyAccessExpression(node) &&
+                            ts.isMetaProperty(node.expression) &&
+                            node.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+                            node.name.text === 'url'
+                        ) {
+                            replacements++;
+                            return ts.factory.createStringLiteral(
+                                'file:///model/scripts/lib/windows-native-authority.mjs',
+                            );
+                        }
+                        return ts.visitEachChild(node, visit, context);
+                    };
+                    return ts.visitNode(file, visit);
+                },
+            ],
+        },
+        reportDiagnostics: true,
+    });
+    assert.equal(replacements, 1);
+    assert.equal(
+        (compiled.diagnostics ?? []).filter((x) => x.category === ts.DiagnosticCategory.Error)
+            .length,
+        0,
+    );
+    const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+    const directory = '/model/tests/native/windows-installer-authority';
+    const binary = directory + '/build/Release/windows_installer_authority.node';
+    const files = new Map([
+        [
+            directory + '/authority.cc',
+            readFileSync(
+                new URL('./native/windows-installer-authority/authority.cc', import.meta.url),
+            ),
+        ],
+        [
+            directory + '/binding.gyp',
+            readFileSync(
+                new URL('./native/windows-installer-authority/binding.gyp', import.meta.url),
+            ),
+        ],
+        [binary, Buffer.from('inert model bytes, never a PE or native module')],
+    ]);
+    const stat = (file) => {
+        assert.ok(files.has(file));
+        return {
+            dev: 1n,
+            ino: BigInt([...files.keys()].indexOf(file) + 1),
+            size: BigInt(files.get(file).length),
+            mtimeNs: 1n,
+            ctimeNs: 1n,
+            nlink: 1n,
+            isFile: () => true,
+            isSymbolicLink: () => false,
+        };
+    };
+    const counts = { open: 0, close: 0, load: 0, launch: 0, sample: 0, release: 0 };
+    const io = Object.freeze({
+        async realpath(file) {
+            assert.ok(files.has(file));
+            return file;
+        },
+        async lstat(file) {
+            return stat(file);
+        },
+        async open(file, flags) {
+            assert.equal(flags, 0, 'read-only model open');
+            counts.open++;
+            const bytes = files.get(file);
+            assert.ok(bytes);
+            return {
+                async stat() {
+                    return stat(file);
+                },
+                async read(buffer, offset, length, position) {
+                    const bytesRead = Math.min(length, bytes.length - position);
+                    bytes.copy(buffer, offset, position, position + bytesRead);
+                    return { bytesRead };
+                },
+                async close() {
+                    counts.close++;
+                },
+            };
+        },
+    });
+    const raw = Object.freeze({ modelOnly: true });
+    const state = {
+        created: false,
+        attempted: false,
+        returned: false,
+        exited: false,
+        cancelled: false,
+        unknownOutput: false,
+        exitCode: 259,
+    };
+    const facts = () => ({
+        creationAttempted: state.attempted,
+        creationReturned: state.returned,
+        createdByThisOwner: state.created,
+        processHandleRetained: state.created,
+        threadHandleRetained: state.created,
+        unconfirmedHandleOutput: state.unknownOutput,
+        pid: state.created ? 17 : null,
+        threadId: state.created ? 18 : null,
+        creationTime100ns: state.created ? '123456789' : null,
+        processExitObserved: state.exited,
+        exitCode: state.exited ? state.exitCode : null,
+        profileEmptyAtPreflight: state.created,
+        stdioObserved: false,
+        physicalLoadedBytesVerified: false,
+        physicalDescendantClosure: false,
+        releaseAcceptance: false,
+    });
+    const native = {
+        prepare() {
+            return raw;
+        },
+        assertCapability(value) {
+            assert.equal(value, raw);
+            return true;
+        },
+        async pinFiles() {
+            return '{}';
+        },
+        async observeProcess() {
+            throw Error('forbidden PID lookup');
+        },
+        cancel(value) {
+            assert.equal(value, raw);
+            state.cancelled = true;
+        },
+        async release() {
+            throw Error('forbidden read-handle release');
+        },
+        refuseNormalClose() {
+            throw Error('WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE');
+        },
+        async launchPinnedProcess(value, profile) {
+            assert.equal(value, raw);
+            assert.equal(profile, request().root + '\\native-launch-profile');
+            counts.launch++;
+            state.attempted = true;
+            if (native.launchGate) await native.launchGate;
+            state.created = true;
+            state.returned = true;
+            return JSON.stringify(facts());
+        },
+        async sampleOwnedProcess(value) {
+            assert.equal(value, raw);
+            counts.sample++;
+            return JSON.stringify(facts());
+        },
+        async releaseOwnedProcessHandles(value) {
+            assert.equal(value, raw);
+            counts.release++;
+            assert.ok(!state.created || state.exited);
+            if (native.releaseGate) await native.releaseGate;
+            return JSON.stringify({
+                ownedHandlesClosed: true,
+                retainedUnknown: false,
+                closedCount: 6,
+                totalCount: 6,
+                processOwnership: false,
+                physicalDescendantClosure: false,
+                releaseAcceptance: false,
+            });
+        },
+    };
+    const imports = Object.freeze({
+        'node:assert/strict': assert,
+        'node:fs': Object.freeze({ constants: Object.freeze({ O_RDONLY: 0 }) }),
+        'node:fs/promises': io,
+        'node:crypto': Object.freeze({ createHash }),
+        'node:process': Object.freeze({
+            dlopen(module, filename) {
+                assert.equal(filename, binary);
+                counts.load++;
+                module.exports = native;
+            },
+        }),
+        'node:path': path,
+        'node:url': Object.freeze({ fileURLToPath }),
+    });
+    const context = vm.createContext(
+        {
+            Buffer,
+            process: Object.freeze({
+                platform: 'win32',
+                arch: 'x64',
+                versions: Object.freeze({ node: '24.22.0' }),
+            }),
+            module: { exports: {} },
+            require(name) {
+                assert.ok(Object.hasOwn(imports, name), 'unknown VM import');
+                return imports[name];
+            },
+        },
+        { codeGeneration: { strings: false, wasm: false } },
+    );
+    context.exports = context.module.exports;
+    new vm.Script(compiled.outputText, {
+        filename: 'memory-only-windows-native-authority.cjs',
+    }).runInContext(context, { timeout: 1000 });
+    const inside = (value) => {
+        context.modelJSON = JSON.stringify(value);
+        try {
+            return new vm.Script('JSON.parse(modelJSON)').runInContext(context, { timeout: 1000 });
+        } finally {
+            delete context.modelJSON;
+        }
+    };
+    const api = context.module.exports;
+    return {
+        api,
+        native,
+        counts,
+        state,
+        facts,
+        inside,
+        async prepare() {
+            const selectedBuild = {
+                ...build(),
+                binarySHA256: digest(files.get(binary)),
+                sourceSHA256: digest(files.get(directory + '/authority.cc')),
+                bindingSHA256: digest(files.get(directory + '/binding.gyp')),
+            };
+            const cap = await api.prepareWindowsNativeAuthority(
+                inside(request()),
+                inside(selectedBuild),
+            );
+            await api.pinWindowsNativeFiles(cap);
+            assert.equal(counts.open, counts.close);
+            return cap;
+        },
+        input() {
+            return inside({
+                action: 'launch-pinned-installed',
+                profile: request().root + '\\native-launch-profile',
+            });
+        },
+    };
+}
+
+test('memory launch uses the actual wrapper snapshot and never represents full lifecycle closure', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare(),
+        input = m.input();
+    const launched = m.api.launchWindowsNativePinnedProcess(cap, input);
+    input.profile = 'C:\\changed-after-reservation';
+    const value = JSON.parse(await launched);
+    assert.equal(m.counts.launch, 1);
+    assert.equal(value.observation.createdByThisOwner, true);
+    assert.equal(value.observation.stdioObserved, false);
+    assert.equal(value.observation.releaseAcceptance, false);
+    assert.throws(() => m.api.launchWindowsNativePinnedProcess(cap, m.input()), /ALREADY_RESERVED/);
+    assert.throws(() => m.api.releaseWindowsNativeAuthority(cap), /OWNED_RELEASE_REQUIRED/);
+    assert.throws(
+        () => m.api.refuseWindowsNativeNormalClose(cap),
+        /ATOMIC_NORMAL_CLOSE_UNAVAILABLE/,
+    );
+    const copy = m.api.readWindowsNativeOwnedProcess(cap);
+    copy.fill(0);
+    assert.equal(
+        JSON.parse(m.api.readWindowsNativeOwnedProcess(cap)).observation.createdByThisOwner,
+        true,
+    );
+    m.state.exited = true;
+    await m.api.sampleWindowsNativeOwnedProcess(cap);
+    const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    assert.equal(ack.physicalDescendantClosure, false);
+    assert.equal(ack.processOwnership, false);
+});
+
+test('memory cancellation before the launch microtask prevents invocation but retains the one-use owner', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    const task = m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    m.api.cancelWindowsNativeAuthority(cap);
+    await assert.rejects(task, /CANCELLED_RETAINED/);
+    assert.equal(m.counts.launch, 0);
+    assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+    const sample = JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap));
+    assert.equal(sample.observation.creationAttempted, false);
+    await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    assert.equal(m.counts.release, 1);
+});
+
+test('memory late creation after cancellation retains returned handles until a real terminal sample', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    let finishLaunch;
+    m.native.launchGate = new Promise((resolve) => {
+        finishLaunch = resolve;
+    });
+    const task = m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    let finishRelease, releasing;
+    try {
+        await Promise.resolve();
+        assert.equal(m.counts.launch, 1);
+        m.api.cancelWindowsNativeAuthority(cap);
+        assert.throws(() => m.api.sampleWindowsNativeOwnedProcess(cap), /OPERATION_PENDING/);
+        finishLaunch();
+        await assert.rejects(task, /CANCELLED_RETAINED/);
+        assert.equal(
+            JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap)).observation
+                .processHandleRetained,
+            true,
+        );
+        assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+        assert.equal(m.counts.release, 0);
+        m.state.exited = true;
+        assert.equal(
+            JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap)).observation.exitCode,
+            259,
+        );
+        m.native.releaseGate = new Promise((resolve) => {
+            finishRelease = resolve;
+        });
+        releasing = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), releasing);
+        finishRelease();
+        await releasing;
+        assert.equal(m.counts.release, 1);
+    } finally {
+        finishLaunch();
+        await task.catch(() => {});
+        finishRelease?.();
+        await releasing?.catch(() => {});
+    }
+});
+
+test('memory primary errors including undefined survive later sampling failures without new launch', async () => {
+    for (const primary of [new Error('first model error'), undefined]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        m.native.launchPinnedProcess = () => {
+            m.counts.launch++;
+            throw primary;
+        };
+        const error = await m.api.launchWindowsNativePinnedProcess(cap, m.input()).then(
+            () => assert.fail('expected failure'),
+            (e) => e,
+        );
+        const custody = error.nativeAuthorityCustody;
+        assert.equal(custody.launch.firstFailureSet, true);
+        assert.equal(custody.launch.firstFailure, primary);
+        assert.equal(
+            Object.getOwnPropertyDescriptor(error, 'nativeAuthorityCustody').enumerable,
+            false,
+        );
+        assert.equal(JSON.stringify(error), '{}');
+        m.native.sampleOwnedProcess = () => {
+            throw Error('later model error');
+        };
+        await assert.rejects(m.api.sampleWindowsNativeOwnedProcess(cap));
+        assert.equal(custody.launch.firstFailure, primary);
+        assert.equal(m.counts.launch, 1);
+        m.native.sampleOwnedProcess = async () => JSON.stringify(m.facts());
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    }
+});
+
+test('memory malformed creation facts retain custody and cannot enable handle release', async () => {
+    for (const mutate of [
+        (x) => {
+            x.physicalLoadedBytesVerified = true;
+        },
+        (x) => {
+            x.createdByThisOwner = true;
+        },
+        (x) => {
+            x.processExitObserved = true;
+            x.exitCode = 0;
+        },
+        (x) => {
+            x.unexpected = true;
+        },
+    ]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        m.native.launchPinnedProcess = async () => {
+            const x = m.facts();
+            mutate(x);
+            return JSON.stringify(x);
+        };
+        const error = await m.api.launchWindowsNativePinnedProcess(cap, m.input()).then(
+            () => assert.fail('expected failure'),
+            (e) => e,
+        );
+        assert.ok(error.nativeAuthorityCustody);
+        assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+        assert.equal(m.counts.release, 0);
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    }
+});
+
+test('memory non-null unconfirmed failure outputs never count as released or permit retry', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    m.native.launchPinnedProcess = async () => {
+        m.state.attempted = true;
+        m.state.returned = true;
+        m.state.unknownOutput = true;
+        throw Error('creation output unknown');
+    };
+    await assert.rejects(m.api.launchWindowsNativePinnedProcess(cap, m.input()));
+    const row = JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap));
+    assert.equal(row.observation.unconfirmedHandleOutput, true);
+    assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+    assert.throws(() => m.api.launchWindowsNativePinnedProcess(cap, m.input()));
+    assert.equal(m.counts.release, 0);
+});
+
+test('memory failed or unknown handle release remains once-only and cannot become process retirement', async () => {
+    for (const outcome of ['reject', 'unknown', 'malformed']) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        m.state.exited = true;
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        m.native.releaseOwnedProcessHandles = async () => {
+            m.counts.release++;
+            if (outcome === 'reject') throw Error('unconfirmed CloseHandle');
+            return JSON.stringify({
+                ownedHandlesClosed: false,
+                retainedUnknown: true,
+                closedCount: 5,
+                totalCount: 6,
+                processOwnership: false,
+                physicalDescendantClosure: outcome === 'malformed',
+                releaseAcceptance: false,
+            });
+        };
+        const task = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
+        if (outcome === 'unknown') assert.equal((await task).retainedUnknown, true);
+        else await assert.rejects(task);
+        assert.equal(m.counts.release, 1);
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
+        assert.throws(() => m.api.readWindowsNativeOwnedProcess(cap));
+    }
 });
