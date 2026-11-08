@@ -4,6 +4,8 @@ import { WINDOWS_SETUP_ASSET } from './windows-setup-release.mjs';
 import {
     inspectWindowsNativeLifecycle,
     readWindowsNativeRecords,
+    inspectWindowsNativeOwnedLifecycle,
+    readWindowsNativeOwnedRecords,
 } from './windows-native-lifecycle.mjs';
 import {
     inspectMacOfflineDirectChild,
@@ -103,6 +105,12 @@ export function inspectInstallerCaseObservation(value, item, expected) {
         value.observation?.kind === 'windows-native-readonly-consistency/v1'
     )
         return inspectWindowsNativeLifecycle(value.observation, item, expected);
+    if (
+        expected.lane === 'win32-x64' &&
+        item.id === 'windows-nsis:offline-launch' &&
+        value.observation?.kind === 'windows-native-owned-runtime/v1'
+    )
+        return inspectWindowsNativeOwnedLifecycle(value.observation, item, expected);
     assert.equal(value.observation, null, 'Unsupported installer observation contract.');
     return 'unsupported-native-case';
 }
@@ -138,6 +146,8 @@ export async function consumeInstallerLifecycleEvidence(rawReceipt, rawExpected,
             await readMacOfflineRecords(value.observation, readBytes);
         if (value.observation?.kind === 'windows-native-readonly-consistency/v1')
             await readWindowsNativeRecords(value.observation, readBytes);
+        if (value.observation?.kind === 'windows-native-owned-runtime/v1')
+            await readWindowsNativeOwnedRecords(value.observation, readBytes);
         observations.push({ caseId: item.id, status });
     }
     return { status: 'installer-lifecycle-unqualified', releaseAcceptance: false, observations };

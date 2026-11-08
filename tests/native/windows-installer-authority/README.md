@@ -185,6 +185,12 @@ failure; cancellation or a missing reply never grants another quit attempt. Publ
 operations are fenced while this owner runs, and cancellation signals its existing owner rather than
 issuing a replacement command.
 
+The endpoint need not already have appeared in an immediate post-creation read. Discovery now runs
+inside this same owner using explicit native drains and retained-HANDLE samples before connection.
+Startup discovery and later root/EOF joins share the original 15-second deadline and 750 polling
+budget; neither phase resets it. A missing, malformed or cancelled endpoint never causes a fallback
+port scan, new controller or replacement connection.
+
 The caller samples the retained native process HANDLE, connects its own captured Node WebSocket,
 enables Runtime, and requires a default context with a bounded `uniqueId`. Both fixed evaluations
 use that exact `uniqueContextId`; there is no numeric-ID fallback or retargeting after context loss.
@@ -256,6 +262,66 @@ Pre/post pathname hashes around `dlopen` are not an atomic loaded-DLL identity p
 actual invocation needs a separately trusted immutable native build/stage, host eligibility and
 action authorization. No native binary is checked in or available from this source preparation. Fake
 tests issue no native caps.
+
+## Callable owned-runtime composition and original-record readback
+
+`observeWindowsNativeOwnedRuntime` in the existing lifecycle module is a callable component
+producer. It snapshots the expected tuple/build inputs and reserves the existing single-authority
+scope before asynchronous preparation, adopts the returned private capability, pins the two named
+files, creates the fixed process, then calls the actual fixed cooperative quit owner. It does not
+substitute an external PID or accept a caller-supplied native transcript, mode flag or port factory.
+No external native entrypoint invocation has run as part of this source preparation.
+
+After the actual quit operation, the producer copies and validates three canonical originals while
+the capability still permits those reads: `file-pins/v1`, terminal `created-process/v2`, and
+`normal-quit/v1`. The quit original is created inside the private successful protocol path, after
+its own bookkeeping checks, rather than from an externally mutable returned Promise or result. Its
+PID, thread and creation-time tuple must match the created-process original, and the identity reply
+must match that PID and `browser` type. Returned launch/quit values are compared with their private
+originals; they cannot manufacture evidence by changing a public Promise's `then` method.
+
+Only after those checks does `produceWindowsNativeOwnedRuntime` explicitly join the native
+HANDLE/TSFN release. It compares the returned ACK with the separate private `owned-release/v1`
+original and validates complete component acknowledgments before releasing the lifecycle scope.
+Failure retains the actual capability or pending reservation and its original error, including
+`undefined`, without implicit release, termination or retry. The two new original-record readers
+return byte copies only; read-only access after invalidation grants no new operation or current
+custody authority.
+
+The narrowly versioned `windows-native-owned-runtime/v1` projection holds those four originals and
+fixed references under `windows-native/owned-runtime/<role>.json`. The existing shared consumer
+checks the selected source/run/package/root bindings and all component correlations, then rereads
+each original with its role-specific bound, fatal UTF-8 decoding, complete canonical JSON,
+length/hash equality and exact projection equality. The read-only
+`windows-native-readonly-consistency/v1` contract remains unchanged; created-process rows are never
+relabeled as external-PID observations. Global dynamic-evidence anti-reuse is unchanged. Successful
+semantic readback reports only
+`selected-pinned-runtime-and-component-closure-consistent-unqualified`; the enclosing lifecycle and
+full installer gate still refuse qualification.
+
+These are **default-network, selected pinned-runtime** observations. Expected version, Setup
+artifact, source and run values are reference labels, not independently observed runtime version,
+Setup bytes, installation or authenticated service issuance. `requestedLaunch` binds the selected
+profile and source-fixed command semantics; it is not sampled runtime argv. File pins cover only the
+executable and ASAR. Retained-HANDLE flags describe capture before release, while the release
+original records a later component ACK; serialized old rows never authenticate current native
+ownership. No stream contents or endpoint tokens are included in the projection.
+
+The `windows-nsis:offline-launch` case name supplies the existing container association only. It
+does not turn these records into installation, machine-offline or UI evidence. The full offline CLI
+still refuses before IO, and its dedicated-profile-outside-installation policy is unchanged. This
+component's source-fixed profile remains `root + "\\native-launch-profile"`; it is deliberately not
+an adapter that bypasses that policy. Real NSIS consent/finish and installed metadata, genuine
+machine-offline/UI observations, authentic source/package/run issuance, loaded-code binding and
+independent retirement are still absent. Mac observation dispatch and all unconditional full
+acceptance refusals remain unchanged.
+
+The local integration controls must execute this real observe function against the same actual
+authority wrapper exports under closed memory/native-port substitutes, then feed its emitted bytes
+through the actual shared consumer/readback. Authored rows separately test invalid projections; they
+do not stand in for that real call wiring or constitute native evidence. The C++ backend is
+unchanged from compiled `349ad72`. No addon, real WebSocket/Inspector, target process, installer or
+security operation is activated by these controls or by this documentation.
 
 ## Build prerequisite (not executed)
 

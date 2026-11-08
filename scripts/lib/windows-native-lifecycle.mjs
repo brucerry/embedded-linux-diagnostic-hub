@@ -9,6 +9,13 @@ import {
     observeWindowsNativeProcess,
     readWindowsNativeObservation,
     releaseWindowsNativeAuthority,
+    launchWindowsNativePinnedProcess,
+    readWindowsNativeOwnedProcess,
+    requestWindowsNativeNormalQuit,
+    readWindowsNativeNormalQuit,
+    releaseWindowsNativeOwnedProcessHandles,
+    readWindowsNativeOwnedRelease,
+    validateWindowsNativeLaunch,
 } from './windows-native-authority.mjs';
 
 export const WINDOWS_NATIVE_RECORD_LIMITS = Object.freeze({
@@ -121,10 +128,8 @@ function selected(expected, binding) {
     assert.equal(matches.length, 1);
     assert.deepEqual(binding.package, matches[0]);
 }
-function parsed(raw, role) {
-    assert.ok(
-        Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= WINDOWS_NATIVE_RECORD_LIMITS[role],
-    );
+function parsed(raw, role, limits = WINDOWS_NATIVE_RECORD_LIMITS) {
+    assert.ok(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= limits[role]);
     const bytes = Buffer.from(raw);
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     const value = JSON.parse(text);
@@ -135,23 +140,7 @@ function parsed(raw, role) {
     );
     return { bytes, value };
 }
-/** Strict consistency checks for genuine backend record shapes. Serialized records alone
- * never authenticate their origin, launch ownership, an installer, or a completed case.
- * fileLeasesRetained/processHandleRetained describe their original capture only:
- * old or released serialized rows do not authenticate current HANDLE custody. */
-export function inspectWindowsNativeRows(rawFiles, rawProcess, rawBinding) {
-    const binding = validateWindowsNativeBinding(rawBinding);
-    const fileRow = structuredClone(rawFiles),
-        processRow = structuredClone(rawProcess);
-    for (const [role, row] of [
-        ['file-pins', fileRow],
-        ['process', processRow],
-    ]) {
-        keys(row, ['schemaVersion', 'kind', 'binding', 'observation']);
-        assert.equal(row.schemaVersion, 1);
-        assert.equal(row.kind, kinds[role]);
-        assert.deepEqual(row.binding, binding);
-    }
+function inspectPinnedFiles(fileRow, binding) {
     const f = fileRow.observation;
     keys(f, [
         'host',
@@ -182,6 +171,25 @@ export function inspectWindowsNativeRows(rawFiles, rawProcess, rawBinding) {
         f.files[0].volumeSerial + ':' + f.files[0].fileId,
         f.files[1].volumeSerial + ':' + f.files[1].fileId,
     );
+}
+/** Strict consistency checks for genuine backend record shapes. Serialized records alone
+ * never authenticate their origin, launch ownership, an installer, or a completed case.
+ * fileLeasesRetained/processHandleRetained describe their original capture only:
+ * old or released serialized rows do not authenticate current HANDLE custody. */
+export function inspectWindowsNativeRows(rawFiles, rawProcess, rawBinding) {
+    const binding = validateWindowsNativeBinding(rawBinding);
+    const fileRow = structuredClone(rawFiles),
+        processRow = structuredClone(rawProcess);
+    for (const [role, row] of [
+        ['file-pins', fileRow],
+        ['process', processRow],
+    ]) {
+        keys(row, ['schemaVersion', 'kind', 'binding', 'observation']);
+        assert.equal(row.schemaVersion, 1);
+        assert.equal(row.kind, kinds[role]);
+        assert.deepEqual(row.binding, binding);
+    }
+    inspectPinnedFiles(fileRow, binding);
     const p = processRow.observation;
     keys(p, [
         'pid',
@@ -276,6 +284,459 @@ export async function readWindowsNativeRecords(rawObservation, readBytes) {
             observation[field],
             'Windows projection differs from original native row.',
         );
+    }
+}
+export const WINDOWS_OWNED_RECORD_LIMITS = Object.freeze({
+    'file-pins': 16384,
+    'created-process': 16384,
+    'normal-quit': 16384,
+    'owned-release': 8192,
+});
+const ownedFields = Object.freeze({
+    'file-pins': 'filePins',
+    'created-process': 'createdProcess',
+    'normal-quit': 'normalQuit',
+    'owned-release': 'ownedRelease',
+});
+const ownedKinds = Object.freeze({
+    'file-pins': 'windows-native-file-pins/v1',
+    'created-process': 'windows-native-created-process/v2',
+    'normal-quit': 'windows-native-normal-quit/v1',
+    'owned-release': 'windows-native-owned-release/v1',
+});
+const ownedRoles = Object.keys(WINDOWS_OWNED_RECORD_LIMITS);
+function ownedReferences(records) {
+    keys(records, ownedRoles);
+    const hashes = new Set();
+    for (const role of ownedRoles) {
+        const ref = records[role];
+        keys(ref, ['path', 'bytes', 'sha256']);
+        assert.equal(ref.path, 'windows-native/owned-runtime/' + role + '.json');
+        assert.ok(
+            Number.isSafeInteger(ref.bytes) &&
+                ref.bytes > 0 &&
+                ref.bytes <= WINDOWS_OWNED_RECORD_LIMITS[role],
+        );
+        assert.match(ref.sha256, sha256);
+        assert.ok(!hashes.has(ref.sha256));
+        hashes.add(ref.sha256);
+    }
+}
+/** Historical operation consistency, not installation, offline/UI, loaded-code,
+ * current HANDLE custody or service/run authentication after serialization. */
+function inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding) {
+    const binding = validateWindowsNativeBinding(rawBinding);
+    const rows = {
+        'file-pins': structuredClone(rawFiles),
+        'created-process': structuredClone(rawCreated),
+        'normal-quit': structuredClone(rawQuit),
+    };
+    const requested = validateWindowsNativeLaunch(
+        { action: 'launch-pinned-installed', profile: binding.root + '\\native-launch-profile' },
+        binding,
+    );
+    for (const role of ownedRoles.slice(0, 3)) {
+        const row = rows[role];
+        keys(
+            row,
+            role === 'file-pins'
+                ? ['schemaVersion', 'kind', 'binding', 'observation']
+                : role === 'created-process'
+                  ? ['schemaVersion', 'kind', 'binding', 'requestedLaunch', 'observation']
+                  : role === 'normal-quit'
+                    ? [
+                          'schemaVersion',
+                          'kind',
+                          'binding',
+                          'requestedLaunch',
+                          'createdProcess',
+                          'identity',
+                          'observation',
+                      ]
+                    : [
+                          'schemaVersion',
+                          'kind',
+                          'binding',
+                          'requestedLaunch',
+                          'createdProcess',
+                          'observation',
+                      ],
+        );
+        assert.equal(row.schemaVersion, 1);
+        assert.equal(row.kind, ownedKinds[role]);
+        assert.deepEqual(row.binding, binding);
+        if (role !== 'file-pins') assert.deepEqual(row.requestedLaunch, requested);
+    }
+    inspectPinnedFiles(rows['file-pins'], binding);
+    const created = rows['created-process'].observation;
+    keys(created, [
+        'creationAttempted',
+        'creationReturned',
+        'createdByThisOwner',
+        'processHandleRetained',
+        'threadHandleRetained',
+        'unconfirmedHandleOutput',
+        'pid',
+        'threadId',
+        'creationTime100ns',
+        'processExitObserved',
+        'exitCode',
+        'profileEmptyAtPreflight',
+        'hostEventLoopReferenceAcknowledged',
+        'stdioObserved',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+    ]);
+    for (const field of [
+        'creationAttempted',
+        'creationReturned',
+        'createdByThisOwner',
+        'processHandleRetained',
+        'threadHandleRetained',
+        'processExitObserved',
+        'profileEmptyAtPreflight',
+        'hostEventLoopReferenceAcknowledged',
+    ])
+        assert.equal(created[field], true);
+    for (const field of [
+        'unconfirmedHandleOutput',
+        'stdioObserved',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+    ])
+        assert.equal(created[field], false);
+    uint32(created.pid);
+    uint32(created.threadId);
+    decimal(created.creationTime100ns);
+    assert.equal(created.exitCode, 0);
+    const tuple = {
+        pid: created.pid,
+        threadId: created.threadId,
+        creationTime100ns: created.creationTime100ns,
+    };
+    assert.deepEqual(rows['normal-quit'].createdProcess, tuple);
+    assert.deepEqual(rows['normal-quit'].identity, { pid: created.pid, type: 'browser' });
+    const quit = rows['normal-quit'].observation;
+    keys(quit, [
+        'identityReplyObserved',
+        'quitSchedulingReplyObserved',
+        'rootExitObserved',
+        'rootExitCode',
+        'stdoutEOF',
+        'stderrEOF',
+        'ownedInspectorCloseObserved',
+        'closedUnacknowledgedReplies',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+    ]);
+    for (const field of [
+        'identityReplyObserved',
+        'quitSchedulingReplyObserved',
+        'rootExitObserved',
+        'stdoutEOF',
+        'stderrEOF',
+        'ownedInspectorCloseObserved',
+    ])
+        assert.equal(quit[field], true);
+    assert.equal(quit.rootExitCode, 0);
+    assert.equal(quit.closedUnacknowledgedReplies, 0);
+    for (const field of [
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+    ])
+        assert.equal(quit[field], false);
+    return {
+        binding,
+        filePins: rows['file-pins'],
+        createdProcess: rows['created-process'],
+        normalQuit: rows['normal-quit'],
+        tuple,
+        requested,
+    };
+}
+export function inspectWindowsNativeOwnedRows(
+    rawFiles,
+    rawCreated,
+    rawQuit,
+    rawRelease,
+    rawBinding,
+) {
+    const before = inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding);
+    const releaseRow = structuredClone(rawRelease);
+    keys(releaseRow, [
+        'schemaVersion',
+        'kind',
+        'binding',
+        'requestedLaunch',
+        'createdProcess',
+        'observation',
+    ]);
+    assert.equal(releaseRow.schemaVersion, 1);
+    assert.equal(releaseRow.kind, ownedKinds['owned-release']);
+    assert.deepEqual(releaseRow.binding, before.binding);
+    assert.deepEqual(releaseRow.requestedLaunch, before.requested);
+    assert.deepEqual(releaseRow.createdProcess, before.tuple);
+    const released = releaseRow.observation;
+    keys(released, [
+        'ownedHandlesClosed',
+        'retainedUnknown',
+        'closedCount',
+        'totalCount',
+        'processOwnership',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+        'hostLifetimeAcquisitionSubmitted',
+        'hostLifetimeReleaseAcknowledged',
+        'hostLifetimeFinalizerObserved',
+        'hostLifetimeFinalizerAcknowledged',
+        'hostEnvironmentClosing',
+    ]);
+    for (const field of [
+        'ownedHandlesClosed',
+        'hostLifetimeAcquisitionSubmitted',
+        'hostLifetimeReleaseAcknowledged',
+        'hostLifetimeFinalizerObserved',
+        'hostLifetimeFinalizerAcknowledged',
+    ])
+        assert.equal(released[field], true);
+    for (const field of [
+        'retainedUnknown',
+        'processOwnership',
+        'physicalDescendantClosure',
+        'releaseAcceptance',
+        'hostEnvironmentClosing',
+    ])
+        assert.equal(released[field], false);
+    assert.ok(
+        Number.isInteger(released.totalCount) &&
+            released.totalCount > 0 &&
+            released.totalCount <= 64,
+    );
+    assert.equal(released.closedCount, released.totalCount);
+    return {
+        binding: before.binding,
+        filePins: before.filePins,
+        createdProcess: before.createdProcess,
+        normalQuit: before.normalQuit,
+        ownedRelease: releaseRow,
+    };
+}
+export function inspectWindowsNativeOwnedLifecycle(observation, item, expected) {
+    keys(observation, [
+        'kind',
+        'binding',
+        'filePins',
+        'createdProcess',
+        'normalQuit',
+        'ownedRelease',
+        'records',
+    ]);
+    assert.equal(observation.kind, 'windows-native-owned-runtime/v1');
+    assert.equal(item.id, caseId);
+    const binding = validateWindowsNativeBinding(observation.binding);
+    selected(expected, binding);
+    ownedReferences(observation.records);
+    for (const ref of Object.values(observation.records))
+        assert.equal(
+            item.evidence.filter(
+                (row) =>
+                    row.path === ref.path && row.bytes === ref.bytes && row.sha256 === ref.sha256,
+            ).length,
+            1,
+        );
+    inspectWindowsNativeOwnedRows(
+        observation.filePins,
+        observation.createdProcess,
+        observation.normalQuit,
+        observation.ownedRelease,
+        binding,
+    );
+    return 'selected-pinned-runtime-and-component-closure-consistent-unqualified';
+}
+export async function readWindowsNativeOwnedRecords(rawObservation, readBytes) {
+    const observation = structuredClone(rawObservation);
+    ownedReferences(observation.records);
+    inspectWindowsNativeOwnedRows(
+        observation.filePins,
+        observation.createdProcess,
+        observation.normalQuit,
+        observation.ownedRelease,
+        observation.binding,
+    );
+    for (const role of ownedRoles) {
+        const ref = observation.records[role];
+        const returned = await readBytes(ref.path, WINDOWS_OWNED_RECORD_LIMITS[role]);
+        const { bytes, value } = parsed(returned, role, WINDOWS_OWNED_RECORD_LIMITS);
+        assert.equal(bytes.length, ref.bytes);
+        assert.equal(hash(bytes), ref.sha256, 'Original Windows owned-operation record changed.');
+        assert.deepEqual(
+            value,
+            observation[ownedFields[role]],
+            'Windows projection differs from original owned-operation row.',
+        );
+    }
+}
+/** A real same-cap producer: capture originals before invalidation, then explicitly
+ * join native component release and compare its original ACK. No transcript input. */
+export async function produceWindowsNativeOwnedRuntime(rawExpected, rawBinding, capability) {
+    const expected = structuredClone(rawExpected),
+        binding = validateWindowsNativeBinding(rawBinding);
+    selected(expected, binding);
+    await assertWindowsNativeCapability(capability, binding);
+    assert.ok(
+        (!admissionPending && retainedAuthorities.size === 0) ||
+            retainedAuthorities.has(capability),
+        'WINDOWS_NATIVE_READBACK_SCOPE_UNAVAILABLE',
+    );
+    retainedAuthorities.add(capability);
+    const buffers = {
+        'file-pins': readWindowsNativeObservation(capability, 'file-pins'),
+        'created-process': readWindowsNativeOwnedProcess(capability),
+        'normal-quit': readWindowsNativeNormalQuit(capability),
+    };
+    const values = {},
+        records = {};
+    // Validate and compare the three immutable originals BEFORE release invalidates
+    // active readers. Never perform component cleanup on a fabricated Promise row.
+    for (const role of ownedRoles.slice(0, 3)) {
+        const original = parsed(buffers[role], role, WINDOWS_OWNED_RECORD_LIMITS);
+        buffers[role] = original.bytes;
+        values[role] = original.value;
+    }
+    inspectOwnedBeforeRelease(
+        values['file-pins'],
+        values['created-process'],
+        values['normal-quit'],
+        binding,
+    );
+    const returnedRelease = await releaseWindowsNativeOwnedProcessHandles(capability);
+    buffers['owned-release'] = readWindowsNativeOwnedRelease(capability);
+    for (const role of ownedRoles) {
+        const original = parsed(buffers[role], role, WINDOWS_OWNED_RECORD_LIMITS);
+        buffers[role] = original.bytes;
+        values[role] = original.value;
+        records[role] = {
+            path: 'windows-native/owned-runtime/' + role + '.json',
+            bytes: original.bytes.length,
+            sha256: hash(original.bytes),
+        };
+    }
+    assert.deepEqual(
+        returnedRelease,
+        values['owned-release'].observation,
+        'Release Promise differs from private original ACK.',
+    );
+    inspectWindowsNativeOwnedRows(
+        values['file-pins'],
+        values['created-process'],
+        values['normal-quit'],
+        values['owned-release'],
+        binding,
+    );
+    retainedAuthorities.delete(capability); // Only after actual complete component ACK plus original-row checks.
+    const observation = {
+        kind: 'windows-native-owned-runtime/v1',
+        binding,
+        filePins: values['file-pins'],
+        createdProcess: values['created-process'],
+        normalQuit: values['normal-quit'],
+        ownedRelease: values['owned-release'],
+        records,
+    };
+    const evidence = Object.values(records).map((row) => ({ ...row }));
+    const status = inspectWindowsNativeOwnedLifecycle(
+        observation,
+        { id: caseId, evidence },
+        expected,
+    );
+    const envelope = {
+        schemaVersion: 1,
+        kind: 'installer-case-observation',
+        version: expected.version,
+        sourceCommit: expected.sourceCommit,
+        sourceTree: expected.sourceTree,
+        runId: expected.runId,
+        runAttempt: expected.runAttempt,
+        lane: expected.lane,
+        caseId,
+        package: binding.package,
+        observation,
+    };
+    const bytes = Buffer.from(JSON.stringify(envelope) + '\n');
+    assert.ok(bytes.length <= 128 * 1024);
+    const lifecycleEvidence = {
+        path: 'cases/windows-nsis/offline-launch.json',
+        bytes: bytes.length,
+        sha256: hash(bytes),
+    };
+    return {
+        status,
+        bytes,
+        lifecycleEvidence,
+        evidence: [lifecycleEvidence, ...evidence],
+        originalRecords: buffers,
+        componentHandlesAndLifetimeAcknowledged: true,
+        installationObserved: false,
+        offlineObserved: false,
+        uiObserved: false,
+        physicalLoadedBytesVerified: false,
+        physicalDescendantClosure: false,
+        installerCaseComplete: false,
+        releaseAcceptance: false,
+    };
+}
+/** Separated default-network pinned-runtime operation. The existing offline CLI
+ * and its outside-installation-profile policy are deliberately not this caller. */
+export async function observeWindowsNativeOwnedRuntime(rawExpected, rawBinding, rawBuild) {
+    const expected = structuredClone(rawExpected),
+        binding = validateWindowsNativeBinding(rawBinding),
+        build = structuredClone(rawBuild);
+    selected(expected, binding);
+    assert.ok(
+        !admissionPending && retainedAuthorities.size === 0,
+        'WINDOWS_NATIVE_READBACK_SCOPE_UNAVAILABLE',
+    );
+    admissionPending = true;
+    let authority;
+    try {
+        authority = await prepareWindowsNativeAuthority(binding, build);
+        retainedAuthorities.add(authority);
+        admissionPending = false;
+        await assertWindowsNativeCapability(authority, binding);
+        await pinWindowsNativeFiles(authority);
+        const launched = await launchWindowsNativePinnedProcess(authority, {
+            action: 'launch-pinned-installed',
+            profile: binding.root + '\\native-launch-profile',
+        });
+        assert.deepEqual(
+            launched,
+            readWindowsNativeOwnedProcess(authority),
+            'Launch Promise differs from original native row.',
+        );
+        const quit = await requestWindowsNativeNormalQuit(authority);
+        const originalQuit = parsed(
+            readWindowsNativeNormalQuit(authority),
+            'normal-quit',
+            WINDOWS_OWNED_RECORD_LIMITS,
+        ).value;
+        assert.deepEqual(
+            quit,
+            originalQuit.observation,
+            'Quit Promise differs from private original protocol result.',
+        );
+        return await produceWindowsNativeOwnedRuntime(expected, binding, authority);
+    } catch (error) {
+        if (
+            authority &&
+            error !== null &&
+            (typeof error === 'object' || typeof error === 'function')
+        )
+            failureAuthorities.set(error, authority);
+        throw error; // Cap/reservation retained; no implicit release, kill or retry.
     }
 }
 /** Actual producer: only backend-issued private native capabilities can supply rows.

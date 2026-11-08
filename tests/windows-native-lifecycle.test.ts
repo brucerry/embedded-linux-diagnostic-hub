@@ -10,6 +10,11 @@ import {
     produceWindowsNativeLifecycle,
     inspectWindowsNativeQueryRelease,
     releaseWindowsNativeLifecycleQueries,
+    inspectWindowsNativeOwnedRows,
+    inspectWindowsNativeOwnedLifecycle,
+    readWindowsNativeOwnedRecords,
+    produceWindowsNativeOwnedRuntime,
+    observeWindowsNativeOwnedRuntime,
 } from '../scripts/lib/windows-native-lifecycle.mjs';
 
 // Authored data tests semantic consistency only. They cannot issue a native
@@ -363,4 +368,434 @@ test('Windows query-handle release schema never represents observed process reti
         assert.throws(() => inspectWindowsNativeQueryRelease(q));
     }
     await assert.rejects(releaseWindowsNativeLifecycleQueries({ mode: 'native', ...complete }));
+});
+
+// Authored row data only. This helper cannot supply the private authority required
+// by the actual producer; actual composed issuance is covered in the authority VM.
+function ownedFixture() {
+    const f = fixture();
+    const requestedLaunch = {
+        action: 'launch-pinned-installed',
+        profile: f.binding.root + '\\native-launch-profile',
+    };
+    const tuple = { pid: 321, threadId: 456, creationTime100ns: '133700000000000000' };
+    const createdProcess = {
+        schemaVersion: 1,
+        kind: 'windows-native-created-process/v2',
+        binding: structuredClone(f.binding),
+        requestedLaunch,
+        observation: {
+            creationAttempted: true,
+            creationReturned: true,
+            createdByThisOwner: true,
+            processHandleRetained: true,
+            threadHandleRetained: true,
+            unconfirmedHandleOutput: false,
+            ...tuple,
+            processExitObserved: true,
+            exitCode: 0,
+            profileEmptyAtPreflight: true,
+            hostEventLoopReferenceAcknowledged: true,
+            stdioObserved: false,
+            physicalLoadedBytesVerified: false,
+            physicalDescendantClosure: false,
+            releaseAcceptance: false,
+        },
+    };
+    const normalQuit = {
+        schemaVersion: 1,
+        kind: 'windows-native-normal-quit/v1',
+        binding: structuredClone(f.binding),
+        requestedLaunch: structuredClone(requestedLaunch),
+        createdProcess: structuredClone(tuple),
+        identity: { pid: tuple.pid, type: 'browser' },
+        observation: {
+            identityReplyObserved: true,
+            quitSchedulingReplyObserved: true,
+            rootExitObserved: true,
+            rootExitCode: 0,
+            stdoutEOF: true,
+            stderrEOF: true,
+            ownedInspectorCloseObserved: true,
+            closedUnacknowledgedReplies: 0,
+            physicalLoadedBytesVerified: false,
+            physicalDescendantClosure: false,
+            releaseAcceptance: false,
+        },
+    };
+    const ownedRelease = {
+        schemaVersion: 1,
+        kind: 'windows-native-owned-release/v1',
+        binding: structuredClone(f.binding),
+        requestedLaunch: structuredClone(requestedLaunch),
+        createdProcess: structuredClone(tuple),
+        observation: {
+            ownedHandlesClosed: true,
+            retainedUnknown: false,
+            closedCount: 6,
+            totalCount: 6,
+            processOwnership: false,
+            physicalDescendantClosure: false,
+            releaseAcceptance: false,
+            hostLifetimeAcquisitionSubmitted: true,
+            hostLifetimeReleaseAcknowledged: true,
+            hostLifetimeFinalizerObserved: true,
+            hostLifetimeFinalizerAcknowledged: true,
+            hostEnvironmentClosing: false,
+        },
+    };
+    const rows = {
+        'file-pins': f.filePins,
+        'created-process': createdProcess,
+        'normal-quit': normalQuit,
+        'owned-release': ownedRelease,
+    };
+    const buffers = Object.fromEntries(
+        Object.entries(rows).map(([role, value]) => [role, encoded(value)]),
+    );
+    const records = Object.fromEntries(
+        Object.entries(buffers).map(([role, bytes]) => [
+            role,
+            {
+                path: 'windows-native/owned-runtime/' + role + '.json',
+                bytes: bytes.length,
+                sha256: sha(bytes),
+            },
+        ]),
+    );
+    const observation = {
+        kind: 'windows-native-owned-runtime/v1',
+        binding: structuredClone(f.binding),
+        filePins: f.filePins,
+        createdProcess,
+        normalQuit,
+        ownedRelease,
+        records,
+    };
+    const item = { id: f.binding.caseId, evidence: Object.values(records) };
+    return {
+        ...f,
+        requestedLaunch,
+        tuple,
+        createdProcess,
+        normalQuit,
+        ownedRelease,
+        rows,
+        buffers,
+        records,
+        observation,
+        item,
+    };
+}
+
+test('Windows owned four-row semantic data stays partial and reads exactly the named originals', async () => {
+    const f = ownedFixture();
+    inspectWindowsNativeOwnedRows(
+        f.filePins,
+        f.createdProcess,
+        f.normalQuit,
+        f.ownedRelease,
+        f.binding,
+    );
+    assert.equal(
+        inspectWindowsNativeOwnedLifecycle(f.observation, f.item, f.expected),
+        'selected-pinned-runtime-and-component-closure-consistent-unqualified',
+    );
+    const reads: string[] = [];
+    await readWindowsNativeOwnedRecords(f.observation, async (name: string, maximum: number) => {
+        reads.push(name);
+        const role = name.split('/').at(-1)!.replace('.json', '') as keyof typeof f.buffers;
+        assert.equal(maximum, role === 'owned-release' ? 8192 : 16384);
+        return Buffer.from(f.buffers[role]);
+    });
+    assert.deepEqual(
+        reads,
+        Object.keys(f.rows).map((role) => 'windows-native/owned-runtime/' + role + '.json'),
+    );
+    assert.equal(f.normalQuit.observation.releaseAcceptance, false);
+    assert.equal(f.ownedRelease.observation.processOwnership, false);
+});
+
+test('Windows owned rows reject mismatched binding profile PID context and component closure without promotion', () => {
+    for (const change of [
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.binding.runId = '999';
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.createdProcess.binding.sourceTree = 'f'.repeat(40);
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.ownedRelease.binding.package.sha256 = '0'.repeat(64);
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.requestedLaunch.profile = f.binding.root + '\\other';
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.createdProcess.pid++;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.ownedRelease.createdProcess.creationTime100ns = '2';
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.identity.type = 'renderer';
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.identity.pid++;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.observation.stdoutEOF = false;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.normalQuit.observation.closedUnacknowledgedReplies = 1;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.createdProcess.observation.processExitObserved = false;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.ownedRelease.observation.hostLifetimeFinalizerAcknowledged = false;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.ownedRelease.observation.retainedUnknown = true;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.ownedRelease.observation.processOwnership = true;
+        },
+    ]) {
+        const f = ownedFixture();
+        change(f);
+        assert.throws(() =>
+            inspectWindowsNativeOwnedRows(
+                f.filePins,
+                f.createdProcess,
+                f.normalQuit,
+                f.ownedRelease,
+                f.binding,
+            ),
+        );
+    }
+});
+
+test('Windows owned evidence requires exact four roles unique references and canonical original byte readback', async () => {
+    for (const change of [
+        (f: ReturnType<typeof ownedFixture>) => {
+            delete (f.observation.records as any)['normal-quit'];
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            (f.observation.records as any).extra = f.records['file-pins'];
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.records['owned-release'].path = '../owned-release.json';
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.records['normal-quit'].path = f.records['file-pins'].path;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.records['owned-release'].sha256 = f.records['normal-quit'].sha256;
+        },
+        (f: ReturnType<typeof ownedFixture>) => {
+            f.item.evidence.pop();
+        },
+    ]) {
+        const f = ownedFixture();
+        change(f);
+        assert.throws(() => inspectWindowsNativeOwnedLifecycle(f.observation, f.item, f.expected));
+    }
+    for (const mode of ['changed-bytes', 'honest-rehash', 'noncanonical', 'duplicate-json-key']) {
+        const f = ownedFixture();
+        let bytes = Buffer.from(f.buffers['normal-quit']);
+        if (mode === 'noncanonical')
+            bytes = Buffer.from(JSON.stringify(f.normalQuit, null, 2) + '\n');
+        else if (mode === 'duplicate-json-key')
+            bytes = Buffer.from(
+                JSON.stringify(f.normalQuit).slice(0, -1) + ',"schemaVersion":1}\n',
+            );
+        else bytes = encoded({ ...f.normalQuit, extra: true });
+        if (mode !== 'changed-bytes') {
+            f.records['normal-quit'].bytes = bytes.length;
+            f.records['normal-quit'].sha256 = sha(bytes);
+        }
+        await assert.rejects(
+            readWindowsNativeOwnedRecords(f.observation, async (name: string) =>
+                name.endsWith('/normal-quit.json')
+                    ? bytes
+                    : Buffer.from(
+                          f.buffers[
+                              name.split('/').at(-1)!.replace('.json', '') as keyof typeof f.buffers
+                          ],
+                      ),
+            ),
+        );
+    }
+});
+
+test('Windows owned original readback snapshots projection before asynchronous caller mutation', async () => {
+    const f = ownedFixture();
+    let first = true;
+    const reads: string[] = [];
+    await readWindowsNativeOwnedRecords(f.observation, async (name: string) => {
+        reads.push(name);
+        if (first) {
+            first = false;
+            f.observation.normalQuit.identity.pid++;
+            f.observation.binding.root = 'C:\\changed';
+        }
+        const role = name.split('/').at(-1)!.replace('.json', '') as keyof typeof f.buffers;
+        return Buffer.from(f.buffers[role]);
+    });
+    assert.equal(reads.length, 4);
+    assert.equal(f.observation.normalQuit.identity.pid, 322);
+    assert.equal(JSON.parse(f.buffers['normal-quit'].toString()).identity.pid, 321);
+});
+
+test('Windows owned shared-consumer branch rereads originals but refuses honestly rehashed qualification claims', async () => {
+    const f = ownedFixture();
+    const envelope = {
+        schemaVersion: 1,
+        kind: 'installer-case-observation',
+        version: f.expected.version,
+        sourceCommit: f.expected.sourceCommit,
+        sourceTree: f.expected.sourceTree,
+        runId: f.expected.runId,
+        runAttempt: f.expected.runAttempt,
+        lane: f.expected.lane,
+        caseId: f.binding.caseId,
+        package: f.binding.package,
+        observation: f.observation,
+    };
+    const bytes = encoded(envelope),
+        ref = {
+            path: 'cases/windows-nsis/offline-launch.json',
+            bytes: bytes.length,
+            sha256: sha(bytes),
+        };
+    const files = new Map([
+        [ref.path, bytes],
+        ...Object.entries(f.buffers).map(
+            ([role, bytes]) =>
+                ['windows-native/owned-runtime/' + role + '.json', bytes] as [string, Buffer],
+        ),
+    ]);
+    const reads: string[] = [];
+    const summary = await consumeInstallerLifecycleEvidence(
+        {
+            schemaVersion: 2,
+            kind: 'native-installer-lifecycle',
+            runId: f.expected.runId,
+            runAttempt: f.expected.runAttempt,
+            cases: [
+                {
+                    id: f.binding.caseId,
+                    lifecycleEvidence: ref,
+                    evidence: [ref, ...f.item.evidence],
+                },
+            ],
+        },
+        f.expected,
+        async (name: string, maximum: number) => {
+            reads.push(name);
+            const bytes = files.get(name)!;
+            assert.ok(bytes.length <= maximum);
+            return Buffer.from(bytes);
+        },
+    );
+    assert.deepEqual(summary, {
+        status: 'installer-lifecycle-unqualified',
+        releaseAcceptance: false,
+        observations: [
+            {
+                caseId: f.binding.caseId,
+                status: 'selected-pinned-runtime-and-component-closure-consistent-unqualified',
+            },
+        ],
+    });
+    assert.deepEqual(reads, [ref.path, ...Object.values(f.records).map((record) => record.path)]);
+    for (const role of ['created-process', 'normal-quit', 'owned-release'] as const)
+        for (const field of [
+            'physicalLoadedBytesVerified',
+            'physicalDescendantClosure',
+            'releaseAcceptance',
+        ]) {
+            const copy = ownedFixture();
+            (copy.rows[role].observation as any)[field] = true;
+            copy.buffers[role] = encoded(copy.rows[role]);
+            copy.records[role].bytes = copy.buffers[role].length;
+            copy.records[role].sha256 = sha(copy.buffers[role]);
+            const changedBytes = encoded({ ...envelope, observation: copy.observation });
+            const changedRef = {
+                path: ref.path,
+                bytes: changedBytes.length,
+                sha256: sha(changedBytes),
+            };
+            const changedFiles = new Map([
+                [changedRef.path, changedBytes],
+                ...Object.entries(copy.buffers).map(
+                    ([name, bytes]) =>
+                        ['windows-native/owned-runtime/' + name + '.json', bytes] as [
+                            string,
+                            Buffer,
+                        ],
+                ),
+            ]);
+            await assert.rejects(
+                consumeInstallerLifecycleEvidence(
+                    {
+                        schemaVersion: 2,
+                        kind: 'native-installer-lifecycle',
+                        runId: copy.expected.runId,
+                        runAttempt: copy.expected.runAttempt,
+                        cases: [
+                            {
+                                id: copy.binding.caseId,
+                                lifecycleEvidence: changedRef,
+                                evidence: [changedRef, ...Object.values(copy.records)],
+                            },
+                        ],
+                    },
+                    copy.expected,
+                    async (name: string) => Buffer.from(changedFiles.get(name)!),
+                ),
+            );
+            assert.throws(() =>
+                inspectWindowsNativeOwnedRows(
+                    copy.filePins,
+                    copy.createdProcess,
+                    copy.normalQuit,
+                    copy.ownedRelease,
+                    copy.binding,
+                ),
+            );
+        }
+    const broken = ownedFixture();
+    (broken.normalQuit as any).kind = 'windows-native-readonly-consistency/v1';
+    assert.throws(() =>
+        inspectWindowsNativeOwnedLifecycle(broken.observation, broken.item, broken.expected),
+    );
+});
+
+test('Windows owned data cannot issue producer authority and role byte bounds remain fail closed', async () => {
+    const f = ownedFixture();
+    await assert.rejects(
+        produceWindowsNativeOwnedRuntime(f.expected, f.binding, {}),
+        /CAPABILITY_UNISSUED/,
+    );
+    await assert.rejects(
+        produceWindowsNativeOwnedRuntime(f.expected, f.binding, f.observation as any),
+        /CAPABILITY_UNISSUED/,
+    );
+    const wrong = { ...f.binding, sourceTree: '0'.repeat(40) };
+    await assert.rejects(observeWindowsNativeOwnedRuntime(f.expected, wrong, {})); // Selected tuple rejects before preparation/loader.
+    for (const role of Object.keys(f.buffers)) {
+        const cap = role === 'owned-release' ? 8192 : 16384;
+        await assert.rejects(
+            readWindowsNativeOwnedRecords(f.observation, async (name: string) =>
+                name === 'windows-native/owned-runtime/' + role + '.json'
+                    ? Buffer.alloc(cap + 1)
+                    : Buffer.from(
+                          f.buffers[
+                              name.split('/').at(-1)!.replace('.json', '') as keyof typeof f.buffers
+                          ],
+                      ),
+            ),
+        );
+    }
 });

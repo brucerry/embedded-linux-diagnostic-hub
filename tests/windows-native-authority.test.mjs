@@ -7,6 +7,8 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { types as nativeTypes } from 'node:util';
+import { WINDOWS_SETUP_ASSET } from '../scripts/lib/windows-setup-release.mjs';
+import { consumeInstallerLifecycleEvidence } from '../scripts/lib/installer-lifecycle-evidence.mjs';
 import {
     validateWindowsNativeRequest,
     validateWindowsNativeBuild,
@@ -27,6 +29,8 @@ import {
     readWindowsNativeMainInspectorEndpoint,
     requestWindowsNativeNormalQuit,
     joinWindowsNativeNormalQuitTransport,
+    readWindowsNativeNormalQuit,
+    readWindowsNativeOwnedRelease,
 } from '../scripts/lib/windows-native-authority.mjs';
 
 const request = () => ({
@@ -233,6 +237,8 @@ test('explicit launch inputs are confined data and cannot issue native authority
         () => readWindowsNativeMainInspectorEndpoint({}),
         () => requestWindowsNativeNormalQuit({}),
         () => joinWindowsNativeNormalQuitTransport({}),
+        () => readWindowsNativeNormalQuit({}),
+        () => readWindowsNativeOwnedRelease({}),
         () => releaseWindowsNativeOwnedProcessHandles({}),
     ])
         assert.throws(call, /CAPABILITY_UNISSUED/);
@@ -577,6 +583,8 @@ function launchMemory() {
         closeMode: 'observed',
         socketCreated: deferred(),
         closeRequested: deferred(),
+        deadlineStarted: deferred(),
+        pollStarted: deferred(),
         phaseStarted: { enable: deferred(), identity: deferred(), quit: deferred() },
         appQuitCalls: 0,
         timerStarts: 0,
@@ -647,6 +655,8 @@ function launchMemory() {
     }
     quit.startTimer = (callback, delay) => {
         quit.timerStarts++;
+        if (delay === 15000) quit.deadlineStarted.resolve();
+        if (delay === 20) quit.pollStarted.resolve();
         quit.onTimer?.(callback, delay);
         const handle = new FakeTimeout(++quit.nextTimer);
         quit.timers.set(handle, { callback, delay });
@@ -829,10 +839,115 @@ function launchMemory() {
         }
     };
     const api = context.module.exports;
+    // Actual structuredClone, followed only by plain cloned-container prototype
+    // normalization to compensate the VM boundary. Never JSON-copy data/undefined,
+    // change assertions, rebrand a cap, or normalize exotic builtins.
+    const realmPrototypes = new vm.Script(
+        '({object:Object.prototype,array:Array.prototype})',
+    ).runInContext(context);
+    const cloneIntoRealm = (value) => {
+        const copied = structuredClone(value);
+        const seen = new WeakSet();
+        const rehome = (item) => {
+            if (!item || typeof item !== 'object') return;
+            const array = Array.isArray(item);
+            if (!array && Object.getPrototypeOf(item) !== Object.prototype) return;
+            if (seen.has(item)) return;
+            seen.add(item);
+            for (const key of Reflect.ownKeys(item)) {
+                const descriptor = Object.getOwnPropertyDescriptor(item, key);
+                if (Object.hasOwn(descriptor, 'value')) rehome(descriptor.value);
+            }
+            Object.setPrototypeOf(item, array ? realmPrototypes.array : realmPrototypes.object);
+        };
+        rehome(copied);
+        return copied;
+    };
+    let lifecycle;
+    const ownedRuntime = () => {
+        if (lifecycle) return lifecycle;
+        context.structuredClone = cloneIntoRealm;
+        context.TextDecoder = TextDecoder;
+        const source = readFileSync(
+            new URL('../scripts/lib/windows-native-lifecycle.mjs', import.meta.url),
+            'utf8',
+        );
+        const compiled = ts.transpileModule(source, {
+            fileName: 'windows-native-lifecycle.cjs',
+            compilerOptions: {
+                module: ts.ModuleKind.CommonJS,
+                target: ts.ScriptTarget.ES2022,
+                esModuleInterop: true,
+            },
+            reportDiagnostics: true,
+        });
+        assert.equal(
+            (compiled.diagnostics ?? []).filter((x) => x.category === ts.DiagnosticCategory.Error)
+                .length,
+            0,
+        );
+        const module = { exports: {} };
+        const closed = Object.freeze({
+            'node:assert/strict': assert,
+            'node:crypto': Object.freeze({ createHash }),
+            'node:path': path,
+            './windows-setup-release.mjs': Object.freeze({ WINDOWS_SETUP_ASSET }),
+            './windows-native-authority.mjs': api,
+        });
+        const wrapper = new vm.Script(
+            '(function(exports,require,module){\n' + compiled.outputText + '\n})',
+            { filename: 'actual-memory-windows-native-lifecycle.cjs' },
+        ).runInContext(context, { timeout: 1000 });
+        wrapper(
+            module.exports,
+            (name) => {
+                assert.ok(Object.hasOwn(closed, name), 'unknown lifecycle VM import');
+                return closed[name];
+            },
+            module,
+        );
+        lifecycle = module.exports;
+        return lifecycle;
+    };
+    const modelPins = () => ({
+        host: { adminMember: false, elevated: false, integrityRid: 8192 },
+        files: request().expectedFiles.map((file, index) => ({
+            ...file,
+            fileId: String(index + 1).repeat(32),
+            volumeSerial: 'a'.repeat(16),
+        })),
+        leaseScope: 'named-executable-and-asar',
+        fileLeasesRetained: true,
+        physicalLoadedBytesVerified: false,
+        releaseAcceptance: false,
+    });
     return {
         api,
         native,
         quit,
+        cloneIntoRealm,
+        ownedRuntime,
+        modelPins,
+        expected() {
+            const selected = request();
+            return {
+                version: '0.6.0',
+                sourceCommit: selected.sourceCommit,
+                sourceTree: selected.sourceTree,
+                runId: selected.runId,
+                runAttempt: selected.runAttempt,
+                lane: selected.lane,
+                artifacts: [selected.package],
+            };
+        },
+        buildInput() {
+            return inside({
+                ...build(),
+                binarySHA256: digest(files.get(binary)),
+                sourceSHA256: digest(files.get(directory + '/authority.cc')),
+                bindingSHA256: digest(files.get(directory + '/binding.gyp')),
+            });
+        },
         counts,
         state,
         facts,
@@ -2886,5 +3001,407 @@ test('memory unknown socket and timer returns stay retained without proxy traps 
             await assert.rejects(m.prepare(), /OWNER_LIMIT/); // Private owner stays retained; no private issuer added.
         }
         assert.equal(m.quit.constructors <= 1, true);
+    }
+});
+
+test('memory actual owned runtime composition issues private rows then actual shared consumption stays unqualified', async () => {
+    const m = launchMemory(),
+        lifecycle = m.ownedRuntime();
+    m.native.pinFiles = async () => JSON.stringify(m.modelPins());
+    const probe = { absent: undefined, nested: { count: 1 }, array: [undefined, { count: 2 }] };
+    const copied = m.cloneIntoRealm(probe);
+    assert.equal(Object.hasOwn(copied, 'absent'), true);
+    assert.equal(copied.absent, undefined);
+    assert.equal(Object.hasOwn(copied.array, 0), true);
+    copied.nested.count = 9;
+    copied.array[1].count = 9;
+    assert.equal(probe.nested.count, 1);
+    assert.equal(probe.array[1].count, 2);
+    const expected = m.inside(m.expected()),
+        binding = m.inside(request()),
+        build = m.buildInput();
+    const operation = lifecycle.observeWindowsNativeOwnedRuntime(expected, binding, build);
+    void operation.catch(() => {});
+    expected.artifacts[0].sha256 = '0'.repeat(64);
+    binding.expectedFiles[0].sha256 = '0'.repeat(64);
+    build.sourceSHA256 = '0'.repeat(64);
+    await m.quit.pollStarted.promise;
+    assert.equal(m.quit.constructors, 0);
+    assert.equal([...m.quit.timers.values()].filter((x) => x.delay === 15000).length, 1);
+    m.capture.stderr.bytes = Buffer.from('Debugger listening on ws://127.0.0.1:43123/');
+    m.quit.fireTimer(20);
+    await m.quit.microtasks();
+    assert.equal(m.quit.constructors, 0); // Partial startup bytes are not an endpoint.
+    m.capture.stderr.bytes = Buffer.from('Debugger listening on ' + m.quit.endpoint + '\r\n');
+    m.quit.fireTimer(20);
+    await m.quit.closeRequested.promise;
+    await m.quit.microtasks();
+    m.quit.onAppQuit = () => {
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+    };
+    m.quit.runAppQuit();
+    m.quit.fireTimer(20);
+    const result = await operation;
+    assert.equal(
+        result.status,
+        'selected-pinned-runtime-and-component-closure-consistent-unqualified',
+    );
+    assert.equal(result.componentHandlesAndLifetimeAcknowledged, true);
+    for (const key of [
+        'installationObserved',
+        'offlineObserved',
+        'uiObserved',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'installerCaseComplete',
+        'releaseAcceptance',
+    ])
+        assert.equal(result[key], false);
+    assert.equal(m.counts.acquire, 1);
+    assert.equal(m.counts.launch, 1);
+    assert.equal(m.counts.release, 1);
+    assert.equal(m.quit.sends, 3);
+    assert.equal(m.quit.appQuitCalls, 1);
+    assert.equal(m.quit.constructors, 1);
+    const envelope = JSON.parse(result.bytes.toString());
+    assert.equal(envelope.observation.kind, 'windows-native-owned-runtime/v1');
+    assert.deepEqual(Object.keys(result.originalRecords), [
+        'file-pins',
+        'created-process',
+        'normal-quit',
+        'owned-release',
+    ]);
+    assert.equal(envelope.package.sha256, request().package.sha256);
+    assert.equal(
+        envelope.observation.binding.expectedFiles[0].sha256,
+        request().expectedFiles[0].sha256,
+    );
+    const files = new Map([
+        [result.lifecycleEvidence.path, Buffer.from(result.bytes)],
+        ...Object.entries(result.originalRecords).map(([role, bytes]) => [
+            'windows-native/owned-runtime/' + role + '.json',
+            Buffer.from(bytes),
+        ]),
+    ]);
+    const reads = [];
+    const read = async (name, maximum) => {
+        reads.push(name);
+        const bytes = files.get(name);
+        assert.ok(bytes && bytes.length <= maximum);
+        return Buffer.from(bytes);
+    };
+    await lifecycle.readWindowsNativeOwnedRecords(envelope.observation, read);
+    reads.length = 0;
+    const summary = await consumeInstallerLifecycleEvidence(
+        {
+            schemaVersion: 2,
+            kind: 'native-installer-lifecycle',
+            runId: m.expected().runId,
+            runAttempt: m.expected().runAttempt,
+            cases: [
+                {
+                    id: request().caseId,
+                    lifecycleEvidence: result.lifecycleEvidence,
+                    evidence: result.evidence,
+                },
+            ],
+        },
+        m.expected(),
+        read,
+    );
+    assert.deepEqual(summary, {
+        status: 'installer-lifecycle-unqualified',
+        releaseAcceptance: false,
+        observations: [
+            {
+                caseId: request().caseId,
+                status: 'selected-pinned-runtime-and-component-closure-consistent-unqualified',
+            },
+        ],
+    });
+    assert.deepEqual(reads, [
+        result.lifecycleEvidence.path,
+        ...Object.keys(result.originalRecords).map(
+            (role) => 'windows-native/owned-runtime/' + role + '.json',
+        ),
+    ]);
+    assert.equal(JSON.stringify(envelope).includes(m.quit.endpoint), false);
+});
+
+test('memory private normal quit and release originals are issued only by real owner paths and every read is a copy', async () => {
+    const m = launchMemory(),
+        cap = await m.prepareQuit();
+    assert.throws(() => m.api.readWindowsNativeNormalQuit(cap), /QUIT_RECORD_MISSING/);
+    assert.throws(() => m.api.readWindowsNativeOwnedRelease(cap), /OWNED_RELEASE_RECORD_MISSING/);
+    const task = m.api.requestWindowsNativeNormalQuit(cap);
+    assert.throws(() => m.api.readWindowsNativeNormalQuit(cap), /QUIT_RECORD_MISSING/);
+    await m.quit.closeRequested.promise;
+    await m.quit.microtasks();
+    m.state.exited = true;
+    m.state.exitCode = 0;
+    m.endStdio();
+    m.quit.fireTimer(20);
+    const outcome = await task;
+    assert.ok(Object.isFrozen(outcome));
+    assert.throws(() => {
+        outcome.releaseAcceptance = true;
+    }, TypeError);
+    const originalQuit = m.api.readWindowsNativeNormalQuit(cap),
+        originalText = originalQuit.toString();
+    const row = JSON.parse(originalText);
+    assert.equal(row.kind, 'windows-native-normal-quit/v1');
+    assert.deepEqual(row.createdProcess, { pid: 17, threadId: 18, creationTime100ns: '123456789' });
+    assert.deepEqual(row.identity, { pid: 17, type: 'browser' });
+    originalQuit.fill(0);
+    assert.equal(m.api.readWindowsNativeNormalQuit(cap).toString(), originalText);
+    assert.equal(m.counts.release, 0);
+    const release = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    assert.ok(Object.isFrozen(release));
+    assert.equal(release.releaseAcceptance, false);
+    assert.throws(
+        () => m.api.assertWindowsNativeCapability(cap, m.inside(request())),
+        /NOT_ACTIVE/,
+    );
+    const originalRelease = m.api.readWindowsNativeOwnedRelease(cap),
+        releaseText = originalRelease.toString();
+    assert.equal(JSON.parse(releaseText).kind, 'windows-native-owned-release/v1');
+    originalRelease.fill(0);
+    assert.equal(m.api.readWindowsNativeOwnedRelease(cap).toString(), releaseText);
+    assert.equal(m.api.readWindowsNativeNormalQuit(cap).toString(), originalText); // Historical bytes, not active authority.
+    assert.equal(m.counts.release, 1);
+});
+
+test('memory endpoint discovery and shutdown spend the same finite quit owner and never renew its budget', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    const task = m.api.requestWindowsNativeNormalQuit(cap);
+    void task.catch(() => {});
+    await m.quit.pollStarted.promise;
+    assert.equal(m.quit.constructors, 0);
+    // The last permitted discovery poll consumes the shared750 allowance. The
+    // subsequent shutdown poll must refuse rather than acquire a new allowance.
+    for (let i = 0; i < 748; i++) {
+        m.quit.fireTimer(20);
+        await m.quit.microtasks();
+    }
+    m.capture.stderr.bytes = Buffer.from('Debugger listening on ' + m.quit.endpoint + '\n');
+    m.quit.fireTimer(20);
+    await assert.rejects(task, (error) => {
+        assert.match((error.cause ?? error).message, /QUIT_POLL_BUDGET/);
+        assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+        return true;
+    });
+    assert.equal(m.quit.timerStarts, 750); // One deadline plus749 authored poll delays.
+    assert.equal(m.quit.requests.length, 3);
+    assert.equal(m.quit.constructors, 1);
+    assert.equal(m.counts.release, 0);
+    assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+    assert.throws(() => m.api.readWindowsNativeNormalQuit(cap), /QUIT_RECORD_MISSING/);
+    assert.equal(m.quit.timers.size, 0);
+});
+
+test('memory actual composition validates immutable prerelease rows before any component cleanup', async () => {
+    for (const corrupt of [
+        (pins) => {
+            pins.host.elevated = true;
+        },
+        (pins) => {
+            pins.files[0].sha256 = '0'.repeat(64);
+        },
+    ]) {
+        const m = launchMemory(),
+            lifecycle = m.ownedRuntime();
+        const pins = m.modelPins();
+        corrupt(pins);
+        m.native.pinFiles = async () => JSON.stringify(pins);
+        m.native.onCaptureConfigured = () => {
+            m.capture.stderr.bytes = Buffer.from('Debugger listening on ' + m.quit.endpoint + '\n');
+        };
+        const task = lifecycle.observeWindowsNativeOwnedRuntime(
+            m.inside(m.expected()),
+            m.inside(request()),
+            m.buildInput(),
+        );
+        void task.catch(() => {});
+        await m.quit.closeRequested.promise;
+        await m.quit.microtasks();
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+        m.quit.fireTimer(20);
+        const failure = await task.then(
+            () => assert.fail('semantic originals must refuse before cleanup'),
+            (error) => error,
+        );
+        assert.equal(m.counts.release, 0);
+        const cap = lifecycle.windowsNativeLifecycleFailureAuthority(failure);
+        assert.equal(m.api.assertWindowsNativeCapability(cap, m.inside(request())), true);
+        assert.equal(
+            JSON.parse(m.api.readWindowsNativeNormalQuit(cap)).kind,
+            'windows-native-normal-quit/v1',
+        );
+        assert.throws(
+            () => m.api.readWindowsNativeOwnedRelease(cap),
+            /OWNED_RELEASE_RECORD_MISSING/,
+        );
+        const prepared = m.counts.prepare;
+        await assert.rejects(
+            lifecycle.observeWindowsNativeOwnedRuntime(
+                m.inside(m.expected()),
+                m.inside(request()),
+                m.buildInput(),
+            ),
+            /READBACK_SCOPE_UNAVAILABLE/,
+        );
+        assert.equal(m.counts.prepare, prepared);
+        assert.equal(m.counts.release, 0);
+    }
+    const m = launchMemory(),
+        lifecycle = m.ownedRuntime(),
+        cap = await m.prepareQuit();
+    const quit = m.api.requestWindowsNativeNormalQuit(cap);
+    m.api.cancelWindowsNativeAuthority(cap);
+    await assert.rejects(quit, /QUIT_CANCELLED/);
+    await assert.rejects(
+        lifecycle.produceWindowsNativeOwnedRuntime(
+            m.inside(m.expected()),
+            m.inside(request()),
+            cap,
+        ),
+        /NOT_ACTIVE/,
+    );
+    assert.throws(() => m.api.readWindowsNativeNormalQuit(cap), /QUIT_RECORD_MISSING/);
+    assert.equal(m.counts.release, 0);
+});
+
+test('memory actual composition retains a pending finalizer and joins its original private release acknowledgement', async () => {
+    const m = launchMemory(),
+        lifecycle = m.ownedRuntime();
+    m.native.pinFiles = async () => JSON.stringify(m.modelPins());
+    m.native.onCaptureConfigured = () => {
+        m.capture.stderr.bytes = Buffer.from('Debugger listening on ' + m.quit.endpoint + '\n');
+    };
+    let acknowledge;
+    m.native.finalizerGate = new Promise((resolve) => {
+        acknowledge = resolve;
+    });
+    const task = lifecycle.observeWindowsNativeOwnedRuntime(
+        m.inside(m.expected()),
+        m.inside(request()),
+        m.buildInput(),
+    );
+    void task.catch(() => {});
+    try {
+        await m.quit.closeRequested.promise;
+        await m.quit.microtasks();
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+        m.quit.fireTimer(20);
+        await m.finalizerObserved.promise;
+        let complete = false;
+        void task.then(
+            () => {
+                complete = true;
+            },
+            () => {
+                complete = true;
+            },
+        );
+        await m.quit.microtasks();
+        assert.equal(complete, false);
+        assert.equal(m.state.handlesClosed, true);
+        assert.equal(m.state.hostFinalizerAcknowledged, false);
+        const prepared = m.counts.prepare;
+        await assert.rejects(
+            lifecycle.observeWindowsNativeOwnedRuntime(
+                m.inside(m.expected()),
+                m.inside(request()),
+                m.buildInput(),
+            ),
+            /READBACK_SCOPE_UNAVAILABLE/,
+        );
+        assert.equal(m.counts.prepare, prepared);
+        assert.equal(m.counts.release, 1);
+        acknowledge();
+        const result = await task;
+        const released = JSON.parse(result.originalRecords['owned-release']);
+        assert.equal(released.observation.hostLifetimeFinalizerAcknowledged, true);
+        assert.equal(released.observation.retainedUnknown, false);
+        assert.equal(result.componentHandlesAndLifetimeAcknowledged, true);
+        assert.equal(result.releaseAcceptance, false);
+        assert.equal(m.counts.release, 1);
+    } finally {
+        acknowledge();
+        await task.catch(() => {});
+    }
+});
+
+test('memory actual composition preserves first native Error or undefined without automatic release or admission retry', async () => {
+    for (const primary of [Error('first composed native sample failure'), undefined]) {
+        const m = launchMemory(),
+            lifecycle = m.ownedRuntime();
+        m.native.pinFiles = async () => JSON.stringify(m.modelPins());
+        m.native.sampleOwnedProcess = () => {
+            m.counts.sample++;
+            throw primary;
+        };
+        const failure = await lifecycle
+            .observeWindowsNativeOwnedRuntime(
+                m.inside(m.expected()),
+                m.inside(request()),
+                m.buildInput(),
+            )
+            .then(
+                () => assert.fail('native sample must fail'),
+                (error) => error,
+            );
+        assert.equal(Object.hasOwn(failure, 'cause'), true);
+        assert.equal(failure.cause, primary);
+        assert.equal(failure.nativeAuthorityCustody.retainedAtCapture, true);
+        assert.equal(m.counts.release, 0);
+        assert.equal(m.quit.constructors, 0);
+        const cap = lifecycle.windowsNativeLifecycleFailureAuthority(failure);
+        assert.equal(
+            (await m.api.joinWindowsNativeNormalQuitTransport(cap)).transportConstructionSubmitted,
+            false,
+        );
+        assert.throws(() => m.api.readWindowsNativeNormalQuit(cap), /QUIT_RECORD_MISSING/);
+        const prepared = m.counts.prepare;
+        await assert.rejects(
+            lifecycle.observeWindowsNativeOwnedRuntime(
+                m.inside(m.expected()),
+                m.inside(request()),
+                m.buildInput(),
+            ),
+            /READBACK_SCOPE_UNAVAILABLE/,
+        );
+        assert.equal(m.counts.prepare, prepared);
+        m.native.sampleOwnedProcess = async () => {
+            m.counts.sample++;
+            return JSON.stringify(m.facts());
+        };
+        m.state.exited = true;
+        m.endStdio();
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        const later = Error('later composed release failure');
+        m.native.releaseOwnedProcessHandles = () => {
+            m.counts.release++;
+            throw later;
+        };
+        const release = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        await assert.rejects(release, (error) => {
+            assert.equal(error.cause, primary);
+            assert.equal(error.errors[0], primary);
+            assert.equal(error.errors[1], later);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            return true;
+        });
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), release);
+        assert.equal(m.counts.release, 1);
     }
 });

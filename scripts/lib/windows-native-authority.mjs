@@ -852,6 +852,8 @@ function quitOwner(record) {
         protocolCallsPending: 0,
         requests: [],
         context: null,
+        pollCount: 0,
+        originalNormalQuit: null,
         contextInvalidated: false,
         identityReplyObserved: false,
         quitSendSubmitted: false,
@@ -1237,6 +1239,12 @@ function quitValue(reply) {
     );
     return value;
 }
+async function quitPollPause(q) {
+    q.active();
+    const delay = quitDeferred();
+    quitTimer(q, 20, () => delay.resolve());
+    await q.wait(delay.promise);
+}
 async function runNormalQuit(record, q) {
     q.active();
     assert.ok(
@@ -1254,6 +1262,21 @@ async function runNormalQuit(record, q) {
         record.launch.latest.createdByThisOwner && !record.launch.latest.processExitObserved,
         'WINDOWS_NATIVE_QUIT_ROOT_NOT_LIVE',
     );
+    // Startup logging is asynchronous. Discover it under this SAME deadline,
+    // owner and shared polling budget; a single immediate drain is not readiness.
+    while (!record.launch.mainInspectorEndpoint) {
+        q.active();
+        assert.ok(q.pollCount++ < 750, 'WINDOWS_NATIVE_QUIT_POLL_BUDGET');
+        await q.wait(drainOwnedRecord(record));
+        q.active();
+        await q.wait(sampleOwnedRecord(record));
+        q.active();
+        assert.ok(
+            record.launch.latest.pid === pid && !record.launch.latest.processExitObserved,
+            'WINDOWS_NATIVE_QUIT_ROOT_NOT_LIVE',
+        );
+        if (!record.launch.mainInspectorEndpoint) await quitPollPause(q);
+    }
     openQuitSocket(q, record.launch.mainInspectorEndpoint);
     await q.wait(q.opened.promise);
     q.active();
@@ -1279,8 +1302,9 @@ async function runNormalQuit(record, q) {
     );
     q.quitSchedulingReplyObserved = true;
     closeQuitSocket(q); // Detach our debugger before asking the app to finish exit.
-    for (let poll = 0; poll < 750; poll++) {
+    for (;;) {
         q.active();
+        assert.ok(q.pollCount++ < 750, 'WINDOWS_NATIVE_QUIT_POLL_BUDGET');
         await q.wait(sampleOwnedRecord(record));
         q.active();
         await q.wait(drainOwnedRecord(record));
@@ -1302,7 +1326,7 @@ async function runNormalQuit(record, q) {
                     !q.operationUnknown,
                 'WINDOWS_NATIVE_QUIT_BOOKKEEPING_UNKNOWN',
             );
-            return Object.freeze({
+            const outcome = Object.freeze({
                 identityReplyObserved: true,
                 quitSchedulingReplyObserved: true,
                 rootExitObserved: true,
@@ -1315,12 +1339,29 @@ async function runNormalQuit(record, q) {
                 physicalDescendantClosure: false,
                 releaseAcceptance: false,
             });
+            // Created inside the private successful path, never from a mutable
+            // public Promise result or a caller-supplied transcript.
+            const original = Buffer.from(
+                JSON.stringify({
+                    schemaVersion: 1,
+                    kind: 'windows-native-normal-quit/v1',
+                    binding: record.binding,
+                    requestedLaunch: record.launch.request,
+                    createdProcess: {
+                        pid,
+                        threadId: root.threadId,
+                        creationTime100ns: root.creationTime100ns,
+                    },
+                    identity: { pid: identity.pid, type: identity.type },
+                    observation: outcome,
+                }) + '\n',
+            );
+            assert.ok(original.length <= 16384, 'WINDOWS_NATIVE_QUIT_RECORD_BOUND');
+            q.originalNormalQuit = original;
+            return outcome;
         }
-        const delay = quitDeferred();
-        quitTimer(q, 20, () => delay.resolve());
-        await q.wait(delay.promise);
+        await quitPollPause(q);
     }
-    throw Error('WINDOWS_NATIVE_QUIT_POLL_BUDGET');
 }
 /** Fixed cooperative main-inspector protocol only. No arbitrary expression, URL,
  * HWND dispatch or native/full lifecycle admission is exposed. */
@@ -1329,8 +1370,8 @@ export function requestWindowsNativeNormalQuit(cap) {
     if (selected.launch?.normalQuit) return selected.launch.normalQuit.task;
     const record = active(cap);
     assert.ok(
-        record.launch?.mainInspectorEndpoint && record.launch.latest?.createdByThisOwner,
-        'WINDOWS_NATIVE_QUIT_CREATED_ENDPOINT_REQUIRED',
+        record.launch?.latest?.createdByThisOwner,
+        'WINDOWS_NATIVE_QUIT_CREATED_PROCESS_REQUIRED',
     );
     const q = quitOwner(record);
     record.launch.normalQuit = q; // Before every effect.
@@ -1364,6 +1405,21 @@ export function joinWindowsNativeNormalQuitTransport(cap) {
     const q = state(cap).launch?.normalQuit;
     assert.ok(q, 'WINDOWS_NATIVE_QUIT_NOT_REQUESTED');
     return q.closed.promise;
+}
+/** Copies historical same-cap original bytes only, including after release.
+ * These readers grant no new effect or current-custody/native admission. */
+export function readWindowsNativeNormalQuit(cap) {
+    const q = state(cap).launch?.normalQuit;
+    assert.ok(
+        q && !q.inFlight && Buffer.isBuffer(q.originalNormalQuit),
+        'WINDOWS_NATIVE_QUIT_RECORD_MISSING',
+    );
+    return Buffer.from(q.originalNormalQuit);
+}
+export function readWindowsNativeOwnedRelease(cap) {
+    const bytes = state(cap).launch?.originalOwnedRelease;
+    assert.ok(Buffer.isBuffer(bytes), 'WINDOWS_NATIVE_OWNED_RELEASE_RECORD_MISSING');
+    return Buffer.from(bytes);
 }
 /** Join own-HANDLE closure and the native lifetime finalizer, once, after an actual
  * terminal/non-creation sample and created-child pipe EOF. This does not establish
@@ -1407,6 +1463,7 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
     record.launch.release = Promise.resolve()
         .then(() => record.native.releaseOwnedProcessHandles(record.raw))
         .then((output) => {
+            record.launch.releaseReturned = output;
             assert.ok(typeof output === 'string' && Buffer.byteLength(output) <= 4096);
             const value = JSON.parse(output);
             fields(value, [
@@ -1471,6 +1528,23 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
             ])
                 assert.equal(value[key], false);
             if (value.ownedHandlesClosed) assert.equal(value.closedCount, value.totalCount);
+            const root = record.launch.latest;
+            const original = Buffer.from(
+                JSON.stringify({
+                    schemaVersion: 1,
+                    kind: 'windows-native-owned-release/v1',
+                    binding: record.binding,
+                    requestedLaunch: record.launch.request,
+                    createdProcess: {
+                        pid: root.pid,
+                        threadId: root.threadId,
+                        creationTime100ns: root.creationTime100ns,
+                    },
+                    observation: value,
+                }) + '\n',
+            );
+            assert.ok(original.length <= 8192, 'WINDOWS_NATIVE_OWNED_RELEASE_RECORD_BOUND');
+            record.launch.originalOwnedRelease = original;
             if (complete) {
                 assert.equal(value.closedCount, value.totalCount);
                 retained.delete(record);
