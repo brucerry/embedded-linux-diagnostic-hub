@@ -727,6 +727,171 @@ export async function runMacInstallOnlyActions({ inputs, effects }) {
     return { result, custody };
 }
 
+// Fixed current-only busy case; no prior, repair selector or synthetic busy flag.
+export async function runMacBusyOnlyActions({ inputs, effects }) {
+    inputs = structuredClone(inputs);
+    const item = { id: 'macos-bundle:busy-refusal', status: 'unexecuted', actions: [] };
+    const custody = {
+        fixtures: [],
+        owners: [],
+        backups: [],
+        installArguments: [],
+        returnedOperations: [],
+        identityDrifts: [],
+        pending: null,
+    };
+    const result = {
+        schemaVersion: 1,
+        kind: 'macos-busy-only-actions',
+        executionScope: effects?.kind ?? 'unavailable',
+        lane: inputs.lane,
+        qualificationStatus: 'unverified',
+        status: 'unavailable',
+        cases: [item],
+    };
+    let fixture, owned, ownedID;
+    const guardOwner = () => {
+        if (owned) assert.equal(owned.id, ownedID, 'EFFECT_OWNER_IDENTITY_DRIFT');
+    };
+    const guardFixture = () =>
+        assert.deepEqual(
+            {
+                id: fixture?.id,
+                fresh: fixture?.fresh,
+                root: fixture?.root,
+                target: fixture?.target,
+            },
+            {
+                id: item.id,
+                fresh: true,
+                root: path.posix.join(inputs.fixtureParent, 'busy-refusal'),
+                target: path.posix.join(
+                    inputs.fixtureParent,
+                    'busy-refusal/Applications/Diagnostic Hub.app',
+                ),
+            },
+        );
+    const call = async (method, args, retain) => {
+        if (method !== 'prepare') guardFixture();
+        guardOwner();
+        const operation = { caseId: item.id, method, phase: 'submitted' };
+        custody.pending = operation;
+        let returned;
+        try {
+            returned = await effects[method](...args);
+        } catch (error) {
+            operation.error = error; // Private original thrown value, including undefined; never projected.
+            throw Object.assign(new Error('UNKNOWN_EFFECT_RETURN'), { uncertainEffect: true });
+        }
+        operation.phase = 'returned';
+        operation.returned = returned;
+        if (retain) retain(returned);
+        custody.returnedOperations.push(operation);
+        const action = { method, returned: true };
+        item.actions.push(action);
+        try {
+            action.facts = structuredClone(publicFacts(method, returned));
+        } catch {
+            action.invalidReturnedShape = true;
+            throw new Error('INVALID_RETURNED_SHAPE');
+        }
+        custody.pending = null;
+        guardFixture();
+        guardOwner();
+        return method === 'prepare' ? returned : structuredClone(action.facts);
+    };
+    try {
+        assert.deepEqual(Object.keys(inputs).sort(), [
+            'bundleIdentifier',
+            'current',
+            'fixtureParent',
+            'lane',
+        ]);
+        assert.ok(['darwin-x64', 'darwin-arm64'].includes(inputs.lane));
+        assert.equal(inputs.bundleIdentifier, 'dev.diagnostichub.desktop');
+        assert.ok(
+            path.posix.isAbsolute(inputs.fixtureParent) &&
+                path.posix.normalize(inputs.fixtureParent) === inputs.fixtureParent,
+        );
+        assert.ok(['native', 'mock'].includes(effects?.kind));
+        assert.deepEqual(Object.keys(effects).sort(), [
+            'initialize',
+            'install',
+            'kind',
+            'launchOwned',
+            'prepare',
+            'quitOwned',
+            'snapshot',
+        ]);
+        for (const name of ['prepare', 'install', 'snapshot', 'launchOwned', 'quitOwned'])
+            assert.equal(typeof effects[name], 'function');
+        const current = Object.freeze(structuredClone(inputs.current));
+        identifiedPackage(current);
+        item.status = 'running';
+        fixture = await call('prepare', [item.id], (value) => {
+            fixture = value;
+            custody.fixtures.push(value);
+        });
+        assert.equal(snapshot(await call('snapshot', [fixture])).exists, false);
+        const invokeInstall = async (configuration) => {
+            const argument = structuredClone(current),
+                options = structuredClone(configuration);
+            custody.installArguments.push({
+                caseId: item.id,
+                admitted: current,
+                argument,
+                admittedOptions: Object.freeze(structuredClone(configuration)),
+                argumentOptions: options,
+            });
+            const returned = await call('install', [fixture, argument, options]);
+            assert.deepEqual(argument, current, 'EFFECT_PACKAGE_IDENTITY_DRIFT');
+            assert.deepEqual(options, configuration, 'EFFECT_HELPER_OPTIONS_DRIFT');
+            return returned;
+        };
+        normalReturn(await invokeInstall({}));
+        installed(snapshot(await call('snapshot', [fixture])), current);
+        const launch = await call('launchOwned', [fixture], (value) => {
+            owned = value;
+            ownedID = value?.id;
+            custody.owners.push({ value, identity: { id: ownedID }, closed: false });
+        });
+        assert.equal(launch.ready, true);
+        assert.ok(typeof launch.id === 'string' && launch.id.length > 0);
+        const before = snapshot(await call('snapshot', [fixture]));
+        installed(before, current);
+        const refused = await invokeInstall({ expectBusy: true });
+        assert.equal(refused.exitObserved, true);
+        assert.equal(refused.error, 'none');
+        assert.equal(refused.signal, null);
+        assert.ok(
+            Number.isSafeInteger(refused.exitCode) &&
+                refused.exitCode > 0 &&
+                refused.exitCode <= 255,
+        );
+        assert.equal(refused.busyRefusalVerified, true);
+        assert.deepEqual(snapshot(await call('snapshot', [fixture])), before);
+        const returned = await call('quitOwned', [fixture, owned]);
+        assert.equal(returned.ownerId, ownedID);
+        normalReturn(returned);
+        for (const key of ['closeObserved', 'stdoutEOF', 'stderrEOF'])
+            assert.equal(returned[key], true);
+        custody.owners[0].closed = true;
+        item.status = 'verified';
+        validateMacBusyOnlyAction(item, {
+            version: current.version,
+            sourceCommit: current.sourceCommit,
+            zipSHA256: current.zipSHA256,
+            asarSHA256: current.asarSHA256,
+        });
+        result.status = 'verified';
+    } catch (error) {
+        result.status = error.uncertainEffect ? 'unknown' : 'failed';
+        result.reason = error.uncertainEffect ? 'UNKNOWN_EFFECT_RETURN' : 'ACTION_ASSERTION_FAILED';
+        item.status = result.status;
+    }
+    return { result, custody };
+}
+
 // Recheck the actual returned action transcript, rather than trusting a producer's `verified`
 // label. This deliberately has the same limited scope as the live assertions above: named
 // payload/data observations and direct owners, not source transport, run attribution, loaded
@@ -903,6 +1068,54 @@ export function validateMacInstallOnlyAction(value, currentBinding) {
         '--no-launch',
     ]);
     return 'macos-install-only-actions-consistent-unqualified';
+}
+
+export function validateMacBusyOnlyAction(value, currentBinding) {
+    value = structuredClone(value);
+    currentBinding = structuredClone(currentBinding);
+    const exact = (object, names) => {
+        assert.ok(object && typeof object === 'object' && !Array.isArray(object));
+        assert.deepEqual(Object.keys(object).sort(), [...names].sort());
+    };
+    exact(currentBinding, ['version', 'sourceCommit', 'zipSHA256', 'asarSHA256']);
+    identifiedPackage({ ...currentBinding, zipPath: '/admitted-input-identity-only' });
+    exact(value, ['id', 'status', 'actions']);
+    assert.equal(value.id, 'macos-bundle:busy-refusal');
+    assert.equal(value.status, 'verified');
+    assert.ok(Array.isArray(value.actions));
+    assert.deepEqual(
+        value.actions.map((action) => action.method),
+        [
+            'prepare',
+            'snapshot',
+            'install',
+            'snapshot',
+            'launchOwned',
+            'snapshot',
+            'install',
+            'snapshot',
+            'quitOwned',
+        ],
+    );
+    for (const action of value.actions) {
+        exact(action, ['method', 'returned', 'facts']);
+        assert.equal(action.returned, true);
+        assert.deepEqual(publicFacts(action.method, action.facts), action.facts);
+    }
+    verifiedCase(value, { current: currentBinding }, null, new Set());
+    const prepared = value.actions[0].facts;
+    const command = [
+        '/bin/bash',
+        path.posix.join(path.posix.dirname(prepared.root), 'bin/download-run-macos.sh'),
+        '--version',
+        'v' + currentBinding.version,
+        '--directory',
+        path.posix.join(prepared.root, 'Applications'),
+        '--no-launch',
+    ];
+    assert.deepEqual(value.actions[2].facts.command, command);
+    assert.deepEqual(value.actions[6].facts.command, command);
+    return 'macos-busy-only-actions-consistent-unqualified';
 }
 
 // Public evidence has a closed grammar and excludes the private custody object/returned handles.

@@ -15,6 +15,8 @@ import {
     NATIVE_LIMITS,
     MAC_INSTALL_ONLY_CASE,
     MAC_INSTALL_ONLY_EFFECTS,
+    MAC_BUSY_ONLY_CASE,
+    MAC_BUSY_ONLY_EFFECTS,
 } from '../scripts/lib/macos-native-contract.mjs';
 import {
     createMacNativeEffects,
@@ -33,11 +35,17 @@ import {
     validateMacInstallerActionResult,
     runMacInstallOnlyActions,
     validateMacInstallOnlyAction,
+    runMacBusyOnlyActions,
+    validateMacBusyOnlyAction,
 } from '../scripts/lib/macos-installer-actions.mjs';
 import { createMacNativeIO } from '../scripts/lib/macos-native-io.mjs';
 import { captureMacHelperOperation } from '../scripts/lib/macos-installer-child.mjs';
 import { digest, installerCases } from '../scripts/lib/staged-artifact-gate.mjs';
 import { produceMacOfflineLifecycle } from '../scripts/lib/macos-offline-lifecycle.mjs';
+import {
+    produceMacBusyLifecycle,
+    readMacBusyRecords,
+} from '../scripts/lib/macos-busy-lifecycle.mjs';
 import { inspectInstallerCaseObservation } from '../scripts/lib/installer-lifecycle-evidence.mjs';
 import {
     macPayloadIdentity,
@@ -3117,4 +3125,569 @@ test('native terminal row publication excludes private environment and record pr
         assert.ok(!bytes.toString().includes('privateCredential'));
     }
     assert.equal(JSON.parse(m.files.get(m.root + '/evidence/observation.json')).status, 'blocked');
+});
+
+// Fixed busy-only controls execute the actual CLI/adapter/actions with the existing memory ports.
+// Canonical helper stderr is fixture data here, never evidence that lsof ran on this host.
+function busyOnlyModel(options = {}) {
+    const m = installOnlyModel(),
+        previousArgv = m.argv;
+    m.approval.operation = 'macos-native-busy-only';
+    m.approval.case = MAC_BUSY_ONLY_CASE;
+    m.approval.effects = [...MAC_BUSY_ONLY_EFFECTS];
+    m.refresh();
+    m.argv = (mode = '--validate') => {
+        const args = previousArgv(mode);
+        args[args.length - 1] = MAC_BUSY_ONLY_CASE;
+        return args;
+    };
+    const child = m.io.child;
+    m.io.child = async (...args) => {
+        const returned = await child(...args);
+        const row = m.io.state.children.at(-1);
+        if (args[4]?.operationId.endsWith(':helper:2')) {
+            const text = options.late
+                ? 'verifier diagnostic\nDiagnostic Hub: Quit Diagnostic Hub before updating.\n'
+                : 'Diagnostic Hub: Quit Diagnostic Hub before installing or updating.\n';
+            m.io.state.terminalBytes += Buffer.byteLength(text) - row.stderrBytes;
+            row.stderr = [Buffer.from(text)];
+            row.stderrBytes = Buffer.byteLength(text);
+            returned.stderr = text;
+        }
+        options.afterChild?.(m, row, returned, args);
+        return returned;
+    };
+    class BusyDesktop extends m.Desktop {
+        constructor(input) {
+            super(input);
+            Object.assign(this.owner, {
+                exitObserved: false,
+                closeObserved: false,
+                exitCode: null,
+                signal: null,
+                quitComplete: false,
+            });
+            this.owner.streams = {
+                stdoutEOF: false,
+                stderrEOF: false,
+                stdoutComplete: false,
+                stderrComplete: false,
+            };
+        }
+        snapshot() {
+            const complete = this.owner.quitComplete;
+            return {
+                ...super.snapshot(),
+                closeObserved: this.owner.closeObserved,
+                exitCode: this.owner.exitCode,
+                signal: this.owner.signal,
+                quitIntent: complete,
+                quitScheduledAck: complete,
+                quitComplete: complete,
+                attachStarted: true,
+                attachReturned: true,
+                nodeEndpointObserved: true,
+                browserEndpointObserved: true,
+                frameworkOwnsProcess: false,
+                frameworkTemporaryDirectoryAllocated: false,
+                mainTransportClosed: complete,
+                rendererTransportClosed: complete,
+                genericPending: 0,
+                shutdownPending: 0,
+                mainPendingCount: 0,
+                publicationFDCount: this.owner.publicationFDs.size,
+                mainPending: 0,
+                rejectedOwnedCalls: 0,
+                streams: {
+                    ...this.owner.streams,
+                    capExceeded: false,
+                    stdoutBytes: 0,
+                    stderrBytes: 0,
+                },
+                shutdown: {
+                    mode: complete ? 'CLOSING' : 'INACTIVE',
+                    complete,
+                    terminal: null,
+                    repeated: false,
+                    incident: null,
+                },
+                launch: {
+                    executable: this.options.executable,
+                    profile: this.options.profile,
+                    artifactsDir: this.options.artifactsDir,
+                    shell: false,
+                    detached: false,
+                    args: [
+                        '--inspect-brk=127.0.0.1:0',
+                        '--remote-debugging-address=127.0.0.1',
+                        '--remote-debugging-port=0',
+                        '--user-data-dir=' + this.options.profile,
+                    ],
+                },
+                physicalDescendantClosure: false,
+            };
+        }
+        async attach() {
+            await super.attach();
+            if (options.attach) await options.attach(this, m);
+        }
+        async normalQuit() {
+            await super.normalQuit();
+            this.owner.streams = {
+                stdoutEOF: true,
+                stderrEOF: true,
+                stdoutComplete: true,
+                stderrComplete: true,
+            };
+        }
+    }
+    m.deps.createEffects = async (admitted) => {
+        const effects = await createMacNativeEffects(admitted, m.io, { Desktop: BusyDesktop });
+        return options.effects ? options.effects(effects, m) : effects;
+    };
+    return m;
+}
+const busyBinding = (m) => ({
+    version: '0.6.0',
+    sourceCommit: m.approval.sourceCommit,
+    zipSHA256: m.inputs.current.zipSHA256,
+    asarSHA256: digest('asar'),
+});
+
+test('busy-only selector refuses prior unknown and duplicate scope before native IO', async () => {
+    for (const modify of [
+        (args) => args.push('--prior-zip', NATIVE_TASK + '/prior.zip'),
+        (args) => args.push('--case', MAC_BUSY_ONLY_CASE),
+        (args) => {
+            args[args.length - 1] = 'macos-bundle:repair';
+        },
+    ]) {
+        const m = busyOnlyModel(),
+            args = m.argv('--run');
+        modify(args);
+        const result = await runMacNativeCLI(args, m.deps);
+        assert.notEqual(result.exitCode, 0);
+        noActors(m);
+    }
+});
+
+test('busy-only actual adapter retains two helpers one owned app nine actions and eight original references', async () => {
+    const m = busyOnlyModel(),
+        result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 0, result.state.failure?.stack ?? result.output);
+    const output = JSON.parse(result.output);
+    assert.equal(output.status, 'BUSY_ONLY_OBSERVED_REVIEW_REQUIRED');
+    assert.equal(output.busyRefusalStage, 'early');
+    assert.equal(output.fullLifecycle, false);
+    assert.equal(output.releaseAcceptance, false);
+    assert.match(output.runtimeFixture, /^renderer-offline-before-window/);
+    assert.match(output.helperFixture.missedBusyGuardConsequence, /^ordinary-replacement/);
+    assert.equal(m.log.filter(([name]) => name === 'child').length, 2);
+    assert.equal(m.log.filter(([name]) => name === 'app-launch').length, 1);
+    assert.equal(m.log.filter(([name]) => name === 'normal-quit').length, 1);
+    assert.ok(!m.log.some(([name]) => name === 'removeTree'));
+    assert.ok(![...m.files.keys()].some((name) => name.startsWith(m.root + '/mirrors/prior/')));
+    assert.equal(m.files.has(m.root + '/bin/mv'), false);
+    assert.equal(Object.keys(output.records).length, 8);
+    for (const ref of Object.values(output.records)) {
+        const bytes = m.files.get(path.join(m.root, ref.path));
+        assert.equal(bytes.length, ref.bytes);
+        assert.equal(digest(bytes), ref.sha256);
+    }
+    const original = (role) =>
+        JSON.parse(m.files.get(path.join(m.root, output.records[role].path)));
+    const before = original('installedPayloadBefore'),
+        after = original('installedPayloadAfter');
+    assert.equal(before.kind, 'macos-busy-payload-sample/v1');
+    assert.equal(before.phase, 'installed-before-busy');
+    assert.equal(after.phase, 'unchanged-after-busy');
+    assert.deepEqual(before.sample, after.sample);
+    assert.notEqual(
+        output.records.installedPayloadBefore.sha256,
+        output.records.installedPayloadAfter.sha256,
+    );
+    assert.equal(before.operationId, output.operationIds.install);
+    assert.equal(after.operationId, output.operationIds.busy);
+    const item = original('actionCase');
+    assert.equal(
+        validateMacBusyOnlyAction(item, busyBinding(m)),
+        'macos-busy-only-actions-consistent-unqualified',
+    );
+    assert.equal(original('installHelperChild').exitCode, 0);
+    assert.equal(original('busyHelperChild').exitCode, 1);
+    assert.equal(original('appClosure').closure.exitCode, 0);
+    assert.equal(m.io.needsHold(), false);
+    assert.ok(!m.files.has(m.root + '/evidence/observation.json'));
+});
+
+test('busy-only admission refuses broader effects prior binding and contradictory current shipping facts', async () => {
+    for (const change of [
+        (m) => {
+            m.approval.operation = 'macos-native-installer-lifecycle';
+        },
+        (m) => {
+            m.approval.effects.push('repair');
+        },
+        (m) => {
+            m.approval.inputs.prior = m.inputs.current;
+        },
+        (m) => {
+            const info = JSON.parse(m.files.get(m.inputs.current.info));
+            info.source = 'f'.repeat(40);
+            m.json(m.inputs.current.info, info);
+            m.inputs.current.infoSHA256 = digest(m.files.get(m.inputs.current.info));
+        },
+    ]) {
+        const m = busyOnlyModel();
+        change(m);
+        m.refresh();
+        const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.notEqual(result.exitCode, 0);
+        noActors(m);
+    }
+});
+
+test('busy-only actual adapter restricts methods cases helper ordinals options and fresh target', async () => {
+    const m = busyOnlyModel(),
+        admitted = await validateMacNativeRequest(
+            parseMacNativeArgs(m.argv('--run')),
+            m.io,
+            m.sourcePins,
+        );
+    await m.io.claim(admitted);
+    m.io.allocateRoot();
+    const effects = await m.deps.createEffects(admitted);
+    await effects.initialize();
+    assert.deepEqual(Object.keys(effects).sort(), [
+        'initialize',
+        'install',
+        'kind',
+        'launchOwned',
+        'prepare',
+        'quitOwned',
+        'snapshot',
+    ]);
+    await assert.rejects(effects.prepare('macos-bundle:remove'));
+    const fixture = await effects.prepare(MAC_BUSY_ONLY_CASE),
+        current = admitted.packages.current;
+    await assert.rejects(effects.install(fixture, current, { expectBusy: true }));
+    await assert.rejects(effects.install(fixture, current, { fault: 'activation-return-failure' }));
+    m.dirs.set(fixture.target, 999);
+    await assert.rejects(effects.install(fixture, current, {}));
+    assert.equal(m.io.state.children.length, 0);
+    const helper = m.files.get(m.root + '/bin/download-run-macos.sh').toString();
+    assert.equal(helper.split('if lsof -t "$target/Contents/MacOS/Diagnostic Hub"').length - 1, 2);
+    assert.ok(!helper.includes('Install-only fixture refuses an existing target.'));
+    assert.equal(m.files.has(m.root + '/bin/lsof'), false);
+    let release, entered;
+    const gate = new Promise((resolve) => {
+        release = resolve;
+    });
+    const ready = new Promise((resolve) => {
+        entered = resolve;
+    });
+    const second = busyOnlyModel({
+        async attach() {
+            entered();
+            await gate;
+        },
+    });
+    const bound = await validateMacNativeRequest(
+        parseMacNativeArgs(second.argv('--run')),
+        second.io,
+        second.sourcePins,
+    );
+    await second.io.claim(bound);
+    second.io.allocateRoot();
+    const e = await second.deps.createEffects(bound);
+    await e.initialize();
+    const f = await e.prepare(MAC_BUSY_ONLY_CASE);
+    await e.install(f, bound.packages.current, {});
+    const launching = e.launchOwned(f);
+    const launchSettled = launching.then(
+        () => {},
+        () => {},
+    ); // Observe rejection immediately; join below even on assertion failure.
+    try {
+        await Promise.race([
+            ready,
+            launchSettled.then(() => {
+                throw Error('Launch settled before pending attachment.');
+            }),
+        ]);
+        await assert.rejects(e.launchOwned(f), /exactly one app launch submission/);
+        await assert.rejects(
+            e.install(f, bound.packages.current, { expectBusy: true }),
+            /attachment and identity/,
+        );
+        assert.equal(second.io.state.children.length, 1);
+    } finally {
+        release();
+        await launchSettled;
+    }
+    const owner = await launching;
+    await e.install(f, bound.packages.current, { expectBusy: true });
+    await e.quitOwned(f, owner);
+    await assert.rejects(e.launchOwned(f), /helperCalls|strictEqual|Expected|exactly one/);
+    await assert.rejects(e.install(f, bound.packages.current, { expectBusy: true }));
+});
+
+test('busy-only accepts actual early and late diagnostic lines without an early-only gate', async () => {
+    for (const late of [false, true]) {
+        const m = busyOnlyModel({ late }),
+            result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.equal(result.exitCode, 0, result.state.failure?.stack ?? result.output);
+        assert.equal(JSON.parse(result.output).busyRefusalStage, late ? 'late' : 'early');
+        assert.equal(m.log.filter(([name]) => name === 'normal-quit').length, 1);
+    }
+});
+
+test('busy-only helper nonrefusal and incomplete child closure retain the owner without later publication', async () => {
+    for (const change of [
+        (row, returned) => {
+            row.exitCode = returned.exitCode = 0;
+        },
+        (row) => {
+            row.closeObserved = false;
+        },
+        (row) => {
+            row.stdoutEOF = false;
+        },
+        (row) => {
+            row.stderrEOF = false;
+        },
+        (row, returned) => {
+            returned.stderr = 'unrelated diagnostic';
+        },
+    ]) {
+        const m = busyOnlyModel({
+                afterChild(_m, row, returned, args) {
+                    if (args[4]?.operationId.endsWith(':helper:2')) change(row, returned);
+                },
+            }),
+            result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.notEqual(result.exitCode, 0);
+        assert.equal(result.state.holdRequired, true);
+        assert.equal(m.log.filter(([name]) => name === 'normal-quit').length, 0);
+        assert.ok(!m.files.has(m.root + '/busy-refusal/evidence/installed-payload-2.json'));
+        assert.ok(!m.files.has(m.root + '/evidence/busy-only-case.json'));
+    }
+});
+
+test('busy-only changed full bundle or plist after refusal cannot publish the case or quit', async () => {
+    for (const change of [
+        (m) => {
+            const target = m.root + '/busy-refusal/Applications/Diagnostic Hub.app';
+            m.trees.get(target).inventory[0].mode ^= 0o100;
+        },
+        (m) => {
+            m.write(
+                m.root + '/busy-refusal/Applications/Diagnostic Hub.app/Contents/Info.plist',
+                '<plist/>',
+            );
+        },
+    ]) {
+        const m = busyOnlyModel({
+                afterChild(m, _row, _returned, args) {
+                    if (args[4]?.operationId.endsWith(':helper:2')) change(m);
+                },
+            }),
+            result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.notEqual(result.exitCode, 0);
+        assert.equal(m.log.filter(([name]) => name === 'normal-quit').length, 0);
+        assert.ok(!m.files.has(m.root + '/evidence/busy-only-case.json'));
+    }
+});
+
+test('busy-only package options and owner identity mutations stop without borrowing altered values', async () => {
+    for (const variant of ['package', 'options', 'owner']) {
+        const m = busyOnlyModel({
+                effects(effects) {
+                    return {
+                        ...effects,
+                        async install(fixture, input, options) {
+                            const result = await effects.install(fixture, input, options);
+                            if (variant === 'package') input.zipSHA256 = 'f'.repeat(64);
+                            if (variant === 'options') options.fault = 'activation-return-failure';
+                            return result;
+                        },
+                        async launchOwned(fixture) {
+                            const owner = await effects.launchOwned(fixture);
+                            return variant === 'owner' ? { ...owner, ready: false } : owner;
+                        },
+                    };
+                },
+            }),
+            result = await runMacNativeCLI(m.argv('--run'), m.deps);
+        assert.notEqual(result.exitCode, 0);
+        assert.equal(m.log.filter(([name]) => name === 'normal-quit').length, 0);
+        assert.ok(!m.files.has(m.root + '/evidence/busy-only-case.json'));
+    }
+    const thrown = busyOnlyModel({
+        effects(effects) {
+            return {
+                ...effects,
+                async install(...args) {
+                    await effects.install(...args);
+                    throw undefined;
+                },
+            };
+        },
+    });
+    const unknown = await runMacNativeCLI(thrown.argv('--run'), thrown.deps);
+    assert.notEqual(unknown.exitCode, 0);
+    assert.equal(unknown.state.actions.result.status, 'unknown');
+    assert.equal(Object.hasOwn(unknown.state.actions.custody.pending, 'error'), true);
+    assert.equal(unknown.state.actions.custody.pending.error, undefined);
+    assert.equal(unknown.state.holdRequired, true);
+    assert.ok(!thrown.files.has(thrown.root + '/evidence/busy-only-case.json'));
+});
+
+test('busy-only closed replay rejects reordered extra malformed and substituted action facts', async () => {
+    const m = busyOnlyModel(),
+        result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 0, result.state.failure?.stack ?? result.output);
+    const item = result.state.actions.result.cases[0];
+    for (const mutate of [
+        (value) => value.actions.reverse(),
+        (value) => value.actions.push(value.actions[0]),
+        (value) => {
+            value.extra = true;
+        },
+        (value) => {
+            value.actions[6].facts.exitCode = 0;
+        },
+        (value) => {
+            value.actions[6].facts.busyRefusalVerified = false;
+        },
+        (value) => {
+            value.actions[8].facts.ownerId = 'unrelated';
+        },
+        (value) => {
+            value.actions[6].facts.command[1] = '/unrelated/helper';
+        },
+    ]) {
+        const value = structuredClone(item);
+        mutate(value);
+        assert.throws(() => validateMacBusyOnlyAction(value, busyBinding(m)));
+    }
+});
+
+test('busy-only pending prepare retains late fixture and snapshots caller inputs before await', async () => {
+    const m = busyOnlyModel(),
+        admitted = await validateMacNativeRequest(
+            parseMacNativeArgs(m.argv('--run')),
+            m.io,
+            m.sourcePins,
+        );
+    await m.io.claim(admitted);
+    m.io.allocateRoot();
+    const original = await m.deps.createEffects(admitted);
+    await original.initialize();
+    let release;
+    const gate = new Promise((resolve) => {
+        release = resolve;
+    });
+    let submitted;
+    const ready = new Promise((resolve) => {
+        submitted = resolve;
+    });
+    const effects = {
+        ...original,
+        async prepare(id) {
+            submitted();
+            await gate;
+            return original.prepare(id);
+        },
+    };
+    const inputs = {
+        lane: 'darwin-arm64',
+        fixtureParent: m.root,
+        bundleIdentifier: 'dev.diagnostichub.desktop',
+        current: {
+            version: '0.6.0',
+            sourceCommit: m.approval.sourceCommit,
+            zipPath: m.inputs.current.zip,
+            zipSHA256: m.inputs.current.zipSHA256,
+            asarSHA256: digest('asar'),
+        },
+    };
+    const pending = runMacBusyOnlyActions({ inputs, effects });
+    const prepareSettled = pending.then(
+        () => {},
+        () => {},
+    );
+    try {
+        await Promise.race([
+            ready,
+            prepareSettled.then(() => {
+                throw Error('Prepare did not submit.');
+            }),
+        ]);
+        inputs.fixtureParent = '/unrelated';
+        inputs.current.zipSHA256 = 'f'.repeat(64);
+    } finally {
+        release();
+        await prepareSettled;
+    }
+    const result = await pending;
+    assert.equal(result.result.status, 'verified');
+    assert.equal(result.custody.fixtures.length, 1);
+    assert.equal(result.custody.fixtures[0].root, m.root + '/busy-refusal');
+    assert.equal(result.custody.pending, null);
+    assert.equal(result.custody.owners[0].closed, true);
+});
+
+test('busy-only actual CLI original records feed the strict producer and shared consumer without native qualification', async () => {
+    const m = busyOnlyModel(),
+        result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 0, result.state.failure?.stack ?? result.output);
+    const summary = JSON.parse(result.output);
+    // These expected labels are synthetic selected context for a memory-only consistency control.
+    const expected = {
+        version: '0.6.0',
+        sourceCommit: m.approval.sourceCommit,
+        sourceTree: m.approval.sourceTree,
+        runId: '12345',
+        runAttempt: '1',
+        lane: 'darwin-arm64',
+        artifacts: [
+            {
+                name: 'Diagnostic-Hub-macos-arm64.zip',
+                bytes: m.inputs.current.zipBytes,
+                sha256: m.inputs.current.zipSHA256,
+            },
+        ],
+    };
+    const readBytes = async (relative, maximum) => m.io.read(path.join(m.root, relative), maximum);
+    const produced = await produceMacBusyLifecycle(expected, summary.records, readBytes);
+    assert.equal(produced.caseId, MAC_BUSY_ONLY_CASE);
+    assert.equal(produced.releaseAcceptance, false);
+    assert.equal(produced.busyRefusalStage, 'early');
+    const envelope = JSON.parse(produced.bytes.toString());
+    const item = { id: MAC_BUSY_ONLY_CASE, evidence: produced.evidence };
+    assert.equal(
+        inspectInstallerCaseObservation(envelope, item, expected),
+        'busy-refusal-payload-and-direct-child-consistent-unqualified',
+    );
+    await readMacBusyRecords(envelope.observation, readBytes);
+    for (const role of ['installHelperChild', 'busyHelperChild']) {
+        const child = envelope.observation[role];
+        for (const name of ['stdout', 'stderr'])
+            assert.ok(
+                m.log.some(
+                    ([event, file]) =>
+                        event === 'read' &&
+                        file === path.join(m.root, 'evidence', child.streams[name].path),
+                ),
+            );
+    }
+    const ref = summary.records.installedPayloadAfter;
+    const original = Buffer.from(m.files.get(path.join(m.root, ref.path)));
+    m.write(
+        path.join(m.root, ref.path),
+        Buffer.from(original.toString().replace('unchanged-after-busy', 'unrelated-phase')),
+    );
+    await assert.rejects(readMacBusyRecords(envelope.observation, readBytes));
+    assert.equal(m.io.needsHold(), false); // All actors here are inert, normally settled memory ports.
 });

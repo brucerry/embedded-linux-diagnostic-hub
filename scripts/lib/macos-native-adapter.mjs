@@ -7,6 +7,8 @@ import {
     NATIVE_LIMITS,
     MAC_INSTALL_ONLY_CASE,
     MAC_INSTALL_ONLY_EFFECTS,
+    MAC_BUSY_ONLY_CASE,
+    MAC_BUSY_ONLY_EFFECTS,
 } from './macos-native-contract.mjs';
 import { captureMacHelperOperation } from './macos-installer-child.mjs';
 import {
@@ -159,7 +161,9 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
     assert.equal(admission.approval.approved, true);
     assert.equal(io.state.root, admission.parsed.root);
     assert.equal(io.state.rootAllocated, true);
-    const installOnly = admission.parsed.case === MAC_INSTALL_ONLY_CASE;
+    const installOnly = admission.parsed.case === MAC_INSTALL_ONLY_CASE,
+        busyOnly = admission.parsed.case === MAC_BUSY_ONLY_CASE,
+        currentOnly = installOnly || busyOnly;
     if (installOnly) {
         assert.equal(admission.approval.operation, 'macos-native-install-only');
         assert.equal(admission.approval.case, MAC_INSTALL_ONLY_CASE);
@@ -167,6 +171,12 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
             [...admission.approval.effects].sort(),
             [...MAC_INSTALL_ONLY_EFFECTS].sort(),
         );
+        assert.deepEqual(Object.keys(admission.packages), ['current']);
+    }
+    if (busyOnly) {
+        assert.equal(admission.approval.operation, 'macos-native-busy-only');
+        assert.equal(admission.approval.case, MAC_BUSY_ONLY_CASE);
+        assert.deepEqual([...admission.approval.effects].sort(), [...MAC_BUSY_ONLY_EFFECTS].sort());
         assert.deepEqual(Object.keys(admission.packages), ['current']);
     }
     const admitted = structuredClone(admission),
@@ -183,7 +193,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
     let initialized = false,
         Desktop = dependencies.Desktop;
     const helper = path.join(root, 'bin/download-run-macos.sh');
-    const packageRoles = installOnly ? ['current'] : ['current', 'prior'];
+    const packageRoles = currentOnly ? ['current'] : ['current', 'prior'];
     const packageIdentity = (value) => ({
         version: value.version,
         sourceCommit: value.sourceCommit,
@@ -306,7 +316,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 65536,
                 0o700,
             );
-            if (!installOnly)
+            if (!currentOnly)
                 io.publish(
                     path.join(root, 'bin/mv'),
                     Buffer.from(
@@ -357,7 +367,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
             assert.ok(
                 initialized &&
                     installerCases('darwin-' + admitted.metadata.arch).includes(id) &&
-                    (!installOnly || id === MAC_INSTALL_ONLY_CASE) &&
+                    (!currentOnly || id === admitted.parsed.case) &&
                     !fixtures.has(id),
             );
             const dir = path.join(root, id.slice('macos-bundle:'.length));
@@ -405,6 +415,48 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                     true,
                     'Install-only target must be absent.',
                 );
+            }
+            if (busyOnly) {
+                assert.equal(fixture.id, MAC_BUSY_ONLY_CASE);
+                assert.equal(selected, admitted.packages.current);
+                assert.ok(
+                    value.helperCalls === 0 || value.helperCalls === 1,
+                    'Busy helper submissions are fixed once per ordinal.',
+                );
+                if (value.helperCalls === 0) {
+                    assert.deepEqual(options, {});
+                    assert.equal(value.installed, null);
+                    assert.equal(
+                        io.absent(fixture.target),
+                        true,
+                        'Fresh busy fixture must be absent before installation.',
+                    );
+                } else {
+                    assert.deepEqual(options, { expectBusy: true });
+                    assert.equal(value.installed, selected);
+                    const owners = io.state.desktops.filter(
+                        (item) => item.fixture === fixture && !item.closed,
+                    );
+                    assert.equal(
+                        owners.length,
+                        1,
+                        'Busy attempt requires its actual retained live owner.',
+                    );
+                    assert.equal(
+                        value.launchReturned,
+                        true,
+                        'Busy owner attachment and identity must have returned.',
+                    );
+                    assert.equal(owners[0].identity?.ready, true);
+                    assert.equal(owners[0].identity?.version, selected.version);
+                    assert.equal(
+                        owners[0].identity?.asar,
+                        path.join(fixture.target, 'Contents/Resources/app.asar'),
+                    );
+                    assert.equal(owners[0].desktop.owner.reason, null);
+                    assert.equal(owners[0].desktop.owner.exitObserved, false);
+                    io.tree(fixture.target, selected.inventory);
+                }
             }
             assert.ok(Object.keys(options).every((key) => ['expectBusy', 'fault'].includes(key)));
             if (options.fault) assert.equal(options.fault, 'activation-return-failure');
@@ -460,7 +512,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 signal: returned.signal,
                 expectedReturn: expectation,
             });
-            if (installOnly) {
+            if (currentOnly) {
                 const children = io.state.children.filter(
                     (child) => child.request?.operation?.operationId === operation.operationId,
                 );
@@ -469,7 +521,13 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 assert.deepEqual(child.request.operation, operation);
                 for (const key of ['exitObserved', 'closeObserved', 'stdoutEOF', 'stderrEOF'])
                     assert.equal(child[key], true, 'Install-only helper closure is incomplete.');
-                assert.equal(child.exitCode, 0);
+                if (busyOnly && options.expectBusy)
+                    assert.ok(
+                        Number.isSafeInteger(child.exitCode) &&
+                            child.exitCode > 0 &&
+                            child.exitCode <= 255,
+                    );
+                else assert.equal(child.exitCode, 0);
                 assert.equal(child.signal, null);
                 assert.equal(child.error, 'none');
             }
@@ -480,9 +538,60 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 signal: returned.signal,
                 error: returned.error,
             };
-            if (options.expectBusy)
-                result.busyRefusalVerified = /Quit Diagnostic Hub/.test(returned.stderr);
-            else if (options.fault) {
+            if (options.expectBusy) {
+                result.busyRefusalVerified = busyOnly
+                    ? /^Diagnostic Hub: Quit Diagnostic Hub before (?:installing or updating|updating)\.$/m.test(
+                          returned.stderr,
+                      )
+                    : /Quit Diagnostic Hub/.test(returned.stderr);
+                if (busyOnly) {
+                    assert.equal(result.busyRefusalVerified, true);
+                    const observed = io.tree(fixture.target, selected.inventory);
+                    const info = parseMacBundleInfo(
+                        io.read(path.join(fixture.target, 'Contents/Info.plist'), 65536),
+                    );
+                    assert.equal(info.version, selected.version);
+                    const payloadIdentity = macIdentityFromTreeSamples(observed);
+                    validateMacPayloadIdentity(payloadIdentity, selected.payloadIdentity);
+                    const expected = {
+                        caseId: fixture.id,
+                        version: selected.version,
+                        sourceCommit: selected.sourceCommit,
+                        sourceTree: admitted.approval.sourceTree,
+                        archive: {
+                            name: selected.info.asset,
+                            bytes: selected.identity.zipBytes,
+                            sha256: selected.zipSHA256,
+                        },
+                        payloadIdentity: selected.payloadIdentity,
+                    };
+                    const sample = {
+                        schemaVersion: 1,
+                        kind: 'macos-installed-payload-sample',
+                        ...expected,
+                        payloadIdentity,
+                        qualification: false,
+                    };
+                    validateMacInstalledPayloadSample(sample, expected);
+                    assert.equal(value.payloadSamples, 1);
+                    io.publish(
+                        path.join(
+                            fixture.root,
+                            'evidence/installed-payload-' + ++value.payloadSamples + '.json',
+                        ),
+                        encoded({
+                            kind: 'macos-busy-payload-sample/v1',
+                            phase: 'unchanged-after-busy',
+                            operationId: operation.operationId,
+                            sample,
+                        }),
+                        NATIVE_LIMITS.resultBytes,
+                        0o600,
+                        true,
+                    );
+                    value.busyRefused = true;
+                }
+            } else if (options.fault) {
                 assert.equal(
                     io.read(env.HUB_NATIVE_FAULT_MARKER, 64).toString(),
                     'activation-return-failure\n',
@@ -527,7 +636,16 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                             fixture.root,
                             'evidence/installed-payload-' + ++value.payloadSamples + '.json',
                         ),
-                        encoded(sample),
+                        encoded(
+                            busyOnly
+                                ? {
+                                      kind: 'macos-busy-payload-sample/v1',
+                                      phase: 'installed-before-busy',
+                                      operationId: operation.operationId,
+                                      sample,
+                                  }
+                                : sample,
+                        ),
                         NATIVE_LIMITS.resultBytes,
                         0o600,
                         true,
@@ -538,6 +656,21 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
         },
         async launchOwned(fixture) {
             const value = record(fixture);
+            if (busyOnly) {
+                assert.equal(fixture.id, MAC_BUSY_ONLY_CASE);
+                assert.equal(value.helperCalls, 1);
+                assert.equal(
+                    value.launchSubmitted,
+                    undefined,
+                    'Busy fixture owns exactly one app launch submission.',
+                );
+                value.launchSubmitted = true; // Reserve before lazy SDK/owner acquisition; never reset.
+                assert.equal(
+                    io.state.desktops.length,
+                    0,
+                    'Busy fixture owns exactly one app launch.',
+                );
+            }
             assert.ok(value.installed);
             if (!Desktop)
                 Desktop = (await import('../../tests/fixtures/macos-native-owned.ts')).OwnedDesktop;
@@ -588,10 +721,16 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
             });
             retained.identity = structuredClone(observed);
             ownerRecords.set(owner, { retained, ordinal });
+            if (busyOnly) value.launchReturned = true;
             return owner;
         },
         async quitOwned(fixture, owner) {
-            record(fixture);
+            const fixtureValue = record(fixture);
+            if (busyOnly) {
+                assert.equal(fixture.id, MAC_BUSY_ONLY_CASE);
+                assert.equal(fixtureValue.helperCalls, 2);
+                assert.equal(fixtureValue.busyRefused, true);
+            }
             const owned = ownerRecords.get(owner);
             assert.ok(owned && owned.retained.fixture === fixture && !owned.retained.closed);
             const { desktop } = owned.retained;
@@ -873,6 +1012,18 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                       effects[name],
                   ]),
               )
-            : effects,
+            : busyOnly
+              ? Object.fromEntries(
+                    [
+                        'kind',
+                        'initialize',
+                        'prepare',
+                        'install',
+                        'snapshot',
+                        'launchOwned',
+                        'quitOwned',
+                    ].map((name) => [name, effects[name]]),
+                )
+              : effects,
     );
 }

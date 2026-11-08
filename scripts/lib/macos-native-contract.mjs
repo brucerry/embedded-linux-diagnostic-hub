@@ -29,6 +29,18 @@ export const NATIVE_EFFECTS = Object.freeze([
 ]);
 export const MAC_INSTALL_ONLY_CASE = 'macos-bundle:install';
 export const MAC_INSTALL_ONLY_EFFECTS = Object.freeze(['install', 'helper-stage-disposal']);
+export const MAC_BUSY_ONLY_CASE = 'macos-bundle:busy-refusal';
+// A missed busy guard may exercise the ordinary helper only on this newly generated bundle.
+// That fallback can stage same-version repair, move previous.app, roll back and dispose
+// only guarded helper stages. It does not admit a separate repair, another target,
+// user originals or global mutations.
+export const MAC_BUSY_ONLY_EFFECTS = Object.freeze([
+    'install',
+    'owned-app-launch-normal-quit',
+    'owned-loopback',
+    'busy-refusal-owned-bundle-fallback',
+    'helper-stage-disposal',
+]);
 const FLAGS = [
     'task-root',
     'node',
@@ -72,7 +84,7 @@ export function parseMacNativeArgs(argv) {
                 !Object.hasOwn(parsed, flag),
         );
         assert.ok(value && !value.startsWith('--') && value.length <= 4096);
-        if (flag === 'case') assert.equal(value, MAC_INSTALL_ONLY_CASE);
+        if (flag === 'case') assert.ok([MAC_INSTALL_ONLY_CASE, MAC_BUSY_ONLY_CASE].includes(value));
         else if (flag === 'approval-sha256') assert.match(value, hashPattern);
         else
             assert.ok(
@@ -83,13 +95,15 @@ export function parseMacNativeArgs(argv) {
             );
         parsed[flag] = value;
     }
-    const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE;
-    const required = FLAGS.filter((flag) => !installOnly || !flag.startsWith('prior-'));
+    const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE,
+        busyOnly = parsed.case === MAC_BUSY_ONLY_CASE,
+        currentOnly = installOnly || busyOnly;
+    const required = FLAGS.filter((flag) => !currentOnly || !flag.startsWith('prior-'));
     assert.ok(
         required.every((flag) => Object.hasOwn(parsed, flag)),
         'All package and approval bindings are required.',
     );
-    if (installOnly)
+    if (currentOnly)
         assert.ok(!FLAGS.some((flag) => flag.startsWith('prior-') && Object.hasOwn(parsed, flag)));
     const taskRoot = validateMacNativeTaskRoot(parsed['task-root']);
     for (const flag of required.filter(
@@ -198,13 +212,19 @@ export async function validateMacNativeRequest(parsed, io, expectedSourcePins) {
         NATIVE_LIMITS.admissionBytes,
     );
     assert.equal(digest(approvalBytes), parsed['approval-sha256']);
-    const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE;
+    const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE,
+        busyOnly = parsed.case === MAC_BUSY_ONLY_CASE,
+        currentOnly = installOnly || busyOnly;
     assert.equal(
         approval.operation,
-        installOnly ? 'macos-native-install-only' : 'macos-native-installer-lifecycle',
+        installOnly
+            ? 'macos-native-install-only'
+            : busyOnly
+              ? 'macos-native-busy-only'
+              : 'macos-native-installer-lifecycle',
     );
-    if (installOnly) {
-        assert.equal(approval.case, MAC_INSTALL_ONLY_CASE);
+    if (currentOnly) {
+        assert.equal(approval.case, parsed.case);
         assert.ok(!FLAGS.some((flag) => flag.startsWith('prior-') && Object.hasOwn(parsed, flag)));
         assert.deepEqual(Object.keys(approval.inputs ?? {}).sort(), ['current']);
     }
@@ -229,7 +249,13 @@ export async function validateMacNativeRequest(parsed, io, expectedSourcePins) {
     assert.ok(Number.isSafeInteger(approval.minimumFreeBytes) && approval.minimumFreeBytes > 0);
     assert.deepEqual(
         [...approval.effects].sort(),
-        [...(installOnly ? MAC_INSTALL_ONLY_EFFECTS : NATIVE_EFFECTS)].sort(),
+        [
+            ...(installOnly
+                ? MAC_INSTALL_ONLY_EFFECTS
+                : busyOnly
+                  ? MAC_BUSY_ONLY_EFFECTS
+                  : NATIVE_EFFECTS),
+        ].sort(),
     );
     const now = io.nowUTC();
     const issued = Date.parse(approval.issuedAt),
@@ -268,7 +294,7 @@ export async function validateMacNativeRequest(parsed, io, expectedSourcePins) {
         });
     }
     const packages = {};
-    for (const role of installOnly ? ['current'] : ['current', 'prior']) {
+    for (const role of currentOnly ? ['current'] : ['current', 'prior']) {
         const wanted = approval.inputs[role];
         assert.ok(
             wanted &&
@@ -297,7 +323,7 @@ export async function validateMacNativeRequest(parsed, io, expectedSourcePins) {
             commit: info.value.commit,
             sha256: wanted.zipSHA256,
         });
-        if (installOnly) {
+        if (currentOnly) {
             assert.equal(info.value.source, approval.sourceCommit);
             assert.equal(info.value.packagedSourceMatches, true);
             assert.equal(info.value.distribution, true);
@@ -326,7 +352,7 @@ export async function validateMacNativeRequest(parsed, io, expectedSourcePins) {
             identity: wanted,
         };
     }
-    if (!installOnly) {
+    if (!currentOnly) {
         assert.notEqual(packages.current.version, packages.prior.version);
         assert.notEqual(packages.current.zipSHA256, packages.prior.zipSHA256);
     }
@@ -339,7 +365,7 @@ export async function validateMacNativeRequest(parsed, io, expectedSourcePins) {
         nonce: approval.nonce,
         approvalSHA256: digest(approvalBytes),
         current: packages.current.identity,
-        ...(installOnly ? { case: MAC_INSTALL_ONLY_CASE } : { prior: packages.prior.identity }),
+        ...(currentOnly ? { case: parsed.case } : { prior: packages.prior.identity }),
         pins: approval.pins,
         effects: approval.effects,
         windowMs: approval.windowMs,

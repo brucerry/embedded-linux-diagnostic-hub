@@ -12,6 +12,7 @@ import {
     MAC_HELPER_RECORD_LIMIT,
 } from './macos-installer-child.mjs';
 import { inspectMacInstallPayload, readMacInstallRecords } from './macos-install-lifecycle.mjs';
+import { inspectMacBusyPayload, readMacBusyRecords } from './macos-busy-lifecycle.mjs';
 
 export const INSTALLER_CASE_LIMIT = 128 * 1024;
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -141,6 +142,12 @@ export function inspectInstallerCaseObservation(value, item, expected) {
         helperChildReference(value.observation, item);
         return status;
     }
+    if (
+        expected.lane.startsWith('darwin-') &&
+        item.id === 'macos-bundle:busy-refusal' &&
+        value.observation?.kind === 'macos-owned-busy-refusal/v1'
+    )
+        return inspectMacBusyPayload(value.observation, item, expected);
     if (expected.lane.startsWith('darwin-') && item.id === 'macos-bundle:offline-launch')
         return value.observation?.kind === 'macos-owned-offline-launch/v2'
             ? inspectMacOfflinePayload(value.observation, item, expected)
@@ -181,6 +188,8 @@ export async function consumeInstallerLifecycleEvidence(rawReceipt, rawExpected,
             value.observation?.kind === 'macos-owned-install/v1'
         )
             await readMacInstallRecords(value.observation, readBytes);
+        if (value.observation?.kind === 'macos-owned-busy-refusal/v1')
+            await readMacBusyRecords(value.observation, readBytes);
         if (value.observation?.kind === 'macos-owned-offline-launch/v2')
             await readMacOfflineRecords(value.observation, readBytes);
         if (item.id === 'macos-bundle:install' && value.observation?.kind === 'fixed-child')

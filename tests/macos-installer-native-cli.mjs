@@ -6,6 +6,7 @@ import {
     validateMacNativeRequest,
     NATIVE_LIMITS,
     MAC_INSTALL_ONLY_CASE,
+    MAC_BUSY_ONLY_CASE,
 } from '../scripts/lib/macos-native-contract.mjs';
 import {
     createMacNativeEffects,
@@ -16,6 +17,8 @@ import {
     runMacInstallerActions,
     runMacInstallOnlyActions,
     validateMacInstallOnlyAction,
+    runMacBusyOnlyActions,
+    validateMacBusyOnlyAction,
 } from '../scripts/lib/macos-installer-actions.mjs';
 import { createMacInstallerObservation } from '../scripts/lib/macos-installer-observation.mjs';
 import { digest, laneFiles } from '../scripts/lib/staged-artifact-gate.mjs';
@@ -37,6 +40,11 @@ export const MAC_NATIVE_HELP = `Usage: node --import <pinned-tsx> tests/macos-in
   It requires macos-native-install-only approval, the exact case and only install/helper-stage-disposal.
   It retains a partial case, helper child/streams, installed payload and shipping build info;
   it cannot produce an all-nine observation or release acceptance.
+  Optional --case macos-bundle:busy-refusal selects only current install, one owned app,
+  real helper busy refusal, unchanged bundle and normal quit; omit every prior-* flag.
+  It requires macos-native-busy-only and its exact closed effects, including possible ordinary
+  helper replacement/rollback only on this generated fixture if the real busy guard misses.
+  This is not a standalone repair/remove grant or an independent offline-launch qualification.
 No default execution. --validate reads bindings only; it does not claim a run or execute helpers.
 Host paths are explicit configuration, not execution permission. Missing configuration refuses before IO.
 The source-local Playwright path is a nominal dependency pin, not proof of the loaded SDK closure.
@@ -228,6 +236,222 @@ async function publishInstallOnly(admitted, io, actions) {
     }).toString();
 }
 
+async function publishBusyOnly(admitted, io, actions) {
+    const root = admitted.parsed.root,
+        selected = admitted.packages.current;
+    const currentBinding = {
+        version: selected.version,
+        sourceCommit: selected.sourceCommit,
+        zipSHA256: selected.zipSHA256,
+        asarSHA256: selected.asarSHA256,
+    };
+    assert.equal(actions.result.status, 'verified');
+    assert.equal(actions.custody.pending, null);
+    assert.equal(actions.result.cases.length, 1);
+    assert.equal(actions.custody.owners.length, 1);
+    assert.equal(actions.custody.owners[0].closed, true);
+    const actionCase = actions.result.cases[0];
+    validateMacBusyOnlyAction(actionCase, currentBinding);
+    assert.equal(io.state.desktops.length, 1);
+    assert.equal(io.state.desktops[0].closed, true);
+    assert.equal(io.needsHold(), false);
+    const rows = publishTerminalFacts(io, root);
+    const helpers = rows.filter((row) => row.operation?.caseId === MAC_BUSY_ONLY_CASE);
+    assert.equal(helpers.length, 2);
+    const reference = async (relative, cap) => {
+        const bytes = await io.read(path.join(root, relative), cap);
+        return { bytes, ref: { path: relative, bytes: bytes.length, sha256: digest(bytes) } };
+    };
+    const helperRefs = [],
+        streams = [];
+    for (const [ordinal, child] of helpers.entries()) {
+        assert.equal(
+            child.operation.operationId,
+            admitted.approval.nonce + ':' + MAC_BUSY_ONLY_CASE + ':helper:' + (ordinal + 1),
+        );
+        assert.equal(child.operation.fixtureRoot, path.join(root, 'busy-refusal'));
+        assert.deepEqual(child.operation.observerSource, {
+            commit: admitted.approval.sourceCommit,
+            tree: admitted.approval.sourceTree,
+        });
+        assert.deepEqual(child.operation.package, {
+            name: selected.info.asset,
+            bytes: selected.identity.zipBytes,
+            sha256: selected.zipSHA256,
+            version: selected.version,
+            sourceCommit: selected.sourceCommit,
+        });
+        assert.deepEqual(child.command, [
+            '/bin/bash',
+            path.join(root, 'bin/download-run-macos.sh'),
+            '--version',
+            'v' + selected.version,
+            '--directory',
+            path.join(root, 'busy-refusal/Applications'),
+            '--no-launch',
+        ]);
+        for (const key of ['exitObserved', 'closeObserved', 'stdoutEOF', 'stderrEOF'])
+            assert.equal(child[key], true);
+        assert.equal(child.error, 'none');
+        assert.equal(child.signal, null);
+        if (ordinal === 0) assert.equal(child.exitCode, 0);
+        else
+            assert.ok(
+                Number.isSafeInteger(child.exitCode) && child.exitCode > 0 && child.exitCode <= 255,
+            );
+        const saved = await reference(macHelperRecordPath(child.index), NATIVE_LIMITS.stageBytes);
+        assert.deepEqual(JSON.parse(saved.bytes.toString()), child);
+        helperRefs.push(saved.ref);
+        const original = {};
+        for (const name of ['stdout', 'stderr']) {
+            const stream = await reference(
+                'evidence/' + child.streams[name].path,
+                NATIVE_LIMITS.streamBytes,
+            );
+            assert.equal(stream.ref.bytes, child.streams[name].bytes);
+            assert.equal(stream.ref.sha256, child.streams[name].sha256);
+            original[name] = stream.bytes.toString('utf8');
+        }
+        streams.push(original);
+    }
+    const diagnostics = streams[1].stderr
+        .split('\n')
+        .filter((line) =>
+            /^Diagnostic Hub: Quit Diagnostic Hub before (?:installing or updating|updating)\.$/.test(
+                line,
+            ),
+        );
+    assert.equal(diagnostics.length, 1);
+    const busyRefusalStage = diagnostics[0].includes('installing or updating') ? 'early' : 'late';
+    const payloadRefs = [],
+        payloads = [];
+    for (const [index, phase] of ['installed-before-busy', 'unchanged-after-busy'].entries()) {
+        const saved = await reference(
+            'busy-refusal/evidence/installed-payload-' + (index + 1) + '.json',
+            NATIVE_LIMITS.resultBytes,
+        );
+        const wrapper = JSON.parse(saved.bytes.toString());
+        assert.deepEqual(Object.keys(wrapper).sort(), ['kind', 'operationId', 'phase', 'sample']);
+        assert.equal(wrapper.kind, 'macos-busy-payload-sample/v1');
+        assert.equal(wrapper.phase, phase);
+        assert.equal(wrapper.operationId, helpers[index].operation.operationId);
+        validateMacInstalledPayloadSample(wrapper.sample, {
+            caseId: MAC_BUSY_ONLY_CASE,
+            version: selected.version,
+            sourceCommit: selected.sourceCommit,
+            sourceTree: admitted.approval.sourceTree,
+            archive: {
+                name: selected.info.asset,
+                bytes: selected.identity.zipBytes,
+                sha256: selected.zipSHA256,
+            },
+            payloadIdentity: selected.payloadIdentity,
+        });
+        payloads.push(wrapper.sample);
+        payloadRefs.push(saved.ref);
+    }
+    assert.deepEqual(payloads[0], payloads[1]);
+    const appPrequit = await reference(
+        'busy-refusal/evidence/app-1-prequit.json',
+        NATIVE_LIMITS.resultBytes,
+    );
+    const appClosure = await reference(
+        'busy-refusal/evidence/app-1-closure.json',
+        NATIVE_LIMITS.resultBytes,
+    );
+    const prequit = JSON.parse(appPrequit.bytes.toString()),
+        closed = JSON.parse(appClosure.bytes.toString());
+    assert.equal(prequit.ownerId, actionCase.actions[4].facts.id);
+    assert.equal(closed.ownerId, prequit.ownerId);
+    assert.equal(prequit.scope, 'installer-case');
+    assert.equal(prequit.identity.ready, true);
+    assert.equal(prequit.identity.packaged, true);
+    assert.equal(prequit.identity.offline, true);
+    assert.equal(prequit.identity.version, selected.version);
+    assert.equal(
+        prequit.identity.asar,
+        path.join(root, 'busy-refusal/Applications/Diagnostic Hub.app/Contents/Resources/app.asar'),
+    );
+    assert.equal(prequit.identity.profile, path.join(root, 'busy-refusal/profile'));
+    assert.equal(closed.closure.reason, null);
+    assert.equal(closed.closure.exitCode, 0);
+    assert.equal(closed.closure.signal, null);
+    for (const key of [
+        'exitObserved',
+        'closeObserved',
+        'quitComplete',
+        'mainTransportClosed',
+        'rendererTransportClosed',
+    ])
+        assert.equal(closed.closure[key], true);
+    for (const key of ['stdoutComplete', 'stderrComplete', 'stdoutEOF', 'stderrEOF'])
+        assert.equal(closed.closure.streams[key], true);
+    assert.equal(closed.closure.physicalDescendantClosure, false);
+    const infoBytes = await io.read(selected.identity.info, 65536);
+    assert.equal(digest(infoBytes), selected.identity.infoSHA256);
+    const shippingPath = 'evidence/current-shipping-build-info.json';
+    io.publish(path.join(root, shippingPath), infoBytes, 65536, 0o600, true);
+    const shippingBuildInfo = await reference(shippingPath, 65536);
+    assert.ok(shippingBuildInfo.bytes.equals(infoBytes));
+    const casePath = 'evidence/busy-only-case.json';
+    io.publish(
+        path.join(root, casePath),
+        bounded(actionCase, NATIVE_LIMITS.stageBytes),
+        NATIVE_LIMITS.stageBytes,
+        0o600,
+        true,
+    );
+    const caseRecord = await reference(casePath, NATIVE_LIMITS.stageBytes);
+    validateMacBusyOnlyAction(JSON.parse(caseRecord.bytes.toString()), currentBinding);
+    const helperBytes = await io.read(path.join(root, 'bin/download-run-macos.sh'), 65536);
+    io.gate();
+    assert.equal(io.needsHold(), false);
+    return bounded({
+        status: 'BUSY_ONLY_OBSERVED_REVIEW_REQUIRED',
+        case: MAC_BUSY_ONLY_CASE,
+        qualificationStatus: 'unverified',
+        sourceCommit: admitted.approval.sourceCommit,
+        sourceTree: admitted.approval.sourceTree,
+        root,
+        operationIds: {
+            install: helpers[0].operation.operationId,
+            busy: helpers[1].operation.operationId,
+        },
+        busyRefusalStage,
+        records: {
+            actionCase: caseRecord.ref,
+            installHelperChild: helperRefs[0],
+            busyHelperChild: helperRefs[1],
+            installedPayloadBefore: payloadRefs[0],
+            installedPayloadAfter: payloadRefs[1],
+            shippingBuildInfo: shippingBuildInfo.ref,
+            appPrequit: appPrequit.ref,
+            appClosure: appClosure.ref,
+        },
+        helperFixture: {
+            diskIdentityOnly: true,
+            physicalLoadedBytesVerified: false,
+            transport: 'locally-derived-offline-mirror',
+            consent: 'fixed-install-substitution-not-human-dialog',
+            originalHelperSHA256: admitted.approval.pins.find((pin) => pin.role === 'helper')
+                .sha256,
+            executedHelper: {
+                path: 'bin/download-run-macos.sh',
+                bytes: helperBytes.length,
+                sha256: digest(helperBytes),
+            },
+            disposal: 'guarded-helper-owned-download-and-install-stages-only',
+            missedBusyGuardConsequence:
+                'ordinary-replacement-and-rollback-only-on-this-generated-bundle',
+        },
+        runtimeFixture: 'renderer-offline-before-window-not-independent-offline-case-qualification',
+        nativeEffects: true,
+        fullLifecycle: false,
+        descendantClosure: 'UNKNOWN',
+        releaseAcceptance: false,
+    }).toString();
+}
+
 async function artifactRecords(admitted, io) {
     const selected = admitted.packages.current,
         helper = admitted.approval.pins.find((pin) => pin.role === 'helper');
@@ -284,7 +508,9 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
             io,
             (dependencies.sourcePins ?? macNativeSourcePins)(parsed),
         ));
-        const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE;
+        const installOnly = parsed.case === MAC_INSTALL_ONLY_CASE,
+            busyOnly = parsed.case === MAC_BUSY_ONLY_CASE,
+            currentOnly = installOnly || busyOnly;
         io.gate();
         if (parsed.mode === 'validate')
             return {
@@ -297,8 +523,8 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
                     root: parsed.root,
                     sourceCommit: admitted.approval.sourceCommit,
                     current: identity(admitted.packages.current),
-                    ...(installOnly
-                        ? { case: MAC_INSTALL_ONLY_CASE }
+                    ...(currentOnly
+                        ? { case: parsed.case }
                         : { prior: identity(admitted.packages.prior) }),
                 }).toString(),
                 state,
@@ -334,6 +560,23 @@ export async function runMacNativeCLI(argv, dependencies = {}) {
             const output = await publishInstallOnly(admitted, io, state.actions);
             state.publicationComplete = true;
             state.phase = 'completed-install-only-unqualified';
+            return { exitCode: 0, output, state };
+        }
+        if (busyOnly) {
+            state.phase = 'busy-only-case';
+            state.actions = await (dependencies.runBusyOnlyActions ?? runMacBusyOnlyActions)({
+                inputs: {
+                    lane: 'darwin-' + admitted.metadata.arch,
+                    fixtureParent: parsed.root,
+                    bundleIdentifier: 'dev.diagnostichub.desktop',
+                    current: identity(admitted.packages.current),
+                },
+                effects,
+            });
+            state.phase = 'busy-only-publication';
+            const output = await publishBusyOnly(admitted, io, state.actions);
+            state.publicationComplete = true;
+            state.phase = 'completed-busy-only-unqualified';
             return { exitCode: 0, output, state };
         }
         state.phase = 'nine-lifecycle-cases';
