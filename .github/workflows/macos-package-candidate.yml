@@ -1,0 +1,218 @@
+name: Mac package and ZIP candidate
+
+# Package-only evidence on this temporary branch. No application launch,
+# installer lifecycle, release publication or native acceptance is performed.
+on:
+    push:
+        branches: [ci/v060-macos-package-20261108]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: macos-package-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    package:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-macos-package-20261108' && github.run_attempt == 1 }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                      runner-arch: X64
+                      app-dir: mac
+                    - runner: macos-15
+                      arch: arm64
+                      runner-arch: ARM64
+                      app-dir: mac-arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 30
+        defaults:
+            run:
+                shell: bash
+                working-directory:
+                    macos-package-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch
+                    }}/source
+        env:
+            HUB_MAC_ARCH: ${{ matrix.arch }}
+            HUB_MAC_RUNNER_ARCH: ${{ matrix.runner-arch }}
+            HUB_MAC_APP_DIR: ${{ matrix.app-dir }}
+            HUB_MAC_PREFIX:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}
+            TMPDIR:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/tmp
+            npm_config_cache:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/npm-cache
+            npm_config_userconfig:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/npmrc
+            npm_config_globalconfig:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/global-npmrc
+            ELECTRON_CACHE:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/electron-cache
+            ELECTRON_BUILDER_CACHE:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/builder-cache
+            PLAYWRIGHT_BROWSERS_PATH:
+                ${{ github.workspace }}/macos-package-${{ github.run_id }}-${{ github.run_attempt
+                }}-${{ matrix.arch }}/browser-cache
+        steps:
+            - name: Admit the standard native runner and create a fresh owned prefix
+              working-directory: ${{ github.workspace }}
+              run: |
+                  fail() { printf '%s\n' '::error title=Mac package phase::Runner and owned-prefix admission failed.'; exit 1; }
+                  test "$GITHUB_EVENT_NAME" = push && test "$GITHUB_RUN_ATTEMPT" = 1 && test "$GITHUB_REF" = refs/heads/ci/v060-macos-package-20261108 && test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub || fail
+                  test "$RUNNER_ENVIRONMENT" = github-hosted && test "$RUNNER_OS" = macOS && test "$RUNNER_ARCH" = "$HUB_MAC_RUNNER_ARCH" || fail
+                  [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ && "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || fail
+                  test "$HUB_MAC_PREFIX" = "$GITHUB_WORKSPACE/macos-package-$GITHUB_RUN_ID-1-$HUB_MAC_ARCH" || fail
+                  test ! -e "$HUB_MAC_PREFIX" && test ! -L "$HUB_MAC_PREFIX" || fail
+                  umask 077
+                  mkdir "$HUB_MAC_PREFIX" || fail
+                  mkdir "$TMPDIR" "$npm_config_cache" "$ELECTRON_CACHE" "$ELECTRON_BUILDER_CACHE" "$PLAYWRIGHT_BROWSERS_PATH" "$HUB_MAC_PREFIX/logs" || fail
+                  : > "$npm_config_userconfig"
+                  : > "$npm_config_globalconfig"
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (v6)
+              with:
+                  ref: ${{ github.sha }}
+                  path:
+                      macos-package-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch
+                      }}/source
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 (v7)
+              with:
+                  node-version: '24.22.0'
+                  cache: ''
+                  package-manager-cache: false
+            - name: Verify exact source, lock, version and native architecture
+              run: |
+                  node --input-type=module > "$HUB_MAC_PREFIX/logs/source-admission.log" 2>&1 <<'NODE' || { printf '%s\n' '::error title=Mac package phase::Source and lock admission failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync, realpathSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(process.platform, 'darwin');
+                  assert.equal(process.arch, process.env.HUB_MAC_ARCH);
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.equal(realpathSync('.'), process.env.HUB_MAC_PREFIX + '/source');
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.match(git('rev-parse', 'HEAD^{tree}'), /^[a-f0-9]{40}$/);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const [pkg, lock] = ['package.json', 'package-lock.json'].map(name => {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    return JSON.parse(bytes);
+                  });
+                  assert.equal(pkg.name, 'embedded-linux-diagnostic-hub');
+                  assert.equal(pkg.version, '0.6.0');
+                  assert.equal(lock.name, pkg.name);
+                  assert.equal(lock.version, pkg.version);
+                  assert.equal(lock.lockfileVersion, 3);
+                  assert.equal(lock.packages[''].version, pkg.version);
+                  assert.equal(pkg.scripts.build, 'npm run typecheck && vite build && npm run build:desktop');
+                  for (const name of ['preinstall', 'install', 'postinstall', 'prepare', 'prebuild', 'postbuild']) assert.equal(pkg.scripts[name], undefined);
+                  for (const name of ['dist', 'dist-web', 'dist-electron', 'release']) {
+                    try { lstatSync(name); assert.fail('Output already exists.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  NODE
+            - name: Install the committed build dependencies
+              run: |
+                  npm ci > "$HUB_MAC_PREFIX/logs/npm-ci.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Committed dependency installation failed.'; exit 1; }
+            - name: Build current renderer and desktop bundles
+              run: |
+                  available_kib=$(df -Pk . | awk 'NR == 2 { print $4 }')
+                  [[ "$available_kib" =~ ^[0-9]+$ ]] && test "$available_kib" -ge 4194304 || { printf '%s\n' '::error title=Mac package phase::Less than 4 GiB is available before build.'; exit 1; }
+                  npm run build > "$HUB_MAC_PREFIX/logs/build.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Current source build failed.'; exit 1; }
+            - name: Prepare the existing headless icon build tool
+              run: |
+                  npx --no-install playwright install chromium > "$HUB_MAC_PREFIX/logs/icon-tool-install.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Icon build-tool installation failed.'; exit 1; }
+            - name: Generate the established full-resolution icon
+              # Headless Chromium renders only the shared SVG; the existing
+              # generator awaits browser.close() in finally. This is a build tool.
+              run: |
+                  node scripts/generate-macos-icon.mjs > "$HUB_MAC_PREFIX/logs/icon.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Full-resolution icon generation failed.'; exit 1; }
+            - name: Build the complete native ad-hoc app directory without launching it
+              env:
+                  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+              run: |
+                  npx --no-install electron-builder --mac dir --"$HUB_MAC_ARCH" --publish never --config.mac.identity=- --config.mac.hardenedRuntime=false --config.mac.icon=release/macos-icon.png > "$HUB_MAC_PREFIX/logs/package-directory.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Native ad-hoc app directory packaging failed.'; exit 1; }
+            - name: Verify signature, packaged bytes and the actual ZIP roundtrip
+              run: |
+                  node scripts/package-macos.mjs "release/$HUB_MAC_APP_DIR/Diagnostic Hub.app" "$HUB_MAC_ARCH" > "$HUB_MAC_PREFIX/logs/zip-roundtrip.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Static package and ZIP roundtrip verification failed.'; exit 1; }
+            - name: Announce bounded identities read from the actual current package
+              run: |
+                  node --input-type=module 2> "$HUB_MAC_PREFIX/logs/package-identity-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac package phase::Actual package identity readback failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  import { createHash } from 'node:crypto';
+                  import path from 'node:path';
+                  import { macAsset, macManifest, validateMacManifest } from './scripts/lib/macos-release.mjs';
+                  import { inventoryMacPayload, macPayloadIdentity, sampleMacArchive, validateMacPayloadIdentity } from './scripts/lib/macos-payload-identity.mjs';
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  const sourceCommit = git('rev-parse', 'HEAD');
+                  const sourceTree = git('rev-parse', 'HEAD^{tree}');
+                  assert.equal(sourceCommit, process.env.GITHUB_SHA);
+                  assert.match(sourceTree, /^[a-f0-9]{40}$/);
+                  assert.equal(git('diff', '--name-only', 'HEAD'), '');
+                  const inputs = ['package.json', 'package-lock.json'].map(name => {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    return { sha256: createHash('sha256').update(bytes).digest('hex'), value: JSON.parse(bytes) };
+                  });
+                  const version = inputs[0].value.version;
+                  assert.equal(version, '0.6.0');
+                  const arch = process.env.HUB_MAC_ARCH;
+                  assert.ok(['x64', 'arm64'].includes(arch));
+                  assert.equal(process.arch, arch);
+                  const asset = macAsset(arch);
+                  const buildInfoPath = path.resolve('release', macManifest(arch));
+                  const stat = lstatSync(buildInfoPath);
+                  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size > 0 && stat.size <= 65536);
+                  const buildInfoBytes = readFileSync(buildInfoPath);
+                  assert.equal(buildInfoBytes.length, stat.size);
+                  const info = JSON.parse(buildInfoBytes);
+                  const archive = await sampleMacArchive(path.resolve('release', asset));
+                  validateMacManifest(info, { arch, version, commit: sourceCommit, sha256: archive.sha256 });
+                  assert.equal(info.source, sourceCommit);
+                  assert.equal(info.packagedSourceMatches, true);
+                  assert.equal(info.distribution, true);
+                  assert.ok(info.payloadIdentity);
+                  const payload = macPayloadIdentity(await inventoryMacPayload(path.resolve('release', process.env.HUB_MAC_APP_DIR, 'Diagnostic Hub.app')));
+                  validateMacPayloadIdentity(info.payloadIdentity, payload);
+                  assert.equal(payload.asarSHA256, info.asarSHA256);
+                  const identity = {
+                    sourceCommit, sourceTree, version, arch, asset,
+                    packageJSONSHA256: inputs[0].sha256, lockSHA256: inputs[1].sha256,
+                    zipBytes: archive.bytes, zipSHA256: archive.sha256,
+                    buildInfoSHA256: createHash('sha256').update(buildInfoBytes).digest('hex'),
+                    payloadInventorySHA256: payload.inventorySHA256,
+                    executableSHA256: payload.executableSHA256, asarSHA256: payload.asarSHA256,
+                    adHocIntegrityVerified: true, notarized: false,
+                    gatekeeperDownloadedAppQualified: false, releaseAcceptance: false,
+                  };
+                  const text = JSON.stringify(identity);
+                  assert.ok(text.length < 2048 && !/[\r\n%]/.test(text));
+                  console.log('::notice title=Mac package identity::' + text);
+                  NODE
+            - name: State package-only limits and retention
+              run: |
+                  printf '%s\n' '::notice title=Mac package scope::Build, ad-hoc signature, packaged source and ZIP roundtrip only. No application launch, installation, native acceptance, quarantine, notarization or release acceptance.'
+                  printf '%s\n' 'Headless Chromium is used only for SVG icon rasterization; its existing generator awaits normal browser.close. This is not browser or application acceptance.'
+                  printf '%s\n' 'Owned package, roundtrip, build-tool downloads and phase logs remain on this disposable runner only. No artifact upload, cache save, release mutation, explicit cleanup command or descendant retirement claim.'
