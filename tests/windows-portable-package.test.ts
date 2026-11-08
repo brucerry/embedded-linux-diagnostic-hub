@@ -463,6 +463,8 @@ test('actual entry stays inert on import and both workflow callers retain fixed 
         /if \(process\.argv\[1\] && path\.resolve\(process\.argv\[1\]\) === fileURLToPath\(import\.meta\.url\)\)\s*await main\(\);/,
     );
     assert.equal(helper.includes("from 'electron-builder'"), false);
+    assert.ok(helper.includes("process.env.GITHUB_ACTIONS === 'true'"));
+    assert.ok(helper.includes('::error title=Windows portable package::'));
     const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
     assert.equal(
         manifest.scripts['package:win'],
@@ -477,6 +479,15 @@ test('actual entry stays inert on import and both workflow callers retain fixed 
             "'package:win': 'npm run build && node scripts/package-windows-portable.mjs'",
         ),
     );
+    assert.ok(
+        narrow.includes("Write-Output ('::notice title=Windows package identity::' + $identity)"),
+    );
+    const exitGuard = narrow.indexOf(
+        "if ($LASTEXITCODE -ne 0) { throw 'Portable cold-launch check failed.' }",
+    );
+    const closeNotice = narrow.indexOf('::notice title=Windows cold launch::');
+    assert.ok(exitGuard >= 0 && closeNotice > exitGuard);
+    assert.ok(narrow.includes('Descendant retirement unproved.'));
     const shipping = readFileSync(
         new URL('../.github/workflows/windows-portable.yml', import.meta.url),
         'utf8',

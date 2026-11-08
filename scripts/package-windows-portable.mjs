@@ -147,7 +147,12 @@ async function nativePorts() {
 
 export async function main({
     load = nativePorts,
-    report = (record) => console.error(JSON.stringify(record)),
+    report = (record) =>
+        console.error(
+            (process.env.GITHUB_ACTIONS === 'true'
+                ? '::error title=Windows portable package::'
+                : '') + JSON.stringify(record),
+        ),
     setExitCode = (code) => {
         process.exitCode = code;
         process.on('exit', () => {
