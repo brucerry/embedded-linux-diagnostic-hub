@@ -1386,6 +1386,396 @@ test('actual adapted owner rejects shared terminal-budget overflow without retai
     assert.equal(owner.streams.capExceeded, true);
     assert.equal(owner.captured.stdout.length, 0);
 });
+// These controls invoke actual owned shutdown code with authored events only.
+// The VM denies the default OS spawn, WebSocket and framework entrypoints.
+function ownedQuitFixture() {
+    const { OwnedDesktop, rendererTransport } = inertOwnerExports();
+    const desktop = new OwnedDesktop({
+        executable: '/mock/app',
+        profile: '/mock/profile',
+        env: {},
+        artifactsDir: '/mock/evidence',
+        deadline: 120000,
+    });
+    const owner = desktop.owner;
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 5;
+    owner.adopt(child);
+    owner.attachStarted = true;
+    owner.attachReturned = true;
+    owner.preQuitReceiptVerified = true;
+    const deferred = () => {
+        let resolve;
+        const promise = new Promise((done) => {
+            resolve = done;
+        });
+        return { promise, resolve };
+    };
+    const mainRequested = deferred(),
+        browserRequested = deferred();
+    const calls = [],
+        scheduled = [];
+    let quitCalls = 0;
+    const link = (kind, requested) => {
+        const closed = deferred();
+        return {
+            closed,
+            closedObserved: false,
+            disconnectOnly() {
+                calls.push(kind + '-disconnect');
+                assert.equal(owner.quitScheduledAck, true);
+                requested.resolve();
+            },
+            acknowledge() {
+                this.closedObserved = true;
+                closed.resolve();
+            },
+        };
+    };
+    const mainLink = link('main', mainRequested),
+        browserLink = link('browser', browserRequested);
+    // Private source dependencies are replaced only in this closed VM instance.
+    desktop.main = {
+        async evaluate(fn) {
+            return vm.runInNewContext('(' + fn.toString() + ')({app})', {
+                app: {
+                    quit() {
+                        quitCalls++;
+                    },
+                },
+                setImmediate(callback) {
+                    scheduled.push(callback);
+                },
+                __name: (value) => value,
+            });
+        },
+        pendingCount: () => 0,
+    };
+    desktop.mainLink = mainLink;
+    desktop.browserLink = browserLink;
+    const emitRoot = (code = 0, signal = null) => {
+        child.emit('exit', code, signal);
+        child.stdout.emit('end');
+        child.stderr.emit('end');
+        child.emit('close');
+    };
+    const release = () => {
+        emitRoot();
+        mainLink.acknowledge();
+        browserLink.acknowledge();
+    };
+    return {
+        desktop,
+        owner,
+        child,
+        mainLink,
+        browserLink,
+        mainRequested,
+        browserRequested,
+        rendererTransport,
+        calls,
+        scheduled,
+        emitRoot,
+        release,
+        quitCalls: () => quitCalls,
+    };
+}
+
+test('actual owned normal shutdown joins independently observed root EOF and both transport acknowledgements', async () => {
+    const f = ownedQuitFixture();
+    const quit = f.desktop.normalQuit();
+    void quit.catch(() => {}); // Observe rejection custody; later await still exposes it.
+    try {
+        await f.mainRequested.promise;
+        assert.equal(f.owner.quitScheduledAck, true);
+        assert.equal(f.scheduled.length, 1);
+        assert.equal(f.quitCalls(), 0);
+        f.scheduled[0]();
+        assert.equal(f.quitCalls(), 1);
+        assert.equal(f.owner.quitComplete, false);
+        f.emitRoot();
+        await f.browserRequested.promise;
+        assert.equal(f.owner.exitCode, 0);
+        assert.equal(f.owner.signal, null);
+        assert.equal(f.owner.streams.stdoutEOF && f.owner.streams.stderrEOF, true);
+        assert.equal(f.owner.quitComplete, false);
+        f.mainLink.acknowledge();
+        await Promise.resolve();
+        assert.equal(f.owner.quitComplete, false);
+        f.browserLink.acknowledge();
+        await quit;
+        assert.equal(f.owner.shutdown.complete, true);
+        assert.equal(f.owner.quitComplete, true);
+        assert.equal(f.owner.reason, null);
+        assert.equal(f.owner.shutdownPending.size, 0);
+        assert.doesNotThrow(() => f.owner.active());
+        assert.deepEqual(f.calls, ['main-disconnect', 'browser-disconnect']);
+    } finally {
+        f.release();
+        await quit.catch(() => {});
+    }
+});
+
+test('actual owned socket errors may drain direct closure while retaining the nonpassing incident', async () => {
+    for (const kind of ['node', 'browser']) {
+        const f = ownedQuitFixture();
+        const quit = f.desktop.normalQuit();
+        void quit.catch(() => {}); // Observe rejection custody; later await still exposes it.
+        try {
+            await f.mainRequested.promise;
+            f.owner.socketError(kind);
+            assert.equal(f.owner.shutdown.mode, 'DRAINING_NONPASS');
+            assert.equal(f.owner.reason, kind + '-socket-error');
+            f.emitRoot();
+            await f.browserRequested.promise;
+            f.mainLink.acknowledge();
+            f.browserLink.acknowledge();
+            await quit;
+            assert.equal(f.owner.quitComplete, true);
+            assert.equal(f.owner.shutdown.complete, true);
+            assert.equal(f.owner.exitObserved && f.owner.closeObserved, true);
+            assert.equal(f.owner.streams.stdoutEOF && f.owner.streams.stderrEOF, true);
+            assert.equal(f.owner.pendingWaits.size + f.owner.shutdownPending.size, 0);
+            assert.equal(f.owner.publicationFDs.size, 0);
+            assert.throws(() => f.owner.active(), new RegExp(kind + '-socket-error'));
+            assert.equal(f.owner.shutdown.mode, 'RETAINED_UNKNOWN');
+            assert.equal(f.owner.reason, kind + '-socket-error');
+        } finally {
+            f.release();
+            await quit.catch(() => {});
+        }
+    }
+});
+
+test('actual renderer transport close refuses before during and after independently observed normal shutdown', async () => {
+    for (const timing of ['before', 'during', 'after']) {
+        const f = ownedQuitFixture();
+        let sent = 0,
+            disconnected = 0;
+        const transport = f.rendererTransport(f.owner, {
+            send() {
+                sent++;
+            },
+            disconnectOnly() {
+                disconnected++;
+            },
+        });
+        let quit;
+        try {
+            if (timing !== 'before') {
+                quit = f.desktop.normalQuit();
+                // Register rejection observation before a deliberately refused callback.
+                void quit.catch(() => {});
+                await f.mainRequested.promise;
+                if (timing === 'after') {
+                    f.release();
+                    await quit;
+                    assert.equal(f.owner.reason, null);
+                    assert.equal(f.owner.quitComplete, true);
+                }
+            }
+            transport.close();
+            assert.equal(f.owner.reason, 'framework-transport-close-refused');
+            assert.equal(sent, 0);
+            assert.equal(disconnected, 0);
+            assert.throws(() => f.owner.active(), /framework-transport-close-refused/);
+            if (timing === 'during') {
+                f.release();
+                await assert.rejects(quit, /shutdown-retained|framework-transport-close-refused/);
+                assert.equal(f.owner.quitComplete, false);
+            } else if (timing === 'after') {
+                // Completion facts are preserved, but a later framework request grants no authority.
+                assert.equal(f.owner.quitComplete, true);
+                assert.equal(f.owner.shutdown.mode, 'RETAINED_UNKNOWN');
+            }
+        } finally {
+            f.release();
+            if (quit) await quit.catch(() => {});
+        }
+    }
+});
+
+test('actual renderer transport preserves forbidden termination commands and sends only permitted data', () => {
+    const { LaunchCustody, rendererTransport } = inertOwnerExports();
+    const permittedOwner = new LaunchCustody(120000, () => 0);
+    const messages = [];
+    const permitted = rendererTransport(permittedOwner, {
+        send(message) {
+            messages.push(message);
+        },
+        disconnectOnly() {
+            throw Error('physical close prohibited');
+        },
+    });
+    const read = { id: 1, method: 'Runtime.enable', params: {} };
+    permitted.send(read);
+    assert.deepEqual(messages, [read]);
+    for (const method of [
+        'Browser.close',
+        'Browser.crash',
+        'Target.closeTarget',
+        'Target.disposeBrowserContext',
+        'Page.close',
+    ]) {
+        const owner = new LaunchCustody(120000, () => 0);
+        const transport = rendererTransport(owner, {
+            send() {
+                throw Error('forbidden command forwarded');
+            },
+            disconnectOnly() {
+                throw Error('physical close prohibited');
+            },
+        });
+        assert.throws(
+            () => transport.send({ id: 2, method, params: {} }),
+            /forbidden-termination-command/,
+        );
+        assert.equal(owner.reason, 'forbidden-termination-command');
+    }
+});
+
+test('actual owned shutdown completion rejects missing EOF abnormal exit and pending owner resources', () => {
+    for (const defect of [
+        'stderr-eof',
+        'nonzero-exit',
+        'signal',
+        'generic-pending',
+        'shutdown-pending',
+        'main-pending',
+        'publication-fd',
+    ]) {
+        const f = ownedQuitFixture();
+        f.owner.beginShutdown();
+        f.owner.quitIntent = true;
+        f.owner.quitScheduledAck = true;
+        f.child.emit(
+            'exit',
+            defect === 'nonzero-exit' ? 7 : 0,
+            defect === 'signal' ? 'SIGTERM' : null,
+        );
+        f.child.stdout.emit('end');
+        if (defect !== 'stderr-eof') f.child.stderr.emit('end');
+        f.child.emit('close');
+        if (defect === 'generic-pending') f.owner.pendingWaits.set(1, { phase: 'file-open' });
+        if (defect === 'shutdown-pending')
+            f.owner.shutdownPending.set(1, { phase: 'transport-close' });
+        if (defect === 'main-pending') f.owner.mainPendingCount = 1;
+        if (defect === 'publication-fd') f.owner.publicationFDs.add(99); // Synthetic descriptor identity only.
+        assert.throws(() => f.owner.finishShutdown());
+        assert.equal(f.owner.shutdown.complete, false);
+        assert.equal(f.owner.quitComplete, false);
+    }
+});
+
+test('locked SDK natural connection close does not invoke the owned transport close callback', async () => {
+    const packageURL = new URL('../node_modules/playwright-core/package.json', import.meta.url);
+    const metadata = JSON.parse(readFileSync(packageURL, 'utf8'));
+    const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
+    assert.equal(metadata.version, '1.63.0');
+    assert.equal(metadata.version, lock.packages['node_modules/playwright-core'].version);
+    const sdkSource = readFileSync(new URL('./lib/coreBundle.js', packageURL), 'utf8');
+    assert.equal(
+        digest(sdkSource),
+        '549070af3acabb3efcc4f55bfe6210f9f7c2fcf633cf7eaa59bfe60719969171',
+    );
+    const parsed = ts.createSourceFile(
+        'locked-coreBundle.js',
+        sdkSource,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.JS,
+    );
+    assert.equal(parsed.parseDiagnostics.length, 0);
+    const classes = [];
+    const visit = (node) => {
+        if (
+            ts.isBinaryExpression(node) &&
+            node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+            ts.isIdentifier(node.left) &&
+            node.left.text === 'CRConnection' &&
+            ts.isClassExpression(node.right)
+        )
+            classes.push(node.right);
+        ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+    assert.equal(classes.length, 1);
+    const select = (name) => {
+        const matches = classes[0].members.filter(
+            (node) =>
+                ts.isMethodDeclaration(node) &&
+                ts.isIdentifier(node.name) &&
+                node.name.text === name,
+        );
+        assert.equal(matches.length, 1);
+        return matches[0].getText(parsed);
+    };
+    const disconnected = Symbol('fake-disconnected');
+    // Only these two ACTUAL method bodies run. No bundle import, constructor,
+    // SDK session, downstream event listener, native port or module code executes.
+    const methods = vm.runInNewContext('({' + select('_onClose') + ',' + select('close') + '})', {
+        Promise,
+        helper: {
+            formatBrowserLogs: (logs, reason) => {
+                assert.deepEqual(logs, []);
+                return reason;
+            },
+        },
+        ConnectionEvents: { Disconnected: disconnected },
+    });
+    const { LaunchCustody, rendererTransport } = inertOwnerExports();
+    const fixture = () => {
+        const owner = new LaunchCustody(120000, () => 0),
+            events = [];
+        let sends = 0,
+            disconnects = 0,
+            disposed = 0;
+        const link = {
+            send() {
+                sends++;
+            },
+            disconnectOnly() {
+                disconnects++;
+            },
+        };
+        const transport = rendererTransport(owner, link);
+        const receiver = {
+            _closed: false,
+            _transport: transport,
+            _browserLogsCollector: { recentLogs: () => [] },
+            rootSession: {
+                dispose() {
+                    disposed++;
+                },
+            },
+            emit(event) {
+                events.push(event);
+            },
+        };
+        transport.onmessage = () => {};
+        transport.onclose = (reason) => methods._onClose.call(receiver, reason);
+        return { owner, receiver, link, events, counts: () => ({ sends, disconnects, disposed }) };
+    };
+    const natural = fixture();
+    natural.link.onclose();
+    assert.equal(natural.receiver._closed, true);
+    assert.equal(natural.receiver._transport.onclose, undefined);
+    assert.equal(natural.receiver._transport.onmessage, undefined);
+    assert.deepEqual(natural.counts(), { sends: 0, disconnects: 0, disposed: 1 });
+    assert.equal(natural.events.length, 0);
+    await Promise.resolve();
+    assert.deepEqual(natural.events, [disconnected]);
+    methods.close.call(natural.receiver);
+    assert.equal(natural.owner.reason, null);
+    assert.deepEqual(natural.counts(), { sends: 0, disconnects: 0, disposed: 1 });
+    const explicit = fixture();
+    methods.close.call(explicit.receiver);
+    assert.equal(explicit.owner.reason, 'framework-transport-close-refused');
+    assert.deepEqual(explicit.counts(), { sends: 0, disconnects: 0, disposed: 0 });
+});
+
 function offlineCallback() {
     const file = ts.createSourceFile(
             'owner.ts',

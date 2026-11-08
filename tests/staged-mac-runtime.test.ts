@@ -696,3 +696,61 @@ test('owned Mac diagnostic uses one bounded write and preserves primary custody 
         assert.equal(f.owner.publicationFDs.size, 1);
     }
 });
+
+test('owned Mac runtime retains a drained transport incident before opening final publication files', async () => {
+    const f = fixture();
+    const normalQuit = f.desktop.normalQuit.bind(f.desktop);
+    const reports: ReturnType<typeof macRuntimeFailureDiagnostic>[] = [];
+    f.owner.shutdownPending = new Map();
+    f.owner.mainPendingCount = 0;
+    f.desktop.normalQuit = async () => {
+        await normalQuit();
+        f.owner.quitScheduledAck = true;
+        f.owner.reason = 'browser-socket-error';
+        f.owner.shutdown = { mode: 'DRAINING_NONPASS', complete: true };
+    };
+    f.ports.reportFailure = (diagnostic) => {
+        reports.push(diagnostic);
+    };
+    await assert.rejects(runStagedMacRuntime(f.input, f.ports), (error: any) => {
+        assert.ok(error instanceof Retained);
+        assert.equal(error.context.desktop, f.desktop);
+        assert.equal(f.owner.quitComplete, true);
+        assert.equal(f.owner.exitObserved && f.owner.closeObserved, true);
+        assert.equal(f.owner.streams.stdoutEOF && f.owner.streams.stderrEOF, true);
+        assert.equal(f.owner.reason, 'browser-socket-error');
+        assert.equal(f.owner.pendingWaits.size, 0);
+        assert.equal(f.owner.publicationFDs.size, 0);
+        assert.equal(f.descriptors.size, 0);
+        assert.ok(f.files.has('/owned/runtime/prequit.json'));
+        assert.equal(f.files.has('/owned/runtime/closure.json'), false);
+        assert.equal(f.files.has(f.input.destination), false);
+        assert.equal(
+            f.events.some((event) => event === 'open:/owned/runtime/closure.json'),
+            false,
+        );
+        assert.equal(
+            f.events.some((event) => event === 'open:' + f.input.destination),
+            false,
+        );
+        return true;
+    });
+    assert.equal(reports.length, 1);
+    assert.deepEqual(reports[0], {
+        stage: 'file-open',
+        reason: 'transport',
+        waitingStage: 'unclassified',
+        pendingOperations: 0,
+        pendingShutdown: 0,
+        pendingMain: 0,
+        openFiles: 0,
+        childObserved: true,
+        attachReturned: true,
+        quitRequested: true,
+        rootExitObserved: true,
+        rootCloseObserved: true,
+        bothEOFObserved: true,
+        retainedUnknown: true,
+        releaseAcceptance: false,
+    });
+});
