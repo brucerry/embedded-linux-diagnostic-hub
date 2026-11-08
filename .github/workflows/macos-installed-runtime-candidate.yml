@@ -1,0 +1,842 @@
+name: Mac installed runtime candidate
+
+# One fresh current-only install, then a separate owned launch of that installed payload.
+# Install approval stays install/helper-stage-disposal only; runtime is a distinct phase.
+# Neither phase supplies full-nine, physical-loaded-code or descendant acceptance.
+on:
+    push:
+        branches: [ci/v060-macos-installed-runtime-20261108]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: macos-installed-runtime-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    runtime:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-macos-installed-runtime-20261108' && github.run_attempt == 1 }}
+        runs-on: macos-15
+        timeout-minutes: 30
+        defaults:
+            run:
+                shell: bash
+                working-directory:
+                    macos-installed-runtime-${{ github.run_id }}-${{ github.run_attempt
+                    }}-arm64/source
+        env:
+            HUB_MAC_ARCH: arm64
+            HUB_MAC_RUNNER_ARCH: ARM64
+            HUB_MAC_APP_DIR: mac-arm64
+            HUB_MAC_PREFIX:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64
+            TMPDIR:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/tmp
+            npm_config_cache:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/npm-cache
+            npm_config_userconfig:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/npmrc
+            npm_config_globalconfig:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/global-npmrc
+            ELECTRON_CACHE:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/electron-cache
+            ELECTRON_BUILDER_CACHE:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/builder-cache
+            PLAYWRIGHT_BROWSERS_PATH:
+                ${{ github.workspace }}/macos-installed-runtime-${{ github.run_id }}-${{
+                github.run_attempt }}-arm64/browser-cache
+        steps:
+            - name: Admit the standard native runner and create a fresh owned prefix
+              working-directory: ${{ github.workspace }}
+              run: |
+                  fail() { printf '%s\n' '::error title=Mac package phase::Runner and owned-prefix admission failed.'; exit 1; }
+                  test "$GITHUB_EVENT_NAME" = push && test "$GITHUB_RUN_ATTEMPT" = 1 && test "$GITHUB_REF" = refs/heads/ci/v060-macos-installed-runtime-20261108 && test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub || fail
+                  test "$RUNNER_ENVIRONMENT" = github-hosted && test "$RUNNER_OS" = macOS && test "$RUNNER_ARCH" = "$HUB_MAC_RUNNER_ARCH" || fail
+                  for name in NODE_OPTIONS NODE_PATH ELECTRON_RUN_AS_NODE TSX_TSCONFIG_PATH TSX_DISABLE_CACHE ESBUILD_BINARY_PATH PWDEBUG PW_INSTRUMENT_MODULES PLAYWRIGHT_DRIVER_URL PW_TEST_CONNECT_WS_ENDPOINT SELENIUM_REMOTE_URL PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; do
+                    if declare -p "$name" > /dev/null 2>&1; then fail; fi
+                  done
+                  for name in ${!PW_TEST_@}; do fail; done
+                  [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ && "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || fail
+                  test "$HUB_MAC_PREFIX" = "$GITHUB_WORKSPACE/macos-installed-runtime-$GITHUB_RUN_ID-1-$HUB_MAC_ARCH" || fail
+                  test ! -e "$HUB_MAC_PREFIX" && test ! -L "$HUB_MAC_PREFIX" || fail
+                  umask 077
+                  mkdir "$HUB_MAC_PREFIX" || fail
+                  mkdir "$TMPDIR" "$npm_config_cache" "$ELECTRON_CACHE" "$ELECTRON_BUILDER_CACHE" "$PLAYWRIGHT_BROWSERS_PATH" "$HUB_MAC_PREFIX/logs" || fail
+                  : > "$npm_config_userconfig"
+                  : > "$npm_config_globalconfig"
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (v6)
+              with:
+                  ref: ${{ github.sha }}
+                  path:
+                      macos-installed-runtime-${{ github.run_id }}-${{ github.run_attempt
+                      }}-arm64/source
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 (v7)
+              with:
+                  node-version: '24.22.0'
+                  cache: ''
+                  package-manager-cache: false
+            - name: Verify exact source, lock, version and native architecture
+              run: |
+                  node --input-type=module > "$HUB_MAC_PREFIX/logs/source-admission.log" 2>&1 <<'NODE' || { printf '%s\n' '::error title=Mac package phase::Source and lock admission failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync, realpathSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(process.platform, 'darwin');
+                  assert.equal(process.arch, process.env.HUB_MAC_ARCH);
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.equal(realpathSync('.'), process.env.HUB_MAC_PREFIX + '/source');
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.match(git('rev-parse', 'HEAD^{tree}'), /^[a-f0-9]{40}$/);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const [pkg, lock] = ['package.json', 'package-lock.json'].map(name => {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    return JSON.parse(bytes);
+                  });
+                  assert.equal(pkg.name, 'embedded-linux-diagnostic-hub');
+                  assert.equal(pkg.version, '0.6.0');
+                  assert.equal(lock.name, pkg.name);
+                  assert.equal(lock.version, pkg.version);
+                  assert.equal(lock.lockfileVersion, 3);
+                  assert.equal(lock.packages[''].version, pkg.version);
+                  assert.equal(pkg.scripts.build, 'npm run typecheck && vite build && npm run build:desktop');
+                  for (const name of ['preinstall', 'install', 'postinstall', 'prepare', 'prebuild', 'postbuild']) assert.equal(pkg.scripts[name], undefined);
+                  for (const name of ['dist', 'dist-web', 'dist-electron', 'release']) {
+                    try { lstatSync(name); assert.fail('Output already exists.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  NODE
+            - name: Install the committed build dependencies
+              run: |
+                  npm ci > "$HUB_MAC_PREFIX/logs/npm-ci.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Committed dependency installation failed.'; exit 1; }
+            - name: Build current renderer and desktop bundles
+              run: |
+                  available_kib=$(df -Pk . | awk 'NR == 2 { print $4 }')
+                  [[ "$available_kib" =~ ^[0-9]+$ ]] && test "$available_kib" -ge 4194304 || { printf '%s\n' '::error title=Mac package phase::Less than 4 GiB is available before build.'; exit 1; }
+                  npm run build > "$HUB_MAC_PREFIX/logs/build.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Current source build failed.'; exit 1; }
+            - name: Prepare the existing headless icon build tool
+              run: |
+                  npx --no-install playwright install chromium > "$HUB_MAC_PREFIX/logs/icon-tool-install.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Icon build-tool installation failed.'; exit 1; }
+            - name: Generate the established full-resolution icon
+              # Headless Chromium renders only the shared SVG; the existing
+              # generator awaits browser.close() in finally. This is a build tool.
+              run: |
+                  node scripts/generate-macos-icon.mjs > "$HUB_MAC_PREFIX/logs/icon.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Full-resolution icon generation failed.'; exit 1; }
+            - name: Build the complete native ad-hoc app directory without launching it
+              env:
+                  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+              run: |
+                  npx --no-install electron-builder --mac dir --"$HUB_MAC_ARCH" --publish never --config.mac.identity=- --config.mac.hardenedRuntime=false --config.mac.icon=release/macos-icon.png > "$HUB_MAC_PREFIX/logs/package-directory.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Native ad-hoc app directory packaging failed.'; exit 1; }
+            - name: Verify signature, packaged bytes and the actual ZIP roundtrip
+              run: |
+                  node scripts/package-macos.mjs "release/$HUB_MAC_APP_DIR/Diagnostic Hub.app" "$HUB_MAC_ARCH" > "$HUB_MAC_PREFIX/logs/zip-roundtrip.log" 2>&1 || { printf '%s\n' '::error title=Mac package phase::Static package and ZIP roundtrip verification failed.'; exit 1; }
+            - name: Announce bounded identities read from the actual current package
+              run: |
+                  node --input-type=module 2> "$HUB_MAC_PREFIX/logs/package-identity-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac package phase::Actual package identity readback failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  import { createHash } from 'node:crypto';
+                  import path from 'node:path';
+                  import { macAsset, macManifest, validateMacManifest } from './scripts/lib/macos-release.mjs';
+                  import { inventoryMacPayload, macPayloadIdentity, sampleMacArchive, validateMacPayloadIdentity } from './scripts/lib/macos-payload-identity.mjs';
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  const sourceCommit = git('rev-parse', 'HEAD');
+                  const sourceTree = git('rev-parse', 'HEAD^{tree}');
+                  assert.equal(sourceCommit, process.env.GITHUB_SHA);
+                  assert.match(sourceTree, /^[a-f0-9]{40}$/);
+                  assert.equal(git('diff', '--name-only', 'HEAD'), '');
+                  const inputs = ['package.json', 'package-lock.json'].map(name => {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    return { sha256: createHash('sha256').update(bytes).digest('hex'), value: JSON.parse(bytes) };
+                  });
+                  const version = inputs[0].value.version;
+                  assert.equal(version, '0.6.0');
+                  const arch = process.env.HUB_MAC_ARCH;
+                  assert.equal(arch, 'arm64');
+                  assert.equal(process.arch, arch);
+                  const asset = macAsset(arch);
+                  const buildInfoPath = path.resolve('release', macManifest(arch));
+                  const stat = lstatSync(buildInfoPath);
+                  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size > 0 && stat.size <= 65536);
+                  const buildInfoBytes = readFileSync(buildInfoPath);
+                  assert.equal(buildInfoBytes.length, stat.size);
+                  const info = JSON.parse(buildInfoBytes);
+                  const archive = await sampleMacArchive(path.resolve('release', asset));
+                  validateMacManifest(info, { arch, version, commit: sourceCommit, sha256: archive.sha256 });
+                  assert.equal(info.source, sourceCommit);
+                  assert.equal(info.packagedSourceMatches, true);
+                  assert.equal(info.distribution, true);
+                  assert.ok(info.payloadIdentity);
+                  const payload = macPayloadIdentity(await inventoryMacPayload(path.resolve('release', process.env.HUB_MAC_APP_DIR, 'Diagnostic Hub.app')));
+                  validateMacPayloadIdentity(info.payloadIdentity, payload);
+                  assert.equal(payload.asarSHA256, info.asarSHA256);
+                  const identity = {
+                    sourceCommit, sourceTree, version, arch, asset,
+                    packageJSONSHA256: inputs[0].sha256, lockSHA256: inputs[1].sha256,
+                    zipBytes: archive.bytes, zipSHA256: archive.sha256,
+                    buildInfoSHA256: createHash('sha256').update(buildInfoBytes).digest('hex'),
+                    payloadInventorySHA256: payload.inventorySHA256,
+                    executableSHA256: payload.executableSHA256, asarSHA256: payload.asarSHA256,
+                    adHocIntegrityVerified: true, notarized: false,
+                    gatekeeperDownloadedAppQualified: false, releaseAcceptance: false,
+                  };
+                  const text = JSON.stringify(identity);
+                  assert.ok(text.length < 2048 && !/[\r\n%]/.test(text));
+                  console.log('::notice title=Mac package identity::' + text);
+                  NODE
+            - name: Bind the actual current inventory and fixed install-only inputs
+              run: |
+                  node --input-type=module > "$HUB_MAC_PREFIX/logs/install-preparation.log" 2>&1 <<'NODE' || { printf '%s\n' '::error title=Mac current install phase::Current-only package and input preparation failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, writeFileSync, appendFileSync, lstatSync, realpathSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  import { createHash, randomBytes } from 'node:crypto';
+                  import path from 'node:path';
+                  import { macNativeSourcePins } from './scripts/lib/macos-native-adapter.mjs';
+                  import { NATIVE_LIMITS, MAC_INSTALL_ONLY_CASE, MAC_INSTALL_ONLY_EFFECTS, normalizeMacTree } from './scripts/lib/macos-native-contract.mjs';
+                  import { inventoryMacPayload, macPayloadIdentity, sampleMacArchive, validateMacPayloadIdentity } from './scripts/lib/macos-payload-identity.mjs';
+                  import { validateMacManifest } from './scripts/lib/macos-release.mjs';
+                  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  const taskRoot = process.env.HUB_MAC_PREFIX, sourceRoot = process.cwd();
+                  assert.equal(process.platform, 'darwin');
+                  assert.equal(process.arch, 'arm64');
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.equal(realpathSync(taskRoot), taskRoot);
+                  assert.equal(realpathSync(sourceRoot), taskRoot + '/source');
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.equal(git('diff', '--name-only', 'HEAD'), '');
+                  const sourceCommit = process.env.GITHUB_SHA, sourceTree = git('rev-parse', 'HEAD^{tree}');
+                  assert.match(sourceCommit, /^[a-f0-9]{40}$/);
+                  assert.match(sourceTree, /^[a-f0-9]{40}$/);
+                  assert.match(process.env.GITHUB_RUN_ID, /^[1-9][0-9]{0,31}$/);
+                  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+                  const readInput = (file, maximum) => {
+                    assert.equal(realpathSync(file), file);
+                    const stat = lstatSync(file);
+                    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size > 0 && stat.size <= maximum);
+                    const bytes = readFileSync(file);
+                    assert.equal(bytes.length, stat.size);
+                    return bytes;
+                  };
+                  const currentZip = path.join(sourceRoot, 'release/Diagnostic-Hub-macos-arm64.zip');
+                  const currentInfo = path.join(sourceRoot, 'release/macos-build-info-arm64.json');
+                  const infoBytes = readInput(currentInfo, 65536), info = JSON.parse(infoBytes);
+                  const archive = await sampleMacArchive(currentZip);
+                  validateMacManifest(info, { arch: 'arm64', version: '0.6.0', commit: sourceCommit, sha256: archive.sha256 });
+                  assert.equal(info.source, sourceCommit);
+                  assert.equal(info.packagedSourceMatches, true);
+                  assert.equal(info.distribution, true);
+                  const inventory = normalizeMacTree({ entries: await inventoryMacPayload(path.join(sourceRoot, 'release/mac-arm64/Diagnostic Hub.app')) });
+                  validateMacPayloadIdentity(info.payloadIdentity, macPayloadIdentity(inventory));
+                  const treeBytes = Buffer.from(JSON.stringify({ entries: inventory }, null, 2) + '\n');
+                  assert.ok(treeBytes.length > 0 && treeBytes.length <= NATIVE_LIMITS.controlBytes);
+                  const currentTree = taskRoot + '/current-tree.json';
+                  writeFileSync(currentTree, treeBytes, { flag: 'wx', mode: 0o600 });
+                  const configuration = { 'source-root': sourceRoot, node: process.execPath,
+                    tsx: path.join(sourceRoot, 'node_modules/tsx/dist/loader.mjs'),
+                    playwright: path.join(sourceRoot, 'node_modules/@playwright/test/index.mjs') };
+                  const selected = macNativeSourcePins(configuration);
+                  assert.equal(selected.length, 20);
+                  assert.equal(new Set(selected.map(pin => pin.role)).size, 20);
+                  const pins = selected.map(pin => {
+                    assert.match(pin.role, /^[a-z][a-z0-9._-]{0,63}$/);
+                    const bytes = readInput(pin.path, 512 * 1024 ** 2);
+                    if (pin.path.startsWith(sourceRoot + '/') && !pin.path.startsWith(sourceRoot + '/node_modules/'))
+                      assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + path.relative(sourceRoot, pin.path)])));
+                    return { ...pin, bytes: bytes.length, sha256: hash(bytes) };
+                  });
+                  const nonce = randomBytes(16).toString('hex');
+                  const root = taskRoot + '/diagnostic-hub-v060-macos-native-run-' + nonce;
+                  for (const file of [root, root + '.SPENT.json']) {
+                    try { lstatSync(file); assert.fail('Once-only root already exists.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  const issued = Date.now();
+                  // This binds explicit fixture configuration; JSON and run labels confer no authority.
+                  const approval = { operation: 'macos-native-install-only', case: MAC_INSTALL_ONLY_CASE,
+                    approved: true, nonce, root, sourceRoot, sourceCommit, sourceTree,
+                    windowMs: NATIVE_LIMITS.windowMs, clockAllowanceMs: 0, minimumFreeBytes: 2 * 1024 ** 3,
+                    issuedAt: new Date(issued).toISOString(), expiresAt: new Date(issued + NATIVE_LIMITS.windowMs).toISOString(),
+                    effects: [...MAC_INSTALL_ONLY_EFFECTS], pins,
+                    inputs: { current: { zip: currentZip, info: currentInfo, tree: currentTree,
+                      zipBytes: archive.bytes, zipSHA256: archive.sha256,
+                      infoSHA256: hash(infoBytes), treeSHA256: hash(treeBytes) } } };
+                  const approvalBytes = Buffer.from(JSON.stringify(approval, null, 2) + '\n');
+                  assert.ok(approvalBytes.length <= NATIVE_LIMITS.admissionBytes);
+                  assert.ok(approvalBytes.length + treeBytes.length + infoBytes.length <= NATIVE_LIMITS.controlBytes);
+                  writeFileSync(taskRoot + '/install-approval.json', approvalBytes, { flag: 'wx', mode: 0o600 });
+                  const publicPins = { sourceCommit, sourceTree, arch: 'arm64',
+                    pinGroups: [pins.slice(0, 10), pins.slice(10)].map(rows => rows.map(({ role, bytes, sha256 }) => ({ role, bytes, sha256 }))) };
+                  writeFileSync(taskRoot + '/install-public-pins.json', JSON.stringify(publicPins) + '\n', { flag: 'wx', mode: 0o600 });
+                  for (const value of [root, hash(approvalBytes)]) assert.ok(!/[\r\n]/.test(value));
+                  appendFileSync(process.env.GITHUB_ENV, 'HUB_MAC_INSTALL_ROOT=' + root + '\nHUB_MAC_INSTALL_APPROVAL_SHA256=' + hash(approvalBytes) + '\n');
+                  NODE
+            - name: Announce bounded nominal install input identities
+              run: |
+                  node --input-type=module 2> "$HUB_MAC_PREFIX/logs/install-pin-notice-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac current install phase::Bounded input identity publication failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync } from 'node:fs';
+                  const file = process.env.HUB_MAC_PREFIX + '/install-public-pins.json';
+                  const stat = lstatSync(file);
+                  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.size > 0 && stat.size <= 65536);
+                  const value = JSON.parse(readFileSync(file));
+                  assert.equal(value.sourceCommit, process.env.GITHUB_SHA);
+                  assert.match(value.sourceTree, /^[a-f0-9]{40}$/);
+                  assert.equal(value.arch, 'arm64');
+                  assert.equal(value.pinGroups.length, 2);
+                  for (const [index, pins] of value.pinGroups.entries()) {
+                    assert.equal(pins.length, 10);
+                    for (const pin of pins) {
+                      assert.deepEqual(Object.keys(pin).sort(), ['bytes', 'role', 'sha256']);
+                      assert.match(pin.role, /^[a-z][a-z0-9._-]{0,63}$/);
+                      assert.ok(Number.isSafeInteger(pin.bytes) && pin.bytes > 0);
+                      assert.match(pin.sha256, /^[a-f0-9]{64}$/);
+                    }
+                    const notice = { sourceCommit: value.sourceCommit, sourceTree: value.sourceTree,
+                      pins, nominalDiskInputsOnly: true, loadedSDKClaimed: false, releaseAcceptance: false };
+                    const text = JSON.stringify(notice);
+                    assert.ok(Buffer.byteLength(text) <= 2048 && !/[\r\n%]/.test(text));
+                    console.log('::notice title=Mac install input pins ' + (index + 1) + '::' + text);
+                  }
+                  NODE
+            - name: Execute the one current-only install through the actual CLI API
+              # Actual exported CLI functions run once in this Node process. No TSX/SDK/app
+              # is loaded for this scope. Borrowed FD3 carries only one fixed failure projection;
+              # actual CLI/helper output stays private. Unknown ownership parks, with no cleanup.
+              run: |
+                  fail() { printf '%s\n' '::error title=Mac current install phase::Current-only install did not establish a complete bounded outcome; owned state retained.'; exit 1; }
+                  node --input-type=module 3>&1 > "$HUB_MAC_PREFIX/logs/install-only-output.json" 2> "$HUB_MAC_PREFIX/logs/install-only-error.log" <<'NODE' || fail
+                  import assert from 'node:assert/strict';
+                  import path from 'node:path';
+                  import { writeSync } from 'node:fs';
+                  import { runMacNativeCLI, finishMacNativeEntry } from './tests/macos-installer-native-cli.mjs';
+                  const prefix = process.env.HUB_MAC_PREFIX, source = process.cwd(), root = process.env.HUB_MAC_INSTALL_ROOT;
+                  assert.equal(process.platform, 'darwin');
+                  assert.equal(process.arch, 'arm64');
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.ok(root.startsWith(prefix + '/diagnostic-hub-v060-macos-native-run-'));
+                  assert.match(root.slice((prefix + '/diagnostic-hub-v060-macos-native-run-').length), /^[a-f0-9]{32}$/);
+                  assert.match(process.env.HUB_MAC_INSTALL_APPROVAL_SHA256, /^[a-f0-9]{64}$/);
+                  const argv = ['--run', '--case', 'macos-bundle:install', '--task-root', prefix,
+                    '--node', process.execPath, '--tsx', path.join(source, 'node_modules/tsx/dist/loader.mjs'),
+                    '--playwright', path.join(source, 'node_modules/@playwright/test/index.mjs'),
+                    '--approval', prefix + '/install-approval.json', '--approval-sha256', process.env.HUB_MAC_INSTALL_APPROVAL_SHA256,
+                    '--root', root, '--source-root', source,
+                    '--current-zip', path.join(source, 'release/Diagnostic-Hub-macos-arm64.zip'),
+                    '--current-info', path.join(source, 'release/macos-build-info-arm64.json'),
+                    '--current-tree', prefix + '/current-tree.json'];
+                  const result = await runMacNativeCLI(argv);
+                  globalThis.__hubNativeRetained = result.state;
+                  if (result.exitCode !== 0) {
+                    try {
+                      const stages = new Set(['arguments', 'input-validation', 'space-and-once-only-claim', 'source-identity',
+                        'adapter-initialization', 'install-only-case', 'install-only-publication']);
+                      const diagnostic = { case: 'macos-bundle:install', status: 'nonpassing',
+                        phase: stages.has(result.state.phase) ? result.state.phase : 'unclassified',
+                        retainedUnknown: result.state.holdRequired === true, releaseAcceptance: false };
+                      const bytes = Buffer.from('::error title=Mac current install diagnostic::' + JSON.stringify(diagnostic) + '\n');
+                      assert.ok(bytes.length <= 2048);
+                      const written = writeSync(3, bytes);
+                      if (written !== bytes.length) result.state.finiteDiagnosticPublication = 'short-write';
+                    } catch { result.state.finiteDiagnosticPublication = 'write-failed'; }
+                  }
+                  await finishMacNativeEntry(result);
+                  NODE
+            - name: Reingest original install records and announce only partial consistency
+              run: |
+                  node --input-type=module 3>&1 2> "$HUB_MAC_PREFIX/logs/install-readback-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac current install phase::Original install records or partial producer readback failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { writeSync } from 'node:fs';
+                  import { createHash } from 'node:crypto';
+                  import path from 'node:path';
+                  import { createMacNativeIO } from './scripts/lib/macos-native-io.mjs';
+                  import { finishMacNativeEntry } from './tests/macos-installer-native-cli.mjs';
+                  import { produceMacInstallLifecycle, readMacInstallRecords } from './scripts/lib/macos-install-lifecycle.mjs';
+                  import { inspectInstallerCaseObservation } from './scripts/lib/installer-lifecycle-evidence.mjs';
+                  const state = { phase: 'install-only-readback', io: null, failure: null,
+                    holdRequired: false, publicationComplete: false };
+                  globalThis.__hubNativeReadback = state;
+                  globalThis.__hubNativeRetained = state;
+                  let terminal;
+                  try {
+                    const root = process.env.HUB_MAC_INSTALL_ROOT, prefix = process.env.HUB_MAC_PREFIX;
+                    // A separate evidence-readback budget does not renew installer approval/SPENT.
+                    const io = state.io = createMacNativeIO(performance.now(), { taskRoot: prefix });
+                    assert.equal(io.canonicalDir(root), root);
+                    assert.equal(io.canonicalDir(prefix), prefix);
+                    assert.equal(io.canonicalDir(process.cwd()), prefix + '/source');
+                    assert.ok(root.startsWith(prefix + '/diagnostic-hub-v060-macos-native-run-'));
+                    assert.match(root.slice((prefix + '/diagnostic-hub-v060-macos-native-run-').length), /^[a-f0-9]{32}$/);
+                    // Existing evidence root metadata only: no claim, allocation or installer action.
+                    io.state.root = root;
+                    const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                    const readFile = (file, maximum) => {
+                      assert.ok(file.startsWith(prefix + '/') && path.resolve(file) === file);
+                      return io.read(file, maximum);
+                    };
+                    const readBytes = async (relative, maximum) => {
+                      assert.ok(typeof relative === 'string' && !/[\\\x00-\x1f\x7f]/.test(relative));
+                      assert.equal(path.posix.normalize(relative), relative);
+                      assert.ok(!path.posix.isAbsolute(relative) && relative.split('/').every(part => part && part !== '.' && part !== '..'));
+                      return readFile(path.join(root, relative), maximum);
+                    };
+                    const gitBytes = async (...args) => {
+                      const result = await io.child('/usr/bin/git', args, { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }, process.cwd());
+                      assert.equal(result.error, 'none');
+                      assert.equal(result.exitCode, 0);
+                      assert.equal(result.signal, null);
+                      return Buffer.from(result.stdout, 'utf8');
+                    };
+                    const git = async (...args) => (await gitBytes(...args)).toString('utf8').trim();
+                    const sourceCommit = await git('rev-parse', 'HEAD'), sourceTree = await git('rev-parse', 'HEAD^{tree}');
+                    assert.equal(sourceCommit, process.env.GITHUB_SHA);
+                    assert.match(sourceTree, /^[a-f0-9]{40}$/);
+                    assert.equal(await git('diff', '--name-only', 'HEAD'), '');
+                    assert.match(process.env.GITHUB_RUN_ID, /^[1-9][0-9]{0,31}$/);
+                    assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+                    const summaryBytes = readFile(prefix + '/logs/install-only-output.json', 8192);
+                    const summary = JSON.parse(summaryBytes);
+                    assert.equal(summary.status, 'INSTALL_ONLY_OBSERVED_REVIEW_REQUIRED');
+                    assert.equal(summary.case, 'macos-bundle:install');
+                    assert.equal(summary.qualificationStatus, 'unverified');
+                    assert.equal(summary.sourceCommit, sourceCommit);
+                    assert.equal(summary.sourceTree, sourceTree);
+                    assert.equal(summary.root, root);
+                    assert.equal(summary.nativeEffects, true);
+                    assert.equal(summary.fullLifecycle, false);
+                    assert.equal(summary.releaseAcceptance, false);
+                    assert.equal(summary.descendantClosure, 'UNKNOWN');
+                    assert.equal(summary.helperFixture.diskIdentityOnly, true);
+                    assert.equal(summary.helperFixture.physicalLoadedBytesVerified, false);
+                    assert.equal(summary.helperFixture.transport, 'locally-derived-offline-mirror');
+                    assert.equal(summary.helperFixture.consent, 'fixed-install-substitution-not-human-dialog');
+                    assert.equal(summary.helperFixture.executedHelper.path, 'bin/download-run-macos.sh');
+                    const derivedHelper = await readBytes('bin/download-run-macos.sh', 65536);
+                    assert.equal(derivedHelper.length, summary.helperFixture.executedHelper.bytes);
+                    assert.equal(hash(derivedHelper), summary.helperFixture.executedHelper.sha256);
+                    const originalHelper = readFile(path.resolve('public/download-run-macos.sh'), 65536);
+                    assert.ok(originalHelper.equals(await gitBytes('show', 'HEAD:public/download-run-macos.sh')));
+                    assert.equal(hash(originalHelper), summary.helperFixture.originalHelperSHA256);
+                    const approvalBytes = readFile(prefix + '/install-approval.json', 65536);
+                    assert.equal(hash(approvalBytes), process.env.HUB_MAC_INSTALL_APPROVAL_SHA256);
+                    const approval = JSON.parse(approvalBytes);
+                    assert.equal(approval.operation, 'macos-native-install-only');
+                    assert.equal(approval.case, 'macos-bundle:install');
+                    assert.equal(approval.root, root);
+                    assert.equal(approval.sourceCommit, sourceCommit);
+                    assert.equal(approval.sourceTree, sourceTree);
+                    assert.match(approval.nonce, /^[a-f0-9]{32}$/);
+                    assert.equal(root, prefix + '/diagnostic-hub-v060-macos-native-run-' + approval.nonce);
+                    assert.equal(summary.operationId, approval.nonce + ':macos-bundle:install:helper:1');
+                    assert.deepEqual(Object.keys(approval.inputs), ['current']);
+                    assert.deepEqual([...approval.effects].sort(), ['helper-stage-disposal', 'install']);
+                    const zip = path.resolve('release/Diagnostic-Hub-macos-arm64.zip');
+                    const zipStat = io.stat(zip);
+                    assert.ok(zipStat.isFile() && !zipStat.isSymbolicLink() && zipStat.nlink === 1 && zipStat.size > 0 && zipStat.size <= 1024 ** 3);
+                    assert.equal(zipStat.size, approval.inputs.current.zipBytes);
+                    assert.equal(approval.inputs.current.zip, zip);
+                    const archive = io.hash(zip, zipStat.size);
+                    assert.equal(archive.sha256, approval.inputs.current.zipSHA256);
+                    const expected = { version: '0.6.0', sourceCommit, sourceTree,
+                      runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+                      lane: 'darwin-arm64', artifacts: [{ name: 'Diagnostic-Hub-macos-arm64.zip', bytes: archive.bytes, sha256: archive.sha256 }] };
+                    const produced = await produceMacInstallLifecycle(expected, summary.records, readBytes);
+                    assert.equal(produced.caseId, 'macos-bundle:install');
+                    assert.equal(produced.releaseAcceptance, false);
+                    assert.equal(produced.lifecycleEvidence.path, 'cases/macos-bundle/install.json');
+                    io.mkdir(root + '/cases');
+                    io.mkdir(root + '/cases/macos-bundle');
+                    io.publish(root + '/' + produced.lifecycleEvidence.path, produced.bytes, 128 * 1024, 0o600, true);
+                    const caseBytes = await readBytes(produced.lifecycleEvidence.path, 128 * 1024);
+                    assert.ok(caseBytes.equals(produced.bytes));
+                    assert.equal(hash(caseBytes), produced.lifecycleEvidence.sha256);
+                    const envelope = JSON.parse(caseBytes);
+                    assert.equal(envelope.kind, 'installer-case-observation');
+                    assert.equal(envelope.observation.kind, 'macos-owned-install/v1');
+                    assert.equal(envelope.observation.helperChild.operation.operationId, summary.operationId);
+                    assert.equal(envelope.observation.helperChild.operation.fixtureRoot, root + '/install');
+                    await readMacInstallRecords(envelope.observation, readBytes);
+                    const consistency = inspectInstallerCaseObservation(envelope,
+                      { id: 'macos-bundle:install', evidence: produced.evidence }, expected);
+                    assert.equal(consistency, 'installed-payload-and-helper-consistent-unqualified');
+                    const sourcePins = {};
+                    for (const name of ['scripts/lib/macos-install-lifecycle.mjs', 'scripts/lib/installer-lifecycle-evidence.mjs']) {
+                      const bytes = readFile(path.resolve(name), 65536);
+                      assert.ok(bytes.equals(await gitBytes('show', 'HEAD:' + name)));
+                      sourcePins[name] = hash(bytes);
+                    }
+                    io.gate();
+                    assert.equal(io.needsHold(), false);
+                    const observation = { sourceCommit, sourceTree, runId: expected.runId, runAttempt: expected.runAttempt,
+                      arch: 'arm64', case: 'macos-bundle:install', status: 'installed-payload-and-helper-consistent-unqualified',
+                      asset: expected.artifacts[0].name, zipSHA256: archive.sha256,
+                      caseEnvelopeSHA256: produced.lifecycleEvidence.sha256,
+                      installedPayloadSHA256: summary.records.installedPayload.sha256,
+                      helperChildSHA256: summary.records.helperChild.sha256,
+                      shippingBuildInfoSHA256: summary.records.shippingBuildInfo.sha256,
+                      derivedHelperDiskSHA256: summary.helperFixture.executedHelper.sha256,
+                      helperNormalExitAndBothEOF: true, freshOwnedTarget: true,
+                      appLaunched: false, fullLifecycle: false, diskIdentityOnly: true,
+                      physicalLoadedBytesVerified: false, physicalDescendantClosure: false, releaseAcceptance: false };
+                    state.publicationComplete = true;
+                    for (const [title, value] of [['Mac current install observation', observation],
+                      ['Mac install readback source inputs', { sourceCommit, sourceTree, sourcePins, diskIdentityOnly: true, releaseAcceptance: false }]]) {
+                      const text = JSON.stringify(value);
+                      assert.ok(Buffer.byteLength(text) <= 2048 && !/[\r\n%]/.test(text));
+                      console.log('::notice title=' + title + '::' + text);
+                    }
+                    terminal = { exitCode: 0, output: '', state };
+                  } catch (error) {
+                    state.failure = error;
+                    state.holdRequired = state.io?.needsHold() ?? false;
+                    try {
+                      const bytes = Buffer.from('::error title=Mac current install readback diagnostic::' +
+                        JSON.stringify({ case: 'macos-bundle:install', status: 'nonpassing', phase: 'readback',
+                          retainedUnknown: state.holdRequired, releaseAcceptance: false }) + '\n');
+                      assert.ok(bytes.length <= 2048);
+                      const written = writeSync(3, bytes);
+                      if (written !== bytes.length) state.finiteDiagnosticPublication = 'short-write';
+                    } catch { state.finiteDiagnosticPublication = 'write-failed'; }
+                    terminal = { exitCode: 2, output: '', state };
+                  }
+                  await finishMacNativeEntry(terminal);
+                  NODE
+            - name: State the completed install phase boundary
+              run: |
+                  printf '%s\n' '::notice title=Mac current install phase scope::Install phase only: one fresh current-only install using an offline-mirror helper and fixed Install consent substitution. That phase launches no app and performs no repair/update/removal. Its guarded helper stages are disposed; installed target, profile and evidence remain. A separate owned runtime phase follows.'
+            - name: Bind installed-runtime source and nominal SDK disk inputs
+              run: |
+                  node --input-type=module 2> "$HUB_MAC_PREFIX/logs/runtime-input-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac runtime phase::Current runtime input identity failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync, realpathSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  import { createHash } from 'node:crypto';
+                  import path from 'node:path';
+                  import os from 'node:os';
+                  assert.equal(process.env.TMPDIR, process.env.HUB_MAC_PREFIX + '/tmp');
+                  assert.equal(os.tmpdir(), process.env.TMPDIR);
+                  assert.equal(realpathSync(os.tmpdir()), process.env.TMPDIR);
+                  const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+                  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                  const sourceCommit = git('rev-parse', 'HEAD');
+                  const sourceTree = git('rev-parse', 'HEAD^{tree}');
+                  assert.equal(sourceCommit, process.env.GITHUB_SHA);
+                  assert.match(sourceTree, /^[a-f0-9]{40}$/);
+                  assert.equal(git('diff', '--name-only', 'HEAD'), '');
+                  assert.equal(process.platform, 'darwin');
+                  assert.equal(process.arch, 'arm64');
+                  assert.equal(process.version, 'v24.22.0');
+                  const source = {};
+                  for (const name of ['package.json', 'package-lock.json', 'tests/staged-artifact-native.mts', 'tests/fixtures/staged-mac-runtime.ts', 'tests/fixtures/macos-native-owned.ts']) {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('git', ['show', 'HEAD:' + name])));
+                    source[name] = hash(bytes);
+                  }
+                  const lock = JSON.parse(readFileSync('package-lock.json'));
+                  const sdk = {};
+                  for (const name of ['@playwright/test', 'playwright', 'playwright-core', 'tsx']) {
+                    const file = path.resolve('node_modules', name, 'package.json');
+                    assert.equal(realpathSync(file), file);
+                    const stat = lstatSync(file);
+                    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= 65536);
+                    const bytes = readFileSync(file);
+                    assert.equal(bytes.length, stat.size);
+                    const metadata = JSON.parse(bytes);
+                    const version = metadata.version;
+                    assert.equal(version, lock.packages['node_modules/' + name].version);
+                    const entrypoints = {};
+                    if (name === 'tsx') {
+                      assert.equal(metadata.exports['.'], './dist/loader.mjs');
+                      const entry = path.resolve('node_modules/tsx/dist/loader.mjs');
+                      assert.equal(realpathSync(entry), entry);
+                      const entryStat = lstatSync(entry);
+                      assert.ok(entryStat.isFile() && !entryStat.isSymbolicLink() && entryStat.size > 0 && entryStat.size <= 2097152);
+                      entrypoints.importLoaderSHA256 = hash(readFileSync(entry));
+                    } else {
+                      for (const condition of ['import', 'require']) {
+                        const relative = metadata.exports['.'][condition];
+                        assert.ok(typeof relative === 'string' && relative.startsWith('./') && !relative.includes('..'));
+                        const entry = path.resolve('node_modules', name, relative);
+                        assert.equal(realpathSync(entry), entry);
+                        const entryStat = lstatSync(entry);
+                        assert.ok(entryStat.isFile() && !entryStat.isSymbolicLink() && entryStat.size > 0 && entryStat.size <= 2097152);
+                        entrypoints[condition + 'SHA256'] = hash(readFileSync(entry));
+                      }
+                    }
+                    sdk[name] = { version, packageJSONSHA256: hash(bytes), ...entrypoints };
+                  }
+                  const sourceIdentity = { sourceCommit, sourceTree, selectedNode: process.version, source,
+                    physicalLoadedBytesVerified: false, releaseAcceptance: false };
+                  const sdkIdentity = { sourceCommit, sdk, sdkDiskIdentityOnly: true,
+                    physicalLoadedBytesVerified: false, releaseAcceptance: false };
+                  for (const [title, value] of [['Mac installed runtime inputs', sourceIdentity], ['Mac installed runtime SDK disk inputs', sdkIdentity]]) {
+                    const text = JSON.stringify(value);
+                    assert.ok(text.length < 2048 && !/[\r\n%]/.test(text));
+                    console.log('::notice title=' + title + '::' + text);
+                  }
+                  NODE
+            - name: Observe the actual installed payload with the existing owned runtime leaf
+              env:
+                  HUB_TEST_EXECUTABLE:
+                      ${{ env.HUB_MAC_INSTALL_ROOT }}/install/Applications/Diagnostic
+                      Hub.app/Contents/MacOS/Diagnostic Hub
+                  HUB_STAGED_IDENTITY: ${{ env.HUB_MAC_PREFIX }}/installed-runtime-identity.json
+                  HUB_STAGED_ASSET: Diagnostic-Hub-macos-arm64.zip
+                  HUB_STAGED_MAC_BUILD_INFO:
+                      ${{ env.HUB_MAC_INSTALL_ROOT }}/evidence/current-shipping-build-info.json
+                  HUB_STAGED_RUNTIME_ROOT: ${{ env.HUB_MAC_PREFIX }}/installed-runtime
+              # The existing owner has a 90-second phase deadline and observes normal
+              # quit, root exit/close, both EOFs and transport closes. Unknown custody
+              # parks nonpassing with files retained. FD 3 borrows the public output only
+              # for one fixed finite diagnostic; raw stdout/stderr stay private. This job's timeout proves no
+              # descendant or loaded-code retirement and issues no cleanup command.
+              run: |
+                  fail() { printf '%s\n' '::error title=Mac runtime phase::Owned runtime did not establish a complete normal outcome; custody and files retained.'; exit 1; }
+                  for name in NODE_OPTIONS NODE_PATH ELECTRON_RUN_AS_NODE TSX_TSCONFIG_PATH TSX_DISABLE_CACHE ESBUILD_BINARY_PATH PWDEBUG PW_INSTRUMENT_MODULES PLAYWRIGHT_DRIVER_URL PW_TEST_CONNECT_WS_ENDPOINT SELENIUM_REMOTE_URL PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH; do
+                    if declare -p "$name" > /dev/null 2>&1; then fail; fi
+                  done
+                  for name in ${!PW_TEST_@}; do fail; done
+                  test ! -e "$HUB_STAGED_RUNTIME_ROOT" && test ! -L "$HUB_STAGED_RUNTIME_ROOT" && test ! -e "$HUB_STAGED_IDENTITY" && test ! -L "$HUB_STAGED_IDENTITY" || fail
+                  node --import ./node_modules/tsx/dist/loader.mjs tests/staged-artifact-native.mts 3>&1 > "$HUB_MAC_PREFIX/logs/installed-runtime.log" 2>&1 || fail
+            - name: Join original install records to installed runtime and normal closure
+              run: |
+                  node --input-type=module 3>&1 2> "$HUB_MAC_PREFIX/logs/installed-runtime-readback-error.log" <<'NODE' || { printf '%s\n' '::error title=Mac installed runtime phase::Installed runtime and original install binding readback failed.'; exit 1; }
+                  import assert from 'node:assert/strict';
+                  import { writeSync } from 'node:fs';
+                  import { createHash } from 'node:crypto';
+                  import path from 'node:path';
+                  import { createMacNativeIO } from './scripts/lib/macos-native-io.mjs';
+                  import { finishMacNativeEntry } from './tests/macos-installer-native-cli.mjs';
+                  import { produceMacInstallLifecycle, readMacInstallRecords } from './scripts/lib/macos-install-lifecycle.mjs';
+                  import { normalizeMacTree } from './scripts/lib/macos-native-contract.mjs';
+                  import { macIdentityFromTreeSamples, validateMacPayloadIdentity } from './scripts/lib/macos-payload-identity.mjs';
+                  import { inspectInstallerCaseObservation } from './scripts/lib/installer-lifecycle-evidence.mjs';
+                  const state = { phase: 'installed-runtime-readback', io: null, failure: null,
+                    holdRequired: false, publicationComplete: false };
+                  globalThis.__hubInstalledRuntimeReadback = state;
+                  globalThis.__hubNativeRetained = state;
+                  let terminal;
+                  try {
+                    const root = process.env.HUB_MAC_INSTALL_ROOT, prefix = process.env.HUB_MAC_PREFIX;
+                    // A separate evidence-readback budget does not renew installer approval/SPENT.
+                    const io = state.io = createMacNativeIO(performance.now(), { taskRoot: prefix });
+                    assert.equal(io.canonicalDir(root), root);
+                    assert.equal(io.canonicalDir(prefix), prefix);
+                    assert.equal(io.canonicalDir(process.cwd()), prefix + '/source');
+                    assert.ok(root.startsWith(prefix + '/diagnostic-hub-v060-macos-native-run-'));
+                    assert.match(root.slice((prefix + '/diagnostic-hub-v060-macos-native-run-').length), /^[a-f0-9]{32}$/);
+                    // Existing evidence root metadata only: no claim, allocation or installer action.
+                    io.state.root = root;
+                    const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                    const readFile = (file, maximum) => {
+                      assert.ok(file.startsWith(prefix + '/') && path.resolve(file) === file);
+                      return io.read(file, maximum);
+                    };
+                    const readBytes = async (relative, maximum) => {
+                      assert.ok(typeof relative === 'string' && !/[\\\x00-\x1f\x7f]/.test(relative));
+                      assert.equal(path.posix.normalize(relative), relative);
+                      assert.ok(!path.posix.isAbsolute(relative) && relative.split('/').every(part => part && part !== '.' && part !== '..'));
+                      return readFile(path.join(root, relative), maximum);
+                    };
+                    const gitBytes = async (...args) => {
+                      const result = await io.child('/usr/bin/git', args, { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }, process.cwd());
+                      assert.equal(result.error, 'none');
+                      assert.equal(result.exitCode, 0);
+                      assert.equal(result.signal, null);
+                      return Buffer.from(result.stdout, 'utf8');
+                    };
+                    const git = async (...args) => (await gitBytes(...args)).toString('utf8').trim();
+                    const sourceCommit = await git('rev-parse', 'HEAD'), sourceTree = await git('rev-parse', 'HEAD^{tree}');
+                    assert.equal(sourceCommit, process.env.GITHUB_SHA);
+                    assert.match(sourceTree, /^[a-f0-9]{40}$/);
+                    assert.equal(await git('diff', '--name-only', 'HEAD'), '');
+                    assert.match(process.env.GITHUB_RUN_ID, /^[1-9][0-9]{0,31}$/);
+                    assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+                    const summaryBytes = readFile(prefix + '/logs/install-only-output.json', 8192);
+                    const summary = JSON.parse(summaryBytes);
+                    assert.equal(summary.status, 'INSTALL_ONLY_OBSERVED_REVIEW_REQUIRED');
+                    assert.equal(summary.case, 'macos-bundle:install');
+                    assert.equal(summary.qualificationStatus, 'unverified');
+                    assert.equal(summary.sourceCommit, sourceCommit);
+                    assert.equal(summary.sourceTree, sourceTree);
+                    assert.equal(summary.root, root);
+                    assert.equal(summary.nativeEffects, true);
+                    assert.equal(summary.fullLifecycle, false);
+                    assert.equal(summary.releaseAcceptance, false);
+                    assert.equal(summary.descendantClosure, 'UNKNOWN');
+                    assert.equal(summary.helperFixture.diskIdentityOnly, true);
+                    assert.equal(summary.helperFixture.physicalLoadedBytesVerified, false);
+                    assert.equal(summary.helperFixture.transport, 'locally-derived-offline-mirror');
+                    assert.equal(summary.helperFixture.consent, 'fixed-install-substitution-not-human-dialog');
+                    assert.equal(summary.helperFixture.executedHelper.path, 'bin/download-run-macos.sh');
+                    const derivedHelper = await readBytes('bin/download-run-macos.sh', 65536);
+                    assert.equal(derivedHelper.length, summary.helperFixture.executedHelper.bytes);
+                    assert.equal(hash(derivedHelper), summary.helperFixture.executedHelper.sha256);
+                    const originalHelper = readFile(path.resolve('public/download-run-macos.sh'), 65536);
+                    assert.ok(originalHelper.equals(await gitBytes('show', 'HEAD:public/download-run-macos.sh')));
+                    assert.equal(hash(originalHelper), summary.helperFixture.originalHelperSHA256);
+                    const approvalBytes = readFile(prefix + '/install-approval.json', 65536);
+                    assert.equal(hash(approvalBytes), process.env.HUB_MAC_INSTALL_APPROVAL_SHA256);
+                    const approval = JSON.parse(approvalBytes);
+                    assert.equal(approval.operation, 'macos-native-install-only');
+                    assert.equal(approval.case, 'macos-bundle:install');
+                    assert.equal(approval.root, root);
+                    assert.equal(approval.sourceCommit, sourceCommit);
+                    assert.equal(approval.sourceTree, sourceTree);
+                    assert.match(approval.nonce, /^[a-f0-9]{32}$/);
+                    assert.equal(root, prefix + '/diagnostic-hub-v060-macos-native-run-' + approval.nonce);
+                    assert.equal(summary.operationId, approval.nonce + ':macos-bundle:install:helper:1');
+                    assert.deepEqual(Object.keys(approval.inputs), ['current']);
+                    assert.deepEqual([...approval.effects].sort(), ['helper-stage-disposal', 'install']);
+                    const zip = path.resolve('release/Diagnostic-Hub-macos-arm64.zip');
+                    const zipStat = io.stat(zip);
+                    assert.ok(zipStat.isFile() && !zipStat.isSymbolicLink() && zipStat.nlink === 1 && zipStat.size > 0 && zipStat.size <= 1024 ** 3);
+                    assert.equal(zipStat.size, approval.inputs.current.zipBytes);
+                    assert.equal(approval.inputs.current.zip, zip);
+                    const archive = io.hash(zip, zipStat.size);
+                    assert.equal(archive.sha256, approval.inputs.current.zipSHA256);
+                    const expected = { version: '0.6.0', sourceCommit, sourceTree,
+                      runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+                      lane: 'darwin-arm64', artifacts: [{ name: 'Diagnostic-Hub-macos-arm64.zip', bytes: archive.bytes, sha256: archive.sha256 }] };
+                    const produced = await produceMacInstallLifecycle(expected, summary.records, readBytes);
+                    assert.equal(produced.caseId, 'macos-bundle:install');
+                    assert.equal(produced.releaseAcceptance, false);
+                    assert.equal(produced.lifecycleEvidence.path, 'cases/macos-bundle/install.json');
+                    const caseBytes = await readBytes(produced.lifecycleEvidence.path, 128 * 1024);
+                    assert.ok(caseBytes.equals(produced.bytes));
+                    assert.equal(hash(caseBytes), produced.lifecycleEvidence.sha256);
+                    const envelope = JSON.parse(caseBytes);
+                    assert.equal(envelope.kind, 'installer-case-observation');
+                    assert.equal(envelope.observation.kind, 'macos-owned-install/v1');
+                    assert.equal(envelope.observation.helperChild.operation.operationId, summary.operationId);
+                    assert.equal(envelope.observation.helperChild.operation.fixtureRoot, root + '/install');
+                    await readMacInstallRecords(envelope.observation, readBytes);
+                    const consistency = inspectInstallerCaseObservation(envelope,
+                      { id: 'macos-bundle:install', evidence: produced.evidence }, expected);
+                    assert.equal(consistency, 'installed-payload-and-helper-consistent-unqualified');
+                    const sourcePins = {};
+                    for (const name of ['scripts/lib/macos-install-lifecycle.mjs', 'scripts/lib/installer-lifecycle-evidence.mjs']) {
+                      const bytes = readFile(path.resolve(name), 65536);
+                      assert.ok(bytes.equals(await gitBytes('show', 'HEAD:' + name)));
+                      sourcePins[name] = hash(bytes);
+                    }
+                    const runtimeRoot = prefix + '/installed-runtime';
+                    const runtimeBytes = readFile(prefix + '/installed-runtime-identity.json', 32768);
+                    const identity = JSON.parse(runtimeBytes);
+                    const info = envelope.observation.shippingBuildInfo;
+                    const installedBundle = root + '/install/Applications/Diagnostic Hub.app';
+                    const executable = installedBundle + '/Contents/MacOS/Diagnostic Hub';
+                    const asar = installedBundle + '/Contents/Resources/app.asar';
+                    const treeBytes = readFile(prefix + '/current-tree.json', 1048576);
+                    assert.equal(hash(treeBytes), approval.inputs.current.treeSHA256);
+                    const inventory = normalizeMacTree(JSON.parse(treeBytes));
+                    const afterRuntimePayload = macIdentityFromTreeSamples(io.tree(installedBundle, inventory));
+                    validateMacPayloadIdentity(afterRuntimePayload, info.payloadIdentity);
+                    validateMacPayloadIdentity(afterRuntimePayload, envelope.observation.installedPayload.payloadIdentity);
+                    assert.equal(identity.sourceCommit, sourceCommit);
+                    assert.equal(identity.asset, 'Diagnostic-Hub-macos-arm64.zip');
+                    assert.equal(identity.packaged, true);
+                    assert.equal(identity.version, '0.6.0');
+                    assert.equal(identity.platform, 'darwin');
+                    assert.equal(identity.arch, 'arm64');
+                    assert.equal(identity.executable, executable);
+                    assert.equal(identity.asar, asar);
+                    assert.equal(identity.executableSHA256, afterRuntimePayload.executableSHA256);
+                    assert.equal(identity.asarSHA256, afterRuntimePayload.asarSHA256);
+                    assert.equal(identity.asarSHA256, info.asarSHA256);
+                    assert.equal(identity.startupRoot, runtimeRoot);
+                    assert.equal(identity.profile, runtimeRoot + '/profile');
+                    assert.equal(identity.cwd, process.cwd());
+                    assert.equal(identity.fixtureNetworkMode, 'default');
+                    for (const key of ['sandbox', 'osSandboxed', 'contextsSeparated', 'pageNodeAbsent', 'nativeVisible', 'diskIdentityOnly']) assert.equal(identity[key], true);
+                    for (const key of ['physicalLoadedBytesVerified', 'physicalDescendantClosure', 'releaseAcceptance']) assert.equal(identity[key], false);
+                    const closure = identity.closure;
+                    assert.equal(closure.reason, null);
+                    assert.equal(closure.exitCode, 0);
+                    assert.equal(closure.signal, null);
+                    for (const key of ['exitObserved', 'closeObserved', 'quitIntent', 'quitScheduledAck', 'quitComplete', 'mainTransportClosed', 'rendererTransportClosed']) assert.equal(closure[key], true);
+                    for (const key of ['stdoutComplete', 'stderrComplete', 'stdoutEOF', 'stderrEOF']) assert.equal(closure.streams[key], true);
+                    for (const key of ['genericPending', 'shutdownPending', 'mainPending', 'mainPendingCount', 'publicationFDCount', 'rejectedOwnedCalls']) assert.equal(closure[key], 0);
+                    for (const key of ['frameworkOwnsProcess', 'frameworkTemporaryDirectoryAllocated', 'physicalDescendantClosure']) assert.equal(closure[key], false);
+                    assert.equal(closure.streams.capExceeded, false);
+                    assert.equal(closure.shutdown.complete, true);
+                    assert.equal(closure.shutdown.incident, null);
+                    assert.equal(closure.shutdown.terminal, null);
+                    assert.equal(closure.shutdown.repeated, false);
+                    const lock = JSON.parse(readFile(path.resolve('package-lock.json'), 1048576));
+                    assert.equal(identity.versions.electron, lock.packages['node_modules/electron'].version);
+                    for (const key of ['node', 'electron', 'chrome']) assert.ok(typeof identity.versions[key] === 'string' && identity.versions[key].length > 0 && identity.versions[key].length <= 128);
+                    const prequitBytes = readFile(runtimeRoot + '/prequit.json', 32768);
+                    const prequit = JSON.parse(prequitBytes);
+                    const { closure: finalClosure, releaseAcceptance: acceptance, ...prequitIdentity } = identity;
+                    assert.deepEqual(prequit.identity, prequitIdentity);
+                    assert.equal(prequit.releaseAcceptance, false);
+                    assert.equal(prequit.closure.reason, null);
+                    for (const key of ['exitObserved', 'closeObserved', 'quitIntent', 'quitComplete']) assert.equal(prequit.closure[key], false);
+                    const closureBytes = readFile(runtimeRoot + '/closure.json', 32768);
+                    const closureRecord = JSON.parse(closureBytes);
+                    assert.deepEqual(closureRecord.closure, finalClosure);
+                    assert.equal(closureRecord.releaseAcceptance, false);
+                    io.gate();
+                    assert.equal(io.needsHold(), false);
+                    const observation = { sourceCommit, sourceTree, runId: expected.runId, runAttempt: expected.runAttempt,
+                      arch: 'arm64', asset: expected.artifacts[0].name, zipSHA256: archive.sha256,
+                      installCaseEnvelopeSHA256: produced.lifecycleEvidence.sha256,
+                      installedPayloadSHA256: summary.records.installedPayload.sha256,
+                      runtimeIdentitySHA256: hash(runtimeBytes), prequitSHA256: hash(prequitBytes), closureSHA256: hash(closureBytes),
+                      executableSHA256: identity.executableSHA256, asarSHA256: identity.asarSHA256,
+                      payloadInventorySHA256: afterRuntimePayload.inventorySHA256, versions: identity.versions,
+                      installedTargetAndOriginalCaseBound: true, freshRuntimeRootBound: true,
+                      nativeVisible: true, sandbox: true, normalRootExitAndBothEOF: true, bothTransportCloses: true,
+                      fixtureNetworkMode: 'default', offlineLaunchCaseQualified: false, fullLifecycle: false,
+                      diskIdentityOnly: true, physicalLoadedBytesVerified: false,
+                      physicalDescendantClosure: false, releaseAcceptance: false };
+                    state.publicationComplete = true;
+                    for (const [title, value] of [['Mac installed runtime observation', observation],
+                      ['Mac installed runtime readback source inputs', { sourceCommit, sourceTree, sourcePins, diskIdentityOnly: true, releaseAcceptance: false }]]) {
+                      const text = JSON.stringify(value);
+                      assert.ok(Buffer.byteLength(text) <= 2048 && !/[\r\n%]/.test(text));
+                      console.log('::notice title=' + title + '::' + text);
+                    }
+                    terminal = { exitCode: 0, output: '', state };
+                  } catch (error) {
+                    state.failure = error;
+                    state.holdRequired = state.io?.needsHold() ?? false;
+                    try {
+                      const bytes = Buffer.from('::error title=Mac installed runtime readback diagnostic::' +
+                        JSON.stringify({ case: 'macos-bundle:install', status: 'nonpassing', phase: 'readback',
+                          retainedUnknown: state.holdRequired, releaseAcceptance: false }) + '\n');
+                      assert.ok(bytes.length <= 2048);
+                      const written = writeSync(3, bytes);
+                      if (written !== bytes.length) state.finiteDiagnosticPublication = 'short-write';
+                    } catch { state.finiteDiagnosticPublication = 'write-failed'; }
+                    terminal = { exitCode: 2, output: '', state };
+                  }
+                  await finishMacNativeEntry(terminal);
+                  NODE
+            - name: State install and installed-runtime phase limits
+              run: |
+                  printf '%s\n' '::notice title=Mac installed runtime scope::One fresh offline-mirror current-only install, then one separate default-network owned launch of that exact installed payload. Original sandbox/visible/runtime assertions and normal direct root/EOF/transport closure are required. No offline-launch case, full-nine lifecycle, physical loaded-code, clean-handshake, descendant or release acceptance.'
+                  printf '%s\n' 'Install-phase appLaunched=false applies only before the explicit runtime phase. The runtime does not broaden the original install/helper-stage-disposal approval; it uses its own fresh profile/home/temp/artifacts and the unchanged owned leaf.'
+                  printf '%s\n' 'Only inherent guarded helper-stage disposal occurs. Installed target, profiles, raw records and logs remain on the disposable runner. No Browser.close, signals, process cleanup, host security changes, artifact upload or release mutation. Runner teardown is not retirement evidence.'

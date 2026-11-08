@@ -20,6 +20,7 @@ class Retained extends Error {
     }
 }
 type Options = {
+    installed?: boolean;
     identity?: Record<string, unknown>;
     fail?: string;
     late?: string;
@@ -28,17 +29,26 @@ type Options = {
 };
 function fixture(options: Options = {}) {
     const input: MacRuntimeInput = {
-        executable: '/source/release/mac-arm64/Diagnostic Hub.app/Contents/MacOS/Diagnostic Hub',
-        destination: '/evidence/runtime.json',
-        buildInfo: '/source/release/macos-build-info-arm64.json',
-        root: '/owned/runtime',
+        executable: options.installed
+            ? '/owned/install-run/install/Applications/Diagnostic Hub.app/Contents/MacOS/Diagnostic Hub'
+            : '/source/release/mac-arm64/Diagnostic Hub.app/Contents/MacOS/Diagnostic Hub',
+        destination: options.installed
+            ? '/evidence/installed-runtime.json'
+            : '/evidence/runtime.json',
+        buildInfo: options.installed
+            ? '/owned/install-run/evidence/current-shipping-build-info.json'
+            : '/source/release/macos-build-info-arm64.json',
+        root: options.installed ? '/owned/installed-runtime' : '/owned/runtime',
         sourceCommit: '1'.repeat(40),
         asset: 'Diagnostic-Hub-macos-arm64.zip',
         arch: 'arm64',
         cwd: '/source',
         environment: { HTTPS_PROXY: 'test-proxy', RUNNER_SECRET: 'not-child-env' },
     };
-    const asar = '/source/release/mac-arm64/Diagnostic Hub.app/Contents/Resources/app.asar';
+    const asar = input.executable.replace(
+        '/Contents/MacOS/Diagnostic Hub',
+        '/Contents/Resources/app.asar',
+    );
     const executableBytes = Buffer.from('real fake-control executable bytes');
     const asarBytes = Buffer.from('real fake-control asar bytes');
     const files = new Map<string, Buffer>([
@@ -394,6 +404,62 @@ test('owned Mac runtime executes the actual callback and publishes only after du
     assert.equal(output.releaseAcceptance, false);
     assert.equal(output.closure.mainTransportClosed, true);
     assert.equal(output.closure.streams.stdoutEOF, true);
+});
+
+test('owned Mac runtime binds a fresh installed bundle and shipping copy without staged-path fallback', async () => {
+    const f = fixture({ installed: true });
+    const identity = await runStagedMacRuntime(f.input, f.ports);
+    assert.equal(
+        identity.executable,
+        '/owned/install-run/install/Applications/Diagnostic Hub.app/Contents/MacOS/Diagnostic Hub',
+    );
+    assert.equal(
+        identity.asar,
+        '/owned/install-run/install/Applications/Diagnostic Hub.app/Contents/Resources/app.asar',
+    );
+    assert.equal(identity.startupRoot, '/owned/installed-runtime');
+    assert.equal(identity.profile, '/owned/installed-runtime/profile');
+    assert.equal(identity.fixtureNetworkMode, 'default');
+    assert.equal(identity.nativeVisible, true);
+    assert.equal(identity.sandbox, true);
+    assert.equal(identity.physicalLoadedBytesVerified, false);
+    assert.equal(identity.physicalDescendantClosure, false);
+    assert.ok(
+        f.events.includes('open:/owned/install-run/evidence/current-shipping-build-info.json'),
+    );
+    assert.ok(!f.events.some((event) => event.includes('/source/release/')));
+    assert.equal(f.events.filter((event) => event === 'launch').length, 1);
+    assert.equal(f.events.filter((event) => event === 'quit').length, 1);
+    assert.equal(f.owner.reason, null);
+    assert.equal(f.descriptors.size, 0);
+    assert.equal(f.owner.publicationFDs.size, 0);
+    const output = JSON.parse(f.files.get(f.input.destination)!.toString());
+    assert.equal(output.closure.exitCode, 0);
+    assert.equal(output.closure.signal, null);
+    assert.equal(output.closure.mainTransportClosed, true);
+    assert.equal(output.closure.rendererTransportClosed, true);
+    assert.equal(output.closure.streams.stdoutEOF, true);
+    assert.equal(output.closure.streams.stderrEOF, true);
+    assert.equal(output.releaseAcceptance, false);
+    for (const identity of [
+        {
+            executable:
+                '/source/release/mac-arm64/Diagnostic Hub.app/Contents/MacOS/Diagnostic Hub',
+        },
+        { asar: '/source/release/mac-arm64/Diagnostic Hub.app/Contents/Resources/app.asar' },
+    ]) {
+        const changed = fixture({ installed: true, identity });
+        await assert.rejects(runStagedMacRuntime(changed.input, changed.ports), Retained);
+        assert.ok(!changed.events.includes('quit'));
+        assert.ok(!changed.files.has(changed.input.destination));
+    }
+    const changed = fixture({ installed: true });
+    const info = JSON.parse(changed.files.get(changed.input.buildInfo)!.toString());
+    info.asarSHA256 = info.payloadIdentity.asarSHA256 = 'f'.repeat(64);
+    changed.files.set(changed.input.buildInfo, Buffer.from(JSON.stringify(info)));
+    await assert.rejects(runStagedMacRuntime(changed.input, changed.ports), Retained);
+    assert.ok(!changed.events.includes('launch'));
+    assert.ok(!changed.files.has(changed.input.destination));
 });
 
 test('owned Mac runtime refuses failed packaged isolation sandbox visibility paths and runtime identities', async () => {
