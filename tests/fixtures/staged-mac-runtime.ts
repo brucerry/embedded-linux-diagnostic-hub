@@ -87,6 +87,16 @@ const failureReasons = [
     'operation',
     'other',
 ] as const;
+const transportReasons = [
+    'node-socket-error',
+    'browser-socket-error',
+    'node-socket-disconnected',
+    'browser-socket-disconnected',
+    'main-inspector-disconnected',
+    'attach-failed',
+    'forbidden-termination-command',
+    'framework-transport-close-refused',
+] as const;
 const ownData = (object: unknown, key: string): unknown => {
     if (object === null || typeof object !== 'object' || utilTypes.isProxy(object))
         return undefined;
@@ -148,16 +158,7 @@ export function macRuntimeFailureDiagnostic(stage: string, owner: unknown, openF
                       'spawn-failed',
                   ].includes(rawReason)
                 ? 'process'
-                : [
-                        'node-socket-error',
-                        'browser-socket-error',
-                        'node-socket-disconnected',
-                        'browser-socket-disconnected',
-                        'main-inspector-disconnected',
-                        'attach-failed',
-                        'forbidden-termination-command',
-                        'framework-transport-close-refused',
-                    ].includes(rawReason)
+                : (transportReasons as readonly string[]).includes(rawReason)
                   ? 'transport'
                   : [
                           'root-stream-error',
@@ -181,6 +182,11 @@ export function macRuntimeFailureDiagnostic(stage: string, owner: unknown, openF
     return Object.freeze({
         stage: (runtimeStages as readonly string[]).includes(stage) ? stage : 'unclassified',
         reason,
+        transportReason:
+            typeof rawReason === 'string' &&
+            (transportReasons as readonly string[]).includes(rawReason)
+                ? rawReason
+                : 'unclassified',
         waitingStage:
             genericWaitingStage === 'unclassified'
                 ? pendingStage(ownData(owner, 'shutdownPending'))
@@ -208,6 +214,7 @@ export function formatMacRuntimeFailure(diagnostic: MacRuntimeFailureDiagnostic)
         [
             'stage',
             'reason',
+            'transportReason',
             'waitingStage',
             'pendingOperations',
             'pendingShutdown',
@@ -225,6 +232,11 @@ export function formatMacRuntimeFailure(diagnostic: MacRuntimeFailureDiagnostic)
     ) as MacRuntimeFailureDiagnostic;
     assert.ok((runtimeStages as readonly string[]).includes(diagnostic.stage));
     assert.ok((failureReasons as readonly string[]).includes(diagnostic.reason));
+    assert.ok(
+        ([...transportReasons, 'unclassified'] as readonly string[]).includes(
+            diagnostic.transportReason,
+        ),
+    );
     assert.ok((waitingStages as readonly string[]).includes(diagnostic.waitingStage));
     for (const [key, maximum] of [
         ['pendingOperations', 33],

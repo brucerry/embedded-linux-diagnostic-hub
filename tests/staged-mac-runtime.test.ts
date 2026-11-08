@@ -573,6 +573,7 @@ test('owned Mac retained diagnostic exposes only finite data without getters pro
     };
     const diagnostic = macRuntimeFailureDiagnostic('runtime-identity', owner, 1000);
     assert.equal(diagnostic.reason, 'main-evaluation');
+    assert.equal(diagnostic.transportReason, 'unclassified');
     assert.equal(diagnostic.waitingStage, 'main-response');
     assert.equal(diagnostic.pendingMain, 17);
     assert.equal(diagnostic.openFiles, 33);
@@ -622,6 +623,130 @@ test('owned Mac retained diagnostic exposes only finite data without getters pro
     assert.equal(shutdown.reason, 'deadline');
     assert.equal(shutdown.waitingStage, 'transport-close');
     assert.equal(shutdown.pendingShutdown, 1);
+});
+
+test('owned Mac retained diagnostic exposes only exact allowlisted transport reason codes', () => {
+    const known = [
+        'node-socket-error',
+        'browser-socket-error',
+        'node-socket-disconnected',
+        'browser-socket-disconnected',
+        'main-inspector-disconnected',
+        'attach-failed',
+        'forbidden-termination-command',
+        'framework-transport-close-refused',
+    ];
+    for (const code of known) {
+        const diagnostic = macRuntimeFailureDiagnostic('file-open', { reason: code }, 0);
+        assert.equal(diagnostic.reason, 'transport');
+        assert.equal(diagnostic.transportReason, code);
+        assert.equal(diagnostic.retainedUnknown, true);
+        assert.equal(diagnostic.releaseAcceptance, false);
+        let writes = 0;
+        emitMacRuntimeFailure(diagnostic, (line) => {
+            writes++;
+            const prefix = '::error title=Mac retained runtime diagnostic::';
+            assert.ok(line.startsWith(prefix) && line.endsWith('\n'));
+            const text = line.slice(prefix.length, -1);
+            assert.ok(Buffer.byteLength(text) <= 2048);
+            assert.deepEqual(JSON.parse(text), diagnostic);
+            return Buffer.byteLength(line);
+        });
+        assert.equal(writes, 1);
+    }
+    let touched = 0;
+    const hostileValue = new Proxy(
+        {},
+        {
+            get() {
+                touched++;
+                throw Error('PRIVATE_TRANSPORT_SECRET');
+            },
+            getOwnPropertyDescriptor() {
+                touched++;
+                throw Error('PRIVATE_TRANSPORT_SECRET');
+            },
+        },
+    );
+    for (const reason of [
+        undefined,
+        null,
+        7,
+        true,
+        Symbol('PRIVATE_TRANSPORT_SECRET'),
+        {},
+        hostileValue,
+        'unknown',
+        'shutdown-deadline',
+        '/Users/private/PRIVATE_TRANSPORT_SECRET',
+        'ws://127.0.0.1:43123/PRIVATE_TRANSPORT_SECRET',
+        'node-socket-error\nPRIVATE_TRANSPORT_SECRET',
+        'browser-socket-error%0APRIVATE_TRANSPORT_SECRET',
+        {
+            toString() {
+                touched++;
+                return 'node-socket-error';
+            },
+        },
+    ]) {
+        const diagnostic = macRuntimeFailureDiagnostic('prepare', { reason }, 0);
+        assert.equal(diagnostic.transportReason, 'unclassified');
+        assert.ok(!formatMacRuntimeFailure(diagnostic).includes('PRIVATE_TRANSPORT_SECRET'));
+    }
+    const getter = Object.defineProperty({}, 'reason', {
+        get() {
+            touched++;
+            return 'node-socket-error';
+        },
+    });
+    const proxy = new Proxy(
+        {},
+        {
+            getOwnPropertyDescriptor() {
+                touched++;
+                throw Error('PRIVATE_TRANSPORT_SECRET');
+            },
+        },
+    );
+    for (const owner of [getter, proxy, Object.create({ reason: 'node-socket-error' })])
+        assert.equal(
+            macRuntimeFailureDiagnostic('prepare', owner, 0).transportReason,
+            'unclassified',
+        );
+    const valid = macRuntimeFailureDiagnostic('prepare', { reason: 'node-socket-error' }, 0);
+    const accessor = Object.defineProperty({ ...valid }, 'transportReason', {
+        get() {
+            touched++;
+            return 'node-socket-error';
+        },
+    });
+    assert.throws(() => formatMacRuntimeFailure(accessor));
+    assert.throws(() =>
+        formatMacRuntimeFailure(
+            new Proxy(valid, {
+                getOwnPropertyDescriptor() {
+                    touched++;
+                    throw Error('PRIVATE_TRANSPORT_SECRET');
+                },
+            }),
+        ),
+    );
+    for (const forged of [
+        'PRIVATE_TRANSPORT_SECRET',
+        'node-socket-error/PRIVATE_TRANSPORT_SECRET',
+        null,
+        hostileValue,
+    ]) {
+        let writes = 0;
+        assert.throws(() =>
+            emitMacRuntimeFailure({ ...valid, transportReason: forged } as any, () => {
+                writes++;
+                return 0;
+            }),
+        );
+        assert.equal(writes, 0);
+    }
+    assert.equal(touched, 0);
 });
 
 test('owned Mac retained diagnostic reports the failing stage once before parking without new owner work', async () => {
@@ -739,6 +864,7 @@ test('owned Mac runtime retains a drained transport incident before opening fina
     assert.deepEqual(reports[0], {
         stage: 'file-open',
         reason: 'transport',
+        transportReason: 'browser-socket-error',
         waitingStage: 'unclassified',
         pendingOperations: 0,
         pendingShutdown: 0,
