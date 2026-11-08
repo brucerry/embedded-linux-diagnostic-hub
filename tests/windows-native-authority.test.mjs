@@ -305,7 +305,8 @@ function launchMemory() {
             isSymbolicLink: () => false,
         };
     };
-    const counts = { open: 0, close: 0, load: 0, launch: 0, sample: 0, release: 0 };
+    const counts = { open: 0, close: 0, load: 0, prepare: 0, launch: 0, sample: 0, release: 0 };
+    const readFailure = { enabled: false, error: undefined };
     const io = Object.freeze({
         async realpath(file) {
             assert.ok(files.has(file));
@@ -317,6 +318,7 @@ function launchMemory() {
         async open(file, flags) {
             assert.equal(flags, 0, 'read-only model open');
             counts.open++;
+            if (readFailure.enabled) throw readFailure.error;
             const bytes = files.get(file);
             assert.ok(bytes);
             return {
@@ -364,6 +366,7 @@ function launchMemory() {
     });
     const native = {
         prepare() {
+            counts.prepare++;
             return raw;
         },
         assertCapability(value) {
@@ -489,6 +492,10 @@ function launchMemory() {
                 profile: request().root + '\\native-launch-profile',
             });
         },
+        failPreparation(error) {
+            readFailure.enabled = true;
+            readFailure.error = error;
+        },
     };
 }
 
@@ -527,7 +534,11 @@ test('memory cancellation before the launch microtask prevents invocation but re
         cap = await m.prepare();
     const task = m.api.launchWindowsNativePinnedProcess(cap, m.input());
     m.api.cancelWindowsNativeAuthority(cap);
-    await assert.rejects(task, /CANCELLED_RETAINED/);
+    await assert.rejects(task, (error) => {
+        assert.equal(error.message, 'WINDOWS_NATIVE_PREPARATION_RETAINED');
+        assert.equal(error.cause.message, 'WINDOWS_NATIVE_LAUNCH_CANCELLED_RETAINED');
+        return true;
+    });
     assert.equal(m.counts.launch, 0);
     assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
     const sample = JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap));
@@ -551,7 +562,11 @@ test('memory late creation after cancellation retains returned handles until a r
         m.api.cancelWindowsNativeAuthority(cap);
         assert.throws(() => m.api.sampleWindowsNativeOwnedProcess(cap), /OPERATION_PENDING/);
         finishLaunch();
-        await assert.rejects(task, /CANCELLED_RETAINED/);
+        await assert.rejects(task, (error) => {
+            assert.equal(error.message, 'WINDOWS_NATIVE_PREPARATION_RETAINED');
+            assert.equal(error.cause.message, 'WINDOWS_NATIVE_LAUNCH_CANCELLED_RETAINED');
+            return true;
+        });
         assert.equal(
             JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap)).observation
                 .processHandleRetained,
@@ -593,18 +608,32 @@ test('memory primary errors including undefined survive later sampling failures 
             (e) => e,
         );
         const custody = error.nativeAuthorityCustody;
-        assert.equal(custody.launch.firstFailureSet, true);
-        assert.equal(custody.launch.firstFailure, primary);
+        assert.ok(Object.isFrozen(custody));
+        assert.equal(custody.retainedAtCapture, true);
+        assert.equal(custody.launchReservedAtCapture, true);
+        assert.equal(custody.failedAtCapture, true);
+        assert.equal(Object.hasOwn(error, 'cause'), true);
+        assert.equal(error.cause, primary);
         assert.equal(
             Object.getOwnPropertyDescriptor(error, 'nativeAuthorityCustody').enumerable,
             false,
         );
         assert.equal(JSON.stringify(error), '{}');
+        const laterFailure = Error('later model error');
         m.native.sampleOwnedProcess = () => {
-            throw Error('later model error');
+            throw laterFailure;
         };
-        await assert.rejects(m.api.sampleWindowsNativeOwnedProcess(cap));
-        assert.equal(custody.launch.firstFailure, primary);
+        const later = await m.api.sampleWindowsNativeOwnedProcess(cap).then(
+            () => assert.fail('expected later failure'),
+            (failure) => failure,
+        );
+        assert.equal(later.message, 'WINDOWS_NATIVE_LAUNCH_FAILURE_RETAINED');
+        assert.equal(Object.hasOwn(later, 'cause'), true);
+        assert.equal(later.cause, primary);
+        assert.equal(later.errors.length, 2);
+        assert.equal(Object.hasOwn(later.errors, '0'), true);
+        assert.equal(later.errors[0], primary);
+        assert.equal(later.errors[1], laterFailure);
         assert.equal(m.counts.launch, 1);
         m.native.sampleOwnedProcess = async () => JSON.stringify(m.facts());
         await m.api.sampleWindowsNativeOwnedProcess(cap);
@@ -692,4 +721,65 @@ test('memory failed or unknown handle release remains once-only and cannot becom
         assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
         assert.throws(() => m.api.readWindowsNativeOwnedProcess(cap));
     }
+});
+
+test('memory failed preparation exposes no authority record or replaceable native ports', async () => {
+    const m = launchMemory();
+    m.failPreparation(new Error('model pre-native read refusal'));
+    const error = await m.prepare().then(
+        () => assert.fail('preparation must fail'),
+        (failure) => failure,
+    );
+    assert.equal(m.counts.load, 0);
+    assert.equal(m.counts.prepare, 0);
+    const custody = error.nativeAuthorityCustody;
+    assert.ok(custody && typeof custody === 'object');
+    // Exercise the actual old escape rather than merely checking a field name:
+    // replacing public ports/flags must never recover a wrapper-branded capability.
+    const counterfeit = { assertCapability: () => true, pinFiles: async () => '{"forged":true}' };
+    for (const candidate of [custody, { ...custody }]) {
+        for (const [key, value] of [
+            ['native', counterfeit],
+            ['raw', Object.freeze({ modelOnly: true })],
+            ['failed', false],
+            ['cancelled', false],
+            ['invalidated', false],
+            ['pending', new Set()],
+            ['rows', new Map()],
+        ])
+            Reflect.set(candidate, key, value);
+        const cap = candidate.cap ?? candidate;
+        assert.throws(
+            () => m.api.assertWindowsNativeCapability(cap, m.inside(request())),
+            /CAPABILITY_UNISSUED/,
+        );
+        await assert.rejects(m.api.pinWindowsNativeFiles(cap), /CAPABILITY_UNISSUED/);
+        assert.throws(
+            () => m.api.readWindowsNativeObservation(cap, 'file-pins'),
+            /CAPABILITY_UNISSUED/,
+        );
+        assert.throws(
+            () => m.api.launchWindowsNativePinnedProcess(cap, m.input()),
+            /CAPABILITY_UNISSUED/,
+        );
+    }
+    assert.ok(Object.isFrozen(custody));
+    assert.deepEqual(Object.keys(custody).sort(), [
+        'cancelledAtCapture',
+        'failedAtCapture',
+        'launchReservedAtCapture',
+        'pendingOperationsAtCapture',
+        'readCustodiesAtCapture',
+        'retainedAtCapture',
+    ]);
+    for (const value of Object.values(custody))
+        assert.ok(typeof value === 'boolean' || typeof value === 'number');
+    assert.equal(
+        Object.getOwnPropertyDescriptor(error, 'nativeAuthorityCustody').enumerable,
+        false,
+    );
+    assert.equal(JSON.stringify(error), '{}');
+    assert.equal(m.counts.load, 0);
+    assert.equal(m.counts.prepare, 0);
+    assert.equal(m.counts.launch, 0);
 });

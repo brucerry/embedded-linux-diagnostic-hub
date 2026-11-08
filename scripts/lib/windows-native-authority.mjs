@@ -14,6 +14,7 @@ const binary = path.join(directory, 'build/Release/windows_installer_authority.n
 const loadNative = dlopen; // Capture the trusted Node builtin; bypass require.cache/extensions.
 const capabilities = new WeakMap();
 const retained = new Set();
+const custodyErrors = new WeakMap();
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const sha = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 function fields(value, keys) {
@@ -134,13 +135,27 @@ function retainedError(record, primary, close, combined = false) {
         error instanceof Error
             ? Object.getOwnPropertyDescriptor(error, 'nativeAuthorityCustody')
             : undefined;
+    if (error instanceof Error && existing && custodyErrors.get(error) === record.custodyToken)
+        return error;
     const wrapper =
-        error instanceof Error &&
-        Object.isExtensible(error) &&
-        (!existing || existing.value === record)
+        error instanceof Error && Object.isExtensible(error) && !existing
             ? error
             : new Error('WINDOWS_NATIVE_PREPARATION_RETAINED', { cause: error });
-    Object.defineProperty(wrapper, 'nativeAuthorityCustody', { value: record, enumerable: false });
+    // Nonenumerability is not privacy. Never expose the mutable record, ports,
+    // branded cap, native wrapper, buffers, handles, maps, or a graph back to them.
+    const snapshot = Object.freeze({
+        retainedAtCapture: retained.has(record),
+        failedAtCapture: record.failed,
+        cancelledAtCapture: record.cancelled,
+        pendingOperationsAtCapture: record.pending.size,
+        readCustodiesAtCapture: record.reads.size,
+        launchReservedAtCapture: Boolean(record.launch),
+    });
+    Object.defineProperty(wrapper, 'nativeAuthorityCustody', {
+        value: snapshot,
+        enumerable: false,
+    });
+    custodyErrors.set(wrapper, record.custodyToken);
     return wrapper;
 }
 const same = (a, b) =>
@@ -223,6 +238,7 @@ export async function prepareWindowsNativeAuthority(request, expectedBuild) {
     const cap = Object.freeze({});
     const record = {
         cap,
+        custodyToken: Object.freeze({}),
         binding,
         build,
         native: null,
@@ -483,8 +499,19 @@ function retainLaunchFailure(record, error) {
     if (!record.launch.firstFailureSet) {
         record.launch.firstFailureSet = true;
         record.launch.firstFailure = error;
+        return retainedError(record, error);
     }
-    return retainedError(record, error);
+    // Keep the first object (including thrown undefined) as the primary cause.
+    // Later observation/release failures remain reviewable without publishing
+    // the private launch state merely to inspect its first-failure bookkeeping.
+    return retainedError(
+        record,
+        new AggregateError(
+            [record.launch.firstFailure, error],
+            'WINDOWS_NATIVE_LAUNCH_FAILURE_RETAINED',
+            { cause: record.launch.firstFailure },
+        ),
+    );
 }
 function saveOwnedObservation(record, output) {
     const observation = ownedObservation(output);

@@ -52,6 +52,13 @@ alive after the async work settles. This slice retains creation/capture-time HAN
 its host lives; it is not a complete host-lifetime owner and is not eligible for standalone native
 activation. No keepalive, supervisor, forced shutdown, or process framework is added here.
 
+Failure errors expose only a frozen, non-authoritative snapshot of retention flags and counts at
+capture time. The mutable owner, capability, native ports, HANDLEs, maps, source paths, and buffers
+remain private. Nonenumerability alone would not provide that privacy. Primary error objects,
+including a thrown `undefined`, remain available through ordinary causes or aggregate errors; later
+failures cannot overwrite the first. A custody snapshot cannot admit an operation, recover a native
+capability, or attest current resource closure.
+
 The requested executable is the leased volume-GUID executable name, cwd is the pinned installation
 root, and the sole argument selects that profile through the existing `--user-data-dir` route.
 Native code owns a writable quoted command buffer and explicit double-NUL Unicode environment before
