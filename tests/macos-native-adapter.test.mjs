@@ -1301,7 +1301,7 @@ const ownerSource = readFileSync(
     new URL('./fixtures/macos-native-owned.ts', import.meta.url),
     'utf8',
 );
-function inertOwnerExports() {
+function inertOwnerExports(clock = {}) {
     const exports = {};
     const inertFS = { realpathSync: (file) => file };
     const require = (name) => {
@@ -1337,9 +1337,9 @@ function inertOwnerExports() {
         Buffer,
         URL,
         Date,
-        performance: { now: () => 0 },
-        setTimeout,
-        clearTimeout,
+        performance: { now: clock.now ?? (() => 0) },
+        setTimeout: clock.setTimeout ?? setTimeout,
+        clearTimeout: clock.clearTimeout ?? clearTimeout,
         WebSocket: class {
             constructor() {
                 throw Error('network prohibited');
@@ -1386,6 +1386,236 @@ test('actual adapted owner rejects shared terminal-budget overflow without retai
     assert.equal(owner.streams.capExceeded, true);
     assert.equal(owner.captured.stdout.length, 0);
 });
+// Actual LocalSocket and MainInspector run with authored in-process protocol peers.
+// The peer's error-on-open-browser rule is a possible race model, not a native finding.
+async function protocolQuitFixture(options = {}) {
+    let mono = 0,
+        sequence = 0;
+    const timers = new Map(),
+        events = [],
+        scheduled = [],
+        sockets = new Map();
+    const deferred = () => {
+        let resolve;
+        const promise = new Promise((done) => {
+            resolve = done;
+        });
+        return { promise, resolve };
+    };
+    const browserRequested = deferred(),
+        mainRequested = deferred();
+    const clock = {
+        now: () => mono,
+        setTimeout(callback, ms) {
+            const id = ++sequence;
+            timers.set(id, { callback, due: mono + ms });
+            return id;
+        },
+        clearTimeout(id) {
+            timers.delete(id);
+        },
+    };
+    const { OwnedDesktop } = inertOwnerExports(clock);
+    const child = new EventEmitter();
+    child.pid = 5;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    let desktop,
+        quitCalls = 0,
+        peerErrors = 0;
+    const emitRoot = (code = 0, signal = null) => {
+        child.emit('exit', code, signal);
+        child.stdout.emit('end');
+        child.stderr.emit('end');
+        child.emit('close');
+    };
+    class Socket extends EventEmitter {
+        constructor(kind) {
+            super();
+            this.kind = kind;
+            this.readyState = 0;
+            this.closeCalls = 0;
+            sockets.set(kind, this);
+            queueMicrotask(() => {
+                this.readyState = 1;
+                this.emit('open');
+            });
+        }
+        addEventListener(name, callback) {
+            this.on(name, callback);
+        }
+        send(text) {
+            assert.equal(
+                this.kind,
+                'node',
+                'Fake framework never sends browser protocol commands.',
+            );
+            assert.equal(this.readyState, 1);
+            const message = JSON.parse(text);
+            if (message.method === 'Runtime.enable') {
+                queueMicrotask(() => {
+                    this.emit('message', {
+                        data: JSON.stringify({
+                            method: 'Runtime.executionContextCreated',
+                            params: { context: { id: 1, auxData: { isDefault: true } } },
+                        }),
+                    });
+                    this.emit('message', { data: JSON.stringify({ id: message.id, result: {} }) });
+                });
+                return;
+            }
+            assert.equal(message.method, 'Runtime.evaluate');
+            events.push('main-quit-evaluate');
+            // Execute only the actual fixed serialized quit expression. The only require
+            // binding is an authored Electron app; setImmediate queues a memory callback.
+            const task = Promise.resolve().then(() =>
+                vm.runInNewContext(message.params.expression, {
+                    require(name) {
+                        assert.equal(name, 'electron');
+                        return {
+                            app: {
+                                quit() {
+                                    quitCalls++;
+                                    events.push('app-quit');
+                                    const browser = sockets.get('browser');
+                                    if (browser.readyState === 1) {
+                                        peerErrors++;
+                                        events.push('peer-browser-error');
+                                        browser.emit('error');
+                                    }
+                                    browser.acknowledge();
+                                    emitRoot();
+                                },
+                            },
+                        };
+                    },
+                    setImmediate(callback) {
+                        scheduled.push(callback);
+                    },
+                }),
+            );
+            void task.then(
+                (value) =>
+                    this.emit('message', {
+                        data: JSON.stringify({ id: message.id, result: { result: { value } } }),
+                    }),
+                () =>
+                    this.emit('message', {
+                        data: JSON.stringify({
+                            id: message.id,
+                            error: { message: 'authored protocol refusal' },
+                        }),
+                    }),
+            );
+        }
+        close() {
+            this.closeCalls++;
+            events.push(this.kind + '-close-request');
+            if (this.kind === 'browser') browserRequested.resolve();
+            else mainRequested.resolve();
+            if (this.readyState === 3) return;
+            this.readyState = 2;
+            if (this.kind === 'browser' && options.browserClose === 'throw')
+                throw Error('authored browser close refusal');
+            if (this.kind === 'browser' && options.browserClose === 'error') this.emit('error');
+            if (!(this.kind === 'browser' && options.browserClose === 'hold'))
+                queueMicrotask(() => this.acknowledge());
+        }
+        acknowledge() {
+            if (this.readyState === 3) return;
+            this.readyState = 3;
+            events.push(this.kind + '-close-ack');
+            this.emit('close');
+        }
+    }
+    desktop = new OwnedDesktop(
+        {
+            executable: '/mock/app',
+            profile: '/mock/profile',
+            env: {},
+            artifactsDir: '/mock/evidence',
+            deadline: 120000,
+        },
+        {
+            socket: (url) => new Socket(url.includes('/devtools/') ? 'browser' : 'node'),
+            connect: async (transport) => {
+                transport.onmessage = () => {};
+                transport.onclose = () => events.push('fake-sdk-disconnected');
+                return { contexts: () => [{ pages: () => [] }] };
+            },
+        },
+    );
+    desktop.launch(() => child);
+    child.stderr.emit(
+        'data',
+        Buffer.from(
+            'Debugger listening on ws://127.0.0.1:43123/11111111-1111-1111-1111-111111111111\n' +
+                'DevTools listening on ws://127.0.0.1:43124/devtools/browser/22222222-2222-2222-2222-222222222222\n',
+        ),
+    );
+    await desktop.attach();
+    desktop.owner.preQuitReceiptVerified = true;
+    return {
+        desktop,
+        owner: desktop.owner,
+        events,
+        sockets,
+        scheduled,
+        browserRequested,
+        mainRequested,
+        emitRoot,
+        quitCalls: () => quitCalls,
+        peerErrors: () => peerErrors,
+        timers,
+        advance(ms) {
+            mono += ms;
+            for (const [id, entry] of [...timers])
+                if (entry.due <= mono) {
+                    timers.delete(id);
+                    entry.callback();
+                }
+        },
+        release() {
+            if (!desktop.owner.quitComplete) desktop.owner.freeze('test-control-finished');
+            emitRoot();
+            for (const socket of sockets.values()) socket.acknowledge();
+        },
+    };
+}
+
+test('actual owned shutdown closes the browser inspector before an authored peer-exit race', async () => {
+    const f = await protocolQuitFixture();
+    const quit = f.desktop.normalQuit();
+    void quit.catch(() => {});
+    try {
+        await Promise.race([
+            f.mainRequested.promise,
+            quit.then(() => {
+                throw Error('quit returned before its main disconnect');
+            }),
+        ]);
+        assert.equal(f.owner.quitScheduledAck, true);
+        assert.equal(f.scheduled.length, 1);
+        f.scheduled[0]();
+        await quit;
+        assert.equal(f.owner.reason, null);
+        assert.equal(f.peerErrors(), 0);
+        assert.equal(f.quitCalls(), 1);
+        assert.ok(f.events.indexOf('browser-close-ack') < f.events.indexOf('main-quit-evaluate'));
+        assert.equal(f.owner.quitComplete, true);
+        assert.equal(f.owner.exitCode, 0);
+        assert.equal(f.owner.signal, null);
+        assert.equal(f.owner.streams.stdoutEOF && f.owner.streams.stderrEOF, true);
+        assert.equal(f.desktop.mainLink.closedObserved, true);
+        assert.equal(f.desktop.browserLink.closedObserved, true);
+        assert.doesNotThrow(() => f.owner.active());
+    } finally {
+        f.release();
+        await quit.catch(() => {});
+        assert.equal(f.timers.size, 0);
+    }
+});
+
 // These controls invoke actual owned shutdown code with authored events only.
 // The VM denies the default OS spawn, WebSocket and framework entrypoints.
 function ownedQuitFixture() {
