@@ -1,0 +1,260 @@
+name: Windows authority compile-only candidate
+
+# Compile/link only. The produced addon is never loaded or invoked; compilation
+# neither admits this runner for native observations nor supplies release acceptance.
+on:
+    push:
+        branches: [ci/v060-windows-authority-compile-20261108]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: windows-authority-compile-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    compile:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-windows-authority-compile-20261108' && github.run_attempt == 1 }}
+        runs-on: windows-latest
+        timeout-minutes: 15
+        defaults:
+            run:
+                shell: pwsh
+                working-directory:
+                    authority-compile-${{ github.run_id }}-${{ github.run_attempt }}/source
+        env:
+            HUB_COMPILE_ROOT:
+                ${{ github.workspace }}/authority-compile-${{ github.run_id }}-${{
+                github.run_attempt }}
+        steps:
+            - name: Admit the standard x64 runner and fresh compile prefix
+              working-directory: ${{ github.workspace }}
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  try {
+                    if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-authority-compile-20261108' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Context' }
+                    if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') { throw 'Runner' }
+                    if ($env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:GITHUB_RUN_ID -cnotmatch '^[0-9]+$') { throw 'Identity' }
+                    foreach ($name in @('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE','CL','_CL_','LINK','_LINK_')) { if (Test-Path ('Env:' + $name)) { throw 'Override' } }
+                    $expected = Join-Path $env:GITHUB_WORKSPACE ('authority-compile-' + $env:GITHUB_RUN_ID + '-1')
+                    if ([IO.Path]::GetFullPath($env:HUB_COMPILE_ROOT) -cne [IO.Path]::GetFullPath($expected) -or (Test-Path -LiteralPath $expected)) { throw 'Prefix' }
+                    if ($expected -match '[\s% !&|<>^"\r\n]') { throw 'Command path' }
+                    [IO.Directory]::CreateDirectory($expected) | Out-Null
+                    foreach ($name in @('inputs','include','build','logs','tmp')) { [IO.Directory]::CreateDirectory((Join-Path $expected $name)) | Out-Null }
+                  } catch { Write-Output '::error title=Windows authority compile::Runner and owned-prefix admission failed; compile only.'; exit 1 }
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0 (v6)
+              with:
+                  ref: ${{ github.sha }}
+                  path: authority-compile-${{ github.run_id }}-${{ github.run_attempt }}/source
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0 (v7)
+              with:
+                  node-version: '24.22.0'
+                  architecture: x64
+                  cache: ''
+                  package-manager-cache: false
+            - name: Bind committed source and select existing build tools without installation
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $false
+                  try {
+                    $program = @'
+                  import assert from 'node:assert/strict';
+                  import {readFileSync,writeFileSync} from 'node:fs';
+                  import {createHash} from 'node:crypto';
+                  import {execFileSync} from 'node:child_process';
+                  import path from 'node:path';
+                  const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
+                  assert.equal(process.platform,'win32'); assert.equal(process.arch,'x64');
+                  assert.equal(process.version,'v24.22.0');
+                  assert.equal(git('rev-parse','HEAD'),process.env.GITHUB_SHA);
+                  assert.equal(git('status','--porcelain','--untracked-files=all'),'');
+                  const sourceCommit=process.env.GITHUB_SHA,sourceTree=git('rev-parse','HEAD^{tree}');
+                  assert.match(sourceTree,/^[a-f0-9]{40}$/);
+                  const source={};
+                  for(const name of ['package.json','tests/native/windows-installer-authority/authority.cc','tests/native/windows-installer-authority/binding.gyp']){
+                    const bytes=readFileSync(name);assert.ok(bytes.equals(execFileSync('git',['show','HEAD:'+name])));
+                    source[name]=createHash('sha256').update(bytes).digest('hex');
+                  }
+                  assert.equal(JSON.parse(readFileSync('package.json')).version,'0.6.0');
+                  const record={sourceCommit,sourceTree,selectedNode:process.version,source,compileOnly:true,addonLoaded:false,releaseAcceptance:false};
+                  writeFileSync(path.join(process.env.HUB_COMPILE_ROOT,'source-identity.json'),JSON.stringify(record),{flag:'wx'});
+                  const text=JSON.stringify(record);assert.ok(text.length<2048&&!/[\r\n%]/.test(text));
+                  console.log('::notice title=Windows authority source::'+text);
+                  '@
+                    $program | node --input-type=module 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/source-error.log')
+                    if ($LASTEXITCODE -ne 0) { throw 'Source' }
+                    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+                    $installed = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -format json 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/vswhere-error.log')
+                    if ($LASTEXITCODE -ne 0) { throw 'MSVC discovery' }
+                    $instances = @($installed | ConvertFrom-Json)
+                    if ($instances.Count -ne 1) { throw 'MSVC selection' }
+                    $vs = [IO.Path]::GetFullPath($instances[0].installationPath)
+                    $vcVersion = [IO.File]::ReadAllText((Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt')).Trim()
+                    if ($vcVersion -cnotmatch '^14\.\d+\.\d+$') { throw 'MSVC version' }
+                    $cl = Join-Path $vs ('VC/Tools/MSVC/' + $vcVersion + '/bin/Hostx64/x64/cl.exe')
+                    $link = Join-Path $vs ('VC/Tools/MSVC/' + $vcVersion + '/bin/Hostx64/x64/link.exe')
+                    $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
+                    $python = (Get-Command python.exe -CommandType Application).Source
+                    foreach ($file in @($cl,$link,$devcmd,$python)) {
+                      if (-not [IO.Path]::IsPathFullyQualified($file) -or -not [IO.File]::Exists($file) -or $file -match '[%!&|<>^"\r\n]' -or ($file -match '\\WindowsApps\\')) { throw 'Tool path' }
+                    }
+                    $pythonVersion = & $python -I -c 'import sys; assert sys.version_info >= (3, 11); print(".".join(map(str,sys.version_info[:3])))' 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/python-error.log')
+                    if ($LASTEXITCODE -ne 0 -or $pythonVersion -cnotmatch '^3\.\d+\.\d+$') { throw 'Python' }
+                    $tools = @{ cl=$cl; link=$link; devcmd=$devcmd; python=$python; vcVersion=$vcVersion; pythonVersion=$pythonVersion }
+                    [IO.File]::WriteAllText((Join-Path $env:HUB_COMPILE_ROOT 'tools.json'),($tools | ConvertTo-Json -Compress))
+                  } catch { Write-Output '::error title=Windows authority compile::Source or existing build-tool admission failed; no addon was loaded.'; exit 1 }
+            - name: Acquire only verified official Node headers and x64 import library
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $false
+                  try {
+                    $tools = Get-Content -LiteralPath (Join-Path $env:HUB_COMPILE_ROOT 'tools.json') -Raw | ConvertFrom-Json
+                    $program = @'
+                  import hashlib,json,os,pathlib,re,ssl,tarfile,time,urllib.request,urllib.error
+                  root=pathlib.Path(os.environ['HUB_COMPILE_ROOT']); target=root/'inputs'
+                  expected={'SHASUMS256.txt':('8912ada1431af8390bb3e30328d30bca701b59c7a6d5396b491293515c092c46',65536),
+                    'node-v24.22.0-headers.tar.gz':('00e9f08b9057f9f5428387a5ffd496e53f274565b40b144b7ba876700755352a',67108864),
+                    'win-x64/node.lib':('a0a84aa03917b578d286010b7521837e9ff1136ffb2e4a406c14316c33fd06f7',67108864)}
+                  class NoRedirect(urllib.request.HTTPRedirectHandler):
+                    def redirect_request(self,*args,**kwargs): raise RuntimeError('Redirect refused')
+                  opener=urllib.request.build_opener(NoRedirect(),urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+                  deadline=time.monotonic()+180
+                  observed={}
+                  for name,(sha,maximum) in expected.items():
+                    request=urllib.request.Request('https://nodejs.org/dist/v24.22.0/'+name,headers={'User-Agent':'diagnostic-hub-compile-only'})
+                    destination=target/pathlib.PurePosixPath(name).name
+                    size=0; digest=hashlib.sha256()
+                    with opener.open(request,timeout=30) as response,destination.open('xb') as out:
+                      assert response.status==200
+                      length=response.headers.get('Content-Length')
+                      if length is not None: assert length.isdecimal() and int(length)<=maximum
+                      while True:
+                        assert time.monotonic()<deadline
+                        chunk=response.read(65536)
+                        if not chunk: break
+                        size+=len(chunk); assert size<=maximum
+                        digest.update(chunk); out.write(chunk)
+                    assert size>0 and digest.hexdigest()==sha
+                    observed[name]={'bytes':size,'sha256':sha}
+                  sums={line.split()[1]:line.split()[0] for line in (target/'SHASUMS256.txt').read_text('ascii').splitlines() if len(line.split())==2}
+                  for name in ['node-v24.22.0-headers.tar.gz','win-x64/node.lib']: assert sums[name]==expected[name][0]
+                  headers={'node_api.h':'2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a',
+                    'js_native_api.h':'82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840',
+                    'node_api_types.h':'a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00',
+                    'js_native_api_types.h':'4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0'}
+                  wanted={'node-v24.22.0/include/node/'+name:name for name in headers}; found=set(); members=0
+                  with tarfile.open(target/'node-v24.22.0-headers.tar.gz','r:gz') as archive:
+                    for member in archive:
+                      members+=1; assert members<=20000
+                      if member.name not in wanted: continue
+                      name=wanted[member.name]; assert name not in found and member.isfile() and 0<member.size<=1048576
+                      with archive.extractfile(member) as stream: body=stream.read(1048577)
+                      assert len(body)==member.size and hashlib.sha256(body).hexdigest()==headers[name]
+                      for include in re.findall(rb'^\s*#\s*include\s*"([^"]+)"',body,re.M): assert include.decode('ascii') in headers
+                      with (root/'include'/name).open('xb') as out: out.write(body)
+                      found.add(name)
+                  assert found==set(headers)
+                  record={'nodeVersion':'24.22.0','officialInputs':observed,'headers':headers,'checksumBasis':'official Node SHASUMS over HTTPS; no PGP signature claim','compileOnly':True,'releaseAcceptance':False}
+                  (root/'input-identity.json').write_text(json.dumps(record),'ascii')
+                  text=json.dumps(record,separators=(',',':')); assert len(text.encode())<2048 and not re.search(r'[\r\n%]',text)
+                  print('::notice title=Windows authority inputs::'+text)
+                  '@
+                    $program | & $tools.python -I - 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/input-error.log')
+                    if ($LASTEXITCODE -ne 0) { throw 'Inputs' }
+                  } catch { Write-Output '::error title=Windows authority compile::One-attempt official build-input verification failed; no retry or addon load.'; exit 1 }
+            - name: Compile and link the addon without loading it
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $false
+                  try {
+                    $tools = Get-Content -LiteralPath (Join-Path $env:HUB_COMPILE_ROOT 'tools.json') -Raw | ConvertFrom-Json
+                    $root = [IO.Path]::GetFullPath($env:HUB_COMPILE_ROOT)
+                    $source = Join-Path (Get-Location) 'tests/native/windows-installer-authority/authority.cc'
+                    $output = Join-Path $root 'build/windows_installer_authority.node'
+                    if (Test-Path -LiteralPath $output) { throw 'Existing output' }
+                    $versionProgram = @'
+                  import json,os,re,pathlib
+                  root=pathlib.Path(os.environ['HUB_COMPILE_ROOT'])
+                  selected=json.loads((root/'tools.json').read_text())
+                  vc=os.environ['VCToolsVersion'].rstrip('\\/')
+                  sdk=os.environ['WindowsSDKVersion'].rstrip('\\/')
+                  assert vc==selected['vcVersion'] and re.fullmatch(r'14\.\d+\.\d+',vc)
+                  assert re.fullmatch(r'10\.\d+\.\d+\.\d+',sdk)
+                  assert os.environ['VSCMD_ARG_TGT_ARCH']=='x64' and os.environ['VSCMD_ARG_HOST_ARCH']=='x64'
+                  print(json.dumps({'msvcVersion':vc,'windowsSDKVersion':sdk}))
+                  '@
+                    $versionFile = Join-Path $root 'tool-versions.py'
+                    [IO.File]::WriteAllText($versionFile,$versionProgram,[Text.Encoding]::ASCII)
+                    $command = @(
+                      '@echo off',
+                      ('call "' + $tools.devcmd + '" -no_logo -arch=x64 -host_arch=x64 >"' + (Join-Path $root 'logs/devcmd.log') + '" 2>&1'),
+                      'if errorlevel 1 exit /b 1',
+                      ('"' + $tools.python + '" -I "' + $versionFile + '" >"' + (Join-Path $root 'tool-versions.json') + '" 2>"' + (Join-Path $root 'logs/tool-version-error.log') + '"'),
+                      'if errorlevel 1 exit /b 1',
+                      ('"' + $tools.cl + '" /nologo /std:c++17 /EHsc /MD /LD /DNAPI_VERSION=8 /DNODE_GYP_MODULE_NAME=windows_installer_authority /DUNICODE /D_UNICODE /I"' + (Join-Path $root 'include') + '" /Fo"' + (Join-Path $root 'build/authority.obj') + '" /Fd"' + (Join-Path $root 'build/authority.pdb') + '" "' + $source + '" /link /OUT:"' + $output + '" /IMPLIB:"' + (Join-Path $root 'build/windows_installer_authority.lib') + '" "' + (Join-Path $root 'inputs/node.lib') + '" bcrypt.lib advapi32.lib user32.lib'),
+                      'exit /b %errorlevel%'
+                    ) -join "`r`n"
+                    $commandFile = Join-Path $root 'compile.cmd'
+                    [IO.File]::WriteAllText($commandFile,$command,[Text.Encoding]::ASCII)
+                    Push-Location (Join-Path $root 'build')
+                    & $env:ComSpec /d /v:off /c $commandFile *> (Join-Path $root 'logs/compile.log')
+                    $buildExit = $LASTEXITCODE
+                    Pop-Location
+                    $versions = Get-Content -LiteralPath (Join-Path $root 'tool-versions.json') -Raw | ConvertFrom-Json
+                    if ($versions.msvcVersion -cnotmatch '^14\.\d+\.\d+$' -or $versions.windowsSDKVersion -cnotmatch '^10\.\d+\.\d+\.\d+$') { throw 'Tool metadata' }
+                    $toolIdentity = @{msvcVersion=$versions.msvcVersion;windowsSDKVersion=$versions.windowsSDKVersion;pythonVersion=$tools.pythonVersion;clSHA256=(Get-FileHash -LiteralPath $tools.cl -Algorithm SHA256).Hash.ToLowerInvariant();linkSHA256=(Get-FileHash -LiteralPath $tools.link -Algorithm SHA256).Hash.ToLowerInvariant();compileOnly=$true;releaseAcceptance=$false} | ConvertTo-Json -Compress
+                    if ([Text.Encoding]::UTF8.GetByteCount($toolIdentity) -ge 2048 -or $toolIdentity -match '[\r\n%]') { throw 'Tool metadata bound' }
+                    Write-Output ('::notice title=Windows authority compiler::' + $toolIdentity)
+                    if ($buildExit -ne 0) {
+                      Write-Output ('::error title=Windows authority compile::' + (@{stage='compile-link';buildExit=$buildExit;compileOnly=$true;addonLoaded=$false;releaseAcceptance=$false} | ConvertTo-Json -Compress))
+                      exit 1
+                    }
+                    [IO.File]::WriteAllText((Join-Path $root 'build-exit.txt'),'0')
+                  } catch { Write-Output '::error title=Windows authority compile::Compile/link did not establish a normal successful return; addon not loaded.'; exit 1 }
+            - name: Inspect PE bytes and announce compile-only provenance
+              run: |
+                  $ErrorActionPreference = 'Stop'
+                  $PSNativeCommandUseErrorActionPreference = $false
+                  try {
+                    $program = @'
+                  import assert from 'node:assert/strict';
+                  import {readFileSync,lstatSync} from 'node:fs';
+                  import {createHash} from 'node:crypto';
+                  import {execFileSync} from 'node:child_process';
+                  import path from 'node:path';
+                  const root=process.env.HUB_COMPILE_ROOT;
+                  const source=JSON.parse(readFileSync(path.join(root,'source-identity.json')));
+                  assert.equal(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),source.sourceCommit);
+                  assert.equal(source.sourceCommit,process.env.GITHUB_SHA);
+                  for(const [name,expected] of Object.entries(source.source)){
+                    const bytes=readFileSync(name);assert.ok(bytes.equals(execFileSync('git',['show','HEAD:'+name])));
+                    assert.equal(createHash('sha256').update(bytes).digest('hex'),expected);
+                  }
+                  assert.equal(readFileSync(path.join(root,'build-exit.txt'),'ascii'),'0');
+                  const file=path.join(root,'build/windows_installer_authority.node'),stat=lstatSync(file);
+                  assert.ok(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size>=256&&stat.size<=67108864);
+                  const bytes=readFileSync(file);assert.equal(bytes.length,stat.size);
+                  assert.equal(bytes.readUInt16LE(0),0x5a4d);
+                  const pe=bytes.readUInt32LE(0x3c);assert.ok(pe>=64&&pe<=1048576&&pe+26<=bytes.length);
+                  assert.equal(bytes.readUInt32LE(pe),0x00004550);
+                  assert.equal(bytes.readUInt16LE(pe+4),0x8664);
+                  assert.equal(bytes.readUInt16LE(pe+24),0x20b);
+                  assert.ok((bytes.readUInt16LE(pe+22)&0x2000)!==0);
+                  const result={sourceCommit:source.sourceCommit,sourceTree:source.sourceTree,output:'windows_installer_authority.node',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),machine:'AMD64',format:'PE32+ DLL',buildExit:0,compileOnly:true,addonLoaded:false,nativeExportsInvoked:false,hostEligibilityObserved:false,releaseAcceptance:false};
+                  const text=JSON.stringify(result);assert.ok(text.length<2048&&!/[\r\n%]/.test(text));
+                  console.log('::notice title=Windows authority compile result::'+text);
+                  '@
+                    $program | node --input-type=module 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/output-error.log')
+                    if ($LASTEXITCODE -ne 0) { throw 'Output' }
+                    Write-Output '::notice title=Windows authority compile scope::Compilation, linking and data-only PE/hash inspection only. No addon import, export invocation, native observation, app/installer, security or account change, artifact upload, cache save or release acceptance.'
+                  } catch { Write-Output '::error title=Windows authority compile::Data-only output verification failed; no addon was loaded.'; exit 1 }
