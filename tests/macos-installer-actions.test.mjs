@@ -566,6 +566,222 @@ test('public action grammar rejects raw custody, arbitrary diagnostics and forge
     }
 });
 
+test('verified labels cannot replace complete ordered lifecycle action records', async () => {
+    const { result } = await run();
+    for (const mutate of [
+        (x) => {
+            for (const item of x.cases) item.actions = [];
+        },
+        (x) => {
+            x.cases[0].actions.pop();
+        },
+        (x) => {
+            x.cases[0].actions.reverse();
+        },
+        (x) => {
+            x.cases[0].actions.push(structuredClone(x.cases[0].actions.at(-1)));
+        },
+        (x) => {
+            delete x.bindings;
+        },
+        (x) => {
+            x.cases[0].actions[0].facts.fresh = false;
+        },
+        (x) => {
+            x.cases[1].actions[0].facts.root = '/other/offline-launch';
+            x.cases[1].actions[0].facts.target =
+                '/other/offline-launch/Applications/Diagnostic Hub.app';
+        },
+    ]) {
+        const copy = structuredClone(result);
+        mutate(copy);
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+});
+
+test('verified installed snapshots must match admitted current and distinct prior payloads', async () => {
+    const { result } = await run();
+    for (const mutate of [
+        (x) => {
+            x.cases[0].actions.at(-1).facts.asarSHA256 = 'f'.repeat(64);
+        },
+        (x) => {
+            x.cases[0].actions.at(-1).facts.version = '9.0.0';
+        },
+        (x) => {
+            x.cases[4].actions[3].facts.version = x.bindings.current.version;
+        },
+        (x) => {
+            x.cases[4].actions.at(-1).facts.asarSHA256 = x.bindings.previous.asarSHA256;
+        },
+        (x) => {
+            x.cases[4].priorVersion = x.bindings.current.version;
+        },
+        (x) => {
+            x.cases[4].finalVersion = x.bindings.previous.version;
+        },
+    ]) {
+        const copy = structuredClone(result);
+        mutate(copy);
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+});
+
+test('verified launch records need matching unique owners and normal close plus both pipe EOFs', async () => {
+    const { result } = await run();
+    for (const mutate of [
+        (x) => {
+            x.cases[1].actions.at(-2).facts.ready = false;
+        },
+        (x) => {
+            x.cases[1].actions.at(-2).facts.offlineLaunchVerified = false;
+        },
+        (x) => {
+            x.cases[1].actions.at(-1).facts.ownerId = 'different-owner';
+        },
+        (x) => {
+            x.cases[1].actions.at(-1).facts.exitCode = 1;
+        },
+        (x) => {
+            x.cases[1].actions.at(-1).facts.closeObserved = false;
+        },
+        (x) => {
+            x.cases[1].actions.at(-1).facts.stdoutEOF = false;
+        },
+        (x) => {
+            x.cases[1].actions.at(-1).facts.stderrEOF = false;
+        },
+        (x) => {
+            const id = x.cases[1].actions.at(-2).facts.id;
+            x.cases[2].actions[4].facts.id = id;
+            x.cases[2].actions.at(-1).facts.ownerId = id;
+        },
+    ]) {
+        const copy = structuredClone(result);
+        mutate(copy);
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+});
+
+test('verified busy refusal and injected interruption require unchanged installed state', async () => {
+    const { result } = await run();
+    for (const [index, installIndex, snapshotIndex] of [
+        [2, 6, 7],
+        [5, 6, 7],
+    ]) {
+        for (const mutate of [
+            (x) => {
+                x.actions[installIndex].facts.exitCode = 0;
+            },
+            (x) => {
+                x.actions[installIndex].facts.signal = 'SIGTERM';
+            },
+            (x) => {
+                x.actions[installIndex].facts.error = 'timeout';
+            },
+            (x) => {
+                x.actions[snapshotIndex].facts.asarSHA256 = 'f'.repeat(64);
+            },
+            (x) => {
+                if (index === 2) x.actions[installIndex].facts.busyRefusalVerified = false;
+                else delete x.actions[installIndex].facts.faultObserved;
+            },
+        ]) {
+            const copy = structuredClone(result);
+            mutate(copy.cases[index]);
+            assert.throws(() => validateMacInstallerActionResult(copy));
+        }
+    }
+});
+
+test('busy refusal preserves the post-launch data baseline rather than assuming launch is read-only', async () => {
+    const mock = memoryEffects(),
+        original = mock.effects.launchOwned;
+    mock.effects.launchOwned = async (fixture, config) => {
+        const owner = await original(fixture, config);
+        if (fixture.id === 'macos-bundle:busy-refusal') {
+            mock.states.get(fixture.id).profileFiles = [
+                { path: 'profile/created-on-launch.json', bytes: 3, sha256: digest('new') },
+            ];
+            mock.states.get(fixture.id).reportFiles = [
+                { path: 'reports/created-on-launch.json', bytes: 4, sha256: digest('data') },
+            ];
+        }
+        return owner;
+    };
+    const { result } = await runMacInstallerActions({ inputs: inputs(), effects: mock.effects });
+    assert.equal(result.status, 'verified');
+    assert.equal(validateMacInstallerActionResult(result), result);
+    assert.equal(result.qualificationStatus, 'unverified');
+    const baseline = result.cases[2].actions[5].facts;
+    assert.equal(baseline.profileFiles[0].path, 'profile/created-on-launch.json');
+    assert.equal(baseline.reportFiles[0].path, 'reports/created-on-launch.json');
+});
+
+test('verified repair update preservation and application readback compare exact data identities', async () => {
+    const { result } = await run();
+    for (const index of [3, 4, 5, 6]) {
+        const copy = structuredClone(result),
+            item = copy.cases[index];
+        const after = item.actions.filter((x) => x.method === 'snapshot').at(-1);
+        after.facts.reportFiles[0].sha256 = 'f'.repeat(64);
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+    for (const field of ['profileFiles', 'reportFiles']) {
+        const copy = structuredClone(result);
+        copy.cases[6].actions.find((x) => x.method === 'readApplicationData').facts[
+            field
+        ][0].sha256 = 'f'.repeat(64);
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+});
+
+test('verified removal requires the exact retained backup and preserved user files', async () => {
+    const { result } = await run();
+    for (const mutate of [
+        (x) => {
+            x.actions[6].facts.completeBundle = false;
+        },
+        (x) => {
+            x.actions[6].facts.snapshotSHA256 = 'f'.repeat(64);
+        },
+        (x) => {
+            x.actions[7].facts.manifestSHA256 = 'f'.repeat(64);
+        },
+        (x) => {
+            x.actions[7].facts.verifiedBackupRetained = false;
+        },
+        (x) => {
+            x.actions.at(-1).facts.reportFiles = [];
+        },
+        (x) => {
+            x.actions.at(-1).facts.exists = true;
+            x.actions.at(-1).facts.version = '0.6.0';
+            x.actions.at(-1).facts.asarSHA256 = 'c'.repeat(64);
+        },
+    ]) {
+        const copy = structuredClone(result);
+        mutate(copy.cases[8]);
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+});
+
+test('verified owned integration is the selected application bundle and not a global claim', async () => {
+    const { result } = await run();
+    for (const field of ['target', 'bundleIdentifier', 'scope']) {
+        const copy = structuredClone(result);
+        copy.cases[7].actions.at(-1).facts[field] = 'different';
+        assert.throws(() => validateMacInstallerActionResult(copy));
+    }
+});
+
+test('a later failure does not excuse invalid records in an earlier verified case', async () => {
+    const { result } = await run({ failCase: 'repair' });
+    assert.equal(result.status, 'failed');
+    result.cases[0].actions = [];
+    assert.throws(() => validateMacInstallerActionResult(result));
+});
+
 test('native-labelled synthetic result stays blocked and uncertain result preserves UNKNOWN', async () => {
     const makeObservation = () =>
         createMacInstallerObservation({
@@ -594,6 +810,9 @@ test('native-labelled synthetic result stays blocked and uncertain result preser
     const syntheticNativeTag = structuredClone(successfulMock.result);
     syntheticNativeTag.executionScope = 'native'; // Schema control only, not native execution.
     const first = makeObservation();
+    const labelsWithoutActions = structuredClone(syntheticNativeTag);
+    for (const item of labelsWithoutActions.cases) item.actions = [];
+    assert.throws(() => first.attachNativeActions(labelsWithoutActions));
     first.attachNativeActions(syntheticNativeTag);
     first.completeNativeActions('2026-10-26T10:00:01.000Z');
     const receipt = JSON.parse(first.serialize().receiptBytes);

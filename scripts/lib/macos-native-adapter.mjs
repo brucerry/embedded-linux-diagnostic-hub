@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { digest, installerCases } from './staged-artifact-gate.mjs';
 import { assertMacInstallerHelperReturn } from './macos-installer-observation.mjs';
 import { NATIVE_LIMITS } from './macos-native-contract.mjs';
+import { captureMacHelperOperation } from './macos-installer-child.mjs';
 import {
     macIdentityFromTreeSamples,
     validateMacPayloadIdentity,
@@ -70,6 +71,7 @@ export function macNativeSourcePins(configuration) {
         ['cli', path.join(NATIVE_WORKSPACE, 'tests/macos-installer-native-cli.mjs')],
         ...[
             'macos-native-contract.mjs',
+            'macos-installer-child.mjs',
             'macos-payload-identity.mjs',
             'macos-native-io.mjs',
             'macos-native-adapter.mjs',
@@ -355,6 +357,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 token: io.stat(dir),
                 installed: null,
                 payloadSamples: 0,
+                helperCalls: 0,
             });
             fixtures.set(id, fixture);
             return fixture;
@@ -378,6 +381,25 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 HUB_NATIVE_APPS: path.dirname(fixture.target),
                 HUB_NATIVE_FAULT_MARKER: path.join(fixture.root, 'evidence/fault-fired'),
             };
+            // Reserve once before helper submission, including failed/refused/unknown calls.
+            const operation = captureMacHelperOperation({
+                operationId:
+                    admitted.approval.nonce + ':' + fixture.id + ':helper:' + ++value.helperCalls,
+                caseId: fixture.id,
+                observerSource: {
+                    commit: admitted.approval.sourceCommit,
+                    tree: admitted.approval.sourceTree,
+                },
+                package: {
+                    name: selected.info.asset,
+                    bytes: selected.identity.zipBytes,
+                    sha256: selected.zipSHA256,
+                    version: selected.version,
+                    sourceCommit: selected.sourceCommit,
+                },
+                fixtureRoot: fixture.root,
+                helper,
+            });
             const returned = await io.child(
                 '/bin/bash',
                 [
@@ -390,6 +412,7 @@ export async function createMacNativeEffects(admission, io, dependencies = {}) {
                 ],
                 env,
                 NATIVE_WORKSPACE,
+                operation,
             );
             const expectation = options.expectBusy || options.fault ? 'refusal' : 'success';
             assertMacInstallerHelperReturn({

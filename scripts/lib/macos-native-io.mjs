@@ -5,6 +5,7 @@ import { spawn as nativeSpawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { release as osRelease } from 'node:os';
 import { validateMacNativeTaskRoot, NATIVE_LIMITS } from './macos-native-contract.mjs';
+import { captureMacHelperOperation } from './macos-installer-child.mjs';
 
 // Fixed local test IO only. Construction/import does not query files, allocate, or launch.
 export function createMacNativeIO(start = performance.now(), dependencies = {}) {
@@ -255,11 +256,29 @@ export function createMacNativeIO(start = performance.now(), dependencies = {}) 
         assert.ok(state.terminalRows < NATIVE_LIMITS.terminalRows);
         state.terminalRows++;
     }
-    async function child(executable, args, env, cwd) {
+    async function child(executable, args, env, cwd, operation = null) {
+        assert.ok(typeof executable === 'string' && Array.isArray(args) && typeof cwd === 'string');
+        assert.ok(args.every((value) => typeof value === 'string'));
+        assert.ok(
+            env &&
+                typeof env === 'object' &&
+                Object.values(env).every((value) => typeof value === 'string'),
+        );
+        // Snapshot before row allocation/wait/submission; the same private immutable request
+        // drives spawn and later command/context publication. Environment values never publish.
+        const request = Object.freeze({
+            executable,
+            args: Object.freeze([...args]),
+            env: Object.freeze({ ...env }),
+            cwd,
+            operation: operation === null ? null : captureMacHelperOperation(operation),
+        });
+        if (request.operation !== null)
+            assert.equal(path.posix.dirname(request.operation.fixtureRoot), state.root);
         row();
         const record = {
-            executable,
-            args: [...args],
+            executable: request.executable,
+            args: request.args,
             child: null,
             stdout: [],
             stderr: [],
@@ -273,15 +292,16 @@ export function createMacNativeIO(start = performance.now(), dependencies = {}) 
             signal: null,
             error: 'none',
         };
+        Object.defineProperty(record, 'request', { value: request });
         state.children.push(record);
         return wait(
             'child-close',
             () =>
                 new Promise((resolve, reject) => {
                     gate();
-                    const owned = spawn(executable, args, {
-                        cwd,
-                        env,
+                    const owned = spawn(request.executable, [...request.args], {
+                        cwd: request.cwd,
+                        env: { ...request.env },
                         shell: false,
                         detached: false,
                         stdio: ['ignore', 'pipe', 'pipe'],
@@ -326,7 +346,7 @@ export function createMacNativeIO(start = performance.now(), dependencies = {}) 
                             return;
                         }
                         resolve({
-                            command: [executable, ...args],
+                            command: [request.executable, ...request.args],
                             exitObserved: true,
                             exitCode: record.exitCode,
                             signal: record.signal,

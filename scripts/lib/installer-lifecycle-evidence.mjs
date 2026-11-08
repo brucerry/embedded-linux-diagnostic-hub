@@ -6,6 +6,11 @@ import {
     inspectMacOfflinePayload,
     readMacOfflineRecords,
 } from './macos-offline-lifecycle.mjs';
+import {
+    inspectMacInstallHelper,
+    macHelperRecordPath,
+    MAC_HELPER_RECORD_LIMIT,
+} from './macos-installer-child.mjs';
 
 export const INSTALLER_CASE_LIMIT = 128 * 1024;
 const hashPattern = /^[a-f0-9]{64}$/;
@@ -63,6 +68,37 @@ function packageName(lane, caseId) {
         ? 'Diagnostic-Hub-linux-x64.tar.gz'
         : 'Diagnostic-Hub-linux-x64.AppImage';
 }
+function helperChildReference(row, item) {
+    const path = macHelperRecordPath(row.index);
+    const matches = item.evidence.filter((entry) => entry.path === path);
+    assert.equal(matches.length, 1, 'Missing exact retained Mac helper child record.');
+    const ref = matches[0];
+    keys(ref, ['path', 'bytes', 'sha256']);
+    assert.ok(
+        Number.isSafeInteger(ref.bytes) && ref.bytes > 0 && ref.bytes <= MAC_HELPER_RECORD_LIMIT,
+    );
+    assert.match(ref.sha256, hashPattern);
+    return ref;
+}
+async function readHelperChild(row, item, readBytes) {
+    const ref = helperChildReference(row, item);
+    const returned = await readBytes(ref.path, MAC_HELPER_RECORD_LIMIT);
+    assert.ok(
+        Buffer.isBuffer(returned) &&
+            returned.length === ref.bytes &&
+            returned.length <= MAC_HELPER_RECORD_LIMIT,
+    );
+    const bytes = Buffer.from(returned);
+    assert.equal(hash(bytes), ref.sha256, 'Retained Mac helper child record changed.');
+    const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    const value = JSON.parse(text);
+    assert.equal(
+        JSON.stringify(value, null, 2) + '\n',
+        text,
+        'Require complete canonical Mac helper child JSON.',
+    );
+    assert.deepEqual(value, row, 'Install helper projection differs from retained child record.');
+}
 /** Versioned semantic projection, not a producer, provenance authenticator or pass issuer. */
 export function inspectInstallerCaseObservation(value, item, expected) {
     keys(value, [
@@ -89,6 +125,15 @@ export function inspectInstallerCaseObservation(value, item, expected) {
     assert.equal(packages.length, 1, 'Missing exact installer package binding.');
     assert.deepEqual(value.package, packages[0], 'Installer case belongs to a different package.');
     assert.match(value.package.sha256, hashPattern);
+    if (
+        expected.lane.startsWith('darwin-') &&
+        item.id === 'macos-bundle:install' &&
+        value.observation?.kind === 'fixed-child'
+    ) {
+        const status = inspectMacInstallHelper(value.observation, expected);
+        helperChildReference(value.observation, item);
+        return status;
+    }
     if (expected.lane.startsWith('darwin-') && item.id === 'macos-bundle:offline-launch')
         return value.observation?.kind === 'macos-owned-offline-launch/v2'
             ? inspectMacOfflinePayload(value.observation, item, expected)
@@ -126,6 +171,8 @@ export async function consumeInstallerLifecycleEvidence(rawReceipt, rawExpected,
         const status = inspectInstallerCaseObservation(value, item, expected);
         if (value.observation?.kind === 'macos-owned-offline-launch/v2')
             await readMacOfflineRecords(value.observation, readBytes);
+        if (item.id === 'macos-bundle:install' && value.observation?.kind === 'fixed-child')
+            await readHelperChild(value.observation, item, readBytes);
         observations.push({ caseId: item.id, status });
     }
     return { status: 'installer-lifecycle-unqualified', releaseAcceptance: false, observations };

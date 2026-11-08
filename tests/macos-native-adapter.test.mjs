@@ -31,6 +31,7 @@ import {
     validateMacInstallerActionResult,
 } from '../scripts/lib/macos-installer-actions.mjs';
 import { createMacNativeIO } from '../scripts/lib/macos-native-io.mjs';
+import { captureMacHelperOperation } from '../scripts/lib/macos-installer-child.mjs';
 import { digest, installerCases } from '../scripts/lib/staged-artifact-gate.mjs';
 import { produceMacOfflineLifecycle } from '../scripts/lib/macos-offline-lifecycle.mjs';
 import { inspectInstallerCaseObservation } from '../scripts/lib/installer-lifecycle-evidence.mjs';
@@ -208,6 +209,8 @@ function model(options = {}) {
             fds: new Set(),
             children: [],
             desktops: [],
+            terminalRows: 0,
+            terminalBytes: 0,
         },
         gate: () => {},
         nowUTC: () => now + 1,
@@ -283,18 +286,68 @@ function model(options = {}) {
             trees.delete(file);
         },
         take: () => true,
-        row: () => {},
+        row: () => {
+            assert.ok(io.state.terminalRows < NATIVE_LIMITS.terminalRows);
+            io.state.terminalRows++;
+        },
         wait: async (_label, fn) => fn(),
         beforeExpiry: () => true,
-        needsHold: () => io.state.desktops.some((entry) => !entry.closed),
+        needsHold: () =>
+            io.state.desktops.some((entry) => !entry.closed) ||
+            io.state.children.some((entry) => !entry.closeObserved),
     };
-    io.child = async (exe, args, env, cwd) => {
+    io.child = async (exe, args, env, cwd, operation = null) => {
+        io.row();
+        const request = Object.freeze({
+            executable: exe,
+            args: Object.freeze([...args]),
+            env: Object.freeze({ ...env }),
+            cwd,
+            operation: operation === null ? null : captureMacHelperOperation(operation),
+        });
+        const record = {
+            executable: exe,
+            args: request.args,
+            child: null,
+            stdout: [],
+            stderr: [],
+            stdoutBytes: 0,
+            stderrBytes: 0,
+            exitObserved: false,
+            closeObserved: false,
+            stdoutEOF: false,
+            stderrEOF: false,
+            exitCode: null,
+            signal: null,
+            error: 'none',
+        };
+        Object.defineProperty(record, 'request', { value: request });
+        io.state.children.push(record);
+        const complete = (fact) => {
+            const stdout = Buffer.from(fact.stdout),
+                stderr = Buffer.from(fact.stderr);
+            Object.assign(record, {
+                stdout: [stdout],
+                stderr: [stderr],
+                stdoutBytes: stdout.length,
+                stderrBytes: stderr.length,
+                exitObserved: fact.exitObserved,
+                closeObserved: true,
+                stdoutEOF: true,
+                stderrEOF: true,
+                exitCode: fact.exitCode,
+                signal: fact.signal,
+                error: fact.error,
+            });
+            io.state.terminalBytes += stdout.length + stderr.length;
+            return fact;
+        };
         log.push(['child', exe, args, env, cwd]);
         const version = args[2].slice(1),
             target = env.HUB_NATIVE_TARGET;
         if (env.HUB_NATIVE_FAULT) {
             write(env.HUB_NATIVE_FAULT_MARKER, 'activation-return-failure\n');
-            return {
+            return complete({
                 command: [exe, ...args],
                 exitObserved: true,
                 exitCode: 70,
@@ -302,10 +355,10 @@ function model(options = {}) {
                 error: 'none',
                 stdout: '',
                 stderr: '',
-            };
+            });
         }
         if (io.state.desktops.some((entry) => entry.fixture.target === target && !entry.closed))
-            return {
+            return complete({
                 command: [exe, ...args],
                 exitObserved: true,
                 exitCode: 1,
@@ -313,10 +366,10 @@ function model(options = {}) {
                 error: 'none',
                 stdout: '',
                 stderr: 'Quit Diagnostic Hub',
-            };
+            });
         trees.set(target, { version, inventory: inventories[version] });
         write(path.join(target, 'Contents/Info.plist'), infos[version].infoBytes);
-        return {
+        return complete({
             command: [exe, ...args],
             exitObserved: true,
             exitCode: 0,
@@ -324,7 +377,7 @@ function model(options = {}) {
             error: 'none',
             stdout: '',
             stderr: '',
-        };
+        });
     };
     class Desktop {
         constructor(options) {
@@ -718,6 +771,11 @@ test('default source pins need explicit configuration and keep the SDK nominally
         playwright: NATIVE_WORKSPACE + '/node_modules/@playwright/test/index.mjs',
     };
     const pins = macNativeSourcePins(configuration);
+    assert.equal(pins.length, 20);
+    assert.equal(
+        pins.find((pin) => pin.role === 'macos-installer-child.mjs').path,
+        NATIVE_WORKSPACE + '/scripts/lib/macos-installer-child.mjs',
+    );
     for (const role of ['node', 'tsx', 'playwright'])
         assert.equal(pins.find((pin) => pin.role === role).path, configuration[role]);
     assert.throws(() => macNativeSourcePins());
@@ -934,6 +992,28 @@ test('complete native-labelled adapter action path executes only inert substitut
             .get(m.root + '/bin/curl')
             .toString()
             .includes(m.sourcePins[0].path),
+    );
+    const terminal = JSON.parse(m.files.get(m.root + '/evidence/terminal-index.json'));
+    const helperRows = terminal.rows.filter((row) => row.kind === 'fixed-child');
+    assert.equal(helperRows.length, 15);
+    assert.equal(terminal.capturedRows, terminal.rows.length);
+    assert.equal(helperRows[0].operation.caseId, 'macos-bundle:install');
+    assert.equal(helperRows[0].operation.operationId, m.nonce + ':macos-bundle:install:helper:1');
+    assert.deepEqual(helperRows[0].operation.observerSource, {
+        commit: m.approval.sourceCommit,
+        tree: m.approval.sourceTree,
+    });
+    assert.deepEqual(helperRows[0], JSON.parse(m.files.get(m.root + '/evidence/child-0.json')));
+    assert.ok(
+        helperRows.some(
+            (row) => row.operation.caseId === 'macos-bundle:busy-refusal' && row.exitCode === 1,
+        ),
+    );
+    assert.ok(
+        helperRows.some(
+            (row) =>
+                row.operation.caseId === 'macos-bundle:interrupted-recovery' && row.exitCode === 70,
+        ),
     );
     assert.equal(
         receipt.cases[0].evidence[0].sha256,
@@ -1889,4 +1969,28 @@ test('N2 bounded successful output remains unchanged; late asynchronous failure 
     stdout.emit('error', Error('private late error'));
     assert.equal(codes.at(-1), 2);
     assert.equal(result.state.publicOutputFailure, 'PUBLIC_OUTPUT_FAILED');
+});
+
+test('native terminal row publication excludes private environment and record properties', async () => {
+    const m = model(),
+        original = m.io.child;
+    const canary = 'PRIVATE_ENVIRONMENT_AND_RECORD_CANARY';
+    m.io.child = async (...args) => {
+        args[2].PRIVATE_TOKEN = canary;
+        const result = await original(...args);
+        m.io.state.children.at(-1).privateCredential = canary;
+        return result;
+    };
+    const result = await runMacNativeCLI(m.argv('--run'), m.deps);
+    assert.equal(result.exitCode, 0, result.output + (result.state.failure?.stack ?? ''));
+    const records = [...m.files].filter(([name]) =>
+        /\/evidence\/(?:child-[0-9]+\.json|terminal-index\.json)$/.test(name),
+    );
+    assert.equal(records.length, 16);
+    for (const [, bytes] of records) {
+        assert.ok(!bytes.toString().includes(canary));
+        assert.ok(!bytes.toString().includes('PRIVATE_TOKEN'));
+        assert.ok(!bytes.toString().includes('privateCredential'));
+    }
+    assert.equal(JSON.parse(m.files.get(m.root + '/evidence/observation.json')).status, 'blocked');
 });

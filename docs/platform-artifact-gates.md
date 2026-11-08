@@ -150,8 +150,9 @@ exit/close, both pipe EOFs, normal quit acknowledgements, closed transports and 
 custody. The original emitter explicitly declares `physicalDescendantClosure:false`; this limitation
 cannot be relabelled into proof. The parser returns **unqualified** even when these direct-child
 facts are consistent. It does not authenticate that a record is real, bind installed executable/ASAR
-bytes, or independently approve native work. Other case projections remain
-`observation:null`/unsupported. Diagnostic/helper schemas are refused.
+bytes, or independently approve native work. Apart from the install helper projection below, other
+case projections remain `observation:null`/unsupported. Diagnostic/helper success receipts are
+refused.
 
 The [retained offline-launch producer](macos-offline-lifecycle-producer.md) additionally connects
 the existing installed-payload sample and shipping build-info to those same closure facts as
@@ -159,6 +160,23 @@ the existing installed-payload sample and shipping build-info to those same clos
 entry points. This supplies named-file/payload consistency, not loaded-code, service/run provenance
 or native qualification. Both versions remain unqualified; automatic native CLI wiring remains
 blocked on independently selected run context and separately admitted native execution.
+
+The install case can additionally consume the existing `fixed-child` row emitted by the native
+helper owner. Its allowlisted operation context is captured before submission: approval nonce and
+case-local helper ordinal, observer commit/tree, selected package identity, helper and fixture
+paths. The actual spawn uses the same private argument/environment snapshot; environment values are
+never published. The terminal index retains the exact command and observed exit/close/pipe facts,
+including failed and refused operations. Each bound row is also retained at
+`evidence/child-<index>.json` within the existing evidence budget. Ingestion and final readback
+require exactly one matching case evidence reference, re-read/hash the complete canonical row,
+compare it to the inline projection and check the fixed install command, current package/source,
+first-case ordinal and normal direct closure.
+
+This returns `helper-and-pipes-consistent-unqualified`. The helper is the existing offline consent
+and transport fixture. Neither a copied row nor a syntactically consistent nonce authenticates its
+origin or service run. These facts do not prove installation postconditions, installed or loaded
+payload identity, environment application, or descendant retirement. No shipping build-info is
+shared between case evidence lists, and the dynamic-observation anti-reuse rule remains unchanged.
 
 There is no admitted qualifying installer producer yet. The semantic installer gate therefore
 rejects publication unconditionally after consistency checks, alongside the unchanged full-product

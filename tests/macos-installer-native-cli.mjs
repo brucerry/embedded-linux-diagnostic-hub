@@ -14,6 +14,10 @@ import {
 import { runMacInstallerActions } from '../scripts/lib/macos-installer-actions.mjs';
 import { createMacInstallerObservation } from '../scripts/lib/macos-installer-observation.mjs';
 import { digest, laneFiles } from '../scripts/lib/staged-artifact-gate.mjs';
+import {
+    projectMacHelperChild,
+    macHelperRecordPath,
+} from '../scripts/lib/macos-installer-child.mjs';
 
 export const MAC_NATIVE_HELP = `Usage: node --import <pinned-tsx> tests/macos-installer-native-cli.mjs --validate|--run
   --task-root <explicit-owned-task-directory> --node <selected-node> --tsx <selected-loader>
@@ -43,17 +47,7 @@ const identity = ({ version, sourceCommit, zipPath, zipSHA256, asarSHA256 }) => 
 function publishTerminalFacts(io, root) {
     const rows = [];
     for (const [index, child] of io.state.children.entries()) {
-        const row = {
-            kind: 'fixed-child',
-            index,
-            exitObserved: child.exitObserved,
-            closeObserved: child.closeObserved,
-            exitCode: child.exitCode,
-            signal: child.signal,
-            stdoutEOF: child.stdoutEOF,
-            stderrEOF: child.stderrEOF,
-            streams: {},
-        };
+        const streams = {};
         for (const stream of ['stdout', 'stderr']) {
             const bytes = Buffer.concat(child[stream]);
             assert.equal(bytes.length, child[stream + 'Bytes']);
@@ -66,8 +60,19 @@ function publishTerminalFacts(io, root) {
                 0o600,
                 true,
             );
-            row.streams[stream] = { path: name, bytes: bytes.length, sha256: digest(bytes) };
+            streams[stream] = { path: name, bytes: bytes.length, sha256: digest(bytes) };
         }
+        // A failed/refused helper row is retained truthfully; only the separate install
+        // consumer requires normal success. No request environment or raw handle is copied.
+        const row = projectMacHelperChild(child, index, streams);
+        if (row.operation !== null)
+            io.publish(
+                path.join(root, macHelperRecordPath(index)),
+                bounded(row, NATIVE_LIMITS.stageBytes),
+                NATIVE_LIMITS.stageBytes,
+                0o600,
+                true,
+            );
         rows.push(row);
     }
     for (const [index, app] of io.state.desktops.entries())

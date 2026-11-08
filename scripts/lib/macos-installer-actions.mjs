@@ -599,6 +599,148 @@ export async function runMacInstallerActions({ inputs, effects }) {
     return { result, custody };
 }
 
+// Recheck the actual returned action transcript, rather than trusting a producer's `verified`
+// label. This deliberately has the same limited scope as the live assertions above: named
+// payload/data observations and direct owners, not source transport, run attribution, loaded
+// code, crash durability or descendant retirement. Neither native nor mock labels add authority.
+function verifiedCase(item, bindings, fixtureParent, owners) {
+    assert.ok(bindings, 'Verified actions require exact current and previous package bindings.');
+    let next = 0;
+    const take = (method) => {
+        const action = item.actions[next++];
+        assert.equal(action?.method, method, 'Missing or reordered Mac installer ' + method);
+        assert.equal(action.returned, true);
+        assert.ok(!action.invalidReturnedShape && action.facts);
+        return action.facts;
+    };
+    const prepared = take('prepare');
+    assert.equal(prepared.id, item.id);
+    assert.equal(prepared.fresh, true);
+    assert.ok(path.posix.isAbsolute(prepared.root));
+    assert.equal(path.posix.normalize(prepared.root), prepared.root);
+    assert.equal(path.posix.basename(prepared.root), item.id.slice('macos-bundle:'.length));
+    const parent = path.posix.dirname(prepared.root);
+    if (fixtureParent !== null) assert.equal(parent, fixtureParent);
+    assert.equal(
+        prepared.target,
+        path.posix.join(prepared.root, 'Applications/Diagnostic Hub.app'),
+    );
+    const get = () => snapshot(take('snapshot'));
+    const absent = get();
+    assert.equal(absent.exists, false);
+    const install = (input) => {
+        normalReturn(take('install'));
+        const value = get();
+        installed(value, input);
+        return value;
+    };
+    const seed = () => {
+        assert.equal(take('seedApplicationData').origin, 'application');
+        const value = get();
+        assert.ok(value.profileFiles.length > 0 && value.reportFiles.length > 0);
+        return value;
+    };
+    const launch = (offline = false) => {
+        const owner = take('launchOwned');
+        assert.equal(owner.ready, true);
+        if (offline) assert.equal(owner.offlineLaunchVerified, true);
+        assert.ok(typeof owner.id === 'string' && owner.id.length > 0 && !owners.has(owner.id));
+        owners.add(owner.id);
+        return owner;
+    };
+    const quit = (owner) => {
+        const value = take('quitOwned');
+        assert.equal(value.ownerId, owner.id);
+        normalReturn(value);
+        for (const key of ['closeObserved', 'stdoutEOF', 'stderrEOF'])
+            assert.equal(value[key], true);
+    };
+    const name = item.id.slice('macos-bundle:'.length);
+    install(name === 'update-distinct-version' ? bindings.previous : bindings.current);
+    if (name === 'update-distinct-version') {
+        const before = seed();
+        installed(before, bindings.previous);
+        preserved(before, install(bindings.current));
+        assert.equal(item.priorVersion, bindings.previous.version);
+        assert.equal(item.finalVersion, bindings.current.version);
+    } else if (name === 'offline-launch') {
+        quit(launch(true));
+    } else if (name === 'busy-refusal') {
+        const owner = launch(),
+            before = get(),
+            refused = take('install');
+        installed(before, bindings.current);
+        assert.equal(refused.exitObserved, true);
+        assert.equal(refused.error, 'none');
+        assert.equal(refused.signal, null);
+        assert.ok(
+            Number.isSafeInteger(refused.exitCode) &&
+                refused.exitCode > 0 &&
+                refused.exitCode <= 255,
+        );
+        assert.equal(refused.busyRefusalVerified, true);
+        assert.deepEqual(get(), before);
+        quit(owner);
+    } else if (
+        ['repair', 'interrupted-recovery', 'profile-report-preservation', 'remove'].includes(name)
+    ) {
+        const before = seed();
+        installed(before, bindings.current);
+        if (name === 'interrupted-recovery') {
+            const interrupted = take('install');
+            assert.equal(interrupted.exitObserved, true);
+            assert.equal(interrupted.error, 'none');
+            assert.equal(interrupted.signal, null);
+            assert.ok(
+                Number.isSafeInteger(interrupted.exitCode) &&
+                    interrupted.exitCode > 0 &&
+                    interrupted.exitCode <= 255,
+            );
+            assert.equal(interrupted.faultObserved, 'activation-return-failure');
+            assert.deepEqual(get(), before);
+            assert.equal(
+                item.interruptionScope,
+                'injected-helper-operation-failure-not-crash-durability',
+            );
+        }
+        if (name === 'remove') {
+            const backup = take('backupOwnedInstallation');
+            assert.equal(backup.target, prepared.target);
+            assert.equal(backup.verified, true);
+            assert.equal(backup.completeBundle, true);
+            assert.equal(backup.snapshotSHA256, digest(JSON.stringify(before)));
+            assert.match(backup.manifestSHA256, hashPattern);
+            const removed = take('removeOwnedInstallation');
+            assert.equal(removed.target, prepared.target);
+            assert.equal(removed.returned, true);
+            assert.equal(removed.verifiedBackupRetained, true);
+            assert.equal(removed.manifestSHA256, backup.manifestSHA256);
+            const after = get();
+            assert.equal(after.exists, false);
+            preserved(before, after);
+        } else {
+            preserved(before, install(bindings.current));
+            if (name === 'profile-report-preservation') {
+                const owner = launch(true),
+                    read = take('readApplicationData');
+                assert.equal(read.origin, 'application');
+                assert.deepEqual(read.profileFiles, before.profileFiles);
+                assert.deepEqual(read.reportFiles, before.reportFiles);
+                quit(owner);
+            }
+        }
+    } else if (name === 'owned-integrations') {
+        const observed = take('inspectOwnedIntegrations');
+        assert.equal(observed.scope, 'owned-application-bundle');
+        assert.equal(observed.target, prepared.target);
+        assert.equal(observed.bundleIdentifier, 'dev.diagnostichub.desktop');
+        assert.equal(observed.verified, true);
+        assert.equal(item.integrationScope, 'owned-bundle-only-no-global-registration-claim');
+    } else assert.equal(name, 'install');
+    assert.equal(next, item.actions.length, 'Unexpected additional Mac installer actions.');
+    return parent;
+}
+
 // Public evidence has a closed grammar and excludes the private custody object/returned handles.
 export function validateMacInstallerActionResult(value) {
     const keys = (object, allowed) => {
@@ -676,6 +818,11 @@ export function validateMacInstallerActionResult(value) {
         assert.notEqual(value.bindings.current.version, value.bindings.previous.version);
         assert.notEqual(value.bindings.current.zipSHA256, value.bindings.previous.zipSHA256);
     }
+    let fixtureParent = null;
+    const owners = new Set();
+    for (const item of value.cases)
+        if (item.status === 'verified')
+            fixtureParent = verifiedCase(item, value.bindings, fixtureParent, owners);
     if (value.status === 'verified') {
         assert.ok(value.bindings && value.cases.every((item) => item.status === 'verified'));
         assert.ok(!('reason' in value));
