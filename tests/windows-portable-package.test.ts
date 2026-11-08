@@ -313,7 +313,7 @@ test('main uses injected loader only and reports failure without raw fallback, r
         load: async () => {
             loaded++;
             return {
-                loadEnvironment: async () => {},
+                loadEnvironment: async () => null,
                 readInputs: async () => input(),
                 build: async () => {
                     throw Error('SECRET-build');
