@@ -44,6 +44,7 @@ struct File { std::wstring relative; uint64_t size; std::string expected; HANDLE
 struct Crypto { BCRYPT_ALG_HANDLE algorithm = nullptr; BCRYPT_HASH_HANDLE hash = nullptr; bool hashAcquired = false, providerAcquired = false, hashCloseAttempted = false, providerCloseAttempted = false; std::vector<UCHAR> object; };
 struct Lease { HANDLE handle; bool acquired = false; bool closeAttempted = false, closeAcknowledged = false; DWORD closeError = 0; };
 struct Window { uintptr_t handle; DWORD pid; DWORD thread; bool visible; };
+struct OwnedWindow { uintptr_t handle; DWORD pid; DWORD thread; bool visible; bool minimized; };
 constexpr size_t streamLimit = 65536;
 struct StreamCapture {
   Lease* reader = nullptr; Lease* writer = nullptr;
@@ -506,6 +507,64 @@ std::string ownedFacts(Owner* o) {
   }
   s << '}'; return s.str();
 }
+struct OwnedWindowScan {
+  Owner* o; DWORD pid; std::vector<OwnedWindow>* rows;
+  bool cancelled = false, overflow = false, changed = false, callbackFailed = false;
+};
+BOOL CALLBACK enumerateOwned(HWND h, LPARAM raw) noexcept {
+  auto* scan = reinterpret_cast<OwnedWindowScan*>(raw);
+  try {
+    if (scan->o->cancelled.load()) { scan->cancelled = true; return FALSE; }
+    DWORD pid = 0; const DWORD thread = GetWindowThreadProcessId(h, &pid);
+    if (!h || !thread || !pid) { scan->changed = true; return FALSE; }
+    if (pid != scan->pid) return TRUE;
+    if (scan->rows->size() >= 128) { scan->overflow = true; return FALSE; }
+    const auto handle = reinterpret_cast<uintptr_t>(h);
+    for (const auto& row : *scan->rows) if (row.handle == handle) { scan->changed = true; return FALSE; }
+    const bool visible = IsWindowVisible(h) != FALSE, minimized = IsIconic(h) != FALSE;
+    DWORD afterPid = 0; const DWORD afterThread = GetWindowThreadProcessId(h, &afterPid);
+    if (afterPid != pid || afterThread != thread) { scan->changed = true; return FALSE; }
+    scan->rows->push_back({handle, pid, thread, visible, minimized});
+    return TRUE;
+  } catch (...) {
+    scan->callbackFailed = true;
+    if (!scan->o->primaryException) scan->o->primaryException = std::current_exception();
+    scan->o->note({"OWNED_WINDOW_CALLBACK_UNCONFIRMED", 0});
+    return FALSE;
+  }
+}
+std::string ownedWindowFacts(Owner* o, std::vector<OwnedWindow>& rows) {
+  o->check();
+  need(o->creationSucceeded && o->createdTime && o->createdProcess && o->createdThread
+    && o->createdProcess->acquired && o->createdThread->acquired
+    && !o->createdProcess->closeAttempted && !o->createdThread->closeAttempted, "OWNED_WINDOW_PROCESS_REQUIRED");
+  const auto process = o->createdProcess->handle;
+  need(process == o->launched.hProcess && GetProcessId(process) == o->launched.dwProcessId, "OWNED_WINDOW_PROCESS_ID");
+  need(WaitForSingleObject(process, 0) == WAIT_TIMEOUT, "OWNED_WINDOW_PROCESS_NOT_LIVE");
+  FILETIME creation{}, exit{}, kernel{}, user{};
+  if (!GetProcessTimes(process, &creation, &exit, &kernel, &user)) fail("OWNED_WINDOW_PROCESS_TIMES");
+  need(ticks(creation) == o->createdTime, "OWNED_WINDOW_CREATION_CHANGED");
+  need(rows.capacity() >= 128, "OWNED_WINDOW_STORAGE_REQUIRED"); rows.clear();
+  OwnedWindowScan scan{o, o->launched.dwProcessId, &rows}; SetLastError(0);
+  const BOOL ok = EnumWindows(enumerateOwned, reinterpret_cast<LPARAM>(&scan));
+  const DWORD enumerationError = ok ? 0 : GetLastError();
+  if (scan.cancelled) fail("CANCELLED_RETAINED", 0);
+  if (scan.callbackFailed) { need(bool(o->primaryException), "OWNED_WINDOW_CALLBACK_UNCONFIRMED"); std::rethrow_exception(o->primaryException); }
+  need(!scan.overflow && !scan.changed, "OWNED_WINDOW_OBSERVATION_UNCONFIRMED");
+  if (!ok) fail("OWNED_WINDOW_ENUMERATION_FAILED", enumerationError);
+  o->check();
+  need(WaitForSingleObject(process, 0) == WAIT_TIMEOUT && GetProcessId(process) == scan.pid, "OWNED_WINDOW_PROCESS_ENDED");
+  if (!GetProcessTimes(process, &creation, &exit, &kernel, &user)) fail("OWNED_WINDOW_PROCESS_TIMES");
+  need(ticks(creation) == o->createdTime, "OWNED_WINDOW_CREATION_CHANGED");
+  // Bracketed root/window samples do not pin HWNDs, establish interaction, or
+  // impose an absolute wall-clock bound on the synchronous user32 call.
+  std::ostringstream s; s << "{\"pid\":" << scan.pid << ",\"creationTime100ns\":\"" << o->createdTime
+    << "\",\"rootLiveBefore\":true,\"rootLiveAfter\":true,\"windows\":[";
+  for (size_t i = 0; i < rows.size(); ++i) { const auto& row = rows[i]; if (i) s << ',';
+    s << "{\"handle\":\"" << row.handle << "\",\"pid\":" << row.pid << ",\"threadId\":" << row.thread
+      << ",\"visible\":" << (row.visible ? "true" : "false") << ",\"minimized\":" << (row.minimized ? "true" : "false") << '}'; }
+  s << "]}"; return s.str();
+}
 void requireCreatedTerminal(Owner* o) {
   need(!o->pipeAcquisitionUnknown && !o->attributeAcquisitionUnknown, "STDIO_ACQUISITION_UNCONFIRMED");
   need(!o->creationAttempted || o->creationReturned, "CREATION_RETURN_UNKNOWN");
@@ -550,8 +609,8 @@ std::string releaseHandles(Owner* o, bool owned = false) {
   o->releaseClosedCount = closed; o->releaseTotalCount = total;
   return releaseFacts(o, owned);
 }
-enum class Operation { Pin, Observe, ReleaseRead, Launch, SampleOwned, DrainStdio, ReleaseOwned };
-struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; };
+enum class Operation { Pin, Observe, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned };
+struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; std::vector<OwnedWindow> ownedWindows; };
 void hostCleanupMarker(void* data) noexcept {
   auto* o = static_cast<Owner*>(data); o->hostHookFired.store(true); o->hostEnvironmentClosing.store(true);
   // No close, release, process control, or successful retirement is inferred.
@@ -594,6 +653,7 @@ void execute(napi_env, void* raw) {
       case Operation::Observe: process(w->o, w->pid, w->creation); w->result = processFacts(w->o); break;
       case Operation::Launch: launchPinned(w->o, w->profile); w->result = ownedFacts(w->o); break;
       case Operation::SampleOwned: w->result = ownedFacts(w->o); break;
+      case Operation::ObserveOwnedWindows: w->result = ownedWindowFacts(w->o, w->ownedWindows); break;
       case Operation::DrainStdio: w->result = drainStdio(w->o); break;
       case Operation::Pin: pin(w->o); w->result = fileFacts(w->o); break;
     }
@@ -707,12 +767,14 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
       need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted.load() && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
     }
     if (operation == Operation::SampleOwned || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
+    if (operation == Operation::ObserveOwnedWindows) need(o->creationSucceeded && o->createdTime && !o->createdExitObserved, "OWNED_WINDOW_PROCESS_REQUIRED");
     if (operation == Operation::ReleaseRead) need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
     // Refusal here precedes release submission/invalidation and closes nothing.
     if (operation == Operation::ReleaseOwned) requireCreatedTerminal(o);
     std::wstring profile;
     if (launch) { profile = wide(e, a[1], 260); const bool sibling = profile == o->root + L".native-launch-profile"; need(sibling || profile == o->root + L"\\native-launch-profile", "FIXED_PROFILE_REQUIRED"); o->siblingProfileRequested = sibling; o->launchReserved = true; }
     w = new Work{o, e}; w->operation = operation; w->profile = std::move(profile);
+    if (operation == Operation::ObserveOwnedWindows) w->ownedWindows.reserve(128); // Before queueing or any window API.
     if (observe) { double rawPid; api(e, napi_get_value_double(e, a[1], &rawPid)); need(rawPid > 0 && rawPid <= 4294967295.0 && rawPid == uint32_t(rawPid), "PID_INVALID"); w->pid = uint32_t(rawPid); auto s = utf8(e, a[2], 20); need(s[0] != '0' && s.find_first_not_of("0123456789") == std::string::npos, "CREATION_INVALID"); w->creation = 0; for (char digit : s) { auto value = uint64_t(digit - '0'); need(w->creation <= (std::numeric_limits<uint64_t>::max() - value) / 10, "CREATION_OVERFLOW"); w->creation = w->creation * 10 + value; } }
     o->pendingWork = w; o->busy.store(true); if (release) o->releaseSubmitted = true;
     api(e, napi_create_reference(e, a[0], 1, &w->cap)); w->referenceCreated = true;
@@ -733,6 +795,7 @@ napi_value processCall(napi_env e, napi_callback_info i) { return start(e, i, Op
 napi_value releaseCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseRead); }
 napi_value launchCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::Launch); }
 napi_value sampleOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SampleOwned); }
+napi_value observeOwnedWindowsCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ObserveOwnedWindows); }
 napi_value drainStdioCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::DrainStdio); }
 napi_value releaseOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseOwned); }
 napi_value assertCap(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = owner(e, a[0]); need(!o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->hostLifetimeUnknown.load(), "CAPABILITY_INVALIDATED"); napi_value yes; api(e, napi_get_boolean(e, true, &yes)); return yes; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
@@ -740,7 +803,8 @@ napi_value cancel(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_v
 napi_value refuseClose(napi_env e, napi_callback_info) { napi_throw_error(e, "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE", "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE"); return nullptr; }
 napi_value init(napi_env e, napi_value exports) {
   napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"acquireLaunchLifetime", nullptr, acquireHostLifetime, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"drainOwnedStdio", nullptr, drainStdioCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
-  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
+  napi_property_descriptor ownedWindows = {"observeOwnedWindows", nullptr, observeOwnedWindowsCall, nullptr, nullptr, nullptr, napi_default, nullptr};
+  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
 }
 } // namespace
 NAPI_MODULE(NODE_GYP_MODULE_NAME, init)

@@ -288,6 +288,7 @@ export async function prepareWindowsNativeAuthority(request, expectedBuild) {
             'launchPinnedProcess',
             'acquireLaunchLifetime',
             'sampleOwnedProcess',
+            'observeOwnedWindows',
             'drainOwnedStdio',
             'releaseOwnedProcessHandles',
         ])
@@ -693,6 +694,99 @@ function sampleOwnedRecord(record) {
     record.pending.add(task);
     return task
         .then((output) => saveOwnedObservation(record, output))
+        .catch((error) => {
+            throw retainLaunchFailure(record, error);
+        })
+        .finally(() => record.pending.delete(task));
+}
+function ownedWindowSample(output, created) {
+    assert.ok(
+        typeof output === 'string' && Buffer.byteLength(output) <= 65536,
+        'WINDOWS_NATIVE_OWNED_WINDOWS_BOUND',
+    );
+    const value = JSON.parse(output);
+    assert.equal(JSON.stringify(value), output, 'WINDOWS_NATIVE_OWNED_WINDOWS_CANONICAL');
+    fields(value, ['pid', 'creationTime100ns', 'rootLiveBefore', 'rootLiveAfter', 'windows']);
+    assert.equal(value.pid, created.pid);
+    assert.equal(value.creationTime100ns, created.creationTime100ns);
+    assert.equal(value.rootLiveBefore, true);
+    assert.equal(value.rootLiveAfter, true);
+    assert.ok(
+        Array.isArray(value.windows) && value.windows.length <= 128,
+        'WINDOWS_NATIVE_OWNED_WINDOWS_COUNT',
+    );
+    const handles = new Set();
+    const windows = value.windows.map((row) => {
+        fields(row, ['handle', 'pid', 'threadId', 'visible', 'minimized']);
+        assert.ok(typeof row.handle === 'string' && /^[1-9][0-9]{0,19}$/.test(row.handle));
+        assert.ok(BigInt(row.handle) <= 0xffffffffffffffffn);
+        assert.ok(!handles.has(row.handle), 'WINDOWS_NATIVE_OWNED_WINDOWS_DUPLICATE');
+        handles.add(row.handle);
+        assert.equal(row.pid, created.pid);
+        assert.ok(Number.isInteger(row.threadId) && row.threadId > 0 && row.threadId <= 0xffffffff);
+        assert.equal(typeof row.visible, 'boolean');
+        assert.equal(typeof row.minimized, 'boolean');
+        return Object.freeze({ ...row });
+    });
+    return Object.freeze({
+        pid: value.pid,
+        creationTime100ns: value.creationTime100ns,
+        rootLiveBefore: true,
+        rootLiveAfter: true,
+        windows: Object.freeze(windows),
+    });
+}
+/** Ephemeral native window samples from this owner's retained created-process
+ * HANDLE. No supplied PID, HWND control, readiness verdict or lifecycle row. */
+export function sampleWindowsNativeOwnedWindows(cap) {
+    assert.equal(arguments.length, 1, 'WINDOWS_NATIVE_OWNED_WINDOWS_ARGUMENTS');
+    const record = active(cap),
+        created = record.launch?.latest;
+    assert.ok(
+        created?.createdByThisOwner && !created.processExitObserved,
+        'WINDOWS_NATIVE_OWNED_WINDOWS_CREATED_LIVE_REQUIRED',
+    );
+    const task = Promise.resolve().then(
+        () =>
+            new Promise((resolve, reject) => {
+                assert.ok(
+                    !record.cancelled && !record.invalidated && !record.failed,
+                    'WINDOWS_NATIVE_OWNED_WINDOWS_CANCELLED_RETAINED',
+                );
+                record.launch.windowSampleUnknown = true; // Reserve unconfirmed call outcome before invocation.
+                const candidate = record.native.observeOwnedWindows(record.raw);
+                record.launch.windowSampleCandidate = candidate; // Adopt before any observation/property access.
+                assert.ok(
+                    !nativeTypes.isProxy(candidate) && nativeTypes.isPromise(candidate),
+                    'WINDOWS_NATIVE_OWNED_WINDOWS_PROMISE_REQUIRED',
+                );
+                observeNativePromise.call(
+                    candidate,
+                    (output) => {
+                        record.launch.windowSampleReturned = output;
+                        record.launch.windowSampleUnknown = false; // Actual supported Promise settled; data may still fail.
+                        try {
+                            const sample = ownedWindowSample(output, created);
+                            record.launch.windowSample = sample;
+                            assert.ok(
+                                !record.cancelled && !record.invalidated,
+                                'WINDOWS_NATIVE_OWNED_WINDOWS_CANCELLED_RETAINED',
+                            );
+                            resolve(sample);
+                        } catch (error) {
+                            reject(error);
+                        }
+                    },
+                    (error) => {
+                        record.launch.windowSampleRejection = error;
+                        record.launch.windowSampleUnknown = false;
+                        reject(error);
+                    },
+                );
+            }),
+    );
+    record.pending.add(task);
+    return task
         .catch((error) => {
             throw retainLaunchFailure(record, error);
         })
@@ -1504,6 +1598,7 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
     assert.ok(record.launch, 'WINDOWS_NATIVE_LAUNCH_NOT_RESERVED');
     if (record.launch.release) return record.launch.release;
     launchRecord(cap);
+    assert.ok(!record.launch.windowSampleUnknown, 'WINDOWS_NATIVE_OWNED_WINDOWS_OPERATION_UNKNOWN');
     const last = record.launch.latest;
     assert.ok(
         last &&

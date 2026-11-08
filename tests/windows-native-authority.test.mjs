@@ -548,6 +548,12 @@ function launchMemory() {
             counts.sample++;
             return JSON.stringify(facts());
         },
+        observeOwnedWindows(value) {
+            assert.equal(value, raw);
+            assert.equal(arguments.length, 1);
+            assert.equal(typeof native.windowQuery, 'function');
+            return native.windowQuery();
+        },
         async releaseOwnedProcessHandles(value) {
             assert.equal(value, raw);
             counts.release++;
@@ -3840,4 +3846,395 @@ test('memory sibling rows cannot launder legacy inside-profile history or mixed 
     );
     assert.throws(() => inspect(oldRows));
     assert.equal(historical.releaseAcceptance, false);
+});
+
+// These observations come only from the existing closed VM native port. They do
+// not execute EnumWindows, inspect a desktop, or establish HWND/UI authority.
+function ownedWindowFacts(model, count = 1) {
+    const created = model.facts();
+    return {
+        pid: created.pid,
+        creationTime100ns: created.creationTime100ns,
+        rootLiveBefore: true,
+        rootLiveAfter: true,
+        windows: Array.from({ length: count }, (_, index) => ({
+            handle: String(BigInt(index) + 1n),
+            pid: created.pid,
+            threadId: 18,
+            visible: index % 2 === 0,
+            minimized: index % 3 === 0,
+        })),
+    };
+}
+
+test('memory owned window sampling copies complete empty and bounded decimal handle snapshots without lifecycle admission', async () => {
+    const m = launchMemory(),
+        cap = await m.prepare();
+    let queries = 0,
+        selected,
+        thenReads = 0;
+    m.native.windowQuery = () => {
+        queries++;
+        const promise = Promise.resolve(JSON.stringify(selected));
+        Object.defineProperty(promise, 'then', {
+            get() {
+                thenReads++;
+                throw Error('native Promise own then must not run');
+            },
+        });
+        return promise;
+    };
+    assert.throws(() => m.api.sampleWindowsNativeOwnedWindows({}), /CAPABILITY_UNISSUED/);
+    assert.throws(
+        () => m.api.sampleWindowsNativeOwnedWindows(cap),
+        /WINDOWS_NATIVE_OWNED_WINDOWS_CREATED_LIVE_REQUIRED/,
+    );
+    assert.equal(queries, 0);
+    await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+    assert.throws(
+        () => m.api.sampleWindowsNativeOwnedWindows(cap, 17),
+        /WINDOWS_NATIVE_OWNED_WINDOWS_ARGUMENTS/,
+    );
+    assert.equal(queries, 0);
+    selected = ownedWindowFacts(m, 3);
+    selected.windows[1].handle = '9007199254740993';
+    selected.windows[2].handle = '18446744073709551615';
+    const expected = JSON.parse(JSON.stringify(selected)),
+        complete = await m.api.sampleWindowsNativeOwnedWindows(cap);
+    assert.deepEqual(JSON.parse(JSON.stringify(complete)), expected);
+    assert.ok(Object.isFrozen(complete));
+    assert.ok(Object.isFrozen(complete.windows));
+    assert.ok(complete.windows.every(Object.isFrozen));
+    assert.throws(() => {
+        complete.windows[0].handle = '2';
+    }, TypeError);
+    selected.windows[0].visible = !selected.windows[0].visible;
+    assert.deepEqual(JSON.parse(JSON.stringify(complete)), expected);
+    selected = ownedWindowFacts(m, 0);
+    const empty = await m.api.sampleWindowsNativeOwnedWindows(cap);
+    assert.deepEqual(JSON.parse(JSON.stringify(empty.windows)), []);
+    selected = ownedWindowFacts(m, 128);
+    const bounded = await m.api.sampleWindowsNativeOwnedWindows(cap);
+    assert.equal(bounded.windows.length, 128);
+    assert.equal(new Set(bounded.windows.map((row) => row.handle)).size, 128);
+    assert.equal(queries, 3);
+    assert.equal(thenReads, 0);
+    assert.equal(m.counts.launch, 1);
+    assert.equal(m.counts.release, 0);
+    for (const value of [complete, empty, bounded]) {
+        assert.deepEqual(Object.keys(value).sort(), [
+            'creationTime100ns',
+            'pid',
+            'rootLiveAfter',
+            'rootLiveBefore',
+            'windows',
+        ]);
+        for (const name of [
+            'releaseAcceptance',
+            'ready',
+            'offline',
+            'installation',
+            'loadedCode',
+            'descendantClosure',
+            'normalQuit',
+        ])
+            assert.equal(Object.hasOwn(value, name), false);
+    }
+    m.state.exited = true;
+    await m.api.sampleWindowsNativeOwnedProcess(cap);
+    assert.throws(() => m.api.sampleWindowsNativeOwnedWindows(cap), /CREATED_LIVE_REQUIRED/);
+    assert.equal(queries, 3);
+});
+
+test('memory owned window sampling refuses malformed overflow foreign and private output without rewriting creation facts', async () => {
+    const privateCanary = 'PRIVATE_WINDOW_TITLE_PATH_ENDPOINT_OR_CREDENTIAL';
+    const malformed = [
+        () => '',
+        () => '{',
+        (value) => JSON.stringify(value) + '\n',
+        () => ' '.repeat(65537),
+        () => undefined,
+        (value) => {
+            value.pid++;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.creationTime100ns = '123456788';
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.rootLiveBefore = false;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.rootLiveAfter = false;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].handle = 1;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].handle = '0';
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].handle = '01';
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].handle = '18446744073709551616';
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows.push({ ...value.windows[0] });
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].pid++;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].threadId = 0;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].threadId = 4294967296;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].visible = 1;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].minimized = null;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows[0].title = privateCanary;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.endpoint = privateCanary;
+            return JSON.stringify(value);
+        },
+        (value) => {
+            value.windows = Array.from({ length: 129 }, (_, index) => ({
+                ...value.windows[0],
+                handle: String(index + 1),
+            }));
+            return JSON.stringify(value);
+        },
+    ];
+    for (const output of malformed) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        const created = m.api.readWindowsNativeOwnedProcess(cap);
+        let queries = 0;
+        m.native.windowQuery = () => {
+            queries++;
+            return Promise.resolve(output(ownedWindowFacts(m)));
+        };
+        await assert.rejects(m.api.sampleWindowsNativeOwnedWindows(cap), (error) => {
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.equal(error.nativeAuthorityCustody.failedAtCapture, true);
+            assert.equal(JSON.stringify(error).includes(privateCanary), false);
+            return true;
+        });
+        assert.deepEqual(m.api.readWindowsNativeOwnedProcess(cap), created);
+        assert.throws(() => m.api.sampleWindowsNativeOwnedWindows(cap), /CAPABILITY_NOT_ACTIVE/);
+        assert.equal(queries, 1);
+        assert.equal(m.counts.launch, 1);
+        assert.equal(m.counts.release, 0);
+    }
+    for (const mode of [
+        'raw-string',
+        'raw-object',
+        'thenable',
+        'getter',
+        'proxy-object',
+        'proxy-promise',
+    ]) {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        let callbacks = 0;
+        const handler = {
+            get() {
+                callbacks++;
+                throw Error(privateCanary);
+            },
+            ownKeys() {
+                callbacks++;
+                throw Error(privateCanary);
+            },
+            getOwnPropertyDescriptor() {
+                callbacks++;
+                throw Error(privateCanary);
+            },
+            getPrototypeOf() {
+                callbacks++;
+                throw Error(privateCanary);
+            },
+        };
+        m.native.windowQuery = () => {
+            if (mode === 'raw-string') return JSON.stringify(ownedWindowFacts(m));
+            if (mode === 'raw-object') return ownedWindowFacts(m);
+            if (mode === 'thenable')
+                return {
+                    then() {
+                        callbacks++;
+                    },
+                };
+            if (mode === 'getter')
+                return Object.defineProperty({}, 'then', {
+                    get() {
+                        callbacks++;
+                        throw Error(privateCanary);
+                    },
+                });
+            return new Proxy(mode === 'proxy-promise' ? Promise.resolve('unused') : {}, handler);
+        };
+        await assert.rejects(m.api.sampleWindowsNativeOwnedWindows(cap));
+        assert.equal(callbacks, 0);
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /WINDOWS_NATIVE_OWNED_WINDOWS_OPERATION_UNKNOWN/,
+        );
+        assert.equal(m.counts.release, 0);
+    }
+});
+
+test('memory owned window pending reentrant cancelled and late queries retain custody without another native query or release', async () => {
+    {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        let queries = 0;
+        m.native.windowQuery = () => {
+            queries++;
+            return Promise.resolve(JSON.stringify(ownedWindowFacts(m)));
+        };
+        const task = m.api.sampleWindowsNativeOwnedWindows(cap);
+        m.api.cancelWindowsNativeAuthority(cap);
+        await assert.rejects(task, (error) => {
+            assert.equal(error.nativeAuthorityCustody.cancelledAtCapture, true);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            return true;
+        });
+        assert.equal(queries, 0);
+        assert.equal(m.counts.release, 0);
+    }
+    {
+        const m = launchMemory(),
+            cap = await m.prepare();
+        await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+        let resolve,
+            markStarted,
+            queries = 0;
+        const started = new Promise((done) => {
+            markStarted = done;
+        });
+        m.native.windowQuery = () => {
+            queries++;
+            assert.throws(
+                () => m.api.sampleWindowsNativeOwnedWindows(cap),
+                /CAPABILITY_NOT_ACTIVE/,
+            );
+            markStarted();
+            return new Promise((done) => {
+                resolve = done;
+            });
+        };
+        const task = m.api.sampleWindowsNativeOwnedWindows(cap);
+        await started;
+        assert.throws(() => m.api.sampleWindowsNativeOwnedWindows(cap), /CAPABILITY_NOT_ACTIVE/);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /OPERATION_PENDING/,
+        );
+        m.api.cancelWindowsNativeAuthority(cap);
+        resolve(JSON.stringify(ownedWindowFacts(m)));
+        await assert.rejects(task, (error) => {
+            assert.equal(error.nativeAuthorityCustody.cancelledAtCapture, true);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            return true;
+        });
+        assert.throws(() => m.api.sampleWindowsNativeOwnedWindows(cap), /CAPABILITY_NOT_ACTIVE/);
+        assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+        assert.equal(queries, 1);
+        assert.equal(m.counts.launch, 1);
+        assert.equal(m.counts.release, 0);
+    }
+});
+
+test('memory owned window synchronous and rejected primary failures preserve Error or undefined through later terminal observation failure', async () => {
+    for (const asynchronous of [false, true])
+        for (const primary of [Error('first private window sample failure'), undefined]) {
+            const m = launchMemory(),
+                cap = await m.prepare();
+            await m.api.launchWindowsNativePinnedProcess(cap, m.input());
+            let queries = 0;
+            m.native.windowQuery = () => {
+                queries++;
+                if (asynchronous) return Promise.reject(primary);
+                throw primary;
+            };
+            const first = await m.api.sampleWindowsNativeOwnedWindows(cap).then(
+                () => assert.fail('native model query must fail'),
+                (error) => error,
+            );
+            assert.equal(Object.hasOwn(first, 'cause'), true);
+            assert.equal(first.cause, primary);
+            assert.equal(first.nativeAuthorityCustody.failedAtCapture, true);
+            assert.equal(first.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.throws(
+                () => m.api.sampleWindowsNativeOwnedWindows(cap),
+                /CAPABILITY_NOT_ACTIVE/,
+            );
+            const later = Error('later private terminal sample failure');
+            m.native.sampleOwnedProcess = () => {
+                m.counts.sample++;
+                throw later;
+            };
+            await assert.rejects(m.api.sampleWindowsNativeOwnedProcess(cap), (error) => {
+                assert.equal(error.cause, primary);
+                assert.equal(error.errors[0], primary);
+                assert.equal(error.errors[1], later);
+                assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+                assert.equal(JSON.stringify(error), '{}');
+                return true;
+            });
+            assert.equal(queries, 1);
+            assert.equal(m.counts.launch, 1);
+            assert.equal(m.counts.sample, 1);
+            assert.equal(m.counts.release, 0);
+            m.native.sampleOwnedProcess = async () => {
+                m.counts.sample++;
+                return JSON.stringify(m.facts());
+            };
+            m.state.exited = true;
+            m.state.exitCode = 0;
+            m.endStdio();
+            await m.api.sampleWindowsNativeOwnedProcess(cap);
+            await m.api.drainWindowsNativeOwnedStdio(cap);
+            if (asynchronous) {
+                const acknowledged = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+                assert.equal(acknowledged.releaseAcceptance, false);
+                assert.equal(acknowledged.processOwnership, false);
+                assert.equal(m.counts.release, 1);
+            } else {
+                assert.throws(
+                    () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                    /WINDOWS_NATIVE_OWNED_WINDOWS_OPERATION_UNKNOWN/,
+                );
+                assert.equal(m.counts.release, 0);
+            }
+        }
 });

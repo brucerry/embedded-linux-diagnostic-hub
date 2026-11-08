@@ -370,6 +370,53 @@ composition retained the compiled `349ad72` backend; its build does not validate
 profile source. No addon, real WebSocket/Inspector, target process, installer or security operation
 is activated by these controls or by this documentation.
 
+## Ephemeral windows sampled through the created-process HANDLE
+
+`sampleWindowsNativeOwnedWindows(cap)` takes exactly one existing private capability, with no PID,
+HWND, query text or native-port argument. It requires this owner's successfully created, currently
+live root and an active capability. The added native `observeOwnedWindows` export borrows the
+already retained created-process HANDLE. It does not call `OpenProcess`, acquire any new HANDLE,
+invoke PowerShell, allocate a scratch executable, or dispatch a window command.
+
+The existing async Work reserves storage for at most 128 matching rows before queueing. Native code
+checks the retained root's PID, creation time and nonsignaled state before and after `EnumWindows`.
+Each accepted row brackets `IsWindowVisible` and `IsIconic` reads with matching PID/thread queries.
+Zero/changed identities, duplicates, overflow, cancellation or an incomplete enumeration refuse the
+snapshot. Callback exceptions are contained inside the Win32 callback, retained as the first native
+exception when applicable, and rethrown only after the callback has returned. The unrelated
+external-PID observer's stored window rows are not changed.
+
+The returned canonical native data contains only `pid`, `creationTime100ns`, `rootLiveBefore`,
+`rootLiveAfter` and `windows`. Each window holds a positive canonical decimal **string** `handle`,
+`pid`, `threadId`, `visible` and `minimized`. The wrapper checks the original created-process tuple,
+the 64 KiB total bound, strict keys/types, at most 128 unique handles and both root samples. It
+returns a deeply frozen copied snapshot. A handle larger than JavaScript's exact-number range is
+preserved as a string. Raw returned values and the last validated sample stay private; there is no
+new public record reader or source of lifecycle/admission flags.
+
+The wrapper reserves the existing pending operation before dispatch and rechecks cancellation before
+the native call. A late returned value is adopted before validation or cancellation checks. The
+native method must return a genuine, non-Proxy Promise. Its exact candidate is retained before brand
+inspection and observed with the captured intrinsic Promise observer, without consulting an own
+`then` property. Unsupported values, synchronous throws or unconfirmed observer attachment leave a
+private query-uncertainty fence that blocks component release. Only actual supported-Promise
+settlement clears that query fence; rejection or malformed data still preserves a failed observation
+and all independent root, pipe, transport and lifetime release requirements. Failures preserve the
+existing first-error/custody contract; they do not retry, clear primary errors or release the
+process. This query is active-only. After failure or cancellation it grants no new window query;
+only existing restricted terminal/root/stdio observation and component-release paths retain their
+earlier scope. A still-live or unknown root may therefore need the external caller's custody; no
+automatic quit, termination or cleanup is introduced.
+
+These are ephemeral samples, not a pinned HWND, an atomic desktop snapshot or a wall-clock timeout
+for synchronous User32 calls. A window can change immediately after any read. An empty list is not
+proof of permanent absence, and visibility/minimized values are not functional UI interaction,
+renderer readiness, a boot acknowledgment, installation, loaded-code identity or normal-close
+authority. No shared lifecycle schema, full offline CLI, normal-quit command or acceptance gate is
+changed. The sampler's native source needs its own reviewed compilation and runtime validation; the
+separately compiled `516b047` source/binary does not include this new export or qualify it. Memory
+controls execute the actual wrapper with closed fake ports only, never these Win32 APIs.
+
 ## Build prerequisite (not executed)
 
 A Windows x64 MSVC compiler, Windows SDK, official Node 24.22.0 headers and matching win-x64
