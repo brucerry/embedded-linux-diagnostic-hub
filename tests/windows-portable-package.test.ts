@@ -460,7 +460,7 @@ test('actual entry stays inert on import and both workflow callers retain fixed 
     assert.ok(helper.includes("loadEnv(path.resolve('electron-builder.env'))"));
     assert.match(
         helper,
-        /if \(process\.argv\[1\] && path\.resolve\(process\.argv\[1\]\) === fileURLToPath\(import\.meta\.url\)\)\s*await main\(\);/,
+        /if \(process\.argv\[1\] && path\.resolve\(process\.argv\[1\]\) === fileURLToPath\(import\.meta\.url\)\)\s*void main\(\)\.catch\(\(\) => \{\s*process\.exitCode = 1;\s*\}\);/,
     );
     assert.equal(helper.includes("from 'electron-builder'"), false);
     assert.ok(helper.includes("process.env.GITHUB_ACTIONS === 'true'"));
