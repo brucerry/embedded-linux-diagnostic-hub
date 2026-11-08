@@ -118,8 +118,24 @@ jobs:
                     $link = Join-Path $vs ('VC/Tools/MSVC/' + $vcVersion + '/bin/Hostx64/x64/link.exe')
                     $stage = 'devcmd-path'
                     $devcmd = Join-Path $vs 'Common7/Tools/VsDevCmd.bat'
-                    $stage = 'python-selection'; $reason = 'select'
-                    $python = (Get-Command python.exe -CommandType Application).Source
+                    $stage = 'python-selection'; $reason = 'enumerate'
+                    $pythonCandidates = @(Get-Command python.exe -CommandType Application -All -TotalCount 33)
+                    $reason = 'candidate-count'
+                    if ($pythonCandidates.Count -lt 1 -or $pythonCandidates.Count -gt 32) { throw 'Python selection' }
+                    $python = $null
+                    $reason = 'candidate-metadata'
+                    foreach ($candidate in $pythonCandidates) {
+                      if ($candidate -isnot [System.Management.Automation.ApplicationInfo]) { throw 'Python metadata' }
+                      $candidatePath = $candidate.Path
+                      if ($candidatePath -isnot [string] -or [string]::IsNullOrWhiteSpace($candidatePath)) { throw 'Python metadata' }
+                      if (-not [IO.Path]::IsPathFullyQualified($candidatePath)) { continue }
+                      if (-not [IO.File]::Exists($candidatePath)) { continue }
+                      if ($candidatePath -match '[%!&|<>^"\r\n]' -or $candidatePath -match '\\WindowsApps\\') { continue }
+                      $python = $candidatePath
+                      break
+                    }
+                    $reason = 'no-eligible'
+                    if ($python -isnot [string]) { throw 'Python selection' }
                     $pathStages = @('compiler-path','linker-path','devcmd-path','python-path')
                     $pathIndex = 0
                     foreach ($file in @($cl,$link,$devcmd,$python)) {
@@ -144,7 +160,7 @@ jobs:
                     [IO.File]::WriteAllText((Join-Path $env:HUB_COMPILE_ROOT 'tools.json'),$toolsJSON)
                   } catch {
                     $allowedStages = @('source','vs-discovery','vs-json-shape','vs-version','compiler-path','linker-path','devcmd-path','python-selection','python-path','python-version','probe-record','tool-admission')
-                    $allowedReasons = @('prepare','invoke','exit','locate','parse','count','canonical-path','read','version-format','construct','select','fully-qualified','file-exists','metacharacters','windows-app-alias','version-exit','serialize','write','unknown-category')
+                    $allowedReasons = @('prepare','invoke','exit','locate','parse','count','canonical-path','read','version-format','construct','select','enumerate','candidate-count','candidate-metadata','no-eligible','fully-qualified','file-exists','metacharacters','windows-app-alias','version-exit','serialize','write','unknown-category')
                     if ($stage -cnotin $allowedStages -or $reason -cnotin $allowedReasons) { $stage = 'tool-admission'; $reason = 'unknown-category' }
                     $category = '{"stage":"' + $stage + '","reason":"' + $reason + '"}'
                     Write-Output ('::error title=Windows authority tool admission::' + $category)
