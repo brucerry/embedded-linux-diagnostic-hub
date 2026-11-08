@@ -245,8 +245,8 @@ requires an eligible ordinary-user host, trusted immutable native build/stage, g
 profile/action scope and separately authorized runtime work. Source/closed-VM controls exercise
 actual JavaScript orchestration and fixed expressions only. They prove neither a real
 WebSocket/Inspector/app-quit exchange nor Windows runtime, loaded-code, descendant or full release
-acceptance. The C++ is unchanged from the separately compiled `349ad72` stdio component; no repeat
-C++ compilation is claimed from these JavaScript controls.
+acceptance. The original JavaScript-only owned-quit change retained the separately compiled
+`349ad72` stdio component; those controls claimed no repeat C++ compilation.
 
 Explicit `release` attempts to close each newly owned observer HANDLE once, and closes owned CNG
 objects. It invalidates the capability when submitted. A failed close keeps private custody and is
@@ -316,12 +316,59 @@ machine-offline/UI observations, authentic source/package/run issuance, loaded-c
 independent retirement are still absent. Mac observation dispatch and all unconditional full
 acceptance refusals remain unchanged.
 
+### Fixed sibling profile for the installed-app startup policy
+
+The shipping `selectDesktopStartup` rejects a dedicated profile inside a marked installation root.
+The original inside-root component remains available unchanged, but cannot be substituted for that
+installed-app path. The additive `launchWindowsNativePinnedSiblingProcess` operation requires the
+exact action `launch-pinned-sibling-profile` and exact selected profile
+`binding.root + ".native-launch-profile"`. It accepts no arbitrary profile path. The corresponding
+`observeWindowsNativeOwnedSiblingRuntime` caller performs the same actual preparation, pinning,
+creation, cooperative quit and explicit component-release sequence with this fixed sibling command.
+
+The native branch derives the sibling from the pinned volume-GUID root under the already retained
+parent directory. That parent HANDLE is borrowed from an existing ancestor lease, not newly opened
+or independently closed. Before opening the sibling and again before creation, native code checks
+the current DOS-drive mapping against the pinned volume, the held parent identity and final path,
+and the exact canonical relative spelling of the root. An 8.3 alias or case rewrite is
+conservatively refused by this new branch; the old branch's spelling policy is unchanged. These
+samples are not an atomic DOS-namespace or loaded-code authentication claim.
+
+The sibling directory must already exist. Its one owned lease is reserved before `CreateFileW`, uses
+no write/delete sharing, rejects reparse points, and must resolve to the exact derived sibling path
+on the same volume with an identity distinct from the installation root and parent. The existing
+bounded directory enumeration must reach its actual empty EOF. Parent and profile identities are
+checked again before `CreateProcessW`; the actual GUID profile is used in the fixed command and
+explicit environment. No directory is created, removed, or given new permissions.
+
+The new created-process original is `windows-native-created-process/v3`. Its `profileDirectory`
+contains the observed `volumeSerial`, `fileId`, `parentFileId`, `emptyAtPreflight`, and
+`leaseRetained`. A null value means no validated profile observation, including cancellation before
+native launch submission; it never proves absence, freshness or success. A successful producer
+requires complete profile facts, the same pinned-file volume, and distinct directory/file
+identities. Emptiness and a retained HANDLE still do not establish fresh/exclusive staging ownership
+or authorize an action. Those external prerequisites remain required before any actual activation.
+
+This branch uses `windows-native-normal-quit/v2`, `windows-native-owned-release/v2`, and
+`windows-native-owned-runtime/v2` to bind the new requested command explicitly. It uses the existing
+four role paths, canonical originals and strict original-byte rereads. The old created-process/v2,
+quit/release/runtime v1 readers remain restricted to the original inside-root command; records are
+not repinned, migrated or relabeled. Both versions remain unqualified. Compatibility with the
+shipping profile-location rule does not establish an installation, observed application profile,
+runtime version, machine-offline condition, UI interaction, loaded bytes, service/run provenance or
+descendant retirement. The offline CLI and unconditional full installer gate remain refused.
+
+The changed C++ source requires a separately authorized Windows compilation and runtime validation;
+the earlier compiled `349ad72` binary is not build evidence for this new branch. Source/memory
+controls neither load the addon nor create a profile, pipe, socket or target process.
+
 The local integration controls must execute this real observe function against the same actual
 authority wrapper exports under closed memory/native-port substitutes, then feed its emitted bytes
 through the actual shared consumer/readback. Authored rows separately test invalid projections; they
-do not stand in for that real call wiring or constitute native evidence. The C++ backend is
-unchanged from compiled `349ad72`. No addon, real WebSocket/Inspector, target process, installer or
-security operation is activated by these controls or by this documentation.
+do not stand in for that real call wiring or constitute native evidence. The earlier inside-root
+composition retained the compiled `349ad72` backend; its build does not validate the new sibling
+profile source. No addon, real WebSocket/Inspector, target process, installer or security operation
+is activated by these controls or by this documentation.
 
 ## Build prerequisite (not executed)
 

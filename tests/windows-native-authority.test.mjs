@@ -21,7 +21,9 @@ import {
     releaseWindowsNativeAuthority,
     refuseWindowsNativeNormalClose,
     validateWindowsNativeLaunch,
+    validateWindowsNativeSiblingLaunch,
     launchWindowsNativePinnedProcess,
+    launchWindowsNativePinnedSiblingProcess,
     sampleWindowsNativeOwnedProcess,
     readWindowsNativeOwnedProcess,
     releaseWindowsNativeOwnedProcessHandles,
@@ -921,6 +923,55 @@ function launchMemory() {
         physicalLoadedBytesVerified: false,
         releaseAcceptance: false,
     });
+    // Opt-in backend data for the new tests only. The original 46 controls keep
+    // their unchanged inside-profile model methods. This models the same native
+    // export's second fixed command, not a real directory/HANDLE observation.
+    let siblingModelUsed = false;
+    const useSiblingProfileModel = () => {
+        assert.equal(siblingModelUsed, false);
+        siblingModelUsed = true;
+        const model = {
+            submitted: false,
+            profiles: [],
+            directory: {
+                volumeSerial: 'a'.repeat(16),
+                fileId: 'b'.repeat(32),
+                parentFileId: 'c'.repeat(32),
+                emptyAtPreflight: true,
+                leaseRetained: true,
+            },
+        };
+        const originalLaunch = native.launchPinnedProcess;
+        const originalSample = native.sampleOwnedProcess;
+        const siblingFacts = () => ({ ...facts(), profileDirectory: model.directory });
+        native.launchPinnedProcess = async (value, profile) => {
+            if (profile !== request().root + '.native-launch-profile')
+                return originalLaunch(value, profile);
+            assert.equal(value, raw);
+            model.submitted = true;
+            model.profiles.push(profile);
+            counts.launch++;
+            events.push('creation-submitted');
+            launchStarted.resolve();
+            assert.equal(state.hostReferenceAcknowledged, true);
+            capture.configured = true;
+            capture.parentChildCopiesClosed = true;
+            captureEvents.push('model-capture-configured-before-creation');
+            native.onCaptureConfigured?.();
+            state.attempted = true;
+            if (native.launchGate) await native.launchGate;
+            state.created = true;
+            state.returned = true;
+            return JSON.stringify(siblingFacts());
+        };
+        native.sampleOwnedProcess = async (value) => {
+            if (!model.submitted) return originalSample(value);
+            assert.equal(value, raw);
+            counts.sample++;
+            return JSON.stringify(siblingFacts());
+        };
+        return model;
+    };
     return {
         api,
         native,
@@ -928,6 +979,7 @@ function launchMemory() {
         cloneIntoRealm,
         ownedRuntime,
         modelPins,
+        useSiblingProfileModel,
         expected() {
             const selected = request();
             return {
@@ -3404,4 +3456,388 @@ test('memory actual composition preserves first native Error or undefined withou
         assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), release);
         assert.equal(m.counts.release, 1);
     }
+});
+
+const siblingInput = () => ({
+    action: 'launch-pinned-sibling-profile',
+    profile: request().root + '.native-launch-profile',
+});
+async function finishRuntimeModel(m, producer) {
+    m.native.pinFiles = async () => JSON.stringify(m.modelPins());
+    const operation = producer(m.inside(m.expected()), m.inside(request()), m.buildInput());
+    void operation.catch(() => {});
+    await m.quit.pollStarted.promise;
+    m.capture.stderr.bytes = Buffer.from('Debugger listening on ' + m.quit.endpoint + '\r\n');
+    m.quit.fireTimer(20);
+    await m.quit.closeRequested.promise;
+    await m.quit.microtasks();
+    m.quit.onAppQuit = () => {
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+    };
+    m.quit.runAppQuit();
+    m.quit.fireTimer(20);
+    return operation;
+}
+
+test('memory sibling launch selects only the fixed outside-profile spelling while preserving legacy inputs', () => {
+    const legacy = validateWindowsNativeLaunch(
+        { action: 'launch-pinned-installed', profile: request().root + '\\native-launch-profile' },
+        request(),
+    );
+    assert.equal(legacy.profile, request().root + '\\native-launch-profile');
+    const input = siblingInput(),
+        selected = validateWindowsNativeSiblingLaunch(input, request());
+    input.profile = 'C:\\changed-after-selection';
+    assert.ok(Object.isFrozen(selected));
+    assert.deepEqual(selected, siblingInput());
+    // This proves lexical separation only. Native reparse/canonical ownership and
+    // real shipping startup are not executed by these closed memory controls.
+    const relative = path.win32.relative(request().root, selected.profile);
+    assert.equal(relative.split('\\')[0], '..');
+    for (const change of [
+        { action: 'launch-pinned-installed' },
+        { profile: legacy.profile },
+        { profile: request().root },
+        { profile: selected.profile + '\\' },
+        { profile: selected.profile + '\\.' },
+        { profile: selected.profile.toLowerCase() },
+        { profile: selected.profile + ':stream' },
+        { profile: '\\\\server\\share\\profile' },
+        { profile: 'C:\\another-profile' },
+        { authorized: true },
+    ])
+        assert.throws(() =>
+            validateWindowsNativeSiblingLaunch({ ...selected, ...change }, request()),
+        );
+    assert.throws(() => validateWindowsNativeLaunch(selected, request()));
+    let reads = 0;
+    const getter = { ...siblingInput() };
+    Object.defineProperty(getter, 'profile', {
+        enumerable: true,
+        get() {
+            reads++;
+            throw Error('profile getter');
+        },
+    });
+    assert.throws(() => validateWindowsNativeSiblingLaunch(getter, request()));
+    assert.equal(reads, 0);
+    assert.throws(
+        () => launchWindowsNativePinnedSiblingProcess({}, siblingInput()),
+        /CAPABILITY_UNISSUED/,
+    );
+});
+
+test('memory sibling reservation forwards one immutable command and retains cancelled late or malformed native facts', async () => {
+    {
+        const m = launchMemory(),
+            profile = m.useSiblingProfileModel(),
+            cap = await m.prepare(),
+            input = m.inside(siblingInput());
+        m.native.onAcquire = () => {
+            input.profile = 'C:\\changed-during-acquisition';
+            assert.throws(
+                () => m.api.launchWindowsNativePinnedSiblingProcess(cap, m.inside(siblingInput())),
+                /ALREADY_RESERVED/,
+            );
+        };
+        const task = m.api.launchWindowsNativePinnedSiblingProcess(cap, input);
+        input.action = 'changed-after-reservation';
+        const created = JSON.parse(await task);
+        assert.deepEqual(profile.profiles, [siblingInput().profile]);
+        assert.equal(m.counts.acquire, 1);
+        assert.equal(m.counts.launch, 1);
+        assert.equal(created.kind, 'windows-native-created-process/v3');
+        assert.deepEqual(created.requestedLaunch, siblingInput());
+        assert.deepEqual(created.observation.profileDirectory, profile.directory);
+        assert.equal(created.observation.physicalLoadedBytesVerified, false);
+        assert.equal(created.observation.releaseAcceptance, false);
+        const copy = m.api.readWindowsNativeOwnedProcess(cap);
+        copy.fill(0);
+        assert.equal(
+            JSON.parse(m.api.readWindowsNativeOwnedProcess(cap)).kind,
+            'windows-native-created-process/v3',
+        );
+        assert.throws(
+            () => m.api.launchWindowsNativePinnedProcess(cap, m.input()),
+            /ALREADY_RESERVED/,
+        );
+        assert.throws(() => m.api.readWindowsNativeNormalQuit(cap), /QUIT_RECORD_MISSING/);
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(ack.ownedHandlesClosed, true);
+        assert.equal(ack.releaseAcceptance, false);
+        assert.equal(m.counts.release, 1);
+        const released = JSON.parse(m.api.readWindowsNativeOwnedRelease(cap));
+        assert.equal(released.kind, 'windows-native-owned-release/v2');
+        assert.deepEqual(released.requestedLaunch, siblingInput());
+    }
+    {
+        const m = launchMemory(),
+            profile = m.useSiblingProfileModel(),
+            cap = await m.prepare();
+        const task = m.api.launchWindowsNativePinnedSiblingProcess(cap, m.inside(siblingInput()));
+        m.api.cancelWindowsNativeAuthority(cap);
+        await assert.rejects(task);
+        assert.equal(profile.submitted, false);
+        assert.equal(m.counts.acquire, 0);
+        assert.equal(m.counts.launch, 0);
+        const observed = JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap));
+        assert.equal(observed.kind, 'windows-native-created-process/v3');
+        assert.equal(observed.observation.creationAttempted, false);
+        assert.equal(observed.observation.profileDirectory, null); // Unknown, not fresh/absent.
+        await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(m.counts.release, 1);
+    }
+    {
+        const m = launchMemory(),
+            profile = m.useSiblingProfileModel(),
+            cap = await m.prepare();
+        let finish;
+        m.native.launchGate = new Promise((resolve) => {
+            finish = resolve;
+        });
+        const task = m.api.launchWindowsNativePinnedSiblingProcess(cap, m.inside(siblingInput()));
+        void task.catch(() => {});
+        try {
+            await m.launchStarted.promise;
+            m.api.cancelWindowsNativeAuthority(cap);
+            assert.throws(() => m.api.sampleWindowsNativeOwnedProcess(cap), /OPERATION_PENDING/);
+            finish();
+            await assert.rejects(task);
+            const late = JSON.parse(await m.api.sampleWindowsNativeOwnedProcess(cap));
+            assert.deepEqual(late.observation.profileDirectory, profile.directory);
+            assert.equal(late.observation.processHandleRetained, true);
+            assert.throws(
+                () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                /LIVE_OR_UNKNOWN/,
+            );
+            assert.equal(m.counts.release, 0);
+            m.state.exited = true;
+            m.state.exitCode = 0;
+            m.endStdio();
+            await m.api.drainWindowsNativeOwnedStdio(cap);
+            await m.api.sampleWindowsNativeOwnedProcess(cap);
+            await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+            assert.equal(m.counts.release, 1);
+            assert.equal(m.counts.launch, 1);
+        } finally {
+            finish();
+            await task.catch(() => {});
+        }
+    }
+    for (const mode of [
+        'null',
+        'missing',
+        'not-empty',
+        'no-lease',
+        'same-parent',
+        'bad-volume',
+        'extra',
+        'flag-mismatch',
+        'attempted-without-profile',
+    ]) {
+        const m = launchMemory(),
+            profile = m.useSiblingProfileModel(),
+            cap = await m.prepare();
+        if (mode === 'null') profile.directory = null;
+        if (mode === 'missing') profile.directory = undefined;
+        if (mode === 'not-empty') profile.directory.emptyAtPreflight = false;
+        if (mode === 'no-lease') profile.directory.leaseRetained = false;
+        if (mode === 'same-parent') profile.directory.fileId = profile.directory.parentFileId;
+        if (mode === 'bad-volume') profile.directory.volumeSerial = 'x'.repeat(16);
+        if (mode === 'extra') profile.directory.fresh = true;
+        if (mode === 'flag-mismatch' || mode === 'attempted-without-profile') {
+            m.native.launchPinnedProcess = () => {
+                m.counts.launch++;
+                m.state.attempted = true;
+                return JSON.stringify({
+                    ...m.facts(),
+                    profileDirectory: mode === 'flag-mismatch' ? profile.directory : null,
+                });
+            };
+        }
+        await assert.rejects(
+            m.api.launchWindowsNativePinnedSiblingProcess(cap, m.inside(siblingInput())),
+        );
+        assert.equal(m.counts.launch, 1);
+        assert.equal(m.counts.release, 0);
+        assert.throws(() => m.api.releaseWindowsNativeOwnedProcessHandles(cap), /LIVE_OR_UNKNOWN/);
+    }
+});
+
+test('memory actual sibling producer and original readback reach the real shared consumer without qualification', async () => {
+    const m = launchMemory(),
+        profile = m.useSiblingProfileModel(),
+        lifecycle = m.ownedRuntime();
+    const result = await finishRuntimeModel(m, lifecycle.observeWindowsNativeOwnedSiblingRuntime);
+    assert.equal(
+        result.status,
+        'selected-pinned-runtime-and-component-closure-consistent-unqualified',
+    );
+    assert.equal(result.componentHandlesAndLifetimeAcknowledged, true);
+    for (const key of [
+        'installationObserved',
+        'offlineObserved',
+        'uiObserved',
+        'physicalLoadedBytesVerified',
+        'physicalDescendantClosure',
+        'installerCaseComplete',
+        'releaseAcceptance',
+    ])
+        assert.equal(result[key], false);
+    assert.deepEqual(profile.profiles, [siblingInput().profile]);
+    assert.equal(m.counts.launch, 1);
+    assert.equal(m.counts.release, 1);
+    assert.equal(m.quit.appQuitCalls, 1);
+    const envelope = JSON.parse(result.bytes.toString());
+    assert.equal(envelope.observation.kind, 'windows-native-owned-runtime/v2');
+    const kinds = {
+        'created-process': 'windows-native-created-process/v3',
+        'normal-quit': 'windows-native-normal-quit/v2',
+        'owned-release': 'windows-native-owned-release/v2',
+    };
+    for (const [role, kind] of Object.entries(kinds)) {
+        const row = JSON.parse(result.originalRecords[role]);
+        assert.equal(row.kind, kind);
+        assert.deepEqual(row.requestedLaunch, siblingInput());
+    }
+    assert.deepEqual(
+        envelope.observation.createdProcess.observation.profileDirectory,
+        profile.directory,
+    );
+    const files = new Map([
+        [result.lifecycleEvidence.path, Buffer.from(result.bytes)],
+        ...Object.entries(result.originalRecords).map(([role, bytes]) => [
+            'windows-native/owned-runtime/' + role + '.json',
+            Buffer.from(bytes),
+        ]),
+    ]);
+    const reads = [],
+        read = async (name, maximum) => {
+            reads.push(name);
+            const bytes = files.get(name);
+            assert.ok(bytes && bytes.length <= maximum);
+            return Buffer.from(bytes);
+        };
+    await lifecycle.readWindowsNativeOwnedSiblingRecords(envelope.observation, read);
+    reads.length = 0;
+    const summary = await consumeInstallerLifecycleEvidence(
+        {
+            schemaVersion: 2,
+            kind: 'native-installer-lifecycle',
+            runId: m.expected().runId,
+            runAttempt: m.expected().runAttempt,
+            cases: [
+                {
+                    id: request().caseId,
+                    lifecycleEvidence: result.lifecycleEvidence,
+                    evidence: result.evidence,
+                },
+            ],
+        },
+        m.expected(),
+        read,
+    );
+    assert.equal(summary.releaseAcceptance, false);
+    assert.equal(summary.status, 'installer-lifecycle-unqualified');
+    assert.equal(summary.observations[0].status, result.status);
+    assert.deepEqual(reads, [
+        result.lifecycleEvidence.path,
+        ...Object.keys(result.originalRecords).map(
+            (role) => 'windows-native/owned-runtime/' + role + '.json',
+        ),
+    ]);
+    assert.equal(JSON.stringify(envelope).includes(m.quit.endpoint), false);
+});
+
+test('memory sibling rows cannot launder legacy inside-profile history or mixed version and ownership facts', async () => {
+    const current = launchMemory(),
+        profile = current.useSiblingProfileModel(),
+        lifecycle = current.ownedRuntime();
+    const result = await finishRuntimeModel(
+        current,
+        lifecycle.observeWindowsNativeOwnedSiblingRuntime,
+    );
+    const original = Object.fromEntries(
+        Object.entries(result.originalRecords).map(([role, bytes]) => [role, JSON.parse(bytes)]),
+    );
+    const inspect = (rows) =>
+        lifecycle.inspectWindowsNativeOwnedSiblingRows(
+            ...['file-pins', 'created-process', 'normal-quit', 'owned-release'].map((role) =>
+                current.inside(rows[role]),
+            ),
+            current.inside(request()),
+        );
+    inspect(original);
+    assert.throws(() =>
+        lifecycle.inspectWindowsNativeOwnedRows(
+            ...['file-pins', 'created-process', 'normal-quit', 'owned-release'].map((role) =>
+                current.inside(original[role]),
+            ),
+            current.inside(request()),
+        ),
+    );
+    for (const change of [
+        (rows) => {
+            rows['created-process'].kind = 'windows-native-created-process/v2';
+        },
+        (rows) => {
+            rows['normal-quit'].kind = 'windows-native-normal-quit/v1';
+        },
+        (rows) => {
+            rows['owned-release'].kind = 'windows-native-owned-release/v1';
+        },
+        (rows) => {
+            for (const role of ['created-process', 'normal-quit', 'owned-release'])
+                rows[role].requestedLaunch = {
+                    action: 'launch-pinned-installed',
+                    profile: request().root + '\\native-launch-profile',
+                };
+        },
+        (rows) => {
+            rows['created-process'].observation.profileDirectory = null;
+        },
+        (rows) => {
+            rows['created-process'].observation.profileDirectory.volumeSerial = 'd'.repeat(16);
+        },
+        (rows) => {
+            rows['created-process'].observation.profileDirectory.fileId =
+                profile.directory.parentFileId;
+        },
+        (rows) => {
+            rows['created-process'].observation.profileDirectory.leaseRetained = false;
+        },
+    ]) {
+        const changed = structuredClone(original);
+        change(changed);
+        assert.throws(() => inspect(changed));
+    }
+    const old = launchMemory(),
+        legacy = old.ownedRuntime();
+    const historical = await finishRuntimeModel(old, legacy.observeWindowsNativeOwnedRuntime);
+    const oldEnvelope = JSON.parse(historical.bytes.toString());
+    assert.equal(oldEnvelope.observation.kind, 'windows-native-owned-runtime/v1');
+    assert.equal(oldEnvelope.observation.createdProcess.kind, 'windows-native-created-process/v2');
+    assert.equal(
+        Object.hasOwn(oldEnvelope.observation.createdProcess.observation, 'profileDirectory'),
+        false,
+    );
+    assert.equal(
+        oldEnvelope.observation.createdProcess.requestedLaunch.profile,
+        request().root + '\\native-launch-profile',
+    );
+    const oldRows = Object.fromEntries(
+        Object.entries(historical.originalRecords).map(([role, bytes]) => [
+            role,
+            JSON.parse(bytes),
+        ]),
+    );
+    assert.throws(() => inspect(oldRows));
+    assert.equal(historical.releaseAcceptance, false);
 });

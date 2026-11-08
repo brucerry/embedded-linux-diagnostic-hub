@@ -10,12 +10,14 @@ import {
     readWindowsNativeObservation,
     releaseWindowsNativeAuthority,
     launchWindowsNativePinnedProcess,
+    launchWindowsNativePinnedSiblingProcess,
     readWindowsNativeOwnedProcess,
     requestWindowsNativeNormalQuit,
     readWindowsNativeNormalQuit,
     releaseWindowsNativeOwnedProcessHandles,
     readWindowsNativeOwnedRelease,
     validateWindowsNativeLaunch,
+    validateWindowsNativeSiblingLaunch,
 } from './windows-native-authority.mjs';
 
 export const WINDOWS_NATIVE_RECORD_LIMITS = Object.freeze({
@@ -304,6 +306,12 @@ const ownedKinds = Object.freeze({
     'normal-quit': 'windows-native-normal-quit/v1',
     'owned-release': 'windows-native-owned-release/v1',
 });
+const siblingOwnedKinds = Object.freeze({
+    'file-pins': 'windows-native-file-pins/v1',
+    'created-process': 'windows-native-created-process/v3',
+    'normal-quit': 'windows-native-normal-quit/v2',
+    'owned-release': 'windows-native-owned-release/v2',
+});
 const ownedRoles = Object.keys(WINDOWS_OWNED_RECORD_LIMITS);
 function ownedReferences(records) {
     keys(records, ownedRoles);
@@ -324,17 +332,28 @@ function ownedReferences(records) {
 }
 /** Historical operation consistency, not installation, offline/UI, loaded-code,
  * current HANDLE custody or service/run authentication after serialization. */
-function inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding) {
+function inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding, sibling = false) {
     const binding = validateWindowsNativeBinding(rawBinding);
     const rows = {
         'file-pins': structuredClone(rawFiles),
         'created-process': structuredClone(rawCreated),
         'normal-quit': structuredClone(rawQuit),
     };
-    const requested = validateWindowsNativeLaunch(
-        { action: 'launch-pinned-installed', profile: binding.root + '\\native-launch-profile' },
-        binding,
-    );
+    const requested = sibling
+        ? validateWindowsNativeSiblingLaunch(
+              {
+                  action: 'launch-pinned-sibling-profile',
+                  profile: binding.root + '.native-launch-profile',
+              },
+              binding,
+          )
+        : validateWindowsNativeLaunch(
+              {
+                  action: 'launch-pinned-installed',
+                  profile: binding.root + '\\native-launch-profile',
+              },
+              binding,
+          );
     for (const role of ownedRoles.slice(0, 3)) {
         const row = rows[role];
         keys(
@@ -363,7 +382,7 @@ function inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding) {
                       ],
         );
         assert.equal(row.schemaVersion, 1);
-        assert.equal(row.kind, ownedKinds[role]);
+        assert.equal(row.kind, (sibling ? siblingOwnedKinds : ownedKinds)[role]);
         assert.deepEqual(row.binding, binding);
         if (role !== 'file-pins') assert.deepEqual(row.requestedLaunch, requested);
     }
@@ -387,7 +406,29 @@ function inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding) {
         'physicalLoadedBytesVerified',
         'physicalDescendantClosure',
         'releaseAcceptance',
+        ...(sibling ? ['profileDirectory'] : []),
     ]);
+    if (sibling) {
+        const profile = created.profileDirectory;
+        keys(profile, [
+            'volumeSerial',
+            'fileId',
+            'parentFileId',
+            'emptyAtPreflight',
+            'leaseRetained',
+        ]);
+        identifier(profile.volumeSerial, 16);
+        identifier(profile.fileId, 32);
+        identifier(profile.parentFileId, 32);
+        assert.equal(profile.emptyAtPreflight, true);
+        assert.equal(profile.leaseRetained, true);
+        assert.notEqual(profile.fileId, profile.parentFileId);
+        for (const pinned of rows['file-pins'].observation.files) {
+            assert.equal(profile.volumeSerial, pinned.volumeSerial);
+            assert.notEqual(profile.fileId, pinned.fileId);
+            assert.notEqual(profile.parentFileId, pinned.fileId);
+        }
+    }
     for (const field of [
         'creationAttempted',
         'creationReturned',
@@ -465,7 +506,19 @@ export function inspectWindowsNativeOwnedRows(
     rawRelease,
     rawBinding,
 ) {
-    const before = inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding);
+    return inspectOwnedRows(rawFiles, rawCreated, rawQuit, rawRelease, rawBinding, false);
+}
+export function inspectWindowsNativeOwnedSiblingRows(
+    rawFiles,
+    rawCreated,
+    rawQuit,
+    rawRelease,
+    rawBinding,
+) {
+    return inspectOwnedRows(rawFiles, rawCreated, rawQuit, rawRelease, rawBinding, true);
+}
+function inspectOwnedRows(rawFiles, rawCreated, rawQuit, rawRelease, rawBinding, sibling) {
+    const before = inspectOwnedBeforeRelease(rawFiles, rawCreated, rawQuit, rawBinding, sibling);
     const releaseRow = structuredClone(rawRelease);
     keys(releaseRow, [
         'schemaVersion',
@@ -476,7 +529,7 @@ export function inspectWindowsNativeOwnedRows(
         'observation',
     ]);
     assert.equal(releaseRow.schemaVersion, 1);
-    assert.equal(releaseRow.kind, ownedKinds['owned-release']);
+    assert.equal(releaseRow.kind, (sibling ? siblingOwnedKinds : ownedKinds)['owned-release']);
     assert.deepEqual(releaseRow.binding, before.binding);
     assert.deepEqual(releaseRow.requestedLaunch, before.requested);
     assert.deepEqual(releaseRow.createdProcess, before.tuple);
@@ -526,6 +579,12 @@ export function inspectWindowsNativeOwnedRows(
     };
 }
 export function inspectWindowsNativeOwnedLifecycle(observation, item, expected) {
+    return inspectOwnedLifecycle(observation, item, expected, false);
+}
+export function inspectWindowsNativeOwnedSiblingLifecycle(observation, item, expected) {
+    return inspectOwnedLifecycle(observation, item, expected, true);
+}
+function inspectOwnedLifecycle(observation, item, expected, sibling) {
     keys(observation, [
         'kind',
         'binding',
@@ -535,7 +594,10 @@ export function inspectWindowsNativeOwnedLifecycle(observation, item, expected) 
         'ownedRelease',
         'records',
     ]);
-    assert.equal(observation.kind, 'windows-native-owned-runtime/v1');
+    assert.equal(
+        observation.kind,
+        sibling ? 'windows-native-owned-runtime/v2' : 'windows-native-owned-runtime/v1',
+    );
     assert.equal(item.id, caseId);
     const binding = validateWindowsNativeBinding(observation.binding);
     selected(expected, binding);
@@ -548,24 +610,32 @@ export function inspectWindowsNativeOwnedLifecycle(observation, item, expected) 
             ).length,
             1,
         );
-    inspectWindowsNativeOwnedRows(
+    inspectOwnedRows(
         observation.filePins,
         observation.createdProcess,
         observation.normalQuit,
         observation.ownedRelease,
         binding,
+        sibling,
     );
     return 'selected-pinned-runtime-and-component-closure-consistent-unqualified';
 }
 export async function readWindowsNativeOwnedRecords(rawObservation, readBytes) {
+    return readOwnedRecords(rawObservation, readBytes, false);
+}
+export async function readWindowsNativeOwnedSiblingRecords(rawObservation, readBytes) {
+    return readOwnedRecords(rawObservation, readBytes, true);
+}
+async function readOwnedRecords(rawObservation, readBytes, sibling) {
     const observation = structuredClone(rawObservation);
     ownedReferences(observation.records);
-    inspectWindowsNativeOwnedRows(
+    inspectOwnedRows(
         observation.filePins,
         observation.createdProcess,
         observation.normalQuit,
         observation.ownedRelease,
         observation.binding,
+        sibling,
     );
     for (const role of ownedRoles) {
         const ref = observation.records[role];
@@ -583,6 +653,12 @@ export async function readWindowsNativeOwnedRecords(rawObservation, readBytes) {
 /** A real same-cap producer: capture originals before invalidation, then explicitly
  * join native component release and compare its original ACK. No transcript input. */
 export async function produceWindowsNativeOwnedRuntime(rawExpected, rawBinding, capability) {
+    return produceOwnedRuntime(rawExpected, rawBinding, capability, false);
+}
+export async function produceWindowsNativeOwnedSiblingRuntime(rawExpected, rawBinding, capability) {
+    return produceOwnedRuntime(rawExpected, rawBinding, capability, true);
+}
+async function produceOwnedRuntime(rawExpected, rawBinding, capability, sibling) {
     const expected = structuredClone(rawExpected),
         binding = validateWindowsNativeBinding(rawBinding);
     selected(expected, binding);
@@ -612,6 +688,7 @@ export async function produceWindowsNativeOwnedRuntime(rawExpected, rawBinding, 
         values['created-process'],
         values['normal-quit'],
         binding,
+        sibling,
     );
     const returnedRelease = await releaseWindowsNativeOwnedProcessHandles(capability);
     buffers['owned-release'] = readWindowsNativeOwnedRelease(capability);
@@ -630,16 +707,17 @@ export async function produceWindowsNativeOwnedRuntime(rawExpected, rawBinding, 
         values['owned-release'].observation,
         'Release Promise differs from private original ACK.',
     );
-    inspectWindowsNativeOwnedRows(
+    inspectOwnedRows(
         values['file-pins'],
         values['created-process'],
         values['normal-quit'],
         values['owned-release'],
         binding,
+        sibling,
     );
     retainedAuthorities.delete(capability); // Only after actual complete component ACK plus original-row checks.
     const observation = {
-        kind: 'windows-native-owned-runtime/v1',
+        kind: sibling ? 'windows-native-owned-runtime/v2' : 'windows-native-owned-runtime/v1',
         binding,
         filePins: values['file-pins'],
         createdProcess: values['created-process'],
@@ -648,11 +726,7 @@ export async function produceWindowsNativeOwnedRuntime(rawExpected, rawBinding, 
         records,
     };
     const evidence = Object.values(records).map((row) => ({ ...row }));
-    const status = inspectWindowsNativeOwnedLifecycle(
-        observation,
-        { id: caseId, evidence },
-        expected,
-    );
+    const status = inspectOwnedLifecycle(observation, { id: caseId, evidence }, expected, sibling);
     const envelope = {
         schemaVersion: 1,
         kind: 'installer-case-observation',
@@ -692,6 +766,14 @@ export async function produceWindowsNativeOwnedRuntime(rawExpected, rawBinding, 
 /** Separated default-network pinned-runtime operation. The existing offline CLI
  * and its outside-installation-profile policy are deliberately not this caller. */
 export async function observeWindowsNativeOwnedRuntime(rawExpected, rawBinding, rawBuild) {
+    return observeOwnedRuntime(rawExpected, rawBinding, rawBuild, false);
+}
+/** Separate fixed sibling command compatible with the shipping profile policy.
+ * This does not observe an installation or establish staging ownership. */
+export async function observeWindowsNativeOwnedSiblingRuntime(rawExpected, rawBinding, rawBuild) {
+    return observeOwnedRuntime(rawExpected, rawBinding, rawBuild, true);
+}
+async function observeOwnedRuntime(rawExpected, rawBinding, rawBuild, sibling) {
     const expected = structuredClone(rawExpected),
         binding = validateWindowsNativeBinding(rawBinding),
         build = structuredClone(rawBuild);
@@ -708,10 +790,15 @@ export async function observeWindowsNativeOwnedRuntime(rawExpected, rawBinding, 
         admissionPending = false;
         await assertWindowsNativeCapability(authority, binding);
         await pinWindowsNativeFiles(authority);
-        const launched = await launchWindowsNativePinnedProcess(authority, {
-            action: 'launch-pinned-installed',
-            profile: binding.root + '\\native-launch-profile',
-        });
+        const launched = sibling
+            ? await launchWindowsNativePinnedSiblingProcess(authority, {
+                  action: 'launch-pinned-sibling-profile',
+                  profile: binding.root + '.native-launch-profile',
+              })
+            : await launchWindowsNativePinnedProcess(authority, {
+                  action: 'launch-pinned-installed',
+                  profile: binding.root + '\\native-launch-profile',
+              });
         assert.deepEqual(
             launched,
             readWindowsNativeOwnedProcess(authority),
@@ -728,7 +815,7 @@ export async function observeWindowsNativeOwnedRuntime(rawExpected, rawBinding, 
             originalQuit.observation,
             'Quit Promise differs from private original protocol result.',
         );
-        return await produceWindowsNativeOwnedRuntime(expected, binding, authority);
+        return await produceOwnedRuntime(expected, binding, authority, sibling);
     } catch (error) {
         if (
             authority &&

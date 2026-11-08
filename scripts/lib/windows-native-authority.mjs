@@ -440,6 +440,15 @@ export function validateWindowsNativeLaunch(value, selected) {
     assert.equal(value.profile, binding.root + '\\native-launch-profile');
     return Object.freeze({ action: value.action, profile: value.profile });
 }
+/** A second fixed command, compatible with the shipping outside-installation
+ * profile rule. Selected path data still supplies no freshness or authority. */
+export function validateWindowsNativeSiblingLaunch(value, selected) {
+    const binding = validateWindowsNativeRequest(selected);
+    fields(value, ['action', 'profile']);
+    assert.equal(value.action, 'launch-pinned-sibling-profile');
+    assert.equal(value.profile, binding.root + '.native-launch-profile');
+    return Object.freeze({ action: value.action, profile: value.profile });
+}
 function launchRecord(cap) {
     const record = state(cap);
     assert.ok(record.launch && record.native && record.raw && !record.invalidated);
@@ -447,7 +456,7 @@ function launchRecord(cap) {
     assert.ok(!record.launch.normalQuit?.inFlight, 'WINDOWS_NATIVE_QUIT_OPERATION_PENDING');
     return record;
 }
-function ownedObservation(output) {
+function ownedObservation(output, sibling = false) {
     assert.ok(typeof output === 'string' && Buffer.byteLength(output) <= 65536);
     const value = JSON.parse(output);
     const flags = [
@@ -465,8 +474,53 @@ function ownedObservation(output) {
         'physicalDescendantClosure',
         'releaseAcceptance',
     ];
-    fields(value, [...flags, 'pid', 'threadId', 'creationTime100ns', 'exitCode']);
+    const hasProfile = Object.hasOwn(value, 'profileDirectory');
+    fields(value, [
+        ...flags,
+        'pid',
+        'threadId',
+        'creationTime100ns',
+        'exitCode',
+        ...(sibling && hasProfile ? ['profileDirectory'] : []),
+    ]);
+    let profileDirectory = null;
+    if (sibling && hasProfile && value.profileDirectory !== null) {
+        const profile = value.profileDirectory;
+        fields(profile, [
+            'volumeSerial',
+            'fileId',
+            'parentFileId',
+            'emptyAtPreflight',
+            'leaseRetained',
+        ]);
+        assert.ok(
+            typeof profile.volumeSerial === 'string' && /^[a-f0-9]{16}$/.test(profile.volumeSerial),
+        );
+        for (const key of ['fileId', 'parentFileId'])
+            assert.ok(typeof profile[key] === 'string' && /^[a-f0-9]{32}$/.test(profile[key]));
+        assert.notEqual(profile.fileId, profile.parentFileId);
+        assert.equal(typeof profile.emptyAtPreflight, 'boolean');
+        assert.equal(typeof profile.leaseRetained, 'boolean');
+        profileDirectory = Object.freeze({ ...profile });
+    }
+    // Cancellation may precede the native launch submission entirely. A missing
+    // directory observation is unknown, never a proof of freshness or absence.
+    if (sibling && !hasProfile)
+        assert.ok(
+            !value.creationAttempted && !value.profileEmptyAtPreflight && !value.createdByThisOwner,
+        );
     for (const key of flags) assert.equal(typeof value[key], 'boolean');
+    if (sibling) {
+        if (profileDirectory)
+            assert.equal(profileDirectory.emptyAtPreflight, value.profileEmptyAtPreflight);
+        else assert.equal(value.profileEmptyAtPreflight, false);
+        if (value.creationAttempted)
+            assert.ok(
+                profileDirectory &&
+                    profileDirectory.emptyAtPreflight &&
+                    profileDirectory.leaseRetained,
+            );
+    }
     for (const key of [
         'stdioObserved',
         'physicalLoadedBytesVerified',
@@ -492,6 +546,12 @@ function ownedObservation(output) {
                 /^[1-9][0-9]{0,19}$/.test(value.creationTime100ns),
         );
         assert.ok(BigInt(value.creationTime100ns) <= 0xffffffffffffffffn);
+        if (sibling)
+            assert.ok(
+                profileDirectory &&
+                    profileDirectory.emptyAtPreflight &&
+                    profileDirectory.leaseRetained,
+            );
     } else {
         assert.equal(value.pid, null);
         assert.equal(value.threadId, null);
@@ -505,7 +565,7 @@ function ownedObservation(output) {
             Number.isInteger(value.exitCode) && value.exitCode >= 0 && value.exitCode <= 0xffffffff,
         );
     else assert.equal(value.exitCode, null);
-    return Object.freeze(value);
+    return Object.freeze(sibling ? { ...value, profileDirectory } : value);
 }
 function retainLaunchFailure(record, error) {
     record.failed = true;
@@ -527,12 +587,14 @@ function retainLaunchFailure(record, error) {
     );
 }
 function saveOwnedObservation(record, output) {
-    const observation = ownedObservation(output);
+    const observation = ownedObservation(output, record.launch.sibling);
     record.launch.latest = observation;
     const bytes = Buffer.from(
         JSON.stringify({
             schemaVersion: 1,
-            kind: 'windows-native-created-process/v2',
+            kind: record.launch.sibling
+                ? 'windows-native-created-process/v3'
+                : 'windows-native-created-process/v2',
             binding: record.binding,
             requestedLaunch: record.launch.request,
             observation,
@@ -550,6 +612,16 @@ function saveOwnedObservation(record, output) {
 export function launchWindowsNativePinnedProcess(cap, input) {
     const record = active(cap),
         request = validateWindowsNativeLaunch(input, record.binding);
+    return launchPinnedRecord(record, request, false);
+}
+/** Fixed sibling-profile variant; the same private owner retains every pending
+ * acquisition, late handle, stream and lifetime acknowledgment. */
+export function launchWindowsNativePinnedSiblingProcess(cap, input) {
+    const record = active(cap),
+        request = validateWindowsNativeSiblingLaunch(input, record.binding);
+    return launchPinnedRecord(record, request, true);
+}
+function launchPinnedRecord(record, request, sibling) {
     assert.ok(
         record.rows.has('file-pins') && !record.rows.has('process'),
         'WINDOWS_NATIVE_FILE_PINS_REQUIRED',
@@ -557,6 +629,7 @@ export function launchWindowsNativePinnedProcess(cap, input) {
     assert.ok(!record.launch, 'WINDOWS_NATIVE_LAUNCH_ALREADY_RESERVED');
     record.launch = {
         request,
+        sibling,
         firstFailureSet: false,
         firstFailure: undefined,
         latest: null,
@@ -1344,7 +1417,9 @@ async function runNormalQuit(record, q) {
             const original = Buffer.from(
                 JSON.stringify({
                     schemaVersion: 1,
-                    kind: 'windows-native-normal-quit/v1',
+                    kind: record.launch.sibling
+                        ? 'windows-native-normal-quit/v2'
+                        : 'windows-native-normal-quit/v1',
                     binding: record.binding,
                     requestedLaunch: record.launch.request,
                     createdProcess: {
@@ -1532,7 +1607,9 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
             const original = Buffer.from(
                 JSON.stringify({
                     schemaVersion: 1,
-                    kind: 'windows-native-owned-release/v1',
+                    kind: record.launch.sibling
+                        ? 'windows-native-owned-release/v2'
+                        : 'windows-native-owned-release/v1',
                     binding: record.binding,
                     requestedLaunch: record.launch.request,
                     createdProcess: {

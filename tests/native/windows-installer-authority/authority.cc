@@ -58,6 +58,10 @@ struct Owner {
   bool pins = false, processObserved = false, collected = false, releaseSubmitted = false, released = false;
   std::vector<DWORD> closeErrors;
   const char* failure = nullptr; DWORD systemError = 0; std::exception_ptr primaryException; std::wstring rootGuid, volumeRoot;
+  // Borrowed from the existing ancestor leases; never close these aliases twice.
+  HANDLE rootParent = nullptr; FILE_ID_INFO rootParentId{}, rootId{}; std::wstring rootParentGuid;
+  bool siblingProfileRequested = false, profileIdentityObserved = false;
+  Lease* profileLease = nullptr; FILE_ID_INFO profileId{};
   HANDLE process = nullptr; DWORD pid = 0; uint64_t creation = 0; std::vector<Window> windows;
   // Issued with the owner, before any creation call. No cancellation/finalizer
   // may discard outputs, including non-null outputs of an unconfirmed failure.
@@ -148,11 +152,11 @@ FILE_ID_INFO fileId(HANDLE h, bool directory) {
   return id;
 }
 bool sameId(const FILE_ID_INFO& a, const FILE_ID_INFO& b) { return a.VolumeSerialNumber == b.VolumeSerialNumber && memcmp(a.FileId.Identifier, b.FileId.Identifier, 16) == 0; }
-HANDLE openPinned(Owner* o, const std::wstring& p, bool directory, bool listDirectory = false) {
+HANDLE openPinned(Owner* o, const std::wstring& p, bool directory, bool listDirectory = false, FILE_ID_INFO* capturedId = nullptr) {
   o->check(); auto& lease = o->slot(); lease.handle = CreateFileW(p.c_str(), directory ? (FILE_READ_ATTRIBUTES | (listDirectory ? FILE_LIST_DIRECTORY : 0)) : GENERIC_READ,
     FILE_SHARE_READ, nullptr, OPEN_EXISTING,
     FILE_FLAG_OPEN_REPARSE_POINT | (directory ? FILE_FLAG_BACKUP_SEMANTICS : FILE_FLAG_SEQUENTIAL_SCAN), nullptr);
-  HANDLE h = lease.handle; if (h == INVALID_HANDLE_VALUE) fail("OPEN_PIN"); lease.acquired = true; o->check(); fileId(h, directory); return h;
+  HANDLE h = lease.handle; if (h == INVALID_HANDLE_VALUE) fail("OPEN_PIN"); lease.acquired = true; o->check(); const auto id = fileId(h, directory); if (capturedId) *capturedId = id; return h;
 }
 std::vector<BYTE> tokenInfo(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
   DWORD n = 0; GetTokenInformation(token, kind, nullptr, 0, &n); need(n > 0 && n <= 65536, "TOKEN_BOUND");
@@ -192,8 +196,8 @@ void pin(Owner* o) {
   o->volumeRoot = volume.data(); need(o->volumeRoot.rfind(L"\\\\?\\Volume{", 0) == 0 && o->volumeRoot.back() == L'\\', "LOCAL_VOLUME_GUID");
   // Subsequent opens use the resolved local volume GUID, not a mutable DOS drive alias.
   std::wstring p = o->volumeRoot; size_t at = 3;
-  openPinned(o, p, true);
-  while (at < o->root.size()) { auto end = o->root.find(L'\\', at); if (end == std::wstring::npos) end = o->root.size(); if (p.back() != L'\\') p += L'\\'; p += o->root.substr(at, end - at); HANDLE h = openPinned(o, p, true); if (end == o->root.size()) o->rootGuid = finalPath(h); at = end + 1; }
+  FILE_ID_INFO previousId{}; HANDLE previous = openPinned(o, p, true, false, &previousId);
+  while (at < o->root.size()) { auto end = o->root.find(L'\\', at); if (end == std::wstring::npos) end = o->root.size(); if (p.back() != L'\\') p += L'\\'; p += o->root.substr(at, end - at); FILE_ID_INFO currentId{}; HANDLE h = openPinned(o, p, true, false, &currentId); if (end == o->root.size()) { o->rootGuid = finalPath(h); o->rootId = currentId; o->rootParent = previous; o->rootParentId = previousId; } previous = h; previousId = currentId; at = end + 1; }
   auto resources = openPinned(o, o->rootGuid + L"\\resources", true); need(eq(finalPath(resources), o->rootGuid + L"\\resources"), "RESOURCE_PARENT_MISMATCH");
   for (auto& f : o->files) {
     auto relative = f.relative; for (auto& c : relative) if (c == L'/') c = L'\\';
@@ -379,13 +383,39 @@ std::string drainStdio(Owner* o) {
   }
   s << '}'; return s.str();
 }
+void verifySiblingParent(Owner* o) {
+  // The requested DOS sibling and the GUID sibling must have the SAME canonical
+  // relative spelling. Refuse 8.3 aliases/case rewrites for this new operation.
+  need(o->rootGuid.size() > o->volumeRoot.size() && eq(o->rootGuid.substr(0, o->volumeRoot.size()), o->volumeRoot)
+    && o->rootGuid.substr(o->volumeRoot.size()) == o->root.substr(3), "SIBLING_ROOT_ALIAS_REFUSED");
+  std::array<wchar_t, 64> volume{};
+  if (!GetVolumeNameForVolumeMountPointW(o->root.substr(0, 3).c_str(), volume.data(), DWORD(volume.size()))) fail("SIBLING_DRIVE_MAPPING");
+  need(eq(volume.data(), o->volumeRoot), "SIBLING_DRIVE_MAPPING_CHANGED");
+  need(o->rootParent && sameId(fileId(o->rootParent, true), o->rootParentId), "SIBLING_PARENT_ID_CHANGED");
+  const auto parent = finalPath(o->rootParent);
+  auto joined = parent; if (joined.back() != L'\\') joined += L'\\'; joined += o->root.substr(o->root.find_last_of(L'\\') + 1);
+  need(joined == o->rootGuid, "SIBLING_PARENT_PATH_MISMATCH");
+  if (o->rootParentGuid.empty()) o->rootParentGuid = parent;
+  need(parent == o->rootParentGuid, "SIBLING_PARENT_PATH_CHANGED");
+}
+void verifySiblingProfile(Owner* o) {
+  verifySiblingParent(o);
+  need(o->profileIdentityObserved && o->profileLease && o->profileLease->acquired && !o->profileLease->closeAttempted, "SIBLING_PROFILE_CUSTODY_UNKNOWN");
+  need(sameId(fileId(o->profileLease->handle, true), o->profileId), "SIBLING_PROFILE_ID_CHANGED");
+  need(finalPath(o->profileLease->handle) == o->profileGuid, "SIBLING_PROFILE_PATH_CHANGED");
+  need(o->profileId.VolumeSerialNumber == o->rootId.VolumeSerialNumber && o->profileId.VolumeSerialNumber == o->rootParentId.VolumeSerialNumber, "SIBLING_PROFILE_VOLUME_MISMATCH");
+  need(!sameId(o->profileId, o->rootId) && !sameId(o->profileId, o->rootParentId), "SIBLING_PROFILE_ALIAS_REFUSED");
+}
 void launchPinned(Owner* o, const std::wstring& profile) {
   o->check(); need(o->pins && !o->processObserved, "FILE_PINS_REQUIRED");
   need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
-  need(profile == o->root + L"\\native-launch-profile", "FIXED_PROFILE_REQUIRED");
-  o->profileGuid = o->rootGuid + L"\\native-launch-profile";
+  need(profile == o->root + (o->siblingProfileRequested ? L".native-launch-profile" : L"\\native-launch-profile"), "FIXED_PROFILE_REQUIRED");
+  if (o->siblingProfileRequested) verifySiblingParent(o);
+  o->profileGuid = o->rootGuid + (o->siblingProfileRequested ? L".native-launch-profile" : L"\\native-launch-profile");
+  if (o->siblingProfileRequested) { need(o->handleSlots < o->handles.size(), "HANDLE_SLOT_LIMIT"); o->profileLease = &o->handles[o->handleSlots]; }
   HANDLE profileHandle = openPinned(o, o->profileGuid, true, true);
   need(eq(finalPath(profileHandle), o->profileGuid), "PROFILE_PARENT_MISMATCH");
+  if (o->siblingProfileRequested) { o->profileId = fileId(profileHandle, true); o->profileIdentityObserved = true; verifySiblingProfile(o); }
   observeEmptyProfile(o, profileHandle);
   std::array<wchar_t, MAX_PATH + 1> windows{};
   const auto count = GetWindowsDirectoryW(windows.data(), UINT(windows.size()));
@@ -411,6 +441,7 @@ void launchPinned(Owner* o, const std::wstring& profile) {
   need(o->handleSlots + 10 <= o->handles.size(), "HANDLE_SLOT_LIMIT"); fitToken(o);
   o->createdProcess = &o->slot(); o->createdThread = &o->slot();
   prepareStdio(o);
+  if (o->siblingProfileRequested) verifySiblingProfile(o);
   need(sameId(fileId(o->files[0].handle, false), o->files[0].id) && sameId(fileId(o->files[1].handle, false), o->files[1].id), "PIN_CHANGED_BEFORE_CREATION");
   STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup);
   startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -465,7 +496,15 @@ std::string ownedFacts(Owner* o) {
     << ",\"exitCode\":" << (o->createdExitObserved ? std::to_string(o->createdExitCode) : "null")
     << ",\"profileEmptyAtPreflight\":" << (o->profileEmptyObserved ? "true" : "false")
     << ",\"hostEventLoopReferenceAcknowledged\":" << (o->hostReferenceAcknowledged ? "true" : "false")
-    << ",\"stdioObserved\":false,\"physicalLoadedBytesVerified\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false}"; return s.str();
+    << ",\"stdioObserved\":false,\"physicalLoadedBytesVerified\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false";
+  if (o->siblingProfileRequested) {
+    s << ",\"profileDirectory\":";
+    if (!o->profileIdentityObserved) s << "null";
+    else s << "{\"volumeSerial\":\"" << hex64(o->profileId.VolumeSerialNumber) << "\",\"fileId\":\"" << hex(o->profileId.FileId.Identifier, 16)
+      << "\",\"parentFileId\":\"" << hex(o->rootParentId.FileId.Identifier, 16) << "\",\"emptyAtPreflight\":" << (o->profileEmptyObserved ? "true" : "false")
+      << ",\"leaseRetained\":" << (o->profileLease && o->profileLease->acquired && !o->profileLease->closeAttempted ? "true" : "false") << '}';
+  }
+  s << '}'; return s.str();
 }
 void requireCreatedTerminal(Owner* o) {
   need(!o->pipeAcquisitionUnknown && !o->attributeAcquisitionUnknown, "STDIO_ACQUISITION_UNCONFIRMED");
@@ -672,7 +711,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
     // Refusal here precedes release submission/invalidation and closes nothing.
     if (operation == Operation::ReleaseOwned) requireCreatedTerminal(o);
     std::wstring profile;
-    if (launch) { profile = wide(e, a[1], 260); need(profile == o->root + L"\\native-launch-profile", "FIXED_PROFILE_REQUIRED"); o->launchReserved = true; }
+    if (launch) { profile = wide(e, a[1], 260); const bool sibling = profile == o->root + L".native-launch-profile"; need(sibling || profile == o->root + L"\\native-launch-profile", "FIXED_PROFILE_REQUIRED"); o->siblingProfileRequested = sibling; o->launchReserved = true; }
     w = new Work{o, e}; w->operation = operation; w->profile = std::move(profile);
     if (observe) { double rawPid; api(e, napi_get_value_double(e, a[1], &rawPid)); need(rawPid > 0 && rawPid <= 4294967295.0 && rawPid == uint32_t(rawPid), "PID_INVALID"); w->pid = uint32_t(rawPid); auto s = utf8(e, a[2], 20); need(s[0] != '0' && s.find_first_not_of("0123456789") == std::string::npos, "CREATION_INVALID"); w->creation = 0; for (char digit : s) { auto value = uint64_t(digit - '0'); need(w->creation <= (std::numeric_limits<uint64_t>::max() - value) / 10, "CREATION_OVERFLOW"); w->creation = w->creation * 10 + value; } }
     o->pendingWork = w; o->busy.store(true); if (release) o->releaseSubmitted = true;
