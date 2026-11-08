@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { types as nativeTypes } from 'node:util';
 import {
     validateWindowsNativeRequest,
     validateWindowsNativeBuild,
@@ -24,6 +25,8 @@ import {
     releaseWindowsNativeOwnedProcessHandles,
     drainWindowsNativeOwnedStdio,
     readWindowsNativeMainInspectorEndpoint,
+    requestWindowsNativeNormalQuit,
+    joinWindowsNativeNormalQuitTransport,
 } from '../scripts/lib/windows-native-authority.mjs';
 
 const request = () => ({
@@ -228,6 +231,8 @@ test('explicit launch inputs are confined data and cannot issue native authority
         () => readWindowsNativeOwnedProcess({}),
         () => drainWindowsNativeOwnedStdio({}),
         () => readWindowsNativeMainInspectorEndpoint({}),
+        () => requestWindowsNativeNormalQuit({}),
+        () => joinWindowsNativeNormalQuitTransport({}),
         () => releaseWindowsNativeOwnedProcessHandles({}),
     ])
         assert.throws(call, /CAPABILITY_UNISSUED/);
@@ -321,11 +326,12 @@ function launchMemory() {
         release: 0,
     };
     const deferred = () => {
-        let resolve;
-        const promise = new Promise((done) => {
+        let resolve, reject;
+        const promise = new Promise((done, fail) => {
             resolve = done;
+            reject = fail;
         });
-        return { promise, resolve };
+        return { promise, resolve, reject };
     };
     const acquisitionStarted = deferred(),
         launchStarted = deferred(),
@@ -555,6 +561,226 @@ function launchMemory() {
             return JSON.stringify(releaseFacts());
         },
     };
+    // Closed, manually driven ports; never installed on the outer process.
+    const quit = {
+        endpoint: 'ws://127.0.0.1:43123/01234567-89ab-cdef-0123-456789abcdef',
+        sockets: [],
+        timers: new Map(),
+        requests: [],
+        immediateCallbacks: [],
+        context: { id: 7, uniqueId: 'model-default-context', auxData: { isDefault: true } },
+        identity: { pid: 17, type: 'browser' },
+        scheduled: { scheduled: true },
+        openState: 1,
+        holdReplies: new Set(),
+        pendingReplies: new Map(),
+        closeMode: 'observed',
+        socketCreated: deferred(),
+        closeRequested: deferred(),
+        phaseStarted: { enable: deferred(), identity: deferred(), quit: deferred() },
+        appQuitCalls: 0,
+        timerStarts: 0,
+        timerClears: 0,
+        listenerAdds: 0,
+        listenerRemoves: 0,
+        sends: 0,
+        closes: 0,
+        constructors: 0,
+        nextTimer: 0,
+    };
+    const identityExpression = '(()=>({pid:process.pid,type:process.type}))()';
+    const quitExpression =
+        '(()=>{const{app}=require("electron");setImmediate(()=>app.quit());return{scheduled:true};})()';
+    quit.evaluateFixed = (expression) => {
+        assert.ok(expression === identityExpression || expression === quitExpression);
+        const realm = vm.createContext(
+            {
+                process: Object.freeze({ pid: 17, type: 'browser' }),
+                require(name) {
+                    assert.equal(name, 'electron');
+                    return Object.freeze({
+                        app: Object.freeze({
+                            quit() {
+                                quit.appQuitCalls++;
+                                quit.onAppQuit?.();
+                            },
+                        }),
+                    });
+                },
+                setImmediate(callback) {
+                    assert.equal(typeof callback, 'function');
+                    quit.immediateCallbacks.push(callback);
+                },
+            },
+            { codeGeneration: { strings: false, wasm: false } },
+        );
+        return new vm.Script(expression, {
+            filename: 'fixed-memory-main-inspector-expression.js',
+        }).runInContext(realm, { timeout: 1000 });
+    };
+    quit.runAppQuit = () => {
+        assert.equal(quit.immediateCallbacks.length, 1);
+        quit.immediateCallbacks.shift()();
+    };
+    quit.microtasks = async (n = 40) => {
+        for (let i = 0; i < n; i++) await Promise.resolve();
+    };
+    class FakeTimeout {
+        constructor(id) {
+            this.id = id;
+        }
+        ref() {
+            return this;
+        }
+        unref() {
+            return this;
+        }
+        hasRef() {
+            return true;
+        }
+        refresh() {
+            return this;
+        }
+        [Symbol.toPrimitive]() {
+            return this.id;
+        }
+    }
+    quit.startTimer = (callback, delay) => {
+        quit.timerStarts++;
+        quit.onTimer?.(callback, delay);
+        const handle = new FakeTimeout(++quit.nextTimer);
+        quit.timers.set(handle, { callback, delay });
+        if (quit.timerReturnFactory) return quit.timerReturnFactory();
+        return Object.hasOwn(quit, 'timerReturn') ? quit.timerReturn : handle;
+    };
+    quit.stopTimer = (handle) => {
+        quit.timerClears++;
+        assert.ok(quit.timers.has(handle));
+        quit.onClearTimer?.(handle);
+        quit.timers.delete(handle);
+        return quit.clearReturnFactory ? quit.clearReturnFactory() : quit.clearReturn;
+    };
+    quit.fireTimer = (delay) => {
+        const entries = [...quit.timers].filter(([, entry]) => entry.delay === delay);
+        assert.equal(entries.length, 1);
+        const [handle, entry] = entries[0];
+        quit.timers.delete(handle);
+        entry.callback();
+    };
+    class FakeWebSocket {
+        constructor(endpoint) {
+            quit.constructors++;
+            assert.equal(endpoint, quit.endpoint);
+            quit.onConstruct?.();
+            this.readyState = quit.openState;
+            this.listeners = new Map();
+            quit.sockets.push(this);
+            quit.socketCreated.resolve(this);
+            if (quit.constructorReturnFactory) return quit.constructorReturnFactory();
+            if (Object.hasOwn(quit, 'constructorReturn')) return quit.constructorReturn;
+        }
+        addEventListener(type, callback) {
+            quit.listenerAdds++;
+            const listeners = this.listeners.get(type) ?? new Set();
+            listeners.add(callback);
+            this.listeners.set(type, listeners);
+            quit.onAdd?.(type, callback, this);
+            return quit.addReturn;
+        }
+        removeEventListener(type, callback) {
+            quit.listenerRemoves++;
+            quit.onRemove?.(type, callback, this);
+            assert.equal(this.listeners.get(type)?.delete(callback), true);
+            return quit.removeReturnFactory ? quit.removeReturnFactory() : quit.removeReturn;
+        }
+        emit(type, event = {}) {
+            for (const callback of [...(this.listeners.get(type) ?? [])]) callback(event);
+        }
+        message(value) {
+            this.emit('message', {
+                data: typeof value === 'string' ? value : JSON.stringify(value),
+            });
+        }
+        open() {
+            this.readyState = 1;
+            this.emit('open');
+        }
+        finishClose() {
+            this.readyState = 3;
+            this.emit('close');
+        }
+        send(data) {
+            quit.sends++;
+            const message = JSON.parse(data);
+            assert.equal(typeof data, 'string');
+            const phase = message.id === 1 ? 'enable' : message.id === 2 ? 'identity' : 'quit';
+            assert.ok(message.id >= 1 && message.id <= 3);
+            assert.equal(
+                message.method,
+                phase === 'enable' ? 'Runtime.enable' : 'Runtime.evaluate',
+            );
+            quit.requests.push(message);
+            quit.phaseStarted[phase].resolve(message);
+            quit.onSend?.(message, phase, this);
+            const reply = () => {
+                if (phase === 'enable') {
+                    this.message({
+                        method: 'Runtime.executionContextCreated',
+                        params: { context: quit.context },
+                    });
+                    this.message({ id: message.id, result: {} });
+                } else {
+                    assert.equal(message.params.uniqueContextId, quit.context.uniqueId);
+                    assert.equal(Object.hasOwn(message.params, 'contextId'), false);
+                    assert.equal(
+                        message.params.expression,
+                        phase === 'identity' ? identityExpression : quitExpression,
+                    );
+                    assert.equal(message.params.includeCommandLineAPI, true);
+                    assert.equal(message.params.awaitPromise, true);
+                    assert.equal(message.params.returnByValue, true);
+                    const actual = quit.evaluateFixed(message.params.expression);
+                    if (phase === 'identity')
+                        assert.deepEqual(JSON.parse(JSON.stringify(actual)), {
+                            pid: 17,
+                            type: 'browser',
+                        });
+                    else {
+                        assert.deepEqual(JSON.parse(JSON.stringify(actual)), { scheduled: true });
+                        assert.equal(quit.appQuitCalls, 0);
+                    }
+                    this.message({
+                        id: message.id,
+                        result: {
+                            result: {
+                                type: 'object',
+                                value: phase === 'identity' ? quit.identity : quit.scheduled,
+                            },
+                        },
+                    });
+                }
+                quit.afterReply?.(message, phase, this);
+            };
+            if (quit.holdReplies.has(phase)) quit.pendingReplies.set(phase, reply);
+            else reply();
+            return quit.sendReturnFactory ? quit.sendReturnFactory() : quit.sendReturn;
+        }
+        close() {
+            quit.closes++;
+            quit.closeRequested.resolve();
+            quit.onClose?.(this);
+            this.readyState = 2;
+            if (quit.closeMode === 'observed') this.finishClose();
+            return quit.closeReturnFactory ? quit.closeReturnFactory() : quit.closeReturn;
+        }
+    }
+    quit.WebSocket = FakeWebSocket;
+    quit.reply = (phase) => {
+        const callback = quit.pendingReplies.get(phase);
+        assert.equal(typeof callback, 'function');
+        quit.pendingReplies.delete(phase);
+        callback();
+    };
     const imports = Object.freeze({
         'node:assert/strict': assert,
         'node:fs': Object.freeze({ constants: Object.freeze({ O_RDONLY: 0 }) }),
@@ -569,10 +795,14 @@ function launchMemory() {
         }),
         'node:path': path,
         'node:url': Object.freeze({ fileURLToPath }),
+        'node:util': Object.freeze({ types: nativeTypes }),
     });
     const context = vm.createContext(
         {
             Buffer,
+            WebSocket: FakeWebSocket,
+            setTimeout: quit.startTimer,
+            clearTimeout: quit.stopTimer,
             process: Object.freeze({
                 platform: 'win32',
                 arch: 'x64',
@@ -602,6 +832,7 @@ function launchMemory() {
     return {
         api,
         native,
+        quit,
         counts,
         state,
         facts,
@@ -631,6 +862,13 @@ function launchMemory() {
             );
             await api.pinWindowsNativeFiles(cap);
             assert.equal(counts.open, counts.close);
+            return cap;
+        },
+        async prepareQuit() {
+            const cap = await this.prepare();
+            await api.launchWindowsNativePinnedProcess(cap, this.input());
+            capture.stderr.bytes = Buffer.from('Debugger listening on ' + quit.endpoint + '\r\n');
+            await api.drainWindowsNativeOwnedStdio(cap);
             return cap;
         },
         input() {
@@ -1880,5 +2118,773 @@ test('memory later failed drains invalidate stale EOF and preserve the first err
         assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), task);
         assert.equal(m.counts.release, 1);
         assert.equal(m.counts.launch, 1);
+    }
+});
+
+// The actual fixed quit caller executes only inside launchMemory's closed VM.
+// Inspector peer/root/EOF/timer facts below are authored, never native observations.
+test('memory normal quit reserves before every port effect and joins fixed protocol and independent resources once', async () => {
+    const m = launchMemory(),
+        cap = await m.prepareQuit();
+    let task;
+    const assertReserved = () => {
+        assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+        assert.throws(() => m.api.sampleWindowsNativeOwnedProcess(cap), /QUIT_OPERATION_PENDING/);
+        assert.throws(() => m.api.drainWindowsNativeOwnedStdio(cap), /QUIT_OPERATION_PENDING/);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /QUIT_OPERATION_PENDING/,
+        );
+        assert.equal(m.counts.release, 0);
+    };
+    m.quit.onTimer = () => {
+        assertReserved();
+        assert.equal(m.quit.constructors, 0);
+    };
+    m.quit.onConstruct = () => {
+        assertReserved();
+        assert.equal(m.quit.timerStarts, 1);
+    };
+    m.quit.onSend = assertReserved;
+    task = m.api.requestWindowsNativeNormalQuit(cap);
+    assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+    assert.equal(m.quit.constructors, 0);
+    assert.equal(m.quit.timerStarts, 0);
+    const transport = m.api.joinWindowsNativeNormalQuitTransport(cap);
+    assert.equal(m.api.joinWindowsNativeNormalQuitTransport(cap), transport);
+    await m.quit.closeRequested.promise;
+    m.quit.onTimer = undefined;
+    await m.quit.microtasks();
+    assert.equal(m.quit.requests.length, 3);
+    assert.equal(m.quit.immediateCallbacks.length, 1);
+    assert.equal(m.quit.appQuitCalls, 0); // Actual fixed expression scheduled, but has not run.
+    assert.equal(m.state.exited, false);
+    assert.equal(m.capture.stdout.eof, false);
+    assert.equal((await transport).closedUnacknowledgedReplies, 0);
+    let settled = false;
+    void task.then(
+        () => {
+            settled = true;
+        },
+        () => {
+            settled = true;
+        },
+    );
+    await m.quit.microtasks();
+    assert.equal(settled, false);
+    m.quit.onAppQuit = () => {
+        m.state.exited = true;
+        m.state.exitCode = 0;
+        m.endStdio();
+    };
+    m.quit.runAppQuit(); // Fake Electron callback, not an app/native invocation.
+    m.quit.fireTimer(20);
+    const result = await task;
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+        identityReplyObserved: true,
+        quitSchedulingReplyObserved: true,
+        rootExitObserved: true,
+        rootExitCode: 0,
+        stdoutEOF: true,
+        stderrEOF: true,
+        ownedInspectorCloseObserved: true,
+        closedUnacknowledgedReplies: 0,
+        physicalLoadedBytesVerified: false,
+        physicalDescendantClosure: false,
+        releaseAcceptance: false,
+    });
+    assert.ok(Object.isFrozen(result));
+    assert.equal(m.quit.appQuitCalls, 1);
+    assert.equal(m.quit.timers.size, 0);
+    assert.equal(m.quit.listenerAdds, 4);
+    assert.equal(m.quit.listenerRemoves, 4);
+    assert.equal(m.quit.closes, 1);
+    const effects = [
+        m.quit.constructors,
+        m.quit.timerStarts,
+        m.quit.sends,
+        m.counts.sample,
+        m.counts.drain,
+    ];
+    assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+    assert.equal(await m.api.requestWindowsNativeNormalQuit(cap), result);
+    assert.equal(m.api.joinWindowsNativeNormalQuitTransport(cap), transport);
+    assert.deepEqual(
+        [m.quit.constructors, m.quit.timerStarts, m.quit.sends, m.counts.sample, m.counts.drain],
+        effects,
+    );
+    assert.equal(JSON.stringify(result).includes(m.quit.endpoint), false);
+    assert.equal(m.counts.release, 0); // Successful protocol/joins do not close HANDLEs/TSFN.
+    const release = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+    assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), release);
+    assert.equal((await release).hostLifetimeFinalizerAcknowledged, true);
+    assert.equal(m.counts.release, 1);
+});
+
+test('memory normal quit binds a unique default context and fresh native PID before the sole scheduling request', async () => {
+    for (const change of [
+        (q) => {
+            delete q.context.uniqueId;
+        },
+        (q) => {
+            q.context.uniqueId = '';
+        },
+        (q) => {
+            q.context.uniqueId = 'x'.repeat(257);
+        },
+        (q) => {
+            q.context.uniqueId = 'bad\0context';
+        },
+        (q) => {
+            q.context.id = 0;
+        },
+        (q) => {
+            q.identity.pid = 18;
+        },
+        (q) => {
+            q.identity.pid = '17';
+        },
+        (q) => {
+            q.identity.type = 'renderer';
+        },
+        (q) => {
+            q.identity.extra = true;
+        },
+    ]) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        change(m.quit);
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        await assert.rejects(task, (error) => {
+            assert.match(
+                (error.cause ?? error).message,
+                /QUIT_(PROTOCOL_INVALID|IDENTITY_MISMATCH)/,
+            );
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.equal(JSON.stringify(error), '{}');
+            return true;
+        });
+        assert.equal(
+            m.quit.requests.some((x) => x.id === 3),
+            false,
+        );
+        assert.equal(m.quit.immediateCallbacks.length, 0);
+        assert.equal(m.quit.appQuitCalls, 0);
+        assert.equal(
+            (await m.api.joinWindowsNativeNormalQuitTransport(cap)).ownedInspectorCloseObserved,
+            true,
+        );
+    }
+    for (const mode of ['nondefault', 'destroyed', 'replaced', 'changed-native-pid']) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        if (mode === 'nondefault') m.quit.context.auxData.isDefault = false;
+        if (mode === 'destroyed' || mode === 'replaced')
+            m.quit.onSend = (_message, phase, socket) => {
+                if (phase !== 'identity') return;
+                socket.message(
+                    mode === 'destroyed'
+                        ? {
+                              method: 'Runtime.executionContextDestroyed',
+                              params: { executionContextUniqueId: m.quit.context.uniqueId },
+                          }
+                        : {
+                              method: 'Runtime.executionContextCreated',
+                              params: {
+                                  context: {
+                                      id: 8,
+                                      uniqueId: 'other-context',
+                                      auxData: { isDefault: true },
+                                  },
+                              },
+                          },
+                );
+            };
+        if (mode === 'changed-native-pid') {
+            let samples = 0;
+            m.native.sampleOwnedProcess = async () => {
+                m.counts.sample++;
+                const facts = m.facts();
+                if (++samples === 2) facts.pid = 19;
+                return JSON.stringify(facts);
+            };
+        }
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        void task.catch(() => {});
+        if (mode === 'nondefault') {
+            await m.quit.phaseStarted.enable.promise;
+            await m.quit.microtasks();
+            m.quit.fireTimer(15000);
+        }
+        await assert.rejects(task, (error) => {
+            assert.match(
+                (error.cause ?? error).message,
+                /QUIT_(DEADLINE|CONTEXT_LOST|CONTEXT_CHANGED|ROOT_NOT_LIVE)/,
+            );
+            return true;
+        });
+        assert.equal(
+            m.quit.requests.some((x) => x.id === 3),
+            false,
+        );
+        assert.equal(m.quit.appQuitCalls, 0);
+    }
+});
+
+test('memory normal quit latches a valid scheduling reply before same-turn close but never promotes reversed or malformed ACK order', async () => {
+    for (const timing of [
+        'ack-close',
+        'ack-context-close',
+        'close-ack',
+        'context-ack',
+        'malformed',
+    ]) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        m.quit.closeMode = 'held';
+        m.quit.afterReply = (_message, phase, socket) => {
+            if (phase !== 'quit' || !timing.startsWith('ack-')) return;
+            if (timing === 'ack-context-close')
+                socket.message({
+                    method: 'Runtime.executionContextDestroyed',
+                    params: { executionContextId: m.quit.context.id },
+                });
+            socket.finishClose();
+        };
+        m.quit.onSend = (_message, phase, socket) => {
+            if (phase !== 'quit') return;
+            if (timing === 'close-ack') socket.finishClose();
+            if (timing === 'context-ack')
+                socket.message({
+                    method: 'Runtime.executionContextDestroyed',
+                    params: { executionContextId: m.quit.context.id },
+                });
+        };
+        if (timing === 'malformed') m.quit.scheduled.scheduled = false;
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        void task.catch(() => {});
+        if (timing.startsWith('ack-')) {
+            await m.quit.phaseStarted.quit.promise;
+            await m.quit.microtasks();
+            assert.equal(m.quit.appQuitCalls, 0);
+            m.state.exited = true;
+            m.state.exitCode = 0;
+            m.endStdio();
+            m.quit.fireTimer(20);
+            const result = await task;
+            assert.equal(result.quitSchedulingReplyObserved, true);
+            assert.equal(result.closedUnacknowledgedReplies, 0);
+            assert.equal(result.releaseAcceptance, false);
+            assert.equal(m.quit.closes, 0); // Peer close ACK, never a second close request.
+        } else {
+            await assert.rejects(task, (error) => {
+                assert.match(
+                    (error.cause ?? error).message,
+                    /QUIT_(REPLY_CLOSED_UNACKNOWLEDGED|TRANSPORT_CLOSED_BEFORE_QUIT_ACK|CONTEXT_LOST|SCHEDULE_NOT_ACKNOWLEDGED)/,
+                );
+                assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+                return true;
+            });
+            if (m.quit.sockets[0].readyState !== 3) m.quit.sockets[0].finishClose();
+            const transport = await m.api.joinWindowsNativeNormalQuitTransport(cap);
+            assert.equal(transport.ownedInspectorCloseObserved, true);
+            assert.equal(m.quit.requests.length, 3);
+            assert.equal(m.counts.release, 0);
+        }
+        assert.equal(m.quit.appQuitCalls, 0); // ACK ordering is not executing the queued app callback.
+        assert.equal(m.quit.requests.filter((x) => x.id === 3).length, 1);
+    }
+    for (const missing of ['root', 'stdout', 'stderr', 'socket', 'nonzero']) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        m.quit.closeMode = 'held';
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        void task.catch(() => {});
+        await m.quit.closeRequested.promise;
+        await m.quit.microtasks();
+        m.state.exited = missing !== 'root';
+        m.state.exitCode = missing === 'nonzero' ? 7 : 0;
+        m.capture.stdout.eof = missing !== 'stdout';
+        m.capture.stderr.eof = missing !== 'stderr';
+        if (missing !== 'socket') m.quit.sockets[0].finishClose();
+        m.quit.fireTimer(20);
+        await m.quit.microtasks();
+        if (missing !== 'nonzero') m.quit.fireTimer(15000);
+        await assert.rejects(task, (error) => {
+            assert.match(
+                (error.cause ?? error).message,
+                missing === 'nonzero' ? /ROOT_EXIT_NOT_ZERO/ : /DEADLINE/,
+            );
+            return true;
+        });
+        assert.equal(m.counts.release, 0);
+        if (missing === 'socket') {
+            assert.throws(
+                () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                /QUIT_TRANSPORT_PENDING/,
+            );
+            const transport = m.api.joinWindowsNativeNormalQuitTransport(cap);
+            let joined = false;
+            void transport.then(() => {
+                joined = true;
+            });
+            await m.quit.microtasks();
+            assert.equal(joined, false);
+            m.quit.sockets[0].finishClose();
+            assert.equal((await transport).ownedInspectorCloseObserved, true);
+            const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+            assert.equal(ack.releaseAcceptance, false); // Late transport closure never changes failed task.
+            await assert.rejects(m.api.requestWindowsNativeNormalQuit(cap));
+            assert.equal(m.quit.constructors, 1);
+        }
+    }
+    const m = launchMemory(),
+        cap = await m.prepareQuit();
+    m.quit.closeMode = 'held';
+    const task = m.api.requestWindowsNativeNormalQuit(cap);
+    void task.catch(() => {});
+    const join = m.api.joinWindowsNativeNormalQuitTransport(cap);
+    Object.defineProperty(join, 'then', {
+        configurable: true,
+        value(resolve) {
+            resolve({
+                transportConstructionSubmitted: true,
+                ownedInspectorCloseObserved: true,
+                closedUnacknowledgedReplies: 0,
+            });
+        },
+    });
+    await m.quit.closeRequested.promise;
+    await m.quit.microtasks();
+    m.state.exited = true;
+    m.state.exitCode = 0;
+    m.endStdio();
+    m.quit.fireTimer(20);
+    await assert.rejects(task, (error) => {
+        assert.match((error.cause ?? error).message, /QUIT_BOOKKEEPING_UNKNOWN/);
+        assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+        return true;
+    });
+    assert.throws(
+        () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+        /QUIT_TRANSPORT_PENDING/,
+    );
+    assert.equal(m.counts.release, 0); // Mutable public Promise is not private transport evidence.
+    delete join.then;
+    m.quit.sockets[0].finishClose();
+    assert.equal((await join).ownedInspectorCloseObserved, true);
+    assert.equal(
+        (await m.api.releaseWindowsNativeOwnedProcessHandles(cap)).releaseAcceptance,
+        false,
+    );
+    await assert.rejects(task);
+    assert.equal(m.quit.constructors, 1);
+    assert.equal(m.quit.requests.length, 3);
+});
+
+test('memory pending open cancellation and deadline fence every later connection callback without reconnecting', async () => {
+    const first = launchMemory(),
+        before = await first.prepareQuit();
+    const beforeTask = first.api.requestWindowsNativeNormalQuit(before);
+    first.api.cancelWindowsNativeAuthority(before);
+    await assert.rejects(beforeTask, /QUIT_CANCELLED/);
+    assert.equal(first.quit.timerStarts, 0);
+    assert.equal(first.quit.constructors, 0);
+    assert.equal(first.quit.sends, 0);
+    const absent = await first.api.joinWindowsNativeNormalQuitTransport(before);
+    assert.equal(absent.transportConstructionSubmitted, false);
+    assert.equal(absent.ownedInspectorCloseObserved, false);
+    for (const mode of ['cancel', 'deadline', 'error']) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        m.quit.openState = 0;
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        void task.catch(() => {});
+        const socket = await m.quit.socketCreated.promise;
+        await m.quit.microtasks();
+        assert.equal(m.quit.sends, 0);
+        if (mode === 'cancel') m.api.cancelWindowsNativeAuthority(cap);
+        if (mode === 'deadline') m.quit.fireTimer(15000);
+        if (mode === 'error') socket.emit('error');
+        await assert.rejects(task, (error) => {
+            assert.match(
+                (error.cause ?? error).message,
+                /QUIT_(CANCELLED|DEADLINE|TRANSPORT_ERROR)/,
+            );
+            return true;
+        });
+        const joined = m.api.joinWindowsNativeNormalQuitTransport(cap);
+        assert.equal(m.api.joinWindowsNativeNormalQuitTransport(cap), joined);
+        assert.equal((await joined).ownedInspectorCloseObserved, true);
+        socket.open();
+        socket.message({ id: 1, result: {} }); // All owned listeners removed; never new work.
+        assert.equal(m.quit.sends, 0);
+        assert.equal(m.quit.constructors, 1);
+        assert.equal(m.quit.closes, 1);
+        assert.equal(m.quit.listenerRemoves, 4);
+        assert.equal(m.quit.timers.size, 0);
+        assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+        assert.equal(m.counts.release, 0);
+    }
+});
+
+test('memory synchronous constructor and send failures retain unknown custody without exposing raw exceptions or retrying', async () => {
+    for (const stage of ['constructor', 'send'])
+        for (const raw of [Error('PRIVATE_SOCKET_EXCEPTION'), undefined]) {
+            const m = launchMemory(),
+                cap = await m.prepareQuit();
+            const fail = () => {
+                throw raw;
+            };
+            if (stage === 'constructor') m.quit.onConstruct = fail;
+            else m.quit.onSend = fail;
+            const task = m.api.requestWindowsNativeNormalQuit(cap);
+            const failure = await task.then(
+                () => assert.fail('submitted effect must remain unknown'),
+                (error) => error,
+            );
+            assert.match(
+                (failure.cause ?? failure).message,
+                stage === 'constructor' ? /TRANSPORT_ACQUISITION_UNKNOWN/ : /SEND_UNCONFIRMED/,
+            );
+            assert.equal(failure.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.equal(failure.nativeAuthorityCustody.failedAtCapture, true);
+            assert.equal(JSON.stringify(failure), '{}');
+            assert.equal(failure.message.includes('PRIVATE_SOCKET_EXCEPTION'), false);
+            assert.equal(m.quit.constructors, 1);
+            assert.equal(m.quit.sends, stage === 'constructor' ? 0 : 1);
+            assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+            const transport = m.api.joinWindowsNativeNormalQuitTransport(cap);
+            assert.equal(m.api.joinWindowsNativeNormalQuitTransport(cap), transport);
+            let joined = false;
+            void transport.then(() => {
+                joined = true;
+            });
+            await m.quit.microtasks();
+            assert.equal(joined, false);
+            m.state.exited = true;
+            m.endStdio();
+            await m.api.sampleWindowsNativeOwnedProcess(cap);
+            await m.api.drainWindowsNativeOwnedStdio(cap);
+            assert.throws(
+                () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                /QUIT_TRANSPORT_PENDING/,
+            );
+            assert.equal(m.counts.release, 0);
+            assert.equal(m.quit.constructors, 1);
+        }
+});
+
+test('memory bounded inspector frames and closed unacknowledged RPCs cannot manufacture scheduling success', async () => {
+    const frames = [
+        '{PRIVATE',
+        '[]',
+        JSON.stringify({ id: 99, result: {} }),
+        JSON.stringify({ method: 1 }),
+        JSON.stringify({ method: 'x'.repeat(201) }),
+        'x'.repeat(65537),
+        Buffer.from('PRIVATE_BINARY_FRAME'),
+    ];
+    for (const frame of frames) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        m.quit.onSend = (_message, phase, socket) => {
+            if (phase === 'enable') {
+                if (Buffer.isBuffer(frame)) socket.emit('message', { data: frame });
+                else socket.message(frame);
+            }
+        };
+        await assert.rejects(m.api.requestWindowsNativeNormalQuit(cap), (error) => {
+            assert.match((error.cause ?? error).message, /QUIT_PROTOCOL_INVALID/);
+            assert.equal(JSON.stringify(error), '{}');
+            assert.equal(error.message.includes('PRIVATE'), false);
+            return true;
+        });
+        assert.equal(
+            m.quit.requests.some((x) => x.id === 3),
+            false,
+        );
+        assert.equal(m.counts.release, 0);
+    }
+    const flood = launchMemory(),
+        flooded = await flood.prepareQuit();
+    flood.quit.onSend = (_message, phase, socket) => {
+        if (phase === 'enable')
+            for (let i = 0; i < 18; i++)
+                socket.message({
+                    method: 'Runtime.consoleAPICalled',
+                    params: { payload: 'x'.repeat(60000) },
+                });
+    };
+    await assert.rejects(
+        flood.api.requestWindowsNativeNormalQuit(flooded),
+        /QUIT_PROTOCOL_INVALID/,
+    );
+    assert.equal(
+        flood.quit.requests.some((x) => x.id === 3),
+        false,
+    );
+    for (const phase of ['enable', 'identity', 'quit']) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        m.quit.holdReplies.add(phase);
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        void task.catch(() => {});
+        await m.quit.phaseStarted[phase].promise;
+        await m.quit.microtasks();
+        const socket = m.quit.sockets[0];
+        socket.message({ method: 'Unknown.boundedNotification', params: {} });
+        assert.equal(m.quit.sends, phase === 'enable' ? 1 : phase === 'identity' ? 2 : 3);
+        socket.finishClose();
+        await assert.rejects(task, (error) => {
+            assert.match(
+                (error.cause ?? error).message,
+                /QUIT_(REPLY_CLOSED_UNACKNOWLEDGED|TRANSPORT_CLOSED_BEFORE_QUIT_ACK)/,
+            );
+            return true;
+        });
+        const transport = await m.api.joinWindowsNativeNormalQuitTransport(cap);
+        assert.equal(transport.closedUnacknowledgedReplies, 1);
+        assert.equal(transport.ownedInspectorCloseObserved, true); // Closure, not RPC completion.
+        m.quit.reply(phase); // Listener removal fences this late reply, including quit ACK.
+        const sends = m.quit.sends;
+        m.state.exited = true;
+        m.endStdio();
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        const ack = await m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        assert.equal(ack.releaseAcceptance, false);
+        assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+        await assert.rejects(task);
+        assert.equal(m.quit.sends, sends);
+        assert.equal(m.quit.constructors, 1);
+    }
+});
+
+test('memory native tasks remain owned after quit deadline and original native failures survive component release errors', async () => {
+    for (const stage of ['initial-sample', 'post-ack-drain']) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        let resolve;
+        const pending = new Promise((done) => {
+            resolve = done;
+        });
+        let started;
+        const issued = new Promise((done) => {
+            started = done;
+        });
+        if (stage === 'initial-sample')
+            m.native.sampleOwnedProcess = () => {
+                m.counts.sample++;
+                started();
+                return pending;
+            };
+        else
+            m.native.drainOwnedStdio = () => {
+                m.counts.drain++;
+                started();
+                return pending;
+            };
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        void task.catch(() => {});
+        try {
+            await issued;
+            m.quit.fireTimer(15000);
+            const failure = await task.then(
+                () => assert.fail('deadline must fail'),
+                (error) => error,
+            );
+            assert.match((failure.cause ?? failure).message, /QUIT_DEADLINE/);
+            assert.equal(failure.nativeAuthorityCustody.pendingOperationsAtCapture, 1);
+            assert.throws(
+                () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+                /OPERATION_PENDING/,
+            );
+            assert.equal(m.counts.release, 0);
+            resolve(JSON.stringify(stage === 'initial-sample' ? m.facts() : m.captureFacts()));
+            await m.quit.microtasks();
+            m.native.sampleOwnedProcess = async () => {
+                m.counts.sample++;
+                return JSON.stringify(m.facts());
+            };
+            m.native.drainOwnedStdio = async () => {
+                m.counts.drain++;
+                return JSON.stringify(m.captureFacts());
+            };
+            m.state.exited = true;
+            m.endStdio();
+            await m.api.sampleWindowsNativeOwnedProcess(cap);
+            await m.api.drainWindowsNativeOwnedStdio(cap);
+            const transport = await m.api.joinWindowsNativeNormalQuitTransport(cap);
+            assert.equal(transport.transportConstructionSubmitted, stage !== 'initial-sample');
+            assert.equal(
+                (await m.api.releaseWindowsNativeOwnedProcessHandles(cap)).releaseAcceptance,
+                false,
+            );
+            await assert.rejects(task);
+        } finally {
+            resolve(JSON.stringify(stage === 'initial-sample' ? m.facts() : m.captureFacts()));
+            await task.catch(() => {});
+        }
+    }
+    for (const primary of [Error('PRIVATE_NATIVE_SAMPLE'), undefined]) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        m.native.sampleOwnedProcess = () => {
+            m.counts.sample++;
+            throw primary;
+        };
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        const failure = await task.then(
+            () => assert.fail('native failure must propagate'),
+            (error) => error,
+        );
+        assert.equal(Object.hasOwn(failure, 'cause'), true);
+        assert.equal(failure.cause, primary);
+        assert.equal(failure.nativeAuthorityCustody.retainedAtCapture, true);
+        assert.equal(m.quit.constructors, 0);
+        assert.equal(
+            (await m.api.joinWindowsNativeNormalQuitTransport(cap)).transportConstructionSubmitted,
+            false,
+        );
+        m.native.sampleOwnedProcess = async () => {
+            m.counts.sample++;
+            return JSON.stringify(m.facts());
+        };
+        m.state.exited = true;
+        m.endStdio();
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        const later = Error('PRIVATE_COMPONENT_RELEASE');
+        m.native.releaseOwnedProcessHandles = () => {
+            m.counts.release++;
+            throw later;
+        };
+        const release = m.api.releaseWindowsNativeOwnedProcessHandles(cap);
+        await assert.rejects(release, (error) => {
+            assert.equal(error.cause, primary);
+            assert.equal(error.errors[0], primary);
+            assert.equal(error.errors[1], later);
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            return true;
+        });
+        assert.equal(m.api.releaseWindowsNativeOwnedProcessHandles(cap), release);
+        assert.equal(m.counts.release, 1);
+    }
+    const m = launchMemory(),
+        cap = await m.prepareQuit();
+    let samples = 0;
+    m.native.sampleOwnedProcess = async () => {
+        m.counts.sample++;
+        if (++samples === 3) m.api.cancelWindowsNativeAuthority(cap);
+        return JSON.stringify(m.facts());
+    };
+    const beforeDrain = m.counts.drain;
+    await assert.rejects(m.api.requestWindowsNativeNormalQuit(cap), /QUIT_CANCELLED/);
+    assert.equal(m.counts.drain, beforeDrain); // Already-latched cancellation cannot submit the next poll/drain.
+    assert.equal(samples, 3);
+});
+
+test('memory unknown socket and timer returns stay retained without proxy traps or false cleanup ACKs', async () => {
+    for (const mode of [
+        'socket-proxy',
+        'timer-proxy',
+        'timer-getter',
+        'send-promise',
+        'add-then-getter',
+        'remove-promise',
+        'close-promise',
+        'clear-promise',
+        'socket-rejected-promise',
+        'timer-rejected-promise',
+        'send-rejected-promise',
+        'remove-rejected-promise',
+        'close-rejected-promise',
+        'clear-rejected-promise',
+    ]) {
+        const m = launchMemory(),
+            cap = await m.prepareQuit();
+        let traps = 0;
+        const proxy = () =>
+            new Proxy(
+                {},
+                {
+                    get() {
+                        traps++;
+                        throw Error('proxy get');
+                    },
+                    getPrototypeOf() {
+                        traps++;
+                        throw Error('proxy prototype');
+                    },
+                    getOwnPropertyDescriptor() {
+                        traps++;
+                        throw Error('proxy descriptor');
+                    },
+                },
+            );
+        if (mode === 'socket-proxy') m.quit.constructorReturn = proxy();
+        if (mode === 'timer-proxy') m.quit.timerReturn = proxy();
+        if (mode === 'timer-getter')
+            m.quit.timerReturn = Object.defineProperty({}, 'ref', {
+                get() {
+                    traps++;
+                    throw Error('timer getter');
+                },
+            });
+        if (mode === 'send-promise') m.quit.sendReturn = Promise.resolve();
+        if (mode === 'add-then-getter')
+            m.quit.addReturn = Object.defineProperty({}, 'then', {
+                get() {
+                    traps++;
+                    throw Error('then getter');
+                },
+            });
+        if (mode === 'remove-promise') m.quit.removeReturn = Promise.resolve();
+        if (mode === 'close-promise') m.quit.closeReturn = Promise.resolve();
+        if (mode.endsWith('rejected-promise')) {
+            const field = mode.startsWith('socket-') ? 'constructor' : mode.split('-')[0];
+            // Create the rejection at the actual fake port invocation, without a
+            // harness catch. The actual wrapper must observe this native Promise.
+            m.quit[field + 'ReturnFactory'] = () =>
+                Promise.reject(Error('PRIVATE_REJECTED_PORT_RESULT'));
+        }
+        if (mode === 'clear-promise' || mode === 'clear-rejected-promise') {
+            m.quit.clearReturn = Promise.resolve();
+            m.quit.onClose = () => {
+                m.state.exited = true;
+                m.state.exitCode = 0;
+                m.endStdio();
+            };
+        }
+        const task = m.api.requestWindowsNativeNormalQuit(cap);
+        await assert.rejects(task, (error) => {
+            assert.match(
+                (error.cause ?? error).message,
+                /QUIT_(TRANSPORT_ACQUISITION_UNKNOWN|TIMER_RESULT_UNKNOWN|SEND_UNCONFIRMED|LISTENER_ADD_UNKNOWN|LISTENER_REMOVE_UNKNOWN|TRANSPORT_CLOSE_UNKNOWN|TIMER_CLEAR_UNKNOWN|TRANSPORT_BOOKKEEPING_UNKNOWN)/,
+            );
+            assert.equal(error.nativeAuthorityCustody.retainedAtCapture, true);
+            assert.equal(error.message.includes('PRIVATE_REJECTED_PORT_RESULT'), false);
+            assert.equal(JSON.stringify(error), '{}');
+            return true;
+        });
+        assert.equal(traps, 0);
+        m.state.exited = true;
+        m.endStdio();
+        await m.api.sampleWindowsNativeOwnedProcess(cap);
+        await m.api.drainWindowsNativeOwnedStdio(cap);
+        assert.throws(
+            () => m.api.releaseWindowsNativeOwnedProcessHandles(cap),
+            /QUIT_TRANSPORT_PENDING/,
+        );
+        assert.equal(m.counts.release, 0);
+        assert.equal(m.api.requestWindowsNativeNormalQuit(cap), task);
+        const transport = m.api.joinWindowsNativeNormalQuitTransport(cap);
+        assert.equal(m.api.joinWindowsNativeNormalQuitTransport(cap), transport);
+        if (mode === 'socket-proxy') {
+            for (let i = 0; i < 31; i++) await m.prepare();
+            await assert.rejects(m.prepare(), /OWNER_LIMIT/); // Private owner stays retained; no private issuer added.
+        }
+        assert.equal(m.quit.constructors <= 1, true);
     }
 });

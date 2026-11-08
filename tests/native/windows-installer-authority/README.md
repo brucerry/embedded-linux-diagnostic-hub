@@ -27,9 +27,9 @@ retained handle's PID/creation time and the **current named image file** to the 
 Reopening `QueryFullProcessImageNameW`'s path cannot establish the originally mapped executable file
 object or loaded ASAR bytes, especially if a process predates a replacement. Window handles are
 bounded observations of that PID, not stable capabilities. `refuseNormalClose` always refuses: no
-HWND/PID/path sampling is represented as atomic close authority. A reviewed
-owned-app-thread/authenticated IPC protocol, actual installer consent/offline/UI facts, and
-independent retirement observations are still missing.
+HWND/PID/path sampling is represented as atomic close authority. The separate fixed cooperative
+caller below still needs actual host/runtime verification. Actual installer consent/offline/UI facts
+and independent retirement observations are still missing.
 
 ## Explicit creation and returned-handle custody
 
@@ -170,11 +170,77 @@ main-inspector endpoint. Fragmented lines wait for a newline or actual EOF; malf
 non-loopback or credential/query/fragment-bearing candidates refuse. Endpoint lookup requires the
 original active capability, with no pending operation, cancellation or primary failure. The endpoint
 is **owned-stderr provenance**, not proof that only the root emitted it, kernel socket ownership,
-server authentication, physically loaded bytes or normal-close authority. A descendant can inherit
-the writer. This code neither connects to that endpoint nor schedules `app.quit`. A future reviewed
-cooperative caller must own the connection, fixed command and its scheduling ACK, disconnect the
-debugger, then separately join root/pipes/transports and existing application cleanup. The synthetic
-HWND close delegate and all native/full lifecycle acceptance gates remain refused.
+server authentication or physically loaded bytes. A descendant can inherit the writer. The fixed
+cooperative caller below is a separate explicit operation; importing or draining never connects or
+dispatches quit. The synthetic HWND close delegate and all native/full lifecycle acceptance gates
+remain refused.
+
+## Fixed cooperative normal quit (source preparation)
+
+`requestWindowsNativeNormalQuit` uses only the original private native-created capability and its
+validated private main-inspector endpoint. It accepts no URL, expression, transport factory or
+caller-issued authority flag. It reserves a private one-use owner and stable Promise before timers,
+native observations or WebSocket construction. Repeated calls join that same result, including a
+failure; cancellation or a missing reply never grants another quit attempt. Public terminal/drain
+operations are fenced while this owner runs, and cancellation signals its existing owner rather than
+issuing a replacement command.
+
+The caller samples the retained native process HANDLE, connects its own captured Node WebSocket,
+enables Runtime, and requires a default context with a bounded `uniqueId`. Both fixed evaluations
+use that exact `uniqueContextId`; there is no numeric-ID fallback or retargeting after context loss.
+The identity evaluation returns only `process.pid` and `process.type`. Its PID must match the actual
+native-created PID and its type must be `browser`. A second native HANDLE sample must still report
+the root live before the only quit evaluation: `setImmediate(() => app.quit())`, with a returned
+`{scheduled:true}`. This is a trusted-inspector protocol reply and scheduling acknowledgment, not
+kernel socket authentication, proof of which process wrote stderr, loaded-image identity or proof
+that cleanup has completed. No path spelling, selected run label, builder Node version or copied
+JSON substitutes for these observations.
+
+The application already routes `app.quit` through its `before-quit` controller, which joins update,
+connection, SSH, console, native-capture and report cleanup and can block quitting on failure. This
+caller does not bypass that controller with `app.exit`, `Browser.close`, a HWND message, process
+termination or a cleanup fallback. After the scheduling reply, it closes only its own inspector
+connection before waiting for actual root termination, because a debugger attachment can delay exit.
+A successful result requires observed root exit code zero, both actual pipe EOF observations, owned
+transport-close/listener bookkeeping, all three replies, and no unknown reply waits. Native HANDLE
+and TSFN release remains a separate explicit operation after those component facts.
+
+Every response wait is retained before send; frames are bounded to 64 KiB and total received data to
+1 MiB. Those are validation/retention bounds, not a hard quota on the WebSocket implementation's
+internal receive buffers. A fixed 15-second observation deadline and at most 750 explicit 20 ms
+sample/drain delays bound JavaScript observation work; they cannot bound a synchronous Windows I/O
+call or establish resource closure by timeout. Timers are retained opaque Node Timeout objects with
+their documented methods, not integer IDs. Socket/listener/timer returns that contradict their real
+API remain privately retained; native Promise returns are observed, and their unknown outcome is
+sticky even if a later close/removal returns normally. Proxy returns are rejected before structural
+inspection. No new worker, polling service or keepalive framework is introduced.
+
+A close event cannot complete transport bookkeeping until listener acquisition has finished and
+exact listener removals have returned. Pending reply waits may then retire only as
+**closed-unacknowledged**, preserving the distinction from a server ACK or completed quit. A failure
+before the constructor is ever invoked has a known no-connection result with
+`ownedInspectorCloseObserved:false`; a submitted constructor that throws or returns an unsupported
+object remains unknown. The narrow `joinWindowsNativeNormalQuitTransport` can observe only that
+already-issued operation after failure or cancellation. It cannot reconnect or dispatch another
+command. Pending native observations that outlive the deadline remain in the native-task owner and
+block release until their real settlement.
+
+Protocol/transport exceptions and frames stay private because they can contain an endpoint token.
+The first fixed public failure is stable; native observation errors retain their original causes
+through the existing custody contract. Unknown constructors, callbacks, timers and return values
+retain their exact private references. Component release is refused until transport, timers and
+native tasks are actually accounted for. A failed quit can still permit component-only release after
+genuine root/pipe/transport closure; it never becomes a successful quit or full-case result.
+
+This source operation uses the same fixed cooperative Inspector shape as the existing Mac owner,
+without importing its Playwright-containing fixture or exposing arbitrary evaluation. It activates
+no native CLI and changes no full installer consumer or admission gate. Real activation still
+requires an eligible ordinary-user host, trusted immutable native build/stage, genuinely fresh owned
+profile/action scope and separately authorized runtime work. Source/closed-VM controls exercise
+actual JavaScript orchestration and fixed expressions only. They prove neither a real
+WebSocket/Inspector/app-quit exchange nor Windows runtime, loaded-code, descendant or full release
+acceptance. The C++ is unchanged from the separately compiled `349ad72` stdio component; no repeat
+C++ compilation is claimed from these JavaScript controls.
 
 Explicit `release` attempts to close each newly owned observer HANDLE once, and closes owned CNG
 objects. It invalidates the capability when submitted. A failed close keeps private custody and is
