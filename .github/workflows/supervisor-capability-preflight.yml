@@ -1,0 +1,74 @@
+name: Read-only supervisor capability preflight
+run-name: Read-only Ubuntu supervisor capability preflight
+
+'on':
+    push:
+        branches: [ci/supervisor-capability-preflight-20261108]
+        paths: [.github/workflows/supervisor-capability-preflight.yml]
+
+permissions: {}
+
+jobs:
+    capability_preflight:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false &&
+            github.event_name == 'push' && github.run_attempt == 1
+        runs-on: ubuntu-24.04
+        timeout-minutes: 3
+        defaults:
+            run:
+                shell: bash --noprofile --norc -euo pipefail {0}
+        steps:
+            - name: Verify genuine public hosted Ubuntu context
+              run: |
+                  [[ "$GITHUB_ACTIONS" == true ]]
+                  [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+                  [[ "$GITHUB_REPOSITORY" == brucerry/embedded-linux-diagnostic-hub ]]
+                  [[ "$GITHUB_REF" == refs/heads/ci/supervisor-capability-preflight-20261108 ]]
+                  [[ "$RUNNER_ENVIRONMENT" == github-hosted ]]
+                  [[ "$RUNNER_OS" == Linux && "$RUNNER_ARCH" == X64 ]]
+                  [[ "$(id -u)" -ne 0 ]]
+                  . /etc/os-release
+                  [[ "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]]
+
+            - name: Verify systemd PID1 and version at least 250
+              run: |
+                  [[ "$(cat /proc/1/comm)" == systemd ]]
+                  systemd_version="$(systemd --version)"
+                  [[ "$systemd_version" =~ ^systemd[[:space:]]([0-9]+) ]]
+                  (( ${BASH_REMATCH[1]} >= 250 ))
+                  [[ -x /usr/bin/systemd-run ]]
+
+            - name: Verify unified cgroup v2 and controller metadata
+              run: |
+                  [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]]
+                  [[ -r /sys/fs/cgroup/cgroup.controllers ]]
+                  [[ -r /sys/fs/cgroup/cgroup.subtree_control ]]
+                  [[ -r /sys/fs/cgroup/cgroup.procs ]]
+
+            - name: Verify current observer cgroup identity and live events
+              run: |
+                  relative_cgroup="$(awk -F: '$1 == "0" && $2 == "" { print $3 }' /proc/self/cgroup)"
+                  [[ "$relative_cgroup" == /* && "$relative_cgroup" != *..* ]]
+                  [[ "$relative_cgroup" != *$'\n'* ]]
+                  current_cgroup="/sys/fs/cgroup${relative_cgroup%/}"
+                  [[ -r "$current_cgroup/cgroup.events" ]]
+                  grep -Eq '^populated 1$' "$current_cgroup/cgroup.events"
+
+            - name: Verify read-only external system manager API
+              run: |
+                  manager_version="$(systemctl --system show --property=Version --value)"
+                  manager_state="$(systemctl --system show --property=SystemState --value)"
+                  [[ -n "$manager_version" && ${#manager_version} -le 256 ]]
+                  [[ "$manager_state" == running || "$manager_state" == degraded ]]
+                  [[ -S /run/systemd/private ]]
+
+            - name: Verify sudo policy permits systemd-run without invoking it
+              run: |
+                  [[ -x /usr/bin/sudo ]]
+                  sudo -n -l /usr/bin/systemd-run > /dev/null 2>&1
+
+            - name: Record capability-only scope
+              run: |
+                  printf '%s\n' '::notice::Read-only capability preflight only. This workflow did not start a service or production workload, create a cgroup, install dependencies, check out source, or upload/cache artifacts. Containment, timeout enforcement and normal retirement remain unverified.'
