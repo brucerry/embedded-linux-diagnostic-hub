@@ -3539,7 +3539,7 @@ test('memory sibling reservation forwards one immutable command and retains canc
             input.profile = 'C:\\changed-during-acquisition';
             assert.throws(
                 () => m.api.launchWindowsNativePinnedSiblingProcess(cap, m.inside(siblingInput())),
-                /ALREADY_RESERVED/,
+                /WINDOWS_NATIVE_CAPABILITY_NOT_ACTIVE/,
             );
         };
         const task = m.api.launchWindowsNativePinnedSiblingProcess(cap, input);
