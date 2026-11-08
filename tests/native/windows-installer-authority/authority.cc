@@ -60,6 +60,18 @@ struct Owner {
   bool profileEmptyObserved = false, createdExitObserved = false; DWORD createdExitCode = 0;
   uint64_t createdTime = 0; std::wstring profileGuid, launchCwd;
   std::vector<wchar_t> launchCommand, launchEnvironment;
+  // A referenced TSFN owns normal event-loop liveness, not the whole host or
+  // application. Never reuse its pointer after the once-only release call.
+  napi_threadsafe_function hostLifetime = nullptr; napi_ref hostCapRef = nullptr;
+  bool hostAcquireSubmitted = false, hostCreateAcknowledged = false, hostReferenceAcknowledged = false;
+  bool hostCapRefCreated = false, hostCapRefDeleteSubmitted = false, hostCapRefDeleted = false;
+  bool hostHookRegistrationSubmitted = false, hostHookRegistered = false;
+  bool hostHookRemovalSubmitted = false, hostHookRemoved = false;
+  std::atomic<bool> hostReleaseSubmitted{false}, hostReleaseAcknowledged{false};
+  std::atomic<bool> hostFinalizerObserved{false}, hostFinalizerAcknowledged{false}, hostLifetimeUnknown{false};
+  std::atomic<bool> hostHookFired{false};
+  std::atomic<bool> hostEnvironmentClosing{false};
+  size_t releaseClosedCount = 0, releaseTotalCount = 0;
   void check() { if (cancelled.load()) fail("CANCELLED_RETAINED", 0); }
   Lease& slot() { need(handleSlots < handles.size(), "HANDLE_SLOT_LIMIT"); return handles[handleSlots++]; }
   void note(const Fault& f) noexcept { if (!failure) { failure = f.code; systemError = f.system; } }
@@ -68,7 +80,15 @@ std::mutex ownersMutex;
 std::unordered_set<Owner*> owners;
 const napi_type_tag ownerTag{0x7d1f6914c3714d2aULL, 0x9dfac285f760821eULL};
 // No finalizer/teardown closes a handle or asserts retirement. Unknown handles stay owned.
-void finalize(napi_env, void* data, void*) noexcept { auto* o = static_cast<Owner*>(data); o->collected = true; try { if ((o->released || (o->handleSlots == 0 && o->crypto.empty() && !o->pendingWork)) && !o->busy.load()) { std::lock_guard<std::mutex> lock(ownersMutex); owners.erase(o); delete o; } } catch (...) { /* No GC cleanup or exception may discard custody. */ } }
+bool hostLifetimeFinished(const Owner* o) {
+  return !o->hostAcquireSubmitted || (o->hostFinalizerAcknowledged && o->hostCapRefDeleted && o->hostHookRemoved && !o->hostLifetimeUnknown);
+}
+void forgetCollected(Owner* o) noexcept {
+  try { if (o->collected && hostLifetimeFinished(o) && (o->released || (o->handleSlots == 0 && o->crypto.empty() && !o->pendingWork)) && !o->busy.load()) {
+    std::lock_guard<std::mutex> lock(ownersMutex); owners.erase(o); delete o;
+  } } catch (...) { /* Unknown custody is never discarded by GC. */ }
+}
+void finalize(napi_env, void* data, void*) noexcept { auto* o = static_cast<Owner*>(data); o->collected = true; forgetCollected(o); }
 void api(napi_env, napi_status status) { if (status != napi_ok) throw Fault{"NAPI_FAILURE", 0}; }
 napi_value text(napi_env e, const std::string& x) { napi_value v; api(e, napi_create_string_utf8(e, x.c_str(), x.size(), &v)); return v; }
 std::wstring wide(napi_env e, napi_value v, size_t maximum) {
@@ -234,6 +254,7 @@ void observeEmptyProfile(Owner* o, HANDLE h) {
 }
 void launchPinned(Owner* o, const std::wstring& profile) {
   o->check(); need(o->pins && !o->processObserved, "FILE_PINS_REQUIRED");
+  need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
   need(profile == o->root + L"\\native-launch-profile", "FIXED_PROFILE_REQUIRED");
   o->profileGuid = o->rootGuid + L"\\native-launch-profile";
   HANDLE profileHandle = openPinned(o, o->profileGuid, true, true);
@@ -263,7 +284,9 @@ void launchPinned(Owner* o, const std::wstring& profile) {
   need(o->handleSlots + 4 <= o->handles.size(), "HANDLE_SLOT_LIMIT"); fitToken(o);
   o->createdProcess = &o->slot(); o->createdThread = &o->slot();
   need(sameId(fileId(o->files[0].handle, false), o->files[0].id) && sameId(fileId(o->files[1].handle, false), o->files[1].id), "PIN_CHANGED_BEFORE_CREATION");
-  STARTUPINFOW startup{}; startup.cb = sizeof(startup); o->check(); o->creationAttempted = true;
+  STARTUPINFOW startup{}; startup.cb = sizeof(startup); o->check();
+  need(o->hostReferenceAcknowledged && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
+  o->creationAttempted = true;
   const BOOL ok = CreateProcessW(executable.c_str(), o->launchCommand.data(), nullptr, nullptr, FALSE,
     CREATE_UNICODE_ENVIRONMENT, o->launchEnvironment.data(), o->launchCwd.c_str(), &startup, &o->launched);
   const auto error = ok ? 0 : GetLastError();
@@ -302,6 +325,7 @@ std::string ownedFacts(Owner* o) {
     << ",\"processExitObserved\":" << (o->createdExitObserved ? "true" : "false")
     << ",\"exitCode\":" << (o->createdExitObserved ? std::to_string(o->createdExitCode) : "null")
     << ",\"profileEmptyAtPreflight\":" << (o->profileEmptyObserved ? "true" : "false")
+    << ",\"hostEventLoopReferenceAcknowledged\":" << (o->hostReferenceAcknowledged ? "true" : "false")
     << ",\"stdioObserved\":false,\"physicalLoadedBytesVerified\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false}"; return s.str();
 }
 void requireCreatedTerminal(Owner* o) {
@@ -314,8 +338,19 @@ void requireCreatedTerminal(Owner* o) {
 }
 // This closes only handles opened by this observer. It never closes a window,
 // terminates a process, waits for descendants, or retries an unacknowledged close.
+std::string releaseFacts(Owner* o, bool owned) {
+  const bool hostComplete = !o->hostAcquireSubmitted || (o->hostReleaseAcknowledged && o->hostFinalizerAcknowledged && !o->hostEnvironmentClosing.load() && !o->hostLifetimeUnknown);
+  const bool complete = o->released && (!owned || hostComplete);
+  std::ostringstream s; s << "{\"" << (owned ? "ownedHandlesClosed" : "readHandlesClosed") << "\":" << (o->released ? "true" : "false") << ",\"retainedUnknown\":" << (complete ? "false" : "true") << ",\"closedCount\":" << o->releaseClosedCount << ",\"totalCount\":" << o->releaseTotalCount << ",\"processOwnership\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false";
+  if (owned) s << ",\"hostLifetimeAcquisitionSubmitted\":" << (o->hostAcquireSubmitted ? "true" : "false")
+    << ",\"hostLifetimeReleaseAcknowledged\":" << (o->hostReleaseAcknowledged ? "true" : "false")
+    << ",\"hostLifetimeFinalizerObserved\":" << (o->hostFinalizerObserved ? "true" : "false")
+    << ",\"hostLifetimeFinalizerAcknowledged\":" << (o->hostFinalizerAcknowledged ? "true" : "false")
+    << ",\"hostEnvironmentClosing\":" << (o->hostEnvironmentClosing.load() ? "true" : "false");
+  s << '}'; return s.str();
+}
 std::string releaseHandles(Owner* o, bool owned = false) {
-  if (owned) requireCreatedTerminal(o); else need(!o->launchReserved, "OWNED_LAUNCH_RELEASE_REQUIRED");
+  if (owned) requireCreatedTerminal(o); else need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
   for (auto& state : o->crypto) {
     if (state->hash && state->hashAcquired && !state->hashCloseAttempted) { state->hashCloseAttempted = true; auto status = BCryptDestroyHash(state->hash); if (status == 0) state->hash = nullptr; else o->closeErrors.push_back(static_cast<DWORD>(status)); }
     if (!state->hash && state->algorithm && state->providerAcquired && !state->providerCloseAttempted) { state->providerCloseAttempted = true; auto status = BCryptCloseAlgorithmProvider(state->algorithm, 0); if (status == 0) state->algorithm = nullptr; else o->closeErrors.push_back(static_cast<DWORD>(status)); }
@@ -331,10 +366,44 @@ std::string releaseHandles(Owner* o, bool owned = false) {
   }
   bool cryptoClosed = true; for (auto& state : o->crypto) cryptoClosed = cryptoClosed && !state->hash && !state->algorithm;
   o->released = closed == total && cryptoClosed;
-  std::ostringstream s; s << "{\"" << (owned ? "ownedHandlesClosed" : "readHandlesClosed") << "\":" << (o->released ? "true" : "false") << ",\"retainedUnknown\":" << (o->released ? "false" : "true") << ",\"closedCount\":" << closed << ",\"totalCount\":" << total << ",\"processOwnership\":false,\"physicalDescendantClosure\":false,\"releaseAcceptance\":false}"; return s.str();
+  o->releaseClosedCount = closed; o->releaseTotalCount = total;
+  return releaseFacts(o, owned);
 }
 enum class Operation { Pin, Observe, ReleaseRead, Launch, SampleOwned, ReleaseOwned };
 struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; };
+void hostCleanupMarker(void* data) noexcept {
+  auto* o = static_cast<Owner*>(data); o->hostHookFired.store(true); o->hostEnvironmentClosing.store(true);
+  // No close, release, process control, or successful retirement is inferred.
+}
+void hostNoop(napi_env, napi_value, void*, void*) noexcept { /* No values are queued. */ }
+void hostFinalizer(napi_env e, void* data, void*) noexcept {
+  auto* o = static_cast<Owner*>(data); o->hostFinalizerObserved.store(true);
+  auto* w = static_cast<Work*>(o->pendingWork);
+  if (!e || e != o->env || o->hostEnvironmentClosing.load() || o->hostHookFired.load() ||
+      !o->hostReleaseSubmitted.load() || !o->hostReleaseAcknowledged.load() || !o->released ||
+      !o->hostCapRefDeleted || !o->hostHookRegistered || !w || w->operation != Operation::ReleaseOwned) {
+    // A worker can still be running during forced teardown. Only atomic state
+    // changes here; never race its first-error bookkeeping or assume live custody.
+    o->hostLifetimeUnknown.store(true); return;
+  }
+  try {
+    // This exact registered hook is retained through finalization to distinguish
+    // forced environment cleanup. Never blindly remove a fired/unknown hook.
+    need(!o->hostHookRemovalSubmitted, "HOST_HOOK_REMOVAL_ALREADY_SUBMITTED");
+    o->hostHookRemovalSubmitted = true; api(e, napi_remove_env_cleanup_hook(e, hostCleanupMarker, o));
+    o->hostHookRegistered = false; o->hostHookRemoved = true;
+    o->hostFinalizerAcknowledged.store(true);
+    const auto value = text(e, releaseFacts(o, true));
+    api(e, napi_resolve_deferred(e, w->deferred, value));
+    o->pendingWork = nullptr; o->busy.store(false); delete w; forgetCollected(o);
+  } catch (...) {
+    if (!o->primaryException) o->primaryException = std::current_exception();
+    o->hostLifetimeUnknown.store(true); o->hostFinalizerAcknowledged.store(false);
+    o->note({"HOST_FINALIZER_BOOKKEEPING_UNCONFIRMED", 0});
+    // TSFN is closing/already finalized: retained data is not a live-loop keeper.
+    // Keep unknown Work/Owner custody; no retry or successful closure settlement.
+  }
+}
 void execute(napi_env, void* raw) {
   auto* w = static_cast<Work*>(raw);
   try {
@@ -359,21 +428,40 @@ void complete(napi_env e, napi_status status, void* raw) {
     need(localCap != nullptr, "COMPLETION_CAP_MISSING");
     const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
     const bool resolve = status == napi_ok && !w->failure && !w->result.empty() && (terminal || (!w->o->failure && !w->o->cancelled.load()));
-    napi_value settlement;
-    if (resolve) settlement = text(e, w->result);
-    else { auto message = text(e, std::string("WINDOWS_NATIVE_") + (w->o->failure ? w->o->failure : "CANCELLED_RETAINED")); api(e, napi_create_error(e, nullptr, message, &settlement)); }
+    const bool joinHost = resolve && w->operation == Operation::ReleaseOwned && w->o->released &&
+      w->o->hostAcquireSubmitted && w->o->hostCreateAcknowledged && w->o->hostReferenceAcknowledged &&
+      w->o->hostHookRegistered && !w->o->hostHookFired.load() && !w->o->hostEnvironmentClosing.load() &&
+      !w->o->hostLifetimeUnknown.load() && !w->o->hostFinalizerObserved.load() && !w->o->hostReleaseSubmitted.load();
+    napi_value settlement = nullptr;
+    if (resolve && !joinHost) settlement = text(e, w->result);
+    else if (!resolve) { auto message = text(e, std::string("WINDOWS_NATIVE_") + (w->o->failure ? w->o->failure : "CANCELLED_RETAINED")); api(e, napi_create_error(e, nullptr, message, &settlement)); }
     // A successful release must not escape while async bookkeeping is unknown.
     // Mark only acknowledged deletes, and never repeat them after a later error.
     api(e, napi_delete_async_work(e, w->work));
     w->workCreated = false; w->work = nullptr;
     api(e, napi_delete_reference(e, w->cap));
     w->referenceCreated = false; w->cap = nullptr;
+    if (joinHost) {
+      auto* o = w->o;
+      need(o->hostCapRefCreated && !o->hostCapRefDeleteSubmitted && o->hostCapRef, "HOST_CAP_REFERENCE_UNKNOWN");
+      o->hostCapRefDeleteSubmitted = true; api(e, napi_delete_reference(e, o->hostCapRef));
+      o->hostCapRefCreated = false; o->hostCapRefDeleted = true; o->hostCapRef = nullptr;
+      // localCap roots this scope; the registry/deletion guard retains Owner
+      // through later finalization even if the wrapper is subsequently collected.
+      const auto lifetime = o->hostLifetime; need(lifetime != nullptr, "HOST_LIFETIME_RESOURCE_UNKNOWN");
+      o->hostReleaseSubmitted.store(true); o->hostLifetime = nullptr;
+      const auto released = napi_release_threadsafe_function(lifetime, napi_tsfn_release);
+      // No ref/unref/query/retry may use lifetime after this call.
+      if (released != napi_ok) o->hostLifetimeUnknown.store(true);
+      api(e, released); o->hostReleaseAcknowledged.store(true);
+      return; // No pool waiter: the finalizer alone can finish this deferred join.
+    }
     api(e, resolve ? napi_resolve_deferred(e, w->deferred, settlement) : napi_reject_deferred(e, w->deferred, settlement));
     w->o->pendingWork = nullptr; w->o->busy.store(false); delete w;
   } catch (...) {
     // No C++ exception crosses this callback. Keep work/reference/owner custody
     // and the busy fence when completion bookkeeping was not acknowledged.
-    if (!w->o->primaryException) w->o->primaryException = std::current_exception(); w->o->note({"NAPI_COMPLETION_RETAINED", 0});
+    if (!w->o->primaryException) w->o->primaryException = std::current_exception(); if (w->o->hostAcquireSubmitted) w->o->hostLifetimeUnknown.store(true); w->o->note({"NAPI_COMPLETION_RETAINED", 0});
   }
 }
 
@@ -387,6 +475,28 @@ napi_value prepare(napi_env e, napi_callback_info info) {
     for (uint32_t i = 0; i < 2; ++i) { napi_value f; api(e, napi_get_element(e, files, i, &f)); auto& target = o->files[i]; target.relative = wide(e, prop(e, f, "relativePath"), 64); need(target.relative == (i ? L"resources/app.asar" : L"Diagnostic Hub.exe"), "FIXED_FILE_REQUIRED"); double size; api(e, napi_get_value_double(e, prop(e, f, "size"), &size)); need(size > 0 && size <= 536870912 && size == uint64_t(size), "FILE_SIZE_BOUND"); target.size = uint64_t(size); target.expected = utf8(e, prop(e, f, "sha256"), 64); need(target.expected.size() == 64 && target.expected.find_first_not_of("0123456789abcdef") == std::string::npos, "DIGEST_INVALID"); }
     return cap;
   } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
+}
+napi_value acquireHostLifetime(napi_env e, napi_callback_info info) {
+  Owner* o = nullptr;
+  try {
+    size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr)); need(n == 1, "HOST_LIFETIME_ARGUMENTS");
+    o = owner(e, a[0]);
+    need(o->pins && !o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->processObserved && !o->launchReserved, "HOST_LIFETIME_NOT_ACTIVE");
+    need(!o->hostAcquireSubmitted, "HOST_LIFETIME_ALREADY_SUBMITTED"); o->hostAcquireSubmitted = true;
+    api(e, napi_create_reference(e, a[0], 1, &o->hostCapRef)); o->hostCapRefCreated = true;
+    api(e, napi_create_threadsafe_function(e, nullptr, nullptr, text(e, "windows-created-process-host-lifetime"),
+      1, 1, o, hostFinalizer, o, hostNoop, &o->hostLifetime)); o->hostCreateAcknowledged = true;
+    api(e, napi_ref_threadsafe_function(e, o->hostLifetime)); o->hostReferenceAcknowledged = true;
+    // Node cleanup hooks are LIFO: register this marker AFTER the TSFN's hook.
+    o->hostHookRegistrationSubmitted = true; api(e, napi_add_env_cleanup_hook(e, hostCleanupMarker, o)); o->hostHookRegistered = true;
+    return text(e, "{\"created\":true,\"referenced\":true,\"cleanupMarkerRegistered\":true}");
+  } catch (const Fault& f) {
+    if (o && o->hostAcquireSubmitted) { o->hostLifetimeUnknown.store(true); o->note(f); }
+    napi_throw_error(e, f.code, f.code); return nullptr;
+  } catch (...) {
+    if (o && o->hostAcquireSubmitted) { o->hostLifetimeUnknown.store(true); if (!o->primaryException) o->primaryException = std::current_exception(); o->note({"HOST_ACQUISITION_UNCONFIRMED", 0}); }
+    napi_throw_error(e, "WINDOWS_NATIVE_HOST_ACQUISITION", "WINDOWS_NATIVE_HOST_ACQUISITION_UNCONFIRMED"); return nullptr;
+  }
 }
 // Known, unqueued bookkeeping can be released. A failed delete remains retained.
 void unqueuedFailure(Work* w, const Fault& original) noexcept {
@@ -407,12 +517,15 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
     size_t n = 3; napi_value a[3]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr));
     need(n == (observe ? 3u : launch ? 2u : 1u), "OP_ARGUMENTS"); auto* o = owner(e, a[0]);
     need(!o->busy.load() && !o->releaseSubmitted, "CAPABILITY_NOT_ACTIVE");
-    if (!terminal && !release) need(!o->failure && !o->cancelled.load(), "CAPABILITY_NOT_ACTIVE");
+    if (!terminal && !release) need(!o->failure && !o->cancelled.load() && !o->hostLifetimeUnknown.load(), "CAPABILITY_NOT_ACTIVE");
     if (operation == Operation::Pin) need(!o->pins && !o->launchReserved, "OP_ALREADY_SUBMITTED");
     if (observe) need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
-    if (launch) need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
+    if (launch) {
+      need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
+      need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted.load() && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
+    }
     if (operation == Operation::SampleOwned) need(o->pins, "FILE_PINS_REQUIRED");
-    if (operation == Operation::ReleaseRead) need(!o->launchReserved, "OWNED_LAUNCH_RELEASE_REQUIRED");
+    if (operation == Operation::ReleaseRead) need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
     // Refusal here precedes release submission/invalidation and closes nothing.
     if (operation == Operation::ReleaseOwned) requireCreatedTerminal(o);
     std::wstring profile;
@@ -439,11 +552,11 @@ napi_value releaseCall(napi_env e, napi_callback_info i) { return start(e, i, Op
 napi_value launchCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::Launch); }
 napi_value sampleOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SampleOwned); }
 napi_value releaseOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseOwned); }
-napi_value assertCap(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = owner(e, a[0]); need(!o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure, "CAPABILITY_INVALIDATED"); napi_value yes; api(e, napi_get_boolean(e, true, &yes)); return yes; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
+napi_value assertCap(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = owner(e, a[0]); need(!o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->hostLifetimeUnknown.load(), "CAPABILITY_INVALIDATED"); napi_value yes; api(e, napi_get_boolean(e, true, &yes)); return yes; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
 napi_value cancel(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); owner(e, a[0])->cancelled.store(true); napi_value v; napi_get_undefined(e, &v); return v; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
 napi_value refuseClose(napi_env e, napi_callback_info) { napi_throw_error(e, "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE", "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE"); return nullptr; }
 napi_value init(napi_env e, napi_value exports) {
-  napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
+  napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"acquireLaunchLifetime", nullptr, acquireHostLifetime, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
   if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
 }
 } // namespace

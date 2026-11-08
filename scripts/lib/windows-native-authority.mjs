@@ -280,6 +280,7 @@ export async function prepareWindowsNativeAuthority(request, expectedBuild) {
             'release',
             'refuseNormalClose',
             'launchPinnedProcess',
+            'acquireLaunchLifetime',
             'sampleOwnedProcess',
             'releaseOwnedProcessHandles',
         ])
@@ -448,6 +449,7 @@ function ownedObservation(output) {
         'unconfirmedHandleOutput',
         'processExitObserved',
         'profileEmptyAtPreflight',
+        'hostEventLoopReferenceAcknowledged',
         'stdioObserved',
         'physicalLoadedBytesVerified',
         'physicalDescendantClosure',
@@ -464,6 +466,7 @@ function ownedObservation(output) {
         assert.equal(value[key], false);
     assert.ok(!value.creationReturned || value.creationAttempted);
     if (value.createdByThisOwner) {
+        assert.equal(value.hostEventLoopReferenceAcknowledged, true);
         assert.ok(
             value.creationAttempted && value.creationReturned && value.profileEmptyAtPreflight,
         );
@@ -519,7 +522,7 @@ function saveOwnedObservation(record, output) {
     const bytes = Buffer.from(
         JSON.stringify({
             schemaVersion: 1,
-            kind: 'windows-native-created-process/v1',
+            kind: 'windows-native-created-process/v2',
             binding: record.binding,
             requestedLaunch: record.launch.request,
             observation,
@@ -531,9 +534,9 @@ function saveOwnedObservation(record, output) {
 }
 /** One explicit future native creation, never activated by import or a read-only
  * lifecycle caller. The owner and one-use reservation precede the submitted task.
- * An independent live host/caller lifetime must precede this call and continue
- * through terminal observation and HANDLE-release ACK. Retained JS/native objects,
- * raw HANDLEs and pending promises do not themselves keep Node's event loop alive. */
+ * A referenced native TSFN is acquired before creation and joined after own-HANDLE
+ * closure. It prevents normal loop drain, not forced exit or unknown finalizer
+ * bookkeeping. Those cases still require an independent host/caller custodian. */
 export function launchWindowsNativePinnedProcess(cap, input) {
     const record = active(cap),
         request = validateWindowsNativeLaunch(input, record.binding);
@@ -549,9 +552,26 @@ export function launchWindowsNativePinnedProcess(cap, input) {
         latest: null,
         bytes: null,
         release: null,
+        lifetimeAcquisitionSubmitted: false,
+        lifetimeAcquisitionAcknowledged: false,
     };
-    const task = Promise.resolve().then(() => {
+    const task = Promise.resolve().then(async () => {
         // Cancellation between reservation and submission grants no new effect.
+        assert.ok(
+            !record.cancelled && !record.invalidated,
+            'WINDOWS_NATIVE_LAUNCH_CANCELLED_RETAINED',
+        );
+        record.launch.lifetimeAcquisitionSubmitted = true;
+        const acquisition = record.native.acquireLaunchLifetime(record.raw);
+        record.launch.lifetimeAcquisition = acquisition; // Adopt before observing a late result.
+        const output = await acquisition;
+        record.launch.lifetimeAcquisitionResult = output;
+        assert.ok(typeof output === 'string' && Buffer.byteLength(output) <= 4096);
+        const ack = JSON.parse(output);
+        fields(ack, ['created', 'referenced', 'cleanupMarkerRegistered']);
+        for (const key of ['created', 'referenced', 'cleanupMarkerRegistered'])
+            assert.equal(ack[key], true);
+        record.launch.lifetimeAcquisitionAcknowledged = true;
         assert.ok(
             !record.cancelled && !record.invalidated,
             'WINDOWS_NATIVE_LAUNCH_CANCELLED_RETAINED',
@@ -592,8 +612,8 @@ export function readWindowsNativeOwnedProcess(cap) {
     assert.ok(record.launch.bytes, 'WINDOWS_NATIVE_OWNED_OBSERVATION_MISSING');
     return Buffer.from(record.launch.bytes);
 }
-/** Release only our HANDLEs, once, after a genuine native terminal sample or a
- * confirmed non-creation. Stdio, all app owners and descendants remain unknown. */
+/** Join own-HANDLE closure and the native lifetime finalizer, once, after an actual
+ * terminal/non-creation sample. Stdio, all app owners and descendants stay unknown. */
 export function releaseWindowsNativeOwnedProcessHandles(cap) {
     const record = state(cap);
     assert.ok(record.launch, 'WINDOWS_NATIVE_LAUNCH_NOT_RESERVED');
@@ -622,9 +642,50 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
                 'processOwnership',
                 'physicalDescendantClosure',
                 'releaseAcceptance',
+                'hostLifetimeAcquisitionSubmitted',
+                'hostLifetimeReleaseAcknowledged',
+                'hostLifetimeFinalizerObserved',
+                'hostLifetimeFinalizerAcknowledged',
+                'hostEnvironmentClosing',
             ]);
             assert.equal(typeof value.ownedHandlesClosed, 'boolean');
-            assert.equal(value.retainedUnknown, !value.ownedHandlesClosed);
+            for (const key of [
+                'hostLifetimeAcquisitionSubmitted',
+                'hostLifetimeReleaseAcknowledged',
+                'hostLifetimeFinalizerObserved',
+                'hostLifetimeFinalizerAcknowledged',
+                'hostEnvironmentClosing',
+            ])
+                assert.equal(typeof value[key], 'boolean');
+            assert.equal(
+                value.hostLifetimeAcquisitionSubmitted,
+                record.launch.lifetimeAcquisitionSubmitted,
+            );
+            if (!value.hostLifetimeAcquisitionSubmitted)
+                for (const key of [
+                    'hostLifetimeReleaseAcknowledged',
+                    'hostLifetimeFinalizerObserved',
+                    'hostLifetimeFinalizerAcknowledged',
+                    'hostEnvironmentClosing',
+                ])
+                    assert.equal(value[key], false);
+            if (value.hostLifetimeReleaseAcknowledged)
+                assert.equal(value.hostLifetimeAcquisitionSubmitted, true);
+            if (value.hostLifetimeFinalizerAcknowledged)
+                assert.ok(
+                    value.hostLifetimeAcquisitionSubmitted &&
+                        value.hostLifetimeReleaseAcknowledged &&
+                        value.hostLifetimeFinalizerObserved &&
+                        !value.hostEnvironmentClosing,
+                );
+            const complete =
+                value.ownedHandlesClosed &&
+                (!value.hostLifetimeAcquisitionSubmitted ||
+                    (value.hostLifetimeReleaseAcknowledged &&
+                        value.hostLifetimeFinalizerObserved &&
+                        value.hostLifetimeFinalizerAcknowledged &&
+                        !value.hostEnvironmentClosing));
+            assert.equal(value.retainedUnknown, !complete);
             for (const key of ['closedCount', 'totalCount'])
                 assert.ok(Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 64);
             assert.ok(value.closedCount <= value.totalCount);
@@ -634,7 +695,8 @@ export function releaseWindowsNativeOwnedProcessHandles(cap) {
                 'releaseAcceptance',
             ])
                 assert.equal(value[key], false);
-            if (value.ownedHandlesClosed) {
+            if (value.ownedHandlesClosed) assert.equal(value.closedCount, value.totalCount);
+            if (complete) {
                 assert.equal(value.closedCount, value.totalCount);
                 retained.delete(record);
             }

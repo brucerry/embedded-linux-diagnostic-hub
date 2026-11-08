@@ -45,12 +45,18 @@ genuine externally established fresh, exclusively owned staging/profile and acti
 remain prerequisites for any future activation. No boolean, receipt, or caller-supplied mode can
 supply those facts. The backend creates, deletes, or changes permissions on no directory.
 
-An independently owned live host/caller lifetime must also exist before `CreateProcessW` and
-continue through terminal observation and resource-release acknowledgment. Retaining a native
-HANDLE, owner registry, JavaScript Set, or unresolved Promise does not itself keep Node's event loop
-alive after the async work settles. This slice retains creation/capture-time HANDLE custody while
-its host lives; it is not a complete host-lifetime owner and is not eligible for standalone native
-activation. No keepalive, supervisor, forced shutdown, or process framework is added here.
+Before creation, the existing owner now acquires a Node-API thread-safe function (TSFN) on the main
+thread: one logical acquisition, queue bound one, no queued calls, no waiter or new worker.
+Creation, explicit loop-reference and cleanup-marker registration must each acknowledge success. A
+strong wrapper reference and owner registry protect finalizer data. The marker is registered after
+the TSFN so reverse-order environment cleanup marks teardown before its finalizer. Native creation
+independently requires these acknowledgments; caller flags cannot supply them.
+
+A referenced TSFN prevents ordinary event-loop drain until destruction. It does not prevent
+`process.exit`, crashes, forced environment teardown, or establish external host ownership. An
+independent host/caller custodian is still required for those cases. Acquired resources survive a
+cancellation before CreateProcess; only actual non-creation/terminal sampling permits an explicit
+release. A rejected acquisition does not prove no resource exists and is never retried.
 
 Failure errors expose only a frozen, non-authoritative snapshot of retention flags and counts at
 capture time. The mutable owner, capability, native ports, HANDLEs, maps, source paths, and buffers
@@ -82,18 +88,32 @@ error; it never accepts a replacement PID or acquires another process. It uses a
 creation time, and exit-code query. A signaled wait establishes root termination; numeric exit code
 259 alone never decides liveness. There are no pipes, output EOF observations, stable HWND
 capabilities, normal-close requests, automatic process control, or descendant observations.
-`releaseOwnedProcessHandles` refuses a live or unknown root before release submission. After a
-confirmed non-creation or observed terminal root, it closes only this owner's HANDLEs once. A
-CloseHandle or N-API bookkeeping failure keeps custody and cannot become successful release. There
-is deliberately no full `closed`/retired promise. The old query-release API refuses a creation
-owner, and successful own-HANDLE release never means application or group closure.
+`releaseOwnedProcessHandles` refuses a live or unknown root before release submission. After actual
+non-creation or root termination, it closes only its own HANDLEs once and joins acknowledged
+async-work/reference cleanup. Only then does it request TSFN release once; that pointer is never
+used again. The existing Promise waits for the normal finalizer callback plus marker-removal and
+remaining bookkeeping ACK. HANDLE closure, release request, release ACK and finalizer observation
+are distinct facts. The finalizer is not proof that every TSFN allocation or namespace is retired.
+
+Created-process `/v2` rows add the actual reference acknowledgment; historical `/v1` records remain
+unchanged. Release results distinguish HANDLE closure from acquisition, release, finalizer,
+finalizer-bookkeeping and environment-closing observations. A submitted acquisition cannot be
+relabeled as absent. Missing/contradictory facts retain the private owner, never admit a full case.
+No-acquisition cancellation is different from submitted-but-unconfirmed acquisition.
+
+Forced/null-environment or premature finalization never acknowledges graceful closure. A failure in
+finalizer cleanup or Promise settlement leaves lifetime/bookkeeping UNKNOWN. Once the last reference
+is closing, retained C++/JS data or an unresolved Promise cannot guarantee the loop stays alive; no
+recursive keeper, forced shutdown or cleanup fallback is added. Stdio/EOF, safe app close, loaded
+code and descendant retirement remain unproved, and full native/release gates stay closed.
+Successful normal release acknowledges only the owner's component resources.
 
 The direct JavaScript controls execute the actual wrapper in a bounded VM with closed in-memory
 filesystem/native-port substitutes. Those model objects are not Node-API capabilities and never
 enter the production module's private capability map. Tests do not compile or execute this new C++
-branch. The earlier compiled read-only source and its binary evidence remain separate; this creation
-extension needs its own future, explicitly authorized Windows compilation and controlled runtime
-evidence before any native qualification.
+branch. The preserved `b769e0d` creation source compiled successfully without addon loading. That
+build evidence remains separate: this TSFN extension has not been compiled or executed. Its
+source/VM controls do not test actual loop liveness, N-API finalization or Windows runtime behavior.
 
 Explicit `release` attempts to close each newly owned observer HANDLE once, and closes owned CNG
 objects. It invalidates the capability when submitted. A failed close keeps private custody and is
@@ -132,8 +152,12 @@ The implementation follows the public contracts for
 [GetWindowThreadProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowthreadprocessid),
 and
 [CloseHandle](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle).
-Node-API wrap/type-tag/freeze/async-work declarations were checked in the retained official Node
-24.22.0 headers; no addon was loaded to check them.
+Node-API wrap/type-tag/freeze/async-work/TSFN declarations were checked in the retained official
+Node 24.22.0 headers. The exact
+[Node 24.22 TSFN contract](https://github.com/nodejs/node/blob/v24.22.0/doc/api/n-api.md#deciding-whether-to-keep-the-process-running)
+and [implementation](https://github.com/nodejs/node/blob/v24.22.0/src/node_api.cc) distinguish
+normal loop references, release and cleanup/finalization. No addon or real TSFN was invoked to check
+them.
 
 A direct compile/link (future approved Windows job only) can use the selected x64 MSVC developer
 environment without app dependencies, Python, node-gyp or npm scripts:
