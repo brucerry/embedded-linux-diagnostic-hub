@@ -8,7 +8,7 @@
                 [
                     "OS=='win'",
                     {
-                        "libraries": ["bcrypt.lib", "advapi32.lib", "user32.lib"],
+                        "libraries": ["bcrypt.lib", "advapi32.lib", "user32.lib", "iphlpapi.lib"],
                         "msvs_settings": {
                             "VCCLCompilerTool": {
                                 "AdditionalOptions": ["/std:c++17"],

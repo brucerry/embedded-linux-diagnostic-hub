@@ -6,6 +6,12 @@
 #define NOMINMAX
 #define _WIN32_WINNT 0x0602
 #include <windows.h>
+#include <winsock2.h>
+#include <iphlpapi.h>
+#include <ipifcons.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "iphlpapi.lib")
+#endif
 #include <bcrypt.h>
 #include <node_api.h>
 #include <atomic>
@@ -54,6 +60,11 @@ struct StreamCapture {
 struct Owner {
   napi_env env; std::wstring root; std::array<File, 2> files;
   std::array<Lease, 64> handles{}; size_t handleSlots = 0; std::vector<std::unique_ptr<Crypto>> crypto;
+  // The output slot belongs to the existing owner before GetIfTable2 writes it.
+  // A failure output is not authority to inspect or free that pointer.
+  PMIB_IF_TABLE2 interfaceTable = nullptr;
+  bool interfaceSubmitted = false, interfaceCallReturned = false, interfaceSucceeded = false;
+  bool interfaceOutputUnknown = false, interfaceFreeSubmitted = false, interfaceFreeReturned = false;
   std::atomic<bool> busy{false}, cancelled{false};
   void* pendingWork = nullptr;
   bool pins = false, processObserved = false, collected = false, releaseSubmitted = false, released = false;
@@ -103,7 +114,7 @@ bool hostLifetimeFinished(const Owner* o) {
   return !o->hostAcquireSubmitted || (o->hostFinalizerAcknowledged && o->hostCapRefDeleted && o->hostHookRemoved && !o->hostLifetimeUnknown);
 }
 void forgetCollected(Owner* o) noexcept {
-  try { if (o->collected && hostLifetimeFinished(o) && (o->released || (o->handleSlots == 0 && o->crypto.empty() && !o->pendingWork)) && !o->busy.load()) {
+  try { if (o->collected && hostLifetimeFinished(o) && !o->interfaceTable && !o->interfaceOutputUnknown && !(o->interfaceFreeSubmitted && !o->interfaceFreeReturned) && (o->released || (o->handleSlots == 0 && o->crypto.empty() && !o->pendingWork)) && !o->busy.load()) {
     std::lock_guard<std::mutex> lock(ownersMutex); owners.erase(o); delete o;
   } } catch (...) { /* Unknown custody is never discarded by GC. */ }
 }
@@ -565,6 +576,57 @@ std::string ownedWindowFacts(Owner* o, std::vector<OwnedWindow>& rows) {
       << ",\"visible\":" << (row.visible ? "true" : "false") << ",\"minimized\":" << (row.minimized ? "true" : "false") << '}'; }
   s << "]}"; return s.str();
 }
+constexpr size_t interfaceRowLimit = 4096;
+void freeKnownInterfaceTable(Owner* o) {
+  // This is only the documented successful GetIfTable2 allocation, never an
+  // error output. A submitted free is never repeated after uncertain return.
+  if (!o->interfaceTable || !o->interfaceSucceeded || o->interfaceOutputUnknown || o->interfaceFreeSubmitted) return;
+  o->interfaceFreeSubmitted = true;
+  FreeMibTable(o->interfaceTable);
+  o->interfaceFreeReturned = true; // VOID API: normal call return, not an independent memory probe.
+  o->interfaceTable = nullptr;
+}
+std::string interfaceStatusFacts(Owner* o) {
+  o->check();
+  need(o->interfaceSubmitted && !o->interfaceCallReturned && !o->interfaceTable, "INTERFACE_OPERATION_NOT_FRESH");
+  const auto status = GetIfTable2(&o->interfaceTable);
+  o->interfaceCallReturned = true;
+  if (status != NO_ERROR) {
+    o->interfaceOutputUnknown = true;
+    fail("INTERFACE_TABLE_UNCONFIRMED", status); // Do not dereference/free any error output.
+  }
+  if (!o->interfaceTable) { o->interfaceOutputUnknown = true; fail("INTERFACE_TABLE_MISSING", 0); }
+  o->interfaceSucceeded = true; // Adopt known allocated success before cancellation/validation.
+  o->check();
+  const size_t rows = o->interfaceTable->NumEntries;
+  need(rows <= interfaceRowLimit, "INTERFACE_ROW_LIMIT");
+  need(rows <= (std::numeric_limits<size_t>::max() - offsetof(MIB_IF_TABLE2, Table)) / sizeof(MIB_IF_ROW2), "INTERFACE_TABLE_SPAN_OVERFLOW");
+  const size_t span = offsetof(MIB_IF_TABLE2, Table) + rows * sizeof(MIB_IF_ROW2);
+  need(reinterpret_cast<uintptr_t>(o->interfaceTable) <= std::numeric_limits<uintptr_t>::max() - span, "INTERFACE_TABLE_ADDRESS_OVERFLOW");
+  std::array<size_t, 8> counts{};
+  size_t loopback = 0;
+  for (size_t i = 0; i < rows; ++i) {
+    o->check();
+    // SDK indexing honors MIB_IF_TABLE2/MIB_IF_ROW2 alignment; no packed-byte walk.
+    const auto& row = o->interfaceTable->Table[i];
+    if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK) ++loopback;
+    const auto state = static_cast<unsigned>(row.OperStatus);
+    ++counts[state >= 1 && state <= 7 ? state - 1 : 7];
+  }
+  o->check();
+  freeKnownInterfaceTable(o);
+  o->check();
+  std::ostringstream result;
+  result << "{\"scope\":\"collector-interface-snapshot\",\"rowLimit\":" << interfaceRowLimit
+    << ",\"rows\":" << rows << ",\"loopbackRows\":" << loopback
+    << ",\"upRows\":" << counts[0] << ",\"downRows\":" << counts[1]
+    << ",\"testingRows\":" << counts[2] << ",\"unknownRows\":" << counts[3]
+    << ",\"dormantRows\":" << counts[4] << ",\"notPresentRows\":" << counts[5]
+    << ",\"lowerLayerDownRows\":" << counts[6] << ",\"otherStatusRows\":" << counts[7]
+    << ",\"tableFreeReturned\":true,\"allCompartmentsObserved\":false,\"intervalObserved\":false"
+    << ",\"machineOffline\":false,\"installerObserved\":false,\"releaseAcceptance\":false}";
+  return result.str();
+}
 void requireCreatedTerminal(Owner* o) {
   need(!o->pipeAcquisitionUnknown && !o->attributeAcquisitionUnknown, "STDIO_ACQUISITION_UNCONFIRMED");
   need(!o->creationAttempted || o->creationReturned, "CREATION_RETURN_UNKNOWN");
@@ -591,6 +653,7 @@ std::string releaseFacts(Owner* o, bool owned) {
 std::string releaseHandles(Owner* o, bool owned = false) {
   if (owned) requireCreatedTerminal(o); else need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
   deleteAttributes(o);
+  freeKnownInterfaceTable(o);
   for (auto& state : o->crypto) {
     if (state->hash && state->hashAcquired && !state->hashCloseAttempted) { state->hashCloseAttempted = true; auto status = BCryptDestroyHash(state->hash); if (status == 0) state->hash = nullptr; else o->closeErrors.push_back(static_cast<DWORD>(status)); }
     if (!state->hash && state->algorithm && state->providerAcquired && !state->providerCloseAttempted) { state->providerCloseAttempted = true; auto status = BCryptCloseAlgorithmProvider(state->algorithm, 0); if (status == 0) state->algorithm = nullptr; else o->closeErrors.push_back(static_cast<DWORD>(status)); }
@@ -605,11 +668,12 @@ std::string releaseHandles(Owner* o, bool owned = false) {
     if (it->closeAcknowledged) ++closed;
   }
   bool cryptoClosed = true; for (auto& state : o->crypto) cryptoClosed = cryptoClosed && !state->hash && !state->algorithm;
-  o->released = closed == total && cryptoClosed;
+  const bool interfaceClosed = !o->interfaceTable && !o->interfaceOutputUnknown && (!o->interfaceFreeSubmitted || o->interfaceFreeReturned);
+  o->released = closed == total && cryptoClosed && interfaceClosed;
   o->releaseClosedCount = closed; o->releaseTotalCount = total;
   return releaseFacts(o, owned);
 }
-enum class Operation { Pin, Observe, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned };
+enum class Operation { Pin, Observe, ObserveInterfaceStatus, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned };
 struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; std::vector<OwnedWindow> ownedWindows; };
 void hostCleanupMarker(void* data) noexcept {
   auto* o = static_cast<Owner*>(data); o->hostHookFired.store(true); o->hostEnvironmentClosing.store(true);
@@ -655,6 +719,7 @@ void execute(napi_env, void* raw) {
       case Operation::SampleOwned: w->result = ownedFacts(w->o); break;
       case Operation::ObserveOwnedWindows: w->result = ownedWindowFacts(w->o, w->ownedWindows); break;
       case Operation::DrainStdio: w->result = drainStdio(w->o); break;
+      case Operation::ObserveInterfaceStatus: w->result = interfaceStatusFacts(w->o); break;
       case Operation::Pin: pin(w->o); w->result = fileFacts(w->o); break;
     }
   } catch (const Fault& f) { w->failure = f.code; w->o->note(f); }
@@ -760,6 +825,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
     need(n == (observe ? 3u : launch ? 2u : 1u), "OP_ARGUMENTS"); auto* o = owner(e, a[0]);
     need(!o->busy.load() && !o->releaseSubmitted, "CAPABILITY_NOT_ACTIVE");
     if (!terminal && !release) need(!o->failure && !o->cancelled.load() && !o->hostLifetimeUnknown.load(), "CAPABILITY_NOT_ACTIVE");
+    if (operation == Operation::ObserveInterfaceStatus) { need(!o->interfaceSubmitted, "INTERFACE_OPERATION_ALREADY_SUBMITTED"); o->interfaceSubmitted = true; }
     if (operation == Operation::Pin) need(!o->pins && !o->launchReserved, "OP_ALREADY_SUBMITTED");
     if (observe) need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
     if (launch) {
@@ -792,6 +858,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation) {
 
 napi_value pinCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::Pin); }
 napi_value processCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::Observe); }
+napi_value interfaceStatusCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ObserveInterfaceStatus); }
 napi_value releaseCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseRead); }
 napi_value launchCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::Launch); }
 napi_value sampleOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SampleOwned); }
@@ -803,8 +870,9 @@ napi_value cancel(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_v
 napi_value refuseClose(napi_env e, napi_callback_info) { napi_throw_error(e, "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE", "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE"); return nullptr; }
 napi_value init(napi_env e, napi_value exports) {
   napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"acquireLaunchLifetime", nullptr, acquireHostLifetime, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"drainOwnedStdio", nullptr, drainStdioCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
+  napi_property_descriptor interfaceStatus = {"observeInterfaceStatus", nullptr, interfaceStatusCall, nullptr, nullptr, nullptr, napi_default, nullptr};
   napi_property_descriptor ownedWindows = {"observeOwnedWindows", nullptr, observeOwnedWindowsCall, nullptr, nullptr, nullptr, napi_default, nullptr};
-  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
+  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok || napi_define_properties(e, exports, 1, &interfaceStatus) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
 }
 } // namespace
 NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
