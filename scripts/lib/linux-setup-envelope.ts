@@ -258,3 +258,79 @@ export async function prepareLinuxReviewEnvelope(input: unknown, injected?: Linu
         };
     }
 }
+
+/** Fixed permanent-folder map. The original portable census is retained separately;
+ * only AppRun uses the actual packaged installed-launcher member, never fabricated bytes. */
+export function planLinuxPermanentEnvelope(input: unknown) {
+    const source = planLinuxReviewEnvelope(input);
+    const launcher = source.files.find((file) => file.path === 'resources/linux-installed-AppRun');
+    if (!launcher || launcher.mode !== 0o755 || launcher.bytes < 1 || launcher.bytes > 16384)
+        throw Error('LINUX_ENVELOPE_INSTALLED_LAUNCHER');
+    for (const [member, cap] of [
+        ['resources/linux-setup-bootstrap.cjs', 1048576],
+        ['resources/linux-setup-install.cjs', 1048576],
+        ['resources/diagnostic_hub_rename_noreplace.node', 33554432],
+    ] as const) {
+        const file = source.files.find((row) => row.path === member);
+        if (!file || file.mode !== 0o644 || file.bytes < 1 || file.bytes > cap)
+            throw Error('LINUX_ENVELOPE_PERMANENT_MEMBER');
+    }
+    const files = source.files.map((file) =>
+        file.path === 'AppRun' ? { ...launcher, path: 'AppRun' } : { ...file },
+    );
+    const manifest = validateInstallationManifest({
+        ...source.manifest,
+        files: files.map((file) => ({
+            kind: 'file',
+            path: 'app/' + file.path,
+            bytes: file.bytes,
+            sha256: file.sha256,
+        })),
+    });
+    const descriptor = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
+    if (descriptor.length > MAX_INSTALLATION_MANIFEST_BYTES)
+        throw Error('LINUX_ENVELOPE_DESCRIPTOR_CAP');
+    return {
+        ...source,
+        inputFiles: clone(source.files),
+        inputInventorySHA256: source.inventorySHA256,
+        appRunSource: 'resources/linux-installed-AppRun' as const,
+        files,
+        inventorySHA256: hash(JSON.stringify(files)),
+        manifest,
+        descriptor: descriptor.toString('utf8'),
+        descriptorSHA256: hash(descriptor),
+        payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0),
+    };
+}
+/** Reuse the unchanged preparation/owner pipeline with one fixed map adapter.
+ * This configures copying only; it grants no native admission, acceptance or release verdict. */
+export async function prepareLinuxPermanentEnvelope(input: unknown, injected?: LinuxEnvelopeIO) {
+    const permanent = planLinuxPermanentEnvelope(input);
+    const disk =
+        injected ?? (await import('./linux-setup-envelope-disk.mjs')).createLinuxEnvelopeDisk();
+    // Old preparation still owns every operation/checkpoint. The private input baseline
+    // used by physical IO remains the original census, while output files/descriptor are mapped.
+    const mappedInput = {
+        ...(clone(input) as object),
+        files: clone(permanent.files),
+        inventorySHA256: permanent.inventorySHA256,
+    };
+    const fixed: LinuxEnvelopeIO = {
+        admit: () => disk.admit(clone(permanent)),
+        verifyInput: () => disk.verifyInput(clone(permanent)),
+        createRoot: () => disk.createRoot(clone(permanent)),
+        copyFile: (_plan, file) => disk.copyFile(clone(permanent), clone(file)),
+        writeDescriptor: (_plan, bytes) =>
+            disk.writeDescriptor(clone(permanent), Buffer.from(bytes)),
+        verifyOutput: () => disk.verifyOutput(clone(permanent)),
+    };
+    const result = await prepareLinuxReviewEnvelope(mappedInput, fixed);
+    return result.status === 'prepared-read-only-envelope'
+        ? {
+              ...result,
+              status: 'prepared-install-envelope' as const,
+              inputInventorySHA256: permanent.inputInventorySHA256,
+          }
+        : result;
+}

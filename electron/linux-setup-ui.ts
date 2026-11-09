@@ -18,6 +18,8 @@ export interface LinuxPromptRequest {
     detail: string;
     menu: boolean;
     deadlineMs: number;
+    /** Only the separate permanent entry requests an applying confirmation. */
+    confirmation?: 'apply';
 }
 export type LinuxPromptReply =
     { status: 'confirmed'; menu: boolean } | { status: 'cancelled' | 'unavailable' | 'unknown' };

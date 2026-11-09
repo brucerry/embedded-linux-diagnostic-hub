@@ -84,9 +84,15 @@ export function linuxGuiPrompt(
                 owner.operation = dialog.showMessageBox({
                     type: 'question',
                     title: 'Diagnostic Hub – Linux setup review',
-                    message: 'Review choices only',
+                    message:
+                        request.confirmation === 'apply'
+                            ? 'Apply this Linux setup operation?'
+                            : 'Review choices only',
                     detail: request.detail,
-                    buttons: ['Cancel', 'Finish review'],
+                    buttons: [
+                        'Cancel',
+                        request.confirmation === 'apply' ? 'Apply operation' : 'Finish review',
+                    ],
                     defaultId: 0,
                     cancelId: 0,
                     noLink: true,
@@ -175,7 +181,9 @@ export function linuxTerminalPrompt(clock = clockDefault, supplied?: LinuxTTYOps
                 const bytes = Buffer.from(
                     '\n' +
                         request.detail +
-                        '\nType "review menu" or "review no-menu"; Enter/cancel leaves everything unchanged: ',
+                        (request.confirmation === 'apply'
+                            ? '\nType "apply menu" or "apply no-menu" to apply this operation; Enter/cancel leaves everything unchanged: '
+                            : '\nType "review menu" or "review no-menu"; Enter/cancel leaves everything unchanged: '),
                 );
                 if (bytes.length > 16384) throw Error('TTY_BOUND');
                 let at = 0;
@@ -226,8 +234,9 @@ export function linuxTerminalPrompt(clock = clockDefault, supplied?: LinuxTTYOps
                 pending.delete(fd);
                 gate();
                 const choice = line.trim();
-                if (choice === 'review menu') return { status: 'confirmed', menu: true };
-                if (choice === 'review no-menu') return { status: 'confirmed', menu: false };
+                const verb = request.confirmation === 'apply' ? 'apply' : 'review';
+                if (choice === verb + ' menu') return { status: 'confirmed', menu: true };
+                if (choice === verb + ' no-menu') return { status: 'confirmed', menu: false };
                 return { status: 'cancelled' };
             } catch {
                 return { status: 'unknown' };

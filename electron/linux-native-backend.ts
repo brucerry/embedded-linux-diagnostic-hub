@@ -5,9 +5,11 @@ import type { Stats, Dir } from 'node:fs';
 import { physicalFS } from './physical-fs.ts';
 import {
     checkedLinuxModelPlan,
+    checkedLinuxModelConfiguration,
     checkedLinuxModelView,
     linuxModelReviewSHA256,
     type LinuxModelPlan,
+    type LinuxModelConfiguration,
     type LinuxModelScope,
     type LinuxModelView,
     type LinuxModelSource,
@@ -150,9 +152,42 @@ export function createLinuxNativeBackend(
     window: LinuxNativeWindow,
     supplied?: LinuxNativeOps,
 ) {
-    const plan = checkedLinuxModelPlan(input),
-        ops = supplied ?? defaultOps(),
-        fs = ops.fs,
+    const plan = checkedLinuxModelPlan(input);
+    return createBackend(
+        plan,
+        window,
+        supplied ?? defaultOps(),
+        false,
+        Boolean(plan.review.history),
+    );
+}
+/** Own a real read-only preparation before a prompt. No fabricated review or consent is supplied. */
+export function createLinuxNativePreparationBackend(
+    input: LinuxModelConfiguration,
+    window: LinuxNativeWindow,
+    supplied: LinuxNativeOps,
+    menuDataHome?: string,
+) {
+    return createBackend(
+        checkedLinuxModelConfiguration(input),
+        window,
+        supplied,
+        true,
+        false,
+        menuDataHome,
+    );
+}
+function createBackend(
+    selected: LinuxModelConfiguration,
+    window: LinuxNativeWindow,
+    ops: LinuxNativeOps,
+    preparing: boolean,
+    retainedHistory = false,
+    menuDataHome?: string,
+) {
+    let plan = selected;
+    const continuation = preparing || retainedHistory;
+    const fs = ops.fs,
         C = fs.constants;
     if (ops.platform !== 'linux' || ops.arch !== 'x64') throw Error('NATIVE_UNSUPPORTED_PLATFORM');
     if (
@@ -177,7 +212,7 @@ export function createLinuxNativeBackend(
         uid: plan.host.uid,
         key: 'dh-linux-' + hash(plan.host.uid + '\0' + plan.root),
     };
-    const menuPaths = plan.menu ? linuxMenuPaths(plan, work) : null;
+    let menuPaths = plan.menu ? linuxMenuPaths(plan, work) : null;
     const state = {
         failed: false,
         code: 'UNSTARTED',
@@ -691,19 +726,42 @@ export function createLinuxNativeBackend(
         if (!stable(sourceStat, stat(plan.host.sourceRoot))) fail('NATIVE_SOURCE_CHANGED');
         const workStat = maybeStat(work);
         let journal: LinuxModelJournal | null = null;
+        let journalOriginal: { base64: string; sha256: string } | null = null;
+        let completed: NonNullable<LinuxModelView['history']>['completed'] = null;
         if (workStat) {
             plainDirectory(workStat, work, true);
             const allowed = new Set([
                 'journal.json',
+                ...(continuation ? ['completed-journal.json'] : []),
                 path.posix.basename(fixed.stage),
                 path.posix.basename(fixed.previous),
                 ...(menuPaths ? ['menu-candidate.desktop', 'menu-previous.desktop'] : []),
             ]);
-            if (names(work, menuPaths ? 5 : 3).some((name) => !allowed.has(name)))
+            if (
+                names(work, (menuPaths ? 5 : 3) + (continuation ? 1 : 0)).some(
+                    (name) => !allowed.has(name),
+                )
+            )
                 fail('NATIVE_FOREIGN_MAINTENANCE');
-            if (maybeStat(work + '/journal.json'))
-                journal = json(work + '/journal.json') as LinuxModelJournal;
-            else if (!state.allocations.has(work)) fail('NATIVE_FOREIGN_MAINTENANCE');
+            if (continuation && maybeStat(work + '/completed-journal.json')) {
+                const bytes = read(work + '/completed-journal.json', 8192);
+                completed = {
+                    journal: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)),
+                    base64: bytes.toString('base64'),
+                    sha256: hash(bytes),
+                };
+            }
+            if (maybeStat(work + '/journal.json')) {
+                if (continuation) {
+                    const bytes = read(work + '/journal.json', 8192);
+                    journal = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+                    journalOriginal = { base64: bytes.toString('base64'), sha256: hash(bytes) };
+                } else {
+                    // Preserve the legacy public metadata-error mapping and private pre-open refusal.
+                    journal = json(work + '/journal.json') as LinuxModelJournal;
+                }
+            } else if (!completed && !state.allocations.has(work))
+                fail('NATIVE_FOREIGN_MAINTENANCE');
         }
         const view: LinuxModelView = {
             parents: parents(),
@@ -716,6 +774,7 @@ export function createLinuxNativeBackend(
             stage: payload(fixed.stage),
             previous: payload(fixed.previous),
             journal,
+            ...(continuation ? { history: { journalOriginal, completed } } : {}),
             activity: activity(),
             ...(menuPaths
                 ? {
@@ -1083,6 +1142,60 @@ export function createLinuxNativeBackend(
     };
     const effects: LinuxUnqualifiedEffects = {
         kind: 'native-unqualified',
+        handoff(scope, expected) {
+            return protect(async () => {
+                requireMutation();
+                const actual = await guard(copy(scope), copy(expected));
+                if (
+                    !continuation ||
+                    !actual.history?.journalOriginal ||
+                    actual.history.completed ||
+                    !actual.journal ||
+                    actual.journal.phase !== 'candidate-active' ||
+                    actual.journal.previousSHA256 !== null ||
+                    !actual.root ||
+                    actual.stage ||
+                    actual.previous ||
+                    actual.root.transactionId !== actual.journal.transactionId ||
+                    actual.root.verifiedManifestSHA256 !== actual.journal.candidateSHA256 ||
+                    actual.journal.transactionId === plan.transactionId
+                )
+                    return fail('NATIVE_COMPLETED_HANDOFF');
+                const parent = pin(work),
+                    source = fdPath(parent.fd) + '/journal.json',
+                    target = fdPath(parent.fd) + '/completed-journal.json',
+                    before = stat(source);
+                regular(before, 8192, true);
+                if (
+                    maybeStat(target) ||
+                    read(work + '/journal.json', 8192).toString('base64') !==
+                        actual.history.journalOriginal.base64
+                )
+                    return fail('NATIVE_COMPLETED_HANDOFF_CHANGED');
+                parent.check();
+                call(
+                    'completed-journal-noreplace',
+                    () =>
+                        ops.moveNoReplace!(
+                            parent.fd,
+                            'journal.json',
+                            parent.fd,
+                            'completed-journal.json',
+                        ),
+                    () => state.allocations.add(work + '/completed-journal.json'),
+                );
+                if (
+                    maybeStat(source) ||
+                    !sameInode(before, stat(target)) ||
+                    read(work + '/completed-journal.json', 8192).toString('base64') !==
+                        actual.history.journalOriginal.base64
+                )
+                    return fail('NATIVE_COMPLETED_HANDOFF_CHANGED');
+                call('parent-sync', () => fs.fsyncSync(parent.fd));
+                parent.finish();
+                return observe(copy(scope));
+            });
+        },
         observe(scope) {
             return protect(() => observe(copy(scope)));
         },
@@ -1095,7 +1208,24 @@ export function createLinuxNativeBackend(
                 const nextBytes = Buffer.from(JSON.stringify(next));
                 if (nextBytes.length > 8192) fail('NATIVE_JOURNAL_BOUND');
                 const actual = await guard(scope, expected);
-                checkedLinuxModelView({ ...copy(actual), journal: next }, plan);
+                checkedLinuxModelView(
+                    {
+                        ...copy(actual),
+                        journal: next,
+                        ...(actual.history
+                            ? {
+                                  history: {
+                                      ...copy(actual.history),
+                                      journalOriginal: {
+                                          base64: nextBytes.toString('base64'),
+                                          sha256: hash(nextBytes),
+                                      },
+                                  },
+                              }
+                            : {}),
+                    },
+                    plan,
+                );
                 const previous = actual.journal;
                 space(actual, previous === null && next.phase === 'copying');
                 const phases: Record<string, string[]> = {
@@ -1169,7 +1299,11 @@ export function createLinuxNativeBackend(
                     work + '/journal.json',
                     nextBytes,
                     previous === null,
-                    previous ? Buffer.from(JSON.stringify(previous)) : undefined,
+                    previous
+                        ? actual.history?.journalOriginal
+                            ? Buffer.from(actual.history.journalOriginal.base64, 'base64')
+                            : Buffer.from(JSON.stringify(previous))
+                        : undefined,
                 );
                 return observe(scope);
             });
@@ -1409,6 +1543,84 @@ export function createLinuxNativeBackend(
         },
     };
     return {
+        selectMenu(selected: boolean) {
+            if (
+                !continuation ||
+                !plan.menu ||
+                attempted ||
+                lease ||
+                state.failed ||
+                typeof selected !== 'boolean'
+            )
+                return fail('NATIVE_MENU_SELECTION');
+            plan = checkedLinuxModelConfiguration({ ...plan, menu: { ...plan.menu, selected } });
+        },
+        /** This only derives operation IDs from actual bounded originals, once.
+         * Every later prompt/transaction still compares a fresh complete view. */
+        prepare: () =>
+            protect(async () => {
+                if (!preparing) return fail('NATIVE_PREPARATION_ALREADY_CONSUMED');
+                preparing = false;
+                procOwner();
+                let installationId = plan.installationId;
+                const destination = maybeStat(plan.root);
+                if (destination) plainDirectory(destination, plan.root, true);
+                const recordPath = plan.root + '/' + INSTALLATION_RECORD;
+                const hasRecord = Boolean(maybeStat(recordPath));
+                if (hasRecord)
+                    installationId = validateInstallationRecord(json(recordPath)).installationId;
+                if (hasRecord && !plan.menu) {
+                    const owner = json(plan.root + '/' + SETUP_OWNER) as {
+                        integrations?: unknown[];
+                    };
+                    if (Array.isArray(owner.integrations) && owner.integrations.length === 1) {
+                        if (!menuDataHome) return fail('NATIVE_MENU_REVIEW_REQUIRED');
+                        plan = checkedLinuxModelConfiguration({
+                            ...plan,
+                            installationId,
+                            menu: { dataHome: menuDataHome, selected: true },
+                        });
+                    }
+                }
+                let transactionId = plan.transactionId;
+                const maintenance = maybeStat(work);
+                if (maintenance) plainDirectory(maintenance, work, true);
+                if (maybeStat(work + '/journal.json')) {
+                    const journal = json(work + '/journal.json') as LinuxModelJournal;
+                    if (!hasRecord) installationId = journal.installationId;
+                    if (
+                        journal.root !== plan.root ||
+                        journal.uid !== plan.host.uid ||
+                        journal.installationId !== installationId ||
+                        typeof journal.transactionId !== 'string' ||
+                        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+                            journal.transactionId,
+                        )
+                    )
+                        return fail('NATIVE_PREPARATION_JOURNAL');
+                    if (
+                        !['install', 'repair', 'update'].includes(plan.action) ||
+                        journal.phase !== 'candidate-active' ||
+                        journal.previousSHA256 !== null ||
+                        maybeStat(work + '/completed-journal.json')
+                    )
+                        transactionId = journal.transactionId;
+                } else if (continuation && maybeStat(work + '/completed-journal.json')) {
+                    const journal = json(work + '/completed-journal.json') as LinuxModelJournal;
+                    if (!hasRecord) return fail('NATIVE_COMPLETED_RECOVERY_ROOT');
+                    if (journal.installationId !== installationId)
+                        return fail('NATIVE_COMPLETED_RECOVERY_ID');
+                }
+                plan = checkedLinuxModelConfiguration({ ...plan, installationId, transactionId });
+                fixed.stage = work + '/stage-' + transactionId;
+                fixed.previous = work + '/previous-' + transactionId;
+                menuPaths = plan.menu ? linuxMenuPaths(plan, work) : null;
+                return {
+                    configuration: copy(plan),
+                    scope: copy(fixed),
+                    view: observe(copy(fixed)),
+                };
+            }),
         kernel: {
             acquire: (wanted) => protect(() => kernel.acquire(wanted)),
             current: (handle) => protect(() => kernel.current(handle)),

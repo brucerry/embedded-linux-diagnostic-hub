@@ -1,0 +1,103 @@
+name: Exercise controlled Linux permanent installation
+
+on:
+    push:
+        branches: [codex/linux-owned-installation-ca471]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: linux-owned-installation-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    owned-installation:
+        if: github.run_attempt == '1'
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Observe the real user and allocate one private fixture
+              shell: bash
+              run: |
+                  python3 -B -I - <<'PY'
+                  import hashlib, json, os, pathlib, platform, pwd, subprocess, tempfile
+                  uid, euid = os.getuid(), os.geteuid()
+                  home = pathlib.Path(os.environ['HOME'])
+                  workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+                  assert platform.system() == 'Linux' and platform.machine() == 'x86_64'
+                  assert uid > 0 and uid == euid
+                  assert 'USE_HARD_LINKS' not in os.environ and 'VITEST' not in os.environ
+                  assert str(home) == pwd.getpwuid(uid).pw_dir and home.resolve() == home
+                  assert workspace.resolve() == workspace and workspace.is_relative_to(home)
+                  assert os.path.isfile('/usr/bin/cc') and os.access('/usr/bin/cc', os.X_OK)
+                  assert os.path.isfile('/usr/bin/7z') and os.access('/usr/bin/7z', os.X_OK)
+                  for name in ['node_modules', 'dist', 'dist-electron', 'dist-linux-native']:
+                      assert not os.path.lexists(workspace / name), name
+                  fixture = pathlib.Path(tempfile.mkdtemp(prefix='dh-owned-install-', dir=home))
+                  for name in ['npm-cache', 'electron-cache', 'builder-cache', 'tmp']:
+                      (fixture / name).mkdir(mode=0o700)
+                  for name in ['build-a', 'build-b', 'installation']:
+                      assert not os.path.lexists(fixture / name), name
+                  tools = {name: {'realpath': os.path.realpath(name), 'sha256': hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()} for name in ['/usr/bin/cc', '/usr/bin/7z']}
+                  node = json.loads(subprocess.check_output(['node', '-p', 'JSON.stringify({version:process.versions.node,executable:process.execPath})']))
+                  npm = subprocess.check_output(['npm', '--version'], text=True).strip()
+                  assert node['version'] == '24.22.0' and npm == '11.19.1'
+                  tools['node'] = {'realpath': node['executable'], 'sha256': hashlib.sha256(pathlib.Path(node['executable']).read_bytes()).hexdigest()}
+                  facts = {'uid': uid, 'euid': euid, 'home': str(home), 'workspace': str(workspace), 'fixture': str(fixture), 'tools': tools, 'nodeVersion': node['version'], 'npmVersion': npm}
+                  (fixture / 'host-selection.json').write_text(json.dumps(facts, indent=2) + '\n')
+                  with open(os.environ['GITHUB_ENV'], 'a') as output:
+                      output.write('HUB_LINUX_FIXTURE=' + str(fixture) + '\n')
+                      output.write('npm_config_cache=' + str(fixture / 'npm-cache') + '\n')
+                      output.write('electron_config_cache=' + str(fixture / 'electron-cache') + '\n')
+                      output.write('ELECTRON_BUILDER_CACHE=' + str(fixture / 'builder-cache') + '\n')
+                      output.write('ELECTRON_BUILDER_7ZIP_PATH=/usr/bin/7z\n')
+                      output.write('TMPDIR=' + str(fixture / 'tmp') + '\n')
+                  print('Linux user, pinned Node/npm, and fresh owned build paths observed.')
+                  PY
+                  test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            - name: Install the locked ordinary build dependencies
+              run: npm ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund
+            - name: Install only the pinned Electron build runtime
+              env:
+                  ELECTRON_INSTALL_PLATFORM: linux
+                  ELECTRON_INSTALL_ARCH: x64
+              run: |
+                  node <<'JS'
+                  const assert = require('node:assert/strict');
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const settings = ['mirror', 'nightlymirror', 'customdir', 'customfilename', 'customversion'];
+                  const overrides = new Set(settings.flatMap(key => ['electron', 'npmconfigelectron', 'npmpackageconfigelectron'].map(prefix => prefix + key)));
+                  for (const key of ['electronoverridedistpath', 'electronuseremotechecksums', 'npmconfigelectronuseremotechecksums', 'napirsnativelibrarypath']) overrides.add(key);
+                  for (const key of Object.keys(process.env)) assert(!overrides.has(key.toLowerCase().replaceAll('_', '')), 'Electron build input override unavailable');
+                  assert.equal(require('./node_modules/electron/package.json').version, '44.5.1');
+                  assert.equal(require('./node_modules/electron/checksums.json')['electron-v44.5.1-linux-x64.zip'], '5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5');
+                  assert.equal(crypto.createHash('sha256').update(fs.readFileSync('node_modules/electron/install.js')).digest('hex'), '3b9e0c3c9070edbdb732dc05ed23c6f1c6b7a404bd623033a2f0b71052534e93');
+                  JS
+                  node node_modules/electron/install.js
+            - name: Build the actual application and native helper once
+              run: |
+                  npm run build
+                  npm run build:linux-native
+            - name: Package two real versioned complete payloads
+              run: |
+                  test ! -e "$HUB_LINUX_FIXTURE/build-a" && test ! -L "$HUB_LINUX_FIXTURE/build-a"
+                  test ! -e "$HUB_LINUX_FIXTURE/build-b" && test ! -L "$HUB_LINUX_FIXTURE/build-b"
+                  node node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0-qualification.0 --config.directories.output="$HUB_LINUX_FIXTURE/build-a"
+                  node node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0 --config.directories.output="$HUB_LINUX_FIXTURE/build-b"
+            - name: Install the controlled prerelease, update to the target, and roll back
+              run: |
+                  node --import ./node_modules/tsx/dist/loader.mjs scripts/linux-owned-installation-fixture.ts --a-appdir "$HUB_LINUX_FIXTURE/build-a/linux-unpacked" --a-archive "$HUB_LINUX_FIXTURE/build-a/Diagnostic-Hub-linux-x64.tar.gz" --b-appdir "$HUB_LINUX_FIXTURE/build-b/linux-unpacked" --b-archive "$HUB_LINUX_FIXTURE/build-b/Diagnostic-Hub-linux-x64.tar.gz" --fixture-root "$HUB_LINUX_FIXTURE/installation"

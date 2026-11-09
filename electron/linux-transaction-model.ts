@@ -74,6 +74,11 @@ export interface LinuxModelJournal {
     phase: LinuxModelPhase;
 }
 export interface LinuxModelView {
+    /** Fixed first-upgrade handoff. Original journal bytes remain part of every later guard. */
+    history?: {
+        journalOriginal: { base64: string; sha256: string } | null;
+        completed: { base64: string; sha256: string; journal: LinuxModelJournal } | null;
+    };
     menu?: LinuxMenuView;
     /** Fresh independent activity observations for exactly the three guarded slots; unknown refuses. */
     activity: {
@@ -100,6 +105,9 @@ export interface LinuxModelPlan {
     review: LinuxModelView;
     reviewSHA256: string;
 }
+/** Fixed operation selection before original filesystem observations or consent.
+ * It contains no review snapshot and cannot be passed to transaction.run. */
+export type LinuxModelConfiguration = Omit<LinuxModelPlan, 'consent' | 'review' | 'reviewSHA256'>;
 export interface LinuxReservationIdentity {
     root: string;
     uid: number;
@@ -128,6 +136,7 @@ export interface LinuxModelKernel {
 }
 export interface LinuxMemoryEffects {
     kind: 'injected-memory-effects';
+    handoff?(scope: LinuxModelScope, guard: LinuxModelView): Promise<LinuxModelView>;
     menuStage?(
         scope: LinuxModelScope,
         guard: LinuxModelView,
@@ -265,10 +274,10 @@ function source(value: LinuxModelSource, uid: number, payload = false) {
     if (manifestDigest(value.manifest) !== value.verifiedManifestSHA256)
         throw Error('model unverified bytes');
 }
-function profile(plan: LinuxModelPlan) {
+function profile(plan: LinuxModelConfiguration) {
     return path.posix.join(plan.host.appData, 'DiagnosticHub', 'profiles', plan.installationId);
 }
-function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
+function validateView(view: LinuxModelView, plan: LinuxModelConfiguration) {
     fields(view, [
         'activity',
         'parents',
@@ -277,6 +286,7 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
         'stage',
         'previous',
         'journal',
+        ...(Object.hasOwn(view, 'history') ? ['history'] : []),
         ...(Object.hasOwn(plan, 'menu') ? ['menu'] : []),
     ]);
     if (Object.hasOwn(plan, 'menu')) checkedLinuxMenuView(view.menu, plan.host.uid);
@@ -356,6 +366,51 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
                 if (inodeKeys.includes(key)) throw Error('aliased model menu file');
                 inodeKeys.push(key);
             }
+    if (Object.hasOwn(view, 'history')) {
+        if (!view.history) throw Error('model history required');
+        fields(view.history, ['journalOriginal', 'completed']);
+        const original = (
+            value: { base64: string; sha256: string },
+            journal: LinuxModelJournal,
+            completed = false,
+        ) => {
+            fields(value, ['base64', 'sha256', ...(completed ? ['journal'] : [])]);
+            if (
+                typeof value.base64 !== 'string' ||
+                value.base64.length > 10924 ||
+                !hash.test(value.sha256)
+            )
+                throw Error('journal original bound');
+            const bytes = Buffer.from(value.base64, 'base64');
+            if (
+                !bytes.length ||
+                bytes.length > 8192 ||
+                bytes.toString('base64') !== value.base64 ||
+                createHash('sha256').update(bytes).digest('hex') !== value.sha256 ||
+                !equal(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), journal)
+            )
+                throw Error('journal original differs');
+        };
+        if (
+            view.journal === null
+                ? view.history.journalOriginal !== null
+                : view.history.journalOriginal === null
+        )
+            throw Error('journal original missing');
+        if (view.history.journalOriginal) original(view.history.journalOriginal, view.journal!);
+        if (view.history.completed) {
+            const prior = view.history.completed;
+            original(prior, prior.journal, true);
+            // Validate retained journal grammar under its own old transaction, without claiming it current.
+            const { history: _history, ...withoutHistory } = copy(view);
+            validateView({ ...withoutHistory, journal: prior.journal } as LinuxModelView, {
+                ...completedJournalContext(plan, prior.journal),
+                transactionId: prior.journal.transactionId,
+            });
+            if (prior.journal.phase !== 'candidate-active' || prior.journal.previousSHA256 !== null)
+                throw Error('completed journal phase differs');
+        }
+    }
     if (view.journal !== null) {
         const journal = view.journal;
         if (Buffer.byteLength(JSON.stringify(journal)) > 8192) throw Error('model journal bound');
@@ -372,13 +427,25 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
             'phase',
             ...(plan.menu ? ['menu'] : []),
         ]);
-        if (plan.menu) checkedLinuxMenuJournal(journal.menu, plan);
+        if (plan.menu)
+            checkedLinuxMenuJournal(
+                journal.menu,
+                view.history && journal.transactionId !== plan.transactionId
+                    ? completedJournalContext(plan, journal)
+                    : plan,
+            );
         owner(journal.owner);
         if (
             journal.schemaVersion !== 1 ||
             journal.root !== plan.root ||
             journal.uid !== plan.host.uid ||
-            journal.transactionId !== plan.transactionId ||
+            (journal.transactionId !== plan.transactionId &&
+                !(
+                    view.history &&
+                    view.history.completed === null &&
+                    ['install', 'repair', 'update'].includes(plan.action) &&
+                    completedRoot(view, journal)
+                )) ||
             journal.installationId !== plan.installationId ||
             journal.profile !== profile(plan) ||
             !hash.test(journal.candidateSHA256) ||
@@ -395,6 +462,31 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
         )
             throw Error('foreign model journal');
     }
+}
+/** Exact first completed installation, with no retained predecessor or uncommitted candidate. */
+function completedRoot(view: LinuxModelView, journal: LinuxModelJournal) {
+    return (
+        journal.phase === 'candidate-active' &&
+        journal.previousSHA256 === null &&
+        view.stage === null &&
+        view.previous === null &&
+        view.root !== null &&
+        view.root.transactionId === journal.transactionId &&
+        view.root.verifiedManifestSHA256 === journal.candidateSHA256 &&
+        (!journal.menu ||
+            (journal.menu.phase === 'applied' &&
+                view.menu?.candidate === null &&
+                view.menu?.previous === null))
+    );
+}
+/** An old journal keeps its old menu intent when a fresh upgrade selects a different menu choice. */
+function completedJournalContext(
+    plan: LinuxModelConfiguration,
+    journal: LinuxModelJournal,
+): LinuxModelConfiguration {
+    return plan.menu && journal.menu
+        ? { ...plan, menu: { ...plan.menu, selected: journal.menu.after !== null } }
+        : plan;
 }
 /** Complete app preimage admission BEFORE any menu rollback write/move. No effects. */
 function assertLinuxAppRollbackPreimages(view: LinuxModelView) {
@@ -577,6 +669,33 @@ function validatePlan(plan: LinuxModelPlan) {
         'reviewSHA256',
         ...(Object.hasOwn(plan, 'menu') ? ['menu'] : []),
     ]);
+    validateConfiguration(plan);
+    if (plan.consent !== true || !hash.test(plan.reviewSHA256)) throw Error('model plan admission');
+    validateView(plan.review, plan);
+    if (plan.action === 'rollback') assertLinuxAppRollbackPreimages(plan.review);
+    if (plan.action === 'resume') assertLinuxResumePreimages(plan.review, plan);
+    if (plan.action === 'launch') assertLinuxLaunchPreimages(plan.review, plan);
+    if (
+        plan.menu &&
+        plan.review.journal &&
+        !(plan.action === 'resume' && plan.review.journal.phase === 'candidate-active')
+    )
+        assertLinuxMenuPhase(
+            plan.review.menu!,
+            plan.review.journal.menu!,
+            plan.review.history && plan.review.journal.transactionId !== plan.transactionId
+                ? completedJournalContext(plan, plan.review.journal)
+                : plan,
+        );
+    if (plan.menu && plan.review.journal === null && plan.action !== 'rollback') {
+        if (plan.review.menu!.candidate !== null || plan.review.menu!.previous !== null)
+            throw Error('foreign menu retention slots');
+        prepareLinuxMenuJournal(plan, plan.review.root?.menu ?? null, plan.review.menu!.current);
+    }
+    if (linuxModelReviewSHA256(plan.review) !== plan.reviewSHA256)
+        throw Error('changed model review');
+}
+function validateConfiguration(plan: LinuxModelConfiguration) {
     fields(plan.host, [
         'platform',
         'arch',
@@ -593,7 +712,6 @@ function validatePlan(plan: LinuxModelPlan) {
         host.arch !== 'x64' ||
         !positive(host.uid) ||
         host.euid !== host.uid ||
-        plan.consent !== true ||
         ![plan.root, host.home, host.sourceRoot, host.appData].every(canonical) ||
         ![plan.root, host.sourceRoot, host.appData].every(
             (item) => item !== host.home && inside(host.home, item),
@@ -605,31 +723,13 @@ function validatePlan(plan: LinuxModelPlan) {
         path.posix.basename(plan.root).startsWith('.DiagnosticHub-') ||
         !uuid.test(plan.transactionId) ||
         !uuid.test(plan.installationId) ||
-        !['install', 'repair', 'update', 'rollback', 'resume', 'launch'].includes(plan.action) ||
-        !hash.test(plan.reviewSHA256)
+        !['install', 'repair', 'update', 'rollback', 'resume', 'launch'].includes(plan.action)
     )
         throw Error('model plan admission');
     owner(plan.owner);
     if (plan.owner.executable !== path.posix.join(host.sourceRoot, 'app/diagnostic-hub'))
         throw Error('model runtime binding');
     if (Object.hasOwn(plan, 'menu')) checkedLinuxMenuChoice(plan);
-    validateView(plan.review, plan);
-    if (plan.action === 'rollback') assertLinuxAppRollbackPreimages(plan.review);
-    if (plan.action === 'resume') assertLinuxResumePreimages(plan.review, plan);
-    if (plan.action === 'launch') assertLinuxLaunchPreimages(plan.review, plan);
-    if (
-        plan.menu &&
-        plan.review.journal &&
-        !(plan.action === 'resume' && plan.review.journal.phase === 'candidate-active')
-    )
-        assertLinuxMenuPhase(plan.review.menu!, plan.review.journal.menu!, plan);
-    if (plan.menu && plan.review.journal === null && plan.action !== 'rollback') {
-        if (plan.review.menu!.candidate !== null || plan.review.menu!.previous !== null)
-            throw Error('foreign menu retention slots');
-        prepareLinuxMenuJournal(plan, plan.review.root?.menu ?? null, plan.review.menu!.current);
-    }
-    if (linuxModelReviewSHA256(plan.review) !== plan.reviewSHA256)
-        throw Error('changed model review');
 }
 export type LinuxModelVerdict =
     'REFUSED' | 'RETAINED_UNKNOWN' | 'ACTIVE_PREVIOUS_RETAINED' | 'ROLLED_BACK_RETAINED';
@@ -638,6 +738,7 @@ type Pending =
     | 'current'
     | 'observe'
     | 'journal'
+    | 'handoff'
     | 'stage'
     | 'move'
     | 'menu-stage'
@@ -801,6 +902,13 @@ class LinuxTransactionCore {
         await this.guard(plan, scope);
         const before = copy(this.view!),
             expected = { ...copy(before), journal: copy(next) };
+        if (expected.history) {
+            const bytes = Buffer.from(JSON.stringify(next));
+            expected.history.journalOriginal = {
+                base64: bytes.toString('base64'),
+                sha256: createHash('sha256').update(bytes).digest('hex'),
+            };
+        }
         validateView(expected, plan); // Reject closed-grammar/size errors before submitting any write.
         const returned = await this.call(
             'journal',
@@ -973,7 +1081,43 @@ class LinuxTransactionCore {
         await this.menuPhase(plan, scope, 'restored');
     }
     private async install(plan: LinuxModelPlan, scope: LinuxModelScope) {
-        const before = copy(this.view!);
+        let before = copy(this.view!);
+        if (
+            before.stage ||
+            before.previous ||
+            !installationActions(
+                before.root?.manifest.version ?? null,
+                before.source.manifest.version,
+            ).includes(plan.action as 'install' | 'repair' | 'update')
+        )
+            throw Error('unavailable model install');
+        if (before.history && before.journal !== null) {
+            if (
+                before.history.completed !== null ||
+                !completedRoot(before, before.journal) ||
+                before.journal.transactionId === plan.transactionId ||
+                !this.effects.handoff
+            )
+                throw Error('completed installation continuation unavailable');
+            await this.guard(plan, scope);
+            const expected = copy(before);
+            expected.history!.completed = {
+                ...expected.history!.journalOriginal!,
+                journal: copy(before.journal),
+            };
+            expected.history!.journalOriginal = null;
+            expected.journal = null;
+            validateView(expected, plan);
+            const returned = copy(
+                await this.call('handoff', () => this.effects.handoff!(copy(scope), copy(before))),
+            );
+            validateView(returned, plan);
+            if (!equal(returned, expected)) throw Error('completed journal handoff differs');
+            this.view = returned;
+            before = copy(returned);
+        }
+        if (before.history?.completed && !completedRoot(before, before.history.completed.journal))
+            throw Error('completed installation recovery differs');
         // Never guess/remove a stale lock, foreign stage, previous slot or unconfirmed journal.
         if (
             before.journal !== null ||
@@ -1165,8 +1309,27 @@ export function checkedLinuxModelPlan(input: LinuxModelPlan): LinuxModelPlan {
     return plan;
 }
 /** Native backend callers use the same closed snapshot grammar before accepting a mutation guard. */
-export function checkedLinuxModelView(input: LinuxModelView, plan: LinuxModelPlan): LinuxModelView {
+export function checkedLinuxModelView(
+    input: LinuxModelView,
+    plan: LinuxModelConfiguration,
+): LinuxModelView {
     const view = copy(input);
     validateView(view, plan);
     return view;
+}
+export function checkedLinuxModelConfiguration(
+    input: LinuxModelConfiguration,
+): LinuxModelConfiguration {
+    const selected = copy(input);
+    fields(selected, [
+        'host',
+        'root',
+        'action',
+        'transactionId',
+        'installationId',
+        'owner',
+        ...(Object.hasOwn(selected, 'menu') ? ['menu'] : []),
+    ]);
+    validateConfiguration(selected);
+    return selected;
 }
