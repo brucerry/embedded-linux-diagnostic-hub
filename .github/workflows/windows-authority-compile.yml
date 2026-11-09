@@ -4,7 +4,7 @@ name: Windows authority compile-only candidate
 # neither admits this runner for native observations nor supplies release acceptance.
 on:
     push:
-        branches: [ci/windows-native-interface-compile-20261109]
+        branches: [ci/windows-native-interface-diagnostic-20261109]
 
 permissions:
     contents: read
@@ -18,7 +18,8 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/windows-native-interface-compile-20261109' && github.run_attempt == 1 }}
+            'refs/heads/ci/windows-native-interface-diagnostic-20261109' && github.run_attempt == 1
+            }}
         runs-on: windows-latest
         timeout-minutes: 15
         defaults:
@@ -36,7 +37,7 @@ jobs:
               run: |
                   $ErrorActionPreference = 'Stop'
                   try {
-                    if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/windows-native-interface-compile-20261109' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Context' }
+                    if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/windows-native-interface-diagnostic-20261109' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Context' }
                     if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') { throw 'Runner' }
                     if ($env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:GITHUB_RUN_ID -cnotmatch '^[0-9]+$') { throw 'Identity' }
                     foreach ($name in @('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE','CL','_CL_','LINK','_LINK_')) { if (Test-Path ('Env:' + $name)) { throw 'Override' } }
@@ -82,7 +83,7 @@ jobs:
                   const sourceCommit=process.env.GITHUB_SHA,sourceTree=git('rev-parse','HEAD^{tree}');
                   assert.match(sourceTree,/^[a-f0-9]{40}$/);
                   const source={};
-                  for(const name of ['package.json','tests/native/windows-installer-authority/authority.cc','tests/native/windows-installer-authority/binding.gyp']){
+                  for(const name of ['package.json','tests/native/windows-installer-authority/authority.cc','tests/native/windows-installer-authority/binding.gyp','.github/scripts/windows-compile-diagnostic.py']){
                     const bytes=readFileSync(name);assert.ok(bytes.equals(execFileSync('git',['show','HEAD:'+name])));
                     source[name]=createHash('sha256').update(bytes).digest('hex');
                   }
@@ -226,10 +227,14 @@ jobs:
                     if ($LASTEXITCODE -ne 0) { throw 'Inputs' }
                   } catch { Write-Output '::error title=Windows authority compile::One-attempt official build-input verification failed; no retry or addon load.'; exit 1 }
             - name: Compile and link the addon without loading it
+              id: native_compile
               run: |
                   $ErrorActionPreference = 'Stop'
                   $PSNativeCommandUseErrorActionPreference = $false
+                  $compileFailed = $false
+                  $diagnosticStage = 'preparation'
                   try {
+                    $diagnosticStage = 'tools-record'
                     $tools = Get-Content -LiteralPath (Join-Path $env:HUB_COMPILE_ROOT 'tools.json') -Raw | ConvertFrom-Json
                     $root = [IO.Path]::GetFullPath($env:HUB_COMPILE_ROOT)
                     $source = Join-Path (Get-Location) 'tests/native/windows-installer-authority/authority.cc'
@@ -248,32 +253,63 @@ jobs:
                   '@
                     $versionFile = Join-Path $root 'tool-versions.py'
                     [IO.File]::WriteAllText($versionFile,$versionProgram,[Text.Encoding]::ASCII)
+                    $diagnosticStage = 'command-write'
                     $command = @(
                       '@echo off',
+                      ('echo devcmd>"' + (Join-Path $root 'build-stage.txt') + '"'),
                       ('call "' + $tools.devcmd + '" -no_logo -arch=x64 -host_arch=x64 >"' + (Join-Path $root 'logs/devcmd.log') + '" 2>&1'),
                       'if errorlevel 1 exit /b 1',
+                      ('echo tool-versions>"' + (Join-Path $root 'build-stage.txt') + '"'),
                       ('"' + $tools.python + '" -I "' + $versionFile + '" >"' + (Join-Path $root 'tool-versions.json') + '" 2>"' + (Join-Path $root 'logs/tool-version-error.log') + '"'),
                       'if errorlevel 1 exit /b 1',
+                      ('echo compile-link>"' + (Join-Path $root 'build-stage.txt') + '"'),
                       ('"' + $tools.cl + '" /nologo /TP /std:c++17 /EHsc /MD /LD /DNAPI_VERSION=8 /DNODE_GYP_MODULE_NAME=windows_installer_authority /DUNICODE /D_UNICODE /I"' + (Join-Path $root 'include') + '" /Fo"' + (Join-Path $root 'build/authority.obj') + '" /Fd"' + (Join-Path $root 'build/authority.pdb') + '" "' + $source + '" /link /OUT:"' + $output + '" /IMPLIB:"' + (Join-Path $root 'build/windows_installer_authority.lib') + '" "' + (Join-Path $root 'inputs/node.lib') + '" bcrypt.lib advapi32.lib user32.lib iphlpapi.lib'),
                       'exit /b %errorlevel%'
                     ) -join "`r`n"
                     $commandFile = Join-Path $root 'compile.cmd'
                     [IO.File]::WriteAllText($commandFile,$command,[Text.Encoding]::ASCII)
+                    $diagnosticStage = 'build-command'
                     Push-Location (Join-Path $root 'build')
                     & $env:ComSpec /d /v:off /c $commandFile *> (Join-Path $root 'logs/compile.log')
                     $buildExit = $LASTEXITCODE
                     Pop-Location
+                    $diagnosticStage = 'tool-metadata'
                     $versions = Get-Content -LiteralPath (Join-Path $root 'tool-versions.json') -Raw | ConvertFrom-Json
                     if ($versions.msvcVersion -cnotmatch '^14\.\d+\.\d+$' -or $versions.windowsSDKVersion -cnotmatch '^10\.\d+\.\d+\.\d+$') { throw 'Tool metadata' }
                     $toolIdentity = @{msvcVersion=$versions.msvcVersion;windowsSDKVersion=$versions.windowsSDKVersion;pythonVersion=$tools.pythonVersion;clSHA256=(Get-FileHash -LiteralPath $tools.cl -Algorithm SHA256).Hash.ToLowerInvariant();linkSHA256=(Get-FileHash -LiteralPath $tools.link -Algorithm SHA256).Hash.ToLowerInvariant();compileOnly=$true;releaseAcceptance=$false} | ConvertTo-Json -Compress
                     if ([Text.Encoding]::UTF8.GetByteCount($toolIdentity) -ge 2048 -or $toolIdentity -match '[\r\n%]') { throw 'Tool metadata bound' }
                     Write-Output ('::notice title=Windows authority compiler::' + $toolIdentity)
                     if ($buildExit -ne 0) {
+                      $diagnosticStage = 'build-command'
                       Write-Output ('::error title=Windows authority compile::' + (@{stage='compile-link';buildExit=$buildExit;compileOnly=$true;addonLoaded=$false;releaseAcceptance=$false} | ConvertTo-Json -Compress))
-                      exit 1
+                      $compileFailed = $true
+                    } else {
+                      [IO.File]::WriteAllText((Join-Path $root 'build-exit.txt'),'0')
                     }
-                    [IO.File]::WriteAllText((Join-Path $root 'build-exit.txt'),'0')
-                  } catch { Write-Output '::error title=Windows authority compile::Compile/link did not establish a normal successful return; addon not loaded.'; exit 1 }
+                  } catch {
+                    Write-Output '::error title=Windows authority compile::Compile/link did not establish a normal successful return; addon not loaded.'
+                    $compileFailed = $true
+                  }
+                  if ($compileFailed) {
+                    # Literal fallback survives an unavailable classifier/interpreter.
+                    try { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8 -Value @('diag_phase=unclassified','diag_status=unknown','diag_code=unknown','diag_line=unknown') } catch { }
+                    $env:HUB_COMPILE_DIAGNOSTIC_STAGE = $diagnosticStage
+                    try {
+                      if ($null -ne $tools -and $tools.python -is [string]) {
+                        & $tools.python -I (Join-Path $env:HUB_COMPILE_ROOT 'source/.github/scripts/windows-compile-diagnostic.py') 2> (Join-Path $env:HUB_COMPILE_ROOT 'logs/diagnostic-error.log')
+                      }
+                    } catch { }
+                    exit 1
+                  }
+            - name: >-
+                  Compile diagnostic phase=${{ steps.native_compile.outputs.diag_phase ||
+                  'unclassified' }} status=${{ steps.native_compile.outputs.diag_status || 'unknown'
+                  }} code=${{ steps.native_compile.outputs.diag_code || 'unknown' }} line=${{
+                  steps.native_compile.outputs.diag_line || 'unknown' }}
+              if: ${{ failure() && steps.native_compile.outcome == 'failure' }}
+              run:
+                  Write-Output 'Finite compile-only diagnostic labels are in this step name. No raw
+                  compiler text is published.'
             - name: Inspect PE bytes and announce compile-only provenance
               run: |
                   $ErrorActionPreference = 'Stop'
