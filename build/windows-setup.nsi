@@ -6,6 +6,10 @@ Unicode true
 !include nsDialogs.nsh
 !include "${ACTION_PRESENTATION}"
 
+!define HUB_OBSERVER_PROPERTY "DiagnosticHub.SetupObserver.v1"
+!define HUB_REVIEW_ROOT_ID 61001
+!define HUB_REVIEW_CHOICES_ID 61002
+
 Name "Diagnostic Hub ${APP_VERSION}"
 Caption "Diagnostic Hub Setup ${APP_VERSION}"
 OutFile "${SETUP_OUT}"
@@ -42,8 +46,12 @@ Var HubActionButton
 Var HubActionEffectBox
 Var HubReviewChoices
 Var HubDialog
+Var HubObserverBoundMode
+Var HubObserverInstallRoot
+Var HubObserverInstallApplied
 
 !define MUI_ABORTWARNING
+!define MUI_CUSTOMFUNCTION_ABORT HubObserverAcceptedAbort
 !define MUI_WELCOMEPAGE_TEXT "Install Diagnostic Hub for your current user.$\r$\n$\r$\nReview the application folder and shortcuts before any install change. Your settings and reports stay separate and are retained during repair or removal.$\r$\n$\r$\nThis build is unsigned; normal Windows publisher policies still apply."
 !insertmacro MUI_PAGE_WELCOME
 Page custom LocationCreate LocationLeave
@@ -51,12 +59,129 @@ Page custom OptionsCreate OptionsLeave
 Page custom ReviewCreate ReviewLeave
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TEXT "$HubResultText"
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE HubObserverFinishLeave
 !insertmacro MUI_PAGE_FINISH
+!ifdef MUI_PAGE_CUSTOMFUNCTION_LEAVE
+  !undef MUI_PAGE_CUSTOMFUNCTION_LEAVE
+!endif
 !define MUI_UNCONFIRMPAGE_TEXT_TOP "Remove the owned Diagnostic Hub application from $INSTDIR?$\r$\n$\r$\nSettings and reports will be retained. Close that installation first."
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_UNPAGE_FINISH
 !insertmacro MUI_LANGUAGE English
+
+; Source-fixed callback reports for the prebound collector path only. The
+; inherited stdout pipe can have other writers: these bytes report callbacks,
+; never authenticate a human, Finish activation or a completed installation.
+Function HubObserverReport
+  Exch $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  StrCpy $5 0
+  IfErrors observerRememberError observerCheck
+observerRememberError:
+  StrCpy $5 1
+observerCheck:
+  ${If} $HubObserverBoundMode != 1
+    Goto observerReportDone
+  ${EndIf}
+  System::Call 'user32::GetPropW(p $HWNDPARENT, w "${HUB_OBSERVER_PROPERTY}") p.r1'
+  ${If} $1 != 1
+  ${AndIf} $1 != 2
+    Goto observerReportDone
+  ${EndIf}
+  System::Call 'kernel32::GetStdHandle(i -11) p.r1'
+  System::Call 'kernel32::GetFileType(p r1) i.r2'
+  ${If} $2 != 3
+    Goto observerReportDone
+  ${EndIf}
+  StrLen $2 $0
+  ${If} $2 > 96
+    Goto observerReportDone
+  ${EndIf}
+  ; All callers below pass fixed ASCII tokens, so character and byte counts
+  ; agree. A failed/partial write is never retried and cannot abort Setup.
+  System::Call 'kernel32::WriteFile(p r1, m r0, i r2, *i .r3, p 0) i.r4'
+observerReportDone:
+  ${If} $5 == 1
+    SetErrors
+  ${Else}
+    ClearErrors
+  ${EndIf}
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+; Remove only this cooperating protocol's known intent while our own parent
+; window still exists. The small property value is data, never a HANDLE to close.
+Function HubObserverClearProperty
+  Push $0
+  Push $1
+  StrCpy $1 0
+  IfErrors observerClearRemember observerClearCheck
+observerClearRemember:
+  StrCpy $1 1
+observerClearCheck:
+  ${If} $HubObserverBoundMode == 1
+    System::Call 'user32::GetPropW(p $HWNDPARENT, w "${HUB_OBSERVER_PROPERTY}") p.r0'
+    ${If} $0 == 1
+    ${OrIf} $0 == 2
+      System::Call 'user32::RemovePropW(p $HWNDPARENT, w "${HUB_OBSERVER_PROPERTY}") p.r0'
+    ${EndIf}
+  ${EndIf}
+  ${If} $1 == 1
+    SetErrors
+  ${Else}
+    ClearErrors
+  ${EndIf}
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function .onInstSuccess
+  Call HubObserverClearProperty
+FunctionEnd
+
+Function .onInstFailed
+  Call HubObserverClearProperty
+FunctionEnd
+
+; MUI calls this only after its warning has accepted an abort. Declining the
+; warning never reaches this callback and keeps the operation intent intact.
+Function HubObserverAcceptedAbort
+  Call HubObserverClearProperty
+FunctionEnd
+
+Function HubObserverFinishLeave
+  ${If} $HubObserverBoundMode == 1
+    StrCmpS "$INSTDIR" "$HubObserverInstallRoot" observerFinishRootMatches
+    Abort "The bound observed install target changed."
+observerFinishRootMatches:
+    ${If} $HubOperation != "install"
+    ${OrIf} $HubLaunch != 0
+    ${OrIf} $HubObserverInstallApplied != 1
+      Abort "The bound install has not reported successful Apply."
+    ${EndIf}
+    Push $9
+    System::Call 'user32::GetPropW(p $HWNDPARENT, w "${HUB_OBSERVER_PROPERTY}") p.r9'
+    ${If} $9 != 2
+      Pop $9
+      Abort "A bound Finish action was not requested."
+    ${EndIf}
+    Pop $9
+  ${EndIf}
+  ${If} $HubObserverInstallApplied == 1
+    Push "DIAGNOSTIC_HUB_SETUP_FINISH_LEAVE_V1$\r$\n"
+    Call HubObserverReport
+  ${EndIf}
+FunctionEnd
 
 !macro WorkerFunctions PREFIX
 Function ${PREFIX}ExtractWorker
@@ -124,6 +249,9 @@ Function .onInit
   StrCpy $HubDesktop 0
   StrCpy $HubLaunch 0
   StrCpy $HubNoLaunch 0
+  StrCpy $HubObserverBoundMode 0
+  StrCpy $HubObserverInstallRoot ""
+  StrCpy $HubObserverInstallApplied 0
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/allusers" $1
@@ -136,6 +264,16 @@ Function .onInit
   ${GetOptions} $0 "/NOLAUNCH" $1
   ${IfNot} ${Errors}
     StrCpy $HubNoLaunch 1
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $0 "/OBSERVEINSTALLROOT=" $HubObserverInstallRoot
+  ${IfNot} ${Errors}
+    ${If} $HubObserverInstallRoot == ""
+      SetErrorLevel 64
+      Quit
+    ${EndIf}
+    StrCpy $HubObserverBoundMode 1
+    StrCpy $INSTDIR "$HubObserverInstallRoot"
   ${EndIf}
   Call ExtractWorker
   WriteUninstaller "$PLUGINSDIR\Uninstall Diagnostic Hub.exe"
@@ -274,6 +412,9 @@ Function ReviewCreate
   Pop $0
   nsDialogs::CreateControl "EDIT" ${DEFAULT_STYLES}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_AUTOVSCROLL}|${ES_READONLY} ${WS_EX_CLIENTEDGE} 0u 73u 290u 24u "$INSTDIR"
   Pop $0
+  Push $9
+  System::Call 'user32::SetWindowLongW(p r0, i -12, i ${HUB_REVIEW_ROOT_ID}) i.r9'
+  Pop $9
   ${NSD_CreateLabel} 0u 100u 290u 9u "Settings and reports folder (retained)"
   Pop $0
   nsDialogs::CreateControl "EDIT" ${DEFAULT_STYLES}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_AUTOVSCROLL}|${ES_READONLY} ${WS_EX_CLIENTEDGE} 0u 110u 290u 24u "$3"
@@ -298,22 +439,67 @@ Function ReviewCreate
   ${EndIf}
   ${NSD_CreateLabel} 0u 50u 290u 10u "$HubReviewChoices"
   Pop $0
+  Push $9
+  System::Call 'user32::SetWindowLongW(p r0, i -12, i ${HUB_REVIEW_CHOICES_ID}) i.r9'
+  Pop $9
   GetDlgItem $0 $HWNDPARENT 1
   SendMessage $0 ${WM_SETTEXT} 0 "STR:$HubActionButton"
   nsDialogs::Show
 FunctionEnd
 
 Function ReviewLeave
+  ${If} $HubObserverBoundMode == 1
+    Push $9
+    System::Call 'user32::GetPropW(p $HWNDPARENT, w "${HUB_OBSERVER_PROPERTY}") p.r9'
+    ${If} $9 != 1
+      Pop $9
+      Abort "A bound install action was not requested."
+    ${EndIf}
+    Pop $9
+    StrCmpS "$INSTDIR" "$HubObserverInstallRoot" observerReviewRootMatches
+    Abort "The bound observed install target changed."
+observerReviewRootMatches:
+    ${If} $HubOperation != "install"
+    ${OrIf} $HubLaunch != 0
+      Abort "Only the bound install with launch disabled is allowed."
+    ${EndIf}
+  ${EndIf}
   StrCpy $HubConsent 1
+  Push "DIAGNOSTIC_HUB_SETUP_REVIEW_LEAVE_V1$\r$\n"
+  Call HubObserverReport
 FunctionEnd
 
 
 Section "Apply reviewed operation"
+  ${If} $HubObserverBoundMode == 1
+    Push $9
+    System::Call 'user32::GetPropW(p $HWNDPARENT, w "${HUB_OBSERVER_PROPERTY}") p.r9'
+    ${If} $9 != 1
+      Pop $9
+      SetErrorLevel 64
+      Abort "A bound install action was not requested."
+    ${EndIf}
+    Pop $9
+    StrCmpS "$INSTDIR" "$HubObserverInstallRoot" observerApplyRootMatches
+    SetErrorLevel 64
+    Abort "The bound observed install target changed."
+observerApplyRootMatches:
+    ${If} $HubOperation != "install"
+    ${OrIf} $HubLaunch != 0
+      SetErrorLevel 64
+      Abort "Only the bound install with launch disabled is allowed."
+    ${EndIf}
+  ${EndIf}
   DetailPrint "Verifying the reviewed identity and complete package bytes..."
   Call CallWorker
   ${If} $0 != "ok"
     SetErrorLevel 1
     Abort
+  ${EndIf}
+  ${If} $HubOperation == "install"
+    StrCpy $HubObserverInstallApplied 1
+    Push "DIAGNOSTIC_HUB_SETUP_INSTALL_WORKER_OK_V1$\r$\n"
+    Call HubObserverReport
   ${EndIf}
   ReadINIStr $1 "$HubResponse" setup warnings
   StrCpy $HubResultText "$HubResultText$\r$\n$\r$\n$1$\r$\n$\r$\nApplication: $INSTDIR$\r$\nSettings and reports retained."

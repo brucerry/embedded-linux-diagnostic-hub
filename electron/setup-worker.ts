@@ -371,13 +371,14 @@ export async function setupWorkerMain(
                 matchesSetupSuccessor(root, expected, version, identity(expected.pid)),
             launch: async (root) => {
                 const environment = { ...process.env };
-                for (const name of [
+                const launchContext = new Set([
                     'ELECTRON_RUN_AS_NODE',
                     'PORTABLE_EXECUTABLE_FILE',
                     'PORTABLE_EXECUTABLE_DIR',
                     'PORTABLE_EXECUTABLE_APP_FILENAME',
-                ])
-                    delete environment[name];
+                ]);
+                for (const name of Object.keys(environment))
+                    if (launchContext.has(name.toUpperCase())) delete environment[name];
                 const launched = spawn(path.join(root, 'Diagnostic Hub.exe'), [], {
                     cwd: root,
                     env: environment,

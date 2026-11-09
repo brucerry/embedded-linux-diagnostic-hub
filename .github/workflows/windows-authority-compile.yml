@@ -4,7 +4,7 @@ name: Windows authority compile-only candidate
 # neither admits this runner for native observations nor supplies release acceptance.
 on:
     push:
-        branches: [ci/v060-windows-setup-observer-compile-20261109]
+        branches: [ci/v060-windows-wizard-actions-20261109]
 
 permissions:
     contents: read
@@ -18,7 +18,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-windows-setup-observer-compile-20261109' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-windows-wizard-actions-20261109' && github.run_attempt == 1 }}
         runs-on: windows-latest
         timeout-minutes: 15
         defaults:
@@ -36,7 +36,7 @@ jobs:
               run: |
                   $ErrorActionPreference = 'Stop'
                   try {
-                    if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-setup-observer-compile-20261109' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Context' }
+                    if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-wizard-actions-20261109' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Context' }
                     if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') { throw 'Runner' }
                     if ($env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$' -or $env:GITHUB_RUN_ID -cnotmatch '^[0-9]+$') { throw 'Identity' }
                     foreach ($name in @('NODE_OPTIONS','NODE_PATH','ELECTRON_RUN_AS_NODE','CL','_CL_','LINK','_LINK_')) { if (Test-Path ('Env:' + $name)) { throw 'Override' } }

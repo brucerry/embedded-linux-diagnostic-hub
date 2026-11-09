@@ -2,7 +2,7 @@ name: Windows Setup package consistency candidate
 
 on:
     push:
-        branches: [ci/v060-windows-setup-package-20261108]
+        branches: [ci/v060-windows-wizard-actions-20261109]
 
 permissions:
     contents: read
@@ -16,7 +16,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-windows-setup-package-20261108' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-windows-wizard-actions-20261109' && github.run_attempt == 1 }}
         runs-on: windows-latest
         timeout-minutes: 30
         steps:
@@ -24,7 +24,7 @@ jobs:
               shell: pwsh
               run: |
                   $ErrorActionPreference = 'Stop'
-                  if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-setup-package-20261108' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Unexpected Setup candidate context.' }
+                  if ($env:GITHUB_EVENT_NAME -ne 'push' -or $env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_REF -ne 'refs/heads/ci/v060-windows-wizard-actions-20261109' -or $env:GITHUB_REPOSITORY -ne 'brucerry/embedded-linux-diagnostic-hub') { throw 'Unexpected Setup candidate context.' }
                   if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64') { throw 'Require the standard hosted Windows x64 runner.' }
                   if ($env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Missing exact event source identity.' }
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0

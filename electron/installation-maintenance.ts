@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 const { lstatSync } = physicalFS;
 const { open } = physicalFS.promises;
 import path from 'node:path';
+import { matchesSetupBootIdentity } from '../shared/setup-boot-identity.ts';
 import {
     INSTALLATION_PRODUCT,
     INSTALLATION_RECORD,
@@ -379,14 +380,16 @@ export async function acknowledgeSetupBoot(context: {
         journal.product !== INSTALLATION_PRODUCT ||
         journal.schemaVersion !== 1 ||
         journal.root !== context.root ||
-        !['candidate-active', 'candidate-confirmed'].includes(String(journal.phase)) ||
+        typeof journal.phase !== 'string' ||
+        !['candidate-active', 'candidate-confirmed'].includes(journal.phase) ||
         journal.installationId !== context.installationId ||
         journal.candidateDigest !== context.manifestSHA256 ||
         journal.candidateVersion !== context.version ||
-        !/^[a-f0-9-]{36}$/.test(String(journal.transactionId))
+        typeof journal.transactionId !== 'string' ||
+        !/^[a-f0-9-]{36}$/.test(journal.transactionId)
     )
         return;
-    await atomicSetupJSON(files.ack, {
+    const ack = {
         schemaVersion: 1,
         product: INSTALLATION_PRODUCT,
         transactionId: journal.transactionId,
@@ -400,5 +403,21 @@ export async function acknowledgeSetupBoot(context: {
         processCreationMs: context.processCreationMs,
         observedAt: new Date().toISOString(),
         source: 'trusted main-frame readUpdateInfo after native window visibility',
-    });
+    };
+    if (
+        !matchesSetupBootIdentity(
+            ack,
+            {
+                transactionId: journal.transactionId,
+                installationId: context.installationId,
+                manifestSHA256: context.manifestSHA256,
+                version: context.version,
+                root: context.root,
+                nativeExecutable: context.nativeExecutable,
+            },
+            (actual, expected) => actual === expected,
+        )
+    )
+        return;
+    await atomicSetupJSON(files.ack, ack);
 }

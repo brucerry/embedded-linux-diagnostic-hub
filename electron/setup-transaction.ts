@@ -12,6 +12,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto';
 const { lstat, open, readFile, readdir, realpath, statfs } = physicalFS.promises;
 import path from 'node:path';
+import { matchesSetupBootIdentity } from '../shared/setup-boot-identity';
 import {
     INSTALLATION_MANIFEST,
     INSTALLATION_RECORD,
@@ -1130,15 +1131,18 @@ export class SetupTransaction {
             throw Error('Candidate identity changed.');
         const ack = (await boundedSetupJSON(maintenancePaths(root).ack)) as Record<string, unknown>;
         if (
-            ack.schemaVersion !== 1 ||
-            ack.product !== INSTALLATION_PRODUCT ||
-            typeof ack.nativeExecutable !== 'string' ||
-            !same(ack.nativeExecutable, path.join(root, current.manifest.entryPoint)) ||
-            ack.transactionId !== journal.transactionId ||
-            ack.installationId !== journal.installationId ||
-            ack.version !== journal.candidateVersion ||
-            ack.manifestSHA256 !== journal.candidateDigest ||
-            !same(String(ack.root), root)
+            !matchesSetupBootIdentity(
+                ack,
+                {
+                    transactionId: journal.transactionId,
+                    installationId: journal.installationId,
+                    version: journal.candidateVersion,
+                    manifestSHA256: journal.candidateDigest,
+                    root,
+                    nativeExecutable: path.join(root, current.manifest.entryPoint),
+                },
+                same,
+            )
         )
             throw Error('A matching native/UI successor has not been observed.');
         const expectedProfile = await realpath(

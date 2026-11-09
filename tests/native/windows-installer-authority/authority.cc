@@ -67,6 +67,11 @@ struct Owner {
   bool setupOnly = false;
   size_t setupControlSamples = 0;
   File setupFile;
+  bool setupInstallPlan = false;
+  std::wstring setupInstallRoot;
+  bool setupReviewReserved = false, setupFinishReserved = false;
+  bool setupReviewMessageAttempted = false, setupReviewMessageReturned = false;
+  bool setupFinishMessageAttempted = false, setupFinishMessageReturned = false;
   std::array<Lease, 64> handles{}; size_t handleSlots = 0; std::vector<std::unique_ptr<Crypto>> crypto;
   // The output slot belongs to the existing owner before GetIfTable2 writes it.
   // A failure output is not authority to inspect or free that pointer.
@@ -701,6 +706,101 @@ std::string setupControlFacts(Owner* o, std::vector<SetupControl>& controls) {
   }
   s << "],\"consent\":\"unconfirmed\",\"finishActivation\":\"unconfirmed\",\"descendantsObserved\":false,\"atomicSnapshot\":false}"; return s.str();
 }
+const SetupControl& setupControlById(const std::vector<SetupControl>& controls, int id) {
+  const SetupControl* selected = nullptr;
+  for (const auto& control : controls) if (control.id == id && control.visible) { need(!selected, "SETUP_ACTION_CONTROL_AMBIGUOUS"); selected = &control; }
+  need(selected != nullptr, "SETUP_ACTION_CONTROL_MISSING"); return *selected;
+}
+std::wstring setupPrivateControlText(SetupScan& scan, const SetupControl& control, bool readonlyEdit) {
+  HWND h = reinterpret_cast<HWND>(control.handle); setupWindowIdentity(&scan, h, control.thread);
+  need(IsWindowVisible(h) && IsWindowEnabled(h), "SETUP_ACTION_CONTROL_NOT_READY");
+  if (readonlyEdit) {
+    need(strcmp(control.className, "edit") == 0, "SETUP_ACTION_EDIT_REQUIRED");
+    SetLastError(0); const auto style = GetWindowLongPtrW(h, GWL_STYLE); need((style || GetLastError() == 0) && (style & ES_READONLY), "SETUP_ACTION_READONLY_EDIT_REQUIRED");
+  } else {
+    need(strcmp(control.className, "static") == 0, "SETUP_ACTION_CHOICES_REQUIRED");
+    SetLastError(0); const auto style = GetWindowLongPtrW(h, GWL_STYLE); need(style || GetLastError() == 0, "SETUP_ACTION_CHOICES_STYLE_UNCONFIRMED");
+    const auto type = style & SS_TYPEMASK;
+    need(type == SS_LEFT || type == SS_CENTER || type == SS_RIGHT || type == SS_SIMPLE || type == SS_LEFTNOWORDWRAP, "SETUP_ACTION_CHOICES_TEXT_REQUIRED");
+  }
+  std::array<wchar_t, 256> value{}; DWORD_PTR returned = 0;
+  need(SendMessageTimeoutW(h, WM_GETTEXT, value.size(), reinterpret_cast<LPARAM>(value.data()), SMTO_BLOCK | SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 30, &returned) != 0, "SETUP_ACTION_TEXT_UNCONFIRMED");
+  need(returned > 0 && returned < value.size() - 1 && value[returned] == 0, "SETUP_ACTION_TEXT_BOUND");
+  setupWindowIdentity(&scan, h, control.thread); return std::wstring(value.data(), size_t(returned));
+}
+std::string setupActionFacts(Owner* o, std::vector<SetupControl>& controls, bool finish) {
+  o->check(); need(o->setupInstallPlan, "SETUP_INSTALL_PLAN_REQUIRED");
+  (void)setupControlFacts(o, controls); need(!o->createdExitObserved, "SETUP_ACTION_ROOT_ENDED");
+  const auto& button = setupControlById(controls, 1); need(strcmp(button.className, "button") == 0 && button.enabled, "SETUP_ACTION_BUTTON_NOT_READY");
+  need(strcmp(button.label, finish ? "finish" : "install") == 0, "SETUP_ACTION_BUTTON_MISMATCH");
+  HWND buttonWindow = reinterpret_cast<HWND>(button.handle); HWND dialog = GetAncestor(buttonWindow, GA_ROOT);
+  SetupScan scan{o, dialog, 0, 1, &controls}; DWORD pid = 0; scan.thread = GetWindowThreadProcessId(dialog, &pid);
+  need(scan.thread && pid == o->launched.dwProcessId, "SETUP_ACTION_ROOT_CHANGED"); setupWindowIdentity(&scan, dialog, scan.thread);
+  if (!finish) {
+    const auto& application = setupControlById(controls, 61001); const auto& choices = setupControlById(controls, 61002);
+    const auto target = setupPrivateControlText(scan, application, true); need(eq(target, o->setupInstallRoot), "SETUP_ACTION_TARGET_MISMATCH");
+    const auto text = setupPrivateControlText(scan, choices, false);
+    need(text == L"Start menu: Yes    Desktop: Yes    Launch: No" || text == L"Start menu: Yes    Desktop: No    Launch: No"
+      || text == L"Start menu: No    Desktop: Yes    Launch: No" || text == L"Start menu: No    Desktop: No    Launch: No", "SETUP_ACTION_LAUNCH_CHOICE_MISMATCH");
+    bool review = false; for (const auto& row : controls) review = review || (row.visible && strcmp(row.label, "review") == 0); need(review, "SETUP_ACTION_REVIEW_REQUIRED");
+  }
+  // Read-only cap issuance cannot be upgraded here. The fixed root/op/launch
+  // checks are repeated by shipping ReviewLeave and Apply before consent/worker.
+  o->check(); (void)setupRootFacts(o); need(!o->createdExitObserved, "SETUP_ACTION_ROOT_ENDED");
+  setupWindowIdentity(&scan, dialog, scan.thread); setupWindowIdentity(&scan, buttonWindow, button.thread);
+  need(SetPropW(dialog, L"DiagnosticHub.SetupObserver.v1", reinterpret_cast<HANDLE>(uintptr_t(finish ? 2 : 1))) != FALSE, "SETUP_OBSERVER_ENABLE_UNCONFIRMED");
+  o->check(); (void)setupRootFacts(o); need(!o->createdExitObserved, "SETUP_ACTION_ROOT_ENDED");
+  setupWindowIdentity(&scan, buttonWindow, button.thread); need(IsWindowVisible(buttonWindow) && IsWindowEnabled(buttonWindow), "SETUP_ACTION_BUTTON_NOT_READY");
+  auto& attempted = finish ? o->setupFinishMessageAttempted : o->setupReviewMessageAttempted;
+  auto& returned = finish ? o->setupFinishMessageReturned : o->setupReviewMessageReturned;
+  attempted = true; DWORD_PTR result = 0;
+  const auto sent = SendMessageTimeoutW(buttonWindow, BM_CLICK, 0, 0, SMTO_BLOCK | SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, 1000, &result);
+  returned = sent != 0; // Adopt the message outcome before cancellation/status checks.
+  need(returned, "SETUP_ACTION_MESSAGE_UNCONFIRMED"); o->check();
+  std::ostringstream s; s << "{\"action\":\"" << (finish ? "finish" : "review-install")
+    << "\",\"messageAttempted\":true,\"messageReturned\":true,\"observerReportingEnabled\":true,\"root\":" << setupRootFacts(o) << '}'; return s.str();
+}
+std::string setupCallbackFacts(Owner* o) {
+  need(o->setupInstallPlan, "SETUP_INSTALL_PLAN_REQUIRED"); (void)drainStdio(o);
+  constexpr std::array<const char*, 3> tokens{{"DIAGNOSTIC_HUB_SETUP_REVIEW_LEAVE_V1\r\n", "DIAGNOSTIC_HUB_SETUP_INSTALL_WORKER_OK_V1\r\n", "DIAGNOSTIC_HUB_SETUP_FINISH_LEAVE_V1\r\n"}};
+  constexpr std::array<const char*, 3> events{{"review-leave", "install-worker-ok", "finish-leave"}};
+  std::array<bool, 3> reported{}; bool unknown = o->standardOutput.overflow || o->standardOutput.readFailed;
+  std::array<size_t, 3> frameEvents{}, frameOffsets{}, frameLengths{}; size_t frameCount = 0;
+  const std::string bytes(reinterpret_cast<const char*>(o->standardOutput.bytes.data()), o->standardOutput.used);
+  size_t at = 0;
+  while (at < bytes.size()) {
+    const auto end = bytes.find('\n', at);
+    if (end == std::string::npos) {
+      bool prefix = false; const auto tail = bytes.substr(at);
+      for (const auto* token : tokens) prefix = prefix || std::string(token).compare(0, tail.size(), tail) == 0;
+      unknown = unknown || !prefix || o->standardOutput.eof; break;
+    }
+    bool recognized = false;
+    for (size_t i = 0; i < tokens.size(); ++i) if (bytes.compare(at, end + 1 - at, tokens[i]) == 0) {
+      if (!reported[i]) { need(frameCount < frameEvents.size(), "SETUP_CALLBACK_FRAME_LIMIT"); frameEvents[frameCount] = i; frameOffsets[frameCount] = at; frameLengths[frameCount] = end + 1 - at; ++frameCount; }
+      reported[i] = true; recognized = true;
+    }
+    unknown = unknown || !recognized; at = end + 1;
+  }
+  const bool any = reported[0] || reported[1] || reported[2];
+  unknown = unknown || (o->standardOutput.eof && !any);
+  std::ostringstream s; s << "{\"root\":" << setupRootFacts(o)
+    << ",\"reviewMessageAttempted\":" << (o->setupReviewMessageAttempted ? "true" : "false") << ",\"reviewMessageReturned\":" << (o->setupReviewMessageReturned ? "true" : "false")
+    << ",\"finishMessageAttempted\":" << (o->setupFinishMessageAttempted ? "true" : "false") << ",\"finishMessageReturned\":" << (o->setupFinishMessageReturned ? "true" : "false")
+    << ",\"reviewLeaveReported\":" << (reported[0] ? "true" : "false") << ",\"installWorkerOkReported\":" << (reported[1] ? "true" : "false")
+    << ",\"finishLeaveReported\":" << (reported[2] ? "true" : "false") << ",\"streamStatus\":\"" << (unknown ? "unconfirmed" : any ? "reported" : "pending")
+    << "\",\"stdoutEOF\":" << (o->standardOutput.eof ? "true" : "false") << ",\"stderrEOF\":" << (o->standardError.eof ? "true" : "false")
+    << ",\"reporterAuthenticated\":false,\"consent\":\"unconfirmed\",\"finishActivation\":\"unconfirmed\",\"installationObserved\":false,\"reportedFrames\":[";
+  for (size_t i = 0; i < frameCount; ++i) {
+    const auto offset = frameOffsets[i], length = frameLengths[i];
+    need(offset <= o->standardOutput.used && length <= o->standardOutput.used - offset, "SETUP_CALLBACK_FRAME_BOUND");
+    if (i) s << ',';
+    // Encode the actual first matched capture slice, not a token reconstructed
+    // from its flag. The caller-owned original survives native-owner collection.
+    s << "{\"event\":\"" << events[frameEvents[i]] << "\",\"offset\":" << offset << ",\"base64\":\"" << base64(o->standardOutput.bytes.data() + offset, length) << "\"}";
+  }
+  s << "]}"; return s.str();
+}
 void launchSetup(Owner* o) {
   o->check(); need(o->setupOnly && o->pins, "SETUP_PIN_REQUIRED");
   need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
@@ -708,7 +808,7 @@ void launchSetup(Owner* o) {
   need(eq(volume.data(), o->volumeRoot), "SETUP_DRIVE_MAPPING_CHANGED");
   need(sameId(fileId(o->setupFile.handle, false), o->setupFile.id), "SETUP_PIN_CHANGED");
   const auto executable = o->rootGuid + L"\\Diagnostic-Hub-Windows-x64-Setup.exe";
-  const auto command = L"\"" + executable + L"\" /NOLAUNCH";
+  const auto command = L"\"" + executable + L"\" /NOLAUNCH" + (o->setupInstallPlan ? L" /OBSERVEINSTALLROOT=\"" + o->setupInstallRoot + L"\"" : L"");
   need(command.size() < 1024 && o->rootGuid.size() < MAX_PATH, "SETUP_COMMAND_BOUND");
   o->launchCommand.assign(command.begin(), command.end()); o->launchCommand.push_back(0); o->launchCwd = o->rootGuid;
   o->launchEnvironment.clear();
@@ -893,7 +993,7 @@ std::string releaseHandles(Owner* o, bool owned = false) {
   o->releaseClosedCount = closed; o->releaseTotalCount = total;
   return releaseFacts(o, owned);
 }
-enum class Operation { Pin, Observe, ObserveInterfaceStatus, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned, SetupPin, SetupLaunch, SetupSample, SetupControls };
+enum class Operation { Pin, Observe, ObserveInterfaceStatus, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned, SetupPin, SetupLaunch, SetupSample, SetupControls, SetupReviewApply, SetupFinish, SetupCallbacks };
 struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; std::vector<OwnedWindow> ownedWindows; std::vector<SetupControl> setupControls; };
 void hostCleanupMarker(void* data) noexcept {
   auto* o = static_cast<Owner*>(data); o->hostHookFired.store(true); o->hostEnvironmentClosing.store(true);
@@ -945,6 +1045,9 @@ void execute(napi_env, void* raw) {
       case Operation::SetupLaunch: launchSetup(w->o); w->result = setupRootFacts(w->o); break;
       case Operation::SetupSample: w->result = setupRootFacts(w->o); break;
       case Operation::SetupControls: w->result = setupControlFacts(w->o, w->setupControls); break;
+      case Operation::SetupReviewApply: w->result = setupActionFacts(w->o, w->setupControls, false); break;
+      case Operation::SetupFinish: w->result = setupActionFacts(w->o, w->setupControls, true); break;
+      case Operation::SetupCallbacks: w->result = setupCallbackFacts(w->o); break;
     }
   } catch (const Fault& f) { w->failure = f.code; w->o->note(f); }
   catch (...) { w->failure = "NATIVE_EXCEPTION_RETAINED"; if (!w->o->primaryException) w->o->primaryException = std::current_exception(); w->o->note({w->failure, 0}); }
@@ -957,7 +1060,7 @@ void complete(napi_env e, napi_status status, void* raw) {
     // after deleting the strong reference, through the final settlement call.
     napi_value localCap; api(e, napi_get_reference_value(e, w->cap, &localCap));
     need(localCap != nullptr, "COMPLETION_CAP_MISSING");
-    const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::SetupSample || w->operation == Operation::DrainStdio || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
+    const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::SetupSample || w->operation == Operation::SetupCallbacks || w->operation == Operation::DrainStdio || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
     const bool resolve = status == napi_ok && !w->failure && !w->result.empty() && (terminal || (!w->o->failure && !w->o->cancelled.load()));
     const bool joinHost = resolve && w->operation == Operation::ReleaseOwned && w->o->released &&
       w->o->hostAcquireSubmitted && w->o->hostCreateAcknowledged && w->o->hostReferenceAcknowledged &&
@@ -1007,7 +1110,7 @@ napi_value prepare(napi_env e, napi_callback_info info) {
     return cap;
   } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
 }
-napi_value prepareSetup(napi_env e, napi_callback_info info) {
+napi_value prepareSetupKind(napi_env e, napi_callback_info info, bool installPlan) {
   try {
     size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr)); need(n == 1, "SETUP_PREPARE_ARGUMENTS");
     Owner* o = nullptr; { std::lock_guard<std::mutex> lock(ownersMutex); need(owners.size() < 32, "OWNER_LIMIT"); auto provisional = std::make_unique<Owner>(); provisional->env = e; provisional->setupOnly = true; owners.insert(provisional.get()); o = provisional.release(); }
@@ -1017,9 +1120,12 @@ napi_value prepareSetup(napi_env e, napi_callback_info info) {
     auto& file = o->setupFile; file.relative = L"Diagnostic-Hub-Windows-x64-Setup.exe";
     double size; api(e, napi_get_value_double(e, prop(e, a[0], "bytes"), &size)); need(size > 0 && size <= 2147483648.0 && size == uint64_t(size), "SETUP_FILE_SIZE_BOUND"); file.size = uint64_t(size);
     file.expected = utf8(e, prop(e, a[0], "sha256"), 64); need(file.expected.size() == 64 && file.expected.find_first_not_of("0123456789abcdef") == std::string::npos, "DIGEST_INVALID");
+    if (installPlan) { o->setupInstallRoot = wide(e, prop(e, a[0], "expectedInstallRoot"), 220); rootSyntax(o->setupInstallRoot); need(!eq(o->setupInstallRoot, o->root), "SETUP_INSTALL_TARGET_IS_STAGE"); o->setupInstallPlan = true; }
     return cap;
   } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
 }
+napi_value prepareSetup(napi_env e, napi_callback_info i) { return prepareSetupKind(e, i, false); }
+napi_value prepareSetupInstall(napi_env e, napi_callback_info i) { return prepareSetupKind(e, i, true); }
 napi_value acquireHostLifetimeKind(napi_env e, napi_callback_info info, bool setup) {
   Owner* o = nullptr;
   try {
@@ -1059,8 +1165,9 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation, bool 
   try {
     const bool observe = operation == Operation::Observe, launch = operation == Operation::Launch;
     const bool setupLaunch = operation == Operation::SetupLaunch;
+    const bool setupAction = operation == Operation::SetupReviewApply || operation == Operation::SetupFinish;
     const bool release = operation == Operation::ReleaseRead || operation == Operation::ReleaseOwned;
-    const bool terminal = operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::DrainStdio || operation == Operation::ReleaseOwned;
+    const bool terminal = operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::SetupCallbacks || operation == Operation::DrainStdio || operation == Operation::ReleaseOwned;
     size_t n = 3; napi_value a[3]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr));
     need(n == (observe ? 3u : launch ? 2u : 1u), "OP_ARGUMENTS"); auto* o = setup ? setupOwner(e, a[0]) : owner(e, a[0]);
     need(!o->busy.load() && !o->releaseSubmitted, "CAPABILITY_NOT_ACTIVE");
@@ -1072,8 +1179,13 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation, bool 
       need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
       need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted.load() && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
     }
-    if (operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
-    if (operation == Operation::SetupControls) { need(o->creationSucceeded && o->createdTime, "SETUP_CREATED_PROCESS_REQUIRED"); need(o->setupControlSamples < 32, "SETUP_CONTROL_SAMPLE_LIMIT"); ++o->setupControlSamples; }
+    if (operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::SetupCallbacks || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
+    if (operation == Operation::SetupCallbacks) need(o->setupInstallPlan, "SETUP_INSTALL_PLAN_REQUIRED");
+    if (setupAction) { need(o->setupInstallPlan, "SETUP_INSTALL_PLAN_REQUIRED"); need(!(operation == Operation::SetupFinish ? o->setupFinishReserved : o->setupReviewReserved), "SETUP_ACTION_ALREADY_SUBMITTED"); }
+    if (operation == Operation::SetupControls || setupAction) {
+      need(o->creationSucceeded && o->createdTime, "SETUP_CREATED_PROCESS_REQUIRED"); need(o->setupControlSamples < 32, "SETUP_CONTROL_SAMPLE_LIMIT"); ++o->setupControlSamples;
+      if (setupAction) (operation == Operation::SetupFinish ? o->setupFinishReserved : o->setupReviewReserved) = true;
+    }
     if (operation == Operation::ObserveOwnedWindows) need(o->creationSucceeded && o->createdTime && !o->createdExitObserved, "OWNED_WINDOW_PROCESS_REQUIRED");
     if (operation == Operation::ReleaseRead) need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
     // Refusal here precedes release submission/invalidation and closes nothing.
@@ -1083,7 +1195,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation, bool 
     if (setupLaunch) o->launchReserved = true;
     w = new Work{o, e}; w->operation = operation; w->profile = std::move(profile);
     if (operation == Operation::ObserveOwnedWindows) w->ownedWindows.reserve(128); // Before queueing or any window API.
-    if (operation == Operation::SetupControls) w->setupControls.reserve(64);
+    if (operation == Operation::SetupControls || setupAction) w->setupControls.reserve(64);
     if (observe) { double rawPid; api(e, napi_get_value_double(e, a[1], &rawPid)); need(rawPid > 0 && rawPid <= 4294967295.0 && rawPid == uint32_t(rawPid), "PID_INVALID"); w->pid = uint32_t(rawPid); auto s = utf8(e, a[2], 20); need(s[0] != '0' && s.find_first_not_of("0123456789") == std::string::npos, "CREATION_INVALID"); w->creation = 0; for (char digit : s) { auto value = uint64_t(digit - '0'); need(w->creation <= (std::numeric_limits<uint64_t>::max() - value) / 10, "CREATION_OVERFLOW"); w->creation = w->creation * 10 + value; } }
     o->pendingWork = w; o->busy.store(true); if (release) o->releaseSubmitted = true;
     api(e, napi_create_reference(e, a[0], 1, &w->cap)); w->referenceCreated = true;
@@ -1114,6 +1226,9 @@ napi_value setupPinCall(napi_env e, napi_callback_info i) { return start(e, i, O
 napi_value setupLaunchCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupLaunch, true); }
 napi_value setupSampleCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupSample, true); }
 napi_value setupControlsCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupControls, true); }
+napi_value setupReviewApplyCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupReviewApply, true); }
+napi_value setupFinishCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupFinish, true); }
+napi_value setupCallbacksCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupCallbacks, true); }
 napi_value setupDrainCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::DrainStdio, true); }
 napi_value setupReleaseCall(napi_env e, napi_callback_info i) {
   try {
@@ -1150,7 +1265,12 @@ napi_value init(napi_env e, napi_value exports) {
     {"drainSetupStdio", nullptr, setupDrainCall, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"releaseSetupHandles", nullptr, setupReleaseCall, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"cancelSetup", nullptr, cancelSetup, nullptr, nullptr, nullptr, napi_default, nullptr}};
-  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok || napi_define_properties(e, exports, 1, &interfaceStatus) != napi_ok || napi_define_properties(e, exports, sizeof(setupProps) / sizeof(setupProps[0]), setupProps) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
+  napi_property_descriptor setupActions[] = {
+    {"prepareSetupInstall", nullptr, prepareSetupInstall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"requestSetupReviewApply", nullptr, setupReviewApplyCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"requestSetupFinish", nullptr, setupFinishCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"observeSetupCallbacks", nullptr, setupCallbacksCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
+  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok || napi_define_properties(e, exports, 1, &interfaceStatus) != napi_ok || napi_define_properties(e, exports, sizeof(setupProps) / sizeof(setupProps[0]), setupProps) != napi_ok || napi_define_properties(e, exports, sizeof(setupActions) / sizeof(setupActions[0]), setupActions) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
 }
 } // namespace
 NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
