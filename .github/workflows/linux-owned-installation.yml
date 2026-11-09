@@ -2,7 +2,7 @@ name: Exercise controlled Linux permanent installation
 
 on:
     push:
-        branches: [codex/linux-owned-installation-ca471]
+        branches: [codex/linux-private-sdk-product-917]
 
 permissions:
     contents: read
@@ -16,6 +16,8 @@ jobs:
         if: github.run_attempt == '1'
         runs-on: ubuntu-24.04
         timeout-minutes: 30
+        env:
+            NODE_DISABLE_COMPILE_CACHE: '1'
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
               with:
@@ -25,15 +27,13 @@ jobs:
                   set-safe-directory: false
                   submodules: false
                   lfs: false
-            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-              with:
-                  node-version: '24.22.0'
-                  package-manager-cache: false
+            - name: Prepare the complete pinned private Node SDK
+              run: python3 -B -I scripts/prepare-linux-private-sdk.py
             - name: Observe the real user and allocate one private fixture
               shell: bash
               run: |
                   python3 -B -I - <<'PY'
-                  import hashlib, json, os, pathlib, platform, pwd, subprocess, tempfile
+                  import hashlib, json, os, pathlib, platform, pwd, shutil, stat, subprocess, tempfile
                   uid, euid = os.getuid(), os.geteuid()
                   home = pathlib.Path(os.environ['HOME'])
                   workspace = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
@@ -52,10 +52,30 @@ jobs:
                   for name in ['build-a', 'build-b', 'installation']:
                       assert not os.path.lexists(fixture / name), name
                   tools = {name: {'realpath': os.path.realpath(name), 'sha256': hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()} for name in ['/usr/bin/cc', '/usr/bin/7z']}
-                  node = json.loads(subprocess.check_output(['node', '-p', 'JSON.stringify({version:process.versions.node,executable:process.execPath})']))
-                  npm = subprocess.check_output(['npm', '--version'], text=True).strip()
-                  assert node['version'] == '24.22.0' and npm == '11.19.1'
-                  tools['node'] = {'realpath': node['executable'], 'sha256': hashlib.sha256(pathlib.Path(node['executable']).read_bytes()).hexdigest()}
+                  selected_sdk = pathlib.Path(os.environ['HUB_PRIVATE_SDK_ROOT'])
+                  selected_node = pathlib.Path(os.environ['HUB_PRIVATE_NODE'])
+                  selected_npm = pathlib.Path(os.environ['HUB_PRIVATE_NPM'])
+                  assert selected_sdk.is_relative_to(home) and selected_sdk.resolve() == selected_sdk
+                  assert selected_node == selected_sdk / 'bin/node' and selected_node.resolve() == selected_node
+                  assert selected_npm == selected_sdk / 'lib/node_modules/npm/bin/npm-cli.js' and selected_npm.resolve() == selected_npm
+                  assert shutil.which('node') == str(selected_node)
+                  assert all(key not in os.environ for key in ['NODE_OPTIONS', 'NODE_PATH', 'npm_config_script_shell'])
+                  selected_stat = selected_node.lstat()
+                  assert stat.S_ISREG(selected_stat.st_mode) and selected_stat.st_uid == uid and selected_stat.st_nlink == 1
+                  assert selected_stat.st_mode & 0o7022 == 0
+                  expected_node_sha = '67ca5783febb8bf85736c79fcdd92c8d6d465a0eb2a082672bcdfa76a506751c'
+                  assert hashlib.sha256(selected_node.read_bytes()).hexdigest() == expected_node_sha
+                  node_check = "const fs=require('node:fs'),crypto=require('node:crypto');const st=fs.statSync('/proc/self/exe',{bigint:true});JSON.stringify({version:process.versions.node,executable:process.execPath,sha256:crypto.createHash('sha256').update(fs.readFileSync('/proc/self/exe')).digest('hex'),dev:String(st.dev),inode:String(st.ino),uid:String(st.uid),links:String(st.nlink)})"
+                  node = json.loads(subprocess.check_output([str(selected_node), '-p', node_check]))
+                  assert node['version'] == '24.22.0' and node['executable'] == str(selected_node) and node['sha256'] == expected_node_sha
+                  assert node['dev'] == str(selected_stat.st_dev) and node['inode'] == str(selected_stat.st_ino)
+                  assert node['uid'] == str(uid) and node['links'] == '1'
+                  selected_after = selected_node.lstat()
+                  assert (selected_after.st_dev, selected_after.st_ino, selected_after.st_size, selected_after.st_mtime_ns, selected_after.st_ctime_ns) == (selected_stat.st_dev, selected_stat.st_ino, selected_stat.st_size, selected_stat.st_mtime_ns, selected_stat.st_ctime_ns)
+                  npm = subprocess.check_output([str(selected_node), str(selected_npm), '--version'], text=True).strip()
+                  assert npm == '11.19.1'
+                  tools['node'] = node
+                  tools['npm'] = {'absoluteCLI': str(selected_npm), 'version': npm}
                   facts = {'uid': uid, 'euid': euid, 'home': str(home), 'workspace': str(workspace), 'fixture': str(fixture), 'tools': tools, 'nodeVersion': node['version'], 'npmVersion': npm}
                   (fixture / 'host-selection.json').write_text(json.dumps(facts, indent=2) + '\n')
                   with open(os.environ['GITHUB_ENV'], 'a') as output:
@@ -65,17 +85,19 @@ jobs:
                       output.write('ELECTRON_BUILDER_CACHE=' + str(fixture / 'builder-cache') + '\n')
                       output.write('ELECTRON_BUILDER_7ZIP_PATH=/usr/bin/7z\n')
                       output.write('TMPDIR=' + str(fixture / 'tmp') + '\n')
-                  print('Linux user, pinned Node/npm, and fresh owned build paths observed.')
+                  print('Private official SDK Node/npm identity and fresh owned build paths observed.')
                   PY
                   test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
             - name: Install the locked ordinary build dependencies
-              run: npm ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund
+              run: |
+                  "$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund
+                  test ! -e node_modules/.bin/node && test ! -L node_modules/.bin/node
             - name: Install only the pinned Electron build runtime
               env:
                   ELECTRON_INSTALL_PLATFORM: linux
                   ELECTRON_INSTALL_ARCH: x64
               run: |
-                  node <<'JS'
+                  "$HUB_PRIVATE_NODE" <<'JS'
                   const assert = require('node:assert/strict');
                   const fs = require('node:fs');
                   const crypto = require('node:crypto');
@@ -87,17 +109,17 @@ jobs:
                   assert.equal(require('./node_modules/electron/checksums.json')['electron-v44.5.1-linux-x64.zip'], '5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5');
                   assert.equal(crypto.createHash('sha256').update(fs.readFileSync('node_modules/electron/install.js')).digest('hex'), '3b9e0c3c9070edbdb732dc05ed23c6f1c6b7a404bd623033a2f0b71052534e93');
                   JS
-                  node node_modules/electron/install.js
+                  "$HUB_PRIVATE_NODE" node_modules/electron/install.js
             - name: Typecheck the actual application
-              run: npm run typecheck
+              run: '"$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" run typecheck'
             - name: Build the production renderer
-              run: node node_modules/vite/bin/vite.js build
+              run: '"$HUB_PRIVATE_NODE" node_modules/vite/bin/vite.js build'
             - name: Build the desktop and installer helpers
-              run: npm run build:desktop
+              run: '"$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" run build:desktop'
             - name: Build the native rename helper once
               id: native_build
               run: |
-                  node --input-type=module - "$PWD/dist-linux-native" <<'JS'
+                  "$HUB_PRIVATE_NODE" --input-type=module - "$PWD/dist-linux-native" <<'JS'
                   import { buildLinuxNative } from './scripts/build-linux-native.mjs';
                   import * as fs from 'node:fs';
                   import { types } from 'node:util';
@@ -164,8 +186,8 @@ jobs:
               run: |
                   test ! -e "$HUB_LINUX_FIXTURE/build-a" && test ! -L "$HUB_LINUX_FIXTURE/build-a"
                   test ! -e "$HUB_LINUX_FIXTURE/build-b" && test ! -L "$HUB_LINUX_FIXTURE/build-b"
-                  node node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0-qualification.0 --config.directories.output="$HUB_LINUX_FIXTURE/build-a"
-                  node node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0 --config.directories.output="$HUB_LINUX_FIXTURE/build-b"
+                  "$HUB_PRIVATE_NODE" node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0-qualification.0 --config.directories.output="$HUB_LINUX_FIXTURE/build-a"
+                  "$HUB_PRIVATE_NODE" node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0 --config.directories.output="$HUB_LINUX_FIXTURE/build-b"
             - name: Install the controlled prerelease, update to the target, and roll back
               run: |
-                  node --import ./node_modules/tsx/dist/loader.mjs scripts/linux-owned-installation-fixture.ts --a-appdir "$HUB_LINUX_FIXTURE/build-a/linux-unpacked" --a-archive "$HUB_LINUX_FIXTURE/build-a/Diagnostic-Hub-linux-x64.tar.gz" --b-appdir "$HUB_LINUX_FIXTURE/build-b/linux-unpacked" --b-archive "$HUB_LINUX_FIXTURE/build-b/Diagnostic-Hub-linux-x64.tar.gz" --fixture-root "$HUB_LINUX_FIXTURE/installation"
+                  "$HUB_PRIVATE_NODE" --import ./node_modules/tsx/dist/loader.mjs scripts/linux-owned-installation-fixture.ts --a-appdir "$HUB_LINUX_FIXTURE/build-a/linux-unpacked" --a-archive "$HUB_LINUX_FIXTURE/build-a/Diagnostic-Hub-linux-x64.tar.gz" --b-appdir "$HUB_LINUX_FIXTURE/build-b/linux-unpacked" --b-archive "$HUB_LINUX_FIXTURE/build-b/Diagnostic-Hub-linux-x64.tar.gz" --fixture-root "$HUB_LINUX_FIXTURE/installation"

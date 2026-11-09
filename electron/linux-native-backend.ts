@@ -20,6 +20,8 @@ import {
     type LinuxModelLease,
     type LinuxReservationIdentity,
     type LinuxMemoryEffects,
+    type LinuxRetainedGeneration,
+    MAX_LINUX_RETAINED_GENERATIONS,
 } from './linux-transaction-model.ts';
 import {
     INSTALLATION_PRODUCT,
@@ -645,13 +647,23 @@ function createBackend(
             ),
         };
     };
-    const activity = (): LinuxModelView['activity'] => {
-        const result: LinuxModelView['activity'] = {
+    const activity = (retained: string[] = []) => {
+        const locations = {
+            root: fixed.root,
+            stage: fixed.stage,
+            previous: fixed.previous,
+            ...Object.fromEntries(retained.map((file, index) => ['retained-' + index, file])),
+        };
+        const result: Record<string, 'inactive' | 'active' | 'unknown'> = {
             root: 'inactive',
             stage: 'inactive',
             previous: 'inactive',
+            ...Object.fromEntries(
+                retained.map((_, index) => ['retained-' + index, 'inactive' as const]),
+            ),
         };
-        const unknown = () => ({ root: 'unknown', stage: 'unknown', previous: 'unknown' }) as const;
+        const unknown = () =>
+            Object.fromEntries(Object.keys(locations).map((key) => [key, 'unknown' as const]));
         const before = names('/proc', MAX_PIDS + 1024).filter((name) => /^[1-9][0-9]*$/.test(name));
         if (before.length > MAX_PIDS) return unknown();
         for (const text of before) {
@@ -685,8 +697,8 @@ function createBackend(
             );
             if (first.startTicks !== last.startTicks || !sameInode(owner, stat(directory)))
                 return unknown();
-            for (const slot of ['root', 'stage', 'previous'] as const)
-                if (inside(fixed[slot], executable)) result[slot] = 'active';
+            for (const [slot, location] of Object.entries(locations))
+                if (inside(location, executable)) result[slot] = 'active';
         }
         if (
             JSON.stringify(before) !==
@@ -728,21 +740,22 @@ function createBackend(
         let journal: LinuxModelJournal | null = null;
         let journalOriginal: { base64: string; sha256: string } | null = null;
         let completed: NonNullable<LinuxModelView['history']>['completed'] = null;
+        let lineage: LinuxRetainedGeneration[] = [];
         if (workStat) {
             plainDirectory(workStat, work, true);
-            const allowed = new Set([
-                'journal.json',
-                ...(continuation ? ['completed-journal.json'] : []),
-                path.posix.basename(fixed.stage),
-                path.posix.basename(fixed.previous),
-                ...(menuPaths ? ['menu-candidate.desktop', 'menu-previous.desktop'] : []),
-            ]);
-            if (
-                names(work, (menuPaths ? 5 : 3) + (continuation ? 1 : 0)).some(
-                    (name) => !allowed.has(name),
-                )
-            )
-                fail('NATIVE_FOREIGN_MAINTENANCE');
+            const entries = names(
+                work,
+                (menuPaths ? 5 : 3) + (continuation ? 1 + MAX_LINUX_RETAINED_GENERATIONS * 2 : 0),
+            );
+            if (!continuation) {
+                const legacy = new Set([
+                    'journal.json',
+                    path.posix.basename(fixed.stage),
+                    path.posix.basename(fixed.previous),
+                    ...(menuPaths ? ['menu-candidate.desktop', 'menu-previous.desktop'] : []),
+                ]);
+                if (entries.some((name) => !legacy.has(name))) fail('NATIVE_FOREIGN_MAINTENANCE');
+            }
             if (continuation && maybeStat(work + '/completed-journal.json')) {
                 const bytes = read(work + '/completed-journal.json', 8192);
                 completed = {
@@ -756,13 +769,100 @@ function createBackend(
                     const bytes = read(work + '/journal.json', 8192);
                     journal = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
                     journalOriginal = { base64: bytes.toString('base64'), sha256: hash(bytes) };
-                } else {
-                    // Preserve the legacy public metadata-error mapping and private pre-open refusal.
-                    journal = json(work + '/journal.json') as LinuxModelJournal;
-                }
+                } else journal = json(work + '/journal.json') as LinuxModelJournal;
             } else if (!completed && !state.allocations.has(work))
                 fail('NATIVE_FOREIGN_MAINTENANCE');
+            const archives = entries.filter((name) =>
+                /^retained-journal-[a-f0-9-]{36}\.json$/.test(name),
+            );
+            if (
+                archives.length > MAX_LINUX_RETAINED_GENERATIONS ||
+                (archives.length && (!completed || menuPaths))
+            )
+                fail('NATIVE_RETAINED_HISTORY');
+            const unordered: LinuxRetainedGeneration[] = archives.map((name) => {
+                const bytes = read(work + '/' + name, 8192),
+                    saved = JSON.parse(
+                        new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+                    ) as LinuxModelJournal;
+                if (
+                    typeof saved.transactionId !== 'string' ||
+                    name !== 'retained-journal-' + saved.transactionId + '.json' ||
+                    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+                        saved.transactionId,
+                    )
+                )
+                    return fail('NATIVE_RETAINED_HISTORY');
+                const previous = payload(work + '/previous-' + saved.transactionId);
+                if (!previous) return fail('NATIVE_RETAINED_HISTORY');
+                return {
+                    archived: true,
+                    base64: bytes.toString('base64'),
+                    sha256: hash(bytes),
+                    journal: saved,
+                    previous,
+                    activity: 'inactive',
+                };
+            });
+            let preceding = completed?.journal;
+            while (unordered.length) {
+                const next = unordered.filter(
+                    (entry) =>
+                        entry.previous.transactionId === preceding?.transactionId &&
+                        entry.journal.previousSHA256 === preceding?.candidateSHA256,
+                );
+                if (next.length !== 1) fail('NATIVE_RETAINED_CHAIN');
+                const selected = next[0];
+                lineage.push(selected);
+                unordered.splice(unordered.indexOf(selected), 1);
+                preceding = selected.journal;
+            }
+            if (
+                continuation &&
+                completed &&
+                journal &&
+                journal.transactionId !== plan.transactionId &&
+                journal.phase === 'candidate-active' &&
+                journal.previousSHA256 !== null
+            ) {
+                if (
+                    menuPaths ||
+                    lineage.length >= MAX_LINUX_RETAINED_GENERATIONS ||
+                    !journalOriginal
+                )
+                    fail('NATIVE_RETAINED_HISTORY');
+                const previous = payload(work + '/previous-' + journal.transactionId);
+                if (!previous) fail('NATIVE_RETAINED_HISTORY');
+                lineage.push({
+                    archived: false,
+                    ...journalOriginal!,
+                    journal,
+                    previous: previous!,
+                    activity: 'inactive',
+                });
+            }
+            const allowed = new Set([
+                'journal.json',
+                ...(continuation ? ['completed-journal.json'] : []),
+                path.posix.basename(fixed.stage),
+                path.posix.basename(fixed.previous),
+                ...(menuPaths ? ['menu-candidate.desktop', 'menu-previous.desktop'] : []),
+                ...lineage.flatMap((entry) => [
+                    'previous-' + entry.journal.transactionId,
+                    ...(entry.archived
+                        ? ['retained-journal-' + entry.journal.transactionId + '.json']
+                        : []),
+                ]),
+            ]);
+            if (entries.some((name) => !allowed.has(name))) fail('NATIVE_FOREIGN_MAINTENANCE');
         }
+        const sampledActivity = activity(
+            lineage.map((entry) => work + '/previous-' + entry.journal.transactionId),
+        );
+        lineage = lineage.map((entry, index) => ({
+            ...entry,
+            activity: sampledActivity['retained-' + index],
+        }));
         const view: LinuxModelView = {
             parents: parents(),
             source: {
@@ -774,8 +874,20 @@ function createBackend(
             stage: payload(fixed.stage),
             previous: payload(fixed.previous),
             journal,
-            ...(continuation ? { history: { journalOriginal, completed } } : {}),
-            activity: activity(),
+            ...(continuation
+                ? {
+                      history: {
+                          journalOriginal,
+                          completed,
+                          ...(lineage.length ? { lineage } : {}),
+                      },
+                  }
+                : {}),
+            activity: {
+                root: sampledActivity.root,
+                stage: sampledActivity.stage,
+                previous: sampledActivity.previous,
+            },
             ...(menuPaths
                 ? {
                       menu: {
@@ -791,6 +903,17 @@ function createBackend(
             {
                 ...copy(view),
                 activity: { root: 'inactive', stage: 'inactive', previous: 'inactive' },
+                ...(view.history?.lineage
+                    ? {
+                          history: {
+                              ...view.history,
+                              lineage: view.history.lineage.map((entry) => ({
+                                  ...entry,
+                                  activity: 'inactive' as const,
+                              })),
+                          },
+                      }
+                    : {}),
             },
             plan,
         );
@@ -1146,13 +1269,14 @@ function createBackend(
             return protect(async () => {
                 requireMutation();
                 const actual = await guard(copy(scope), copy(expected));
+                const pending = actual.history?.lineage?.at(-1);
                 if (
                     !continuation ||
                     !actual.history?.journalOriginal ||
-                    actual.history.completed ||
+                    (actual.history.completed && (!pending || pending.archived)) ||
                     !actual.journal ||
                     actual.journal.phase !== 'candidate-active' ||
-                    actual.journal.previousSHA256 !== null ||
+                    (actual.journal.previousSHA256 !== null && !pending) ||
                     !actual.root ||
                     actual.stage ||
                     actual.previous ||
@@ -1163,7 +1287,10 @@ function createBackend(
                     return fail('NATIVE_COMPLETED_HANDOFF');
                 const parent = pin(work),
                     source = fdPath(parent.fd) + '/journal.json',
-                    target = fdPath(parent.fd) + '/completed-journal.json',
+                    targetName = pending
+                        ? 'retained-journal-' + actual.journal.transactionId + '.json'
+                        : 'completed-journal.json',
+                    target = fdPath(parent.fd) + '/' + targetName,
                     before = stat(source);
                 regular(before, 8192, true);
                 if (
@@ -1175,19 +1302,13 @@ function createBackend(
                 parent.check();
                 call(
                     'completed-journal-noreplace',
-                    () =>
-                        ops.moveNoReplace!(
-                            parent.fd,
-                            'journal.json',
-                            parent.fd,
-                            'completed-journal.json',
-                        ),
-                    () => state.allocations.add(work + '/completed-journal.json'),
+                    () => ops.moveNoReplace!(parent.fd, 'journal.json', parent.fd, targetName),
+                    () => state.allocations.add(work + '/' + targetName),
                 );
                 if (
                     maybeStat(source) ||
                     !sameInode(before, stat(target)) ||
-                    read(work + '/completed-journal.json', 8192).toString('base64') !==
+                    read(work + '/' + targetName, 8192).toString('base64') !==
                         actual.history.journalOriginal.base64
                 )
                     return fail('NATIVE_COMPLETED_HANDOFF_CHANGED');
@@ -1601,8 +1722,9 @@ function createBackend(
                     if (
                         !['install', 'repair', 'update'].includes(plan.action) ||
                         journal.phase !== 'candidate-active' ||
-                        journal.previousSHA256 !== null ||
-                        maybeStat(work + '/completed-journal.json')
+                        (journal.previousSHA256 === null
+                            ? Boolean(maybeStat(work + '/completed-journal.json'))
+                            : Boolean(plan.menu) || !maybeStat(work + '/completed-journal.json'))
                     )
                         transactionId = journal.transactionId;
                 } else if (continuation && maybeStat(work + '/completed-journal.json')) {

@@ -73,11 +73,23 @@ export interface LinuxModelJournal {
     owner: LinuxModelOwner;
     phase: LinuxModelPhase;
 }
+/** Private retained originals, not a new installation/journal wire format. */
+export interface LinuxRetainedGeneration {
+    archived: boolean;
+    base64: string;
+    sha256: string;
+    journal: LinuxModelJournal;
+    previous: LinuxModelPayload;
+    activity: 'inactive' | 'active' | 'unknown';
+}
+export const MAX_LINUX_RETAINED_GENERATIONS = 8;
 export interface LinuxModelView {
     /** Fixed first-upgrade handoff. Original journal bytes remain part of every later guard. */
     history?: {
         journalOriginal: { base64: string; sha256: string } | null;
         completed: { base64: string; sha256: string; journal: LinuxModelJournal } | null;
+        /** No-menu only. At most one final entry is the current, not-yet-archived journal. */
+        lineage?: LinuxRetainedGeneration[];
     };
     menu?: LinuxMenuView;
     /** Fresh independent activity observations for exactly the three guarded slots; unknown refuses. */
@@ -199,8 +211,12 @@ function fields(value: object, allowed: readonly string[]) {
 }
 function copy<T>(value: T): T {
     const bytes = JSON.stringify(value);
-    // Four separately bounded manifest slots plus fixed identity/journal metadata. No heap guarantee.
-    if (!bytes || Buffer.byteLength(bytes) > MAX_INSTALLATION_MANIFEST_BYTES * 4 + 65536)
+    // Current slots and eight separately bounded retained payloads. No heap guarantee.
+    if (
+        !bytes ||
+        Buffer.byteLength(bytes) >
+            MAX_INSTALLATION_MANIFEST_BYTES * (4 + MAX_LINUX_RETAINED_GENERATIONS) + 131072
+    )
         throw Error('model input bound');
     return JSON.parse(bytes) as T;
 }
@@ -368,9 +384,13 @@ function validateView(view: LinuxModelView, plan: LinuxModelConfiguration) {
             }
     if (Object.hasOwn(view, 'history')) {
         if (!view.history) throw Error('model history required');
-        fields(view.history, ['journalOriginal', 'completed']);
+        fields(view.history, [
+            'journalOriginal',
+            'completed',
+            ...(Object.hasOwn(view.history, 'lineage') ? ['lineage'] : []),
+        ]);
         const original = (
-            value: { base64: string; sha256: string },
+            value: { base64: string; sha256: string; journal?: LinuxModelJournal },
             journal: LinuxModelJournal,
             completed = false,
         ) => {
@@ -410,6 +430,97 @@ function validateView(view: LinuxModelView, plan: LinuxModelConfiguration) {
             if (prior.journal.phase !== 'candidate-active' || prior.journal.previousSHA256 !== null)
                 throw Error('completed journal phase differs');
         }
+        if (Object.hasOwn(view.history, 'lineage')) {
+            const lineage = view.history.lineage!;
+            if (
+                Object.hasOwn(plan, 'menu') ||
+                !view.history.completed ||
+                !Array.isArray(lineage) ||
+                !lineage.length ||
+                lineage.length > MAX_LINUX_RETAINED_GENERATIONS ||
+                [view.root, view.stage, view.previous].some(
+                    (slot) => slot && Object.hasOwn(slot, 'menu'),
+                )
+            )
+                throw Error('unsupported retained lineage');
+            let prior = view.history.completed.journal;
+            const transactions = new Set([prior.transactionId]);
+            for (let index = 0; index < lineage.length; index++) {
+                const entry = lineage[index];
+                fields(entry, ['archived', 'base64', 'sha256', 'journal', 'previous', 'activity']);
+                if (
+                    typeof entry.archived !== 'boolean' ||
+                    entry.activity !== 'inactive' ||
+                    (!entry.archived && index !== lineage.length - 1) ||
+                    Object.hasOwn(entry.journal, 'menu') ||
+                    Object.hasOwn(entry.previous, 'menu')
+                )
+                    throw Error('unsupported retained generation');
+                original(
+                    { base64: entry.base64, sha256: entry.sha256, journal: entry.journal },
+                    entry.journal,
+                    true,
+                );
+                const { history: _history, ...withoutHistory } = copy(view);
+                validateView({ ...withoutHistory, journal: entry.journal } as LinuxModelView, {
+                    ...plan,
+                    transactionId: entry.journal.transactionId,
+                });
+                source(entry.previous, plan.host.uid, true);
+                const previous = entry.previous;
+                if (
+                    entry.journal.phase !== 'candidate-active' ||
+                    transactions.has(entry.journal.transactionId) ||
+                    entry.journal.previousSHA256 !== prior.candidateSHA256 ||
+                    previous.transactionId !== prior.transactionId ||
+                    previous.verifiedManifestSHA256 !== prior.candidateSHA256 ||
+                    previous.installationId !== plan.installationId ||
+                    previous.root !== plan.root ||
+                    previous.profile !== profile(plan)
+                )
+                    throw Error('retained generation chain differs');
+                const key = previous.identity.dev + ':' + previous.identity.ino;
+                if (inodeKeys.includes(key)) throw Error('aliased retained generation');
+                inodeKeys.push(key);
+                transactions.add(entry.journal.transactionId);
+                prior = entry.journal;
+                if (
+                    !entry.archived &&
+                    (!equal(view.journal, entry.journal) ||
+                        !equal(view.history.journalOriginal, {
+                            base64: entry.base64,
+                            sha256: entry.sha256,
+                        }))
+                )
+                    throw Error('current retained original differs');
+            }
+            const last = lineage[lineage.length - 1];
+            if (
+                last.archived &&
+                view.journal &&
+                (transactions.has(view.journal.transactionId) ||
+                    view.journal.previousSHA256 !== last.journal.candidateSHA256)
+            )
+                throw Error('current generation does not follow retained history');
+            if (last.archived && view.journal) {
+                const predecessor = (slot: LinuxModelPayload | null) =>
+                    slot !== null &&
+                    slot.transactionId === last.journal.transactionId &&
+                    slot.verifiedManifestSHA256 === last.journal.candidateSHA256;
+                const restored = predecessor(view.root) && view.previous === null;
+                const retained = predecessor(view.previous);
+                const phase = view.journal.phase;
+                const bound =
+                    phase === 'copying' || phase === 'rolled-back'
+                        ? restored
+                        : phase === 'prepared' || phase === 'candidate-retained'
+                          ? restored || (view.root === null && retained)
+                          : ['old-retained', 'candidate-active', 'rollback-started'].includes(
+                                phase,
+                            ) && retained;
+                if (!bound) throw Error('current predecessor differs from retained journal');
+            }
+        }
     }
     if (view.journal !== null) {
         const journal = view.journal;
@@ -442,7 +553,9 @@ function validateView(view: LinuxModelView, plan: LinuxModelConfiguration) {
             (journal.transactionId !== plan.transactionId &&
                 !(
                     view.history &&
-                    view.history.completed === null &&
+                    (view.history.completed === null ||
+                        (view.history.lineage?.at(-1)?.archived === false &&
+                            equal(view.history.lineage.at(-1)!.journal, journal))) &&
                     ['install', 'repair', 'update'].includes(plan.action) &&
                     completedRoot(view, journal)
                 )) ||
@@ -465,9 +578,10 @@ function validateView(view: LinuxModelView, plan: LinuxModelConfiguration) {
 }
 /** Exact first completed installation, with no retained predecessor or uncommitted candidate. */
 function completedRoot(view: LinuxModelView, journal: LinuxModelJournal) {
+    const retained = view.history?.lineage?.at(-1);
     return (
         journal.phase === 'candidate-active' &&
-        journal.previousSHA256 === null &&
+        (journal.previousSHA256 === null || (retained && equal(retained.journal, journal))) &&
         view.stage === null &&
         view.previous === null &&
         view.root !== null &&
@@ -1092,8 +1206,9 @@ class LinuxTransactionCore {
         )
             throw Error('unavailable model install');
         if (before.history && before.journal !== null) {
+            const pending = before.history.lineage?.at(-1);
             if (
-                before.history.completed !== null ||
+                (before.history.completed !== null && (!pending || pending.archived)) ||
                 !completedRoot(before, before.journal) ||
                 before.journal.transactionId === plan.transactionId ||
                 !this.effects.handoff
@@ -1101,10 +1216,12 @@ class LinuxTransactionCore {
                 throw Error('completed installation continuation unavailable');
             await this.guard(plan, scope);
             const expected = copy(before);
-            expected.history!.completed = {
-                ...expected.history!.journalOriginal!,
-                journal: copy(before.journal),
-            };
+            if (pending) expected.history!.lineage!.at(-1)!.archived = true;
+            else
+                expected.history!.completed = {
+                    ...expected.history!.journalOriginal!,
+                    journal: copy(before.journal),
+                };
             expected.history!.journalOriginal = null;
             expected.journal = null;
             validateView(expected, plan);
@@ -1116,7 +1233,13 @@ class LinuxTransactionCore {
             this.view = returned;
             before = copy(returned);
         }
-        if (before.history?.completed && !completedRoot(before, before.history.completed.journal))
+        if (
+            before.history?.completed &&
+            !completedRoot(
+                before,
+                before.history.lineage?.at(-1)?.journal ?? before.history.completed.journal,
+            )
+        )
             throw Error('completed installation recovery differs');
         // Never guess/remove a stale lock, foreign stage, previous slot or unconfirmed journal.
         if (
