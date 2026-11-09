@@ -88,10 +88,14 @@ jobs:
                   assert.equal(crypto.createHash('sha256').update(fs.readFileSync('node_modules/electron/install.js')).digest('hex'), '3b9e0c3c9070edbdb732dc05ed23c6f1c6b7a404bd623033a2f0b71052534e93');
                   JS
                   node node_modules/electron/install.js
-            - name: Build the actual application and native helper once
-              run: |
-                  npm run build
-                  npm run build:linux-native
+            - name: Typecheck the actual application
+              run: npm run typecheck
+            - name: Build the production renderer
+              run: node node_modules/vite/bin/vite.js build
+            - name: Build the desktop and installer helpers
+              run: npm run build:desktop
+            - name: Build the native rename helper once
+              run: npm run build:linux-native
             - name: Package two real versioned complete payloads
               run: |
                   test ! -e "$HUB_LINUX_FIXTURE/build-a" && test ! -L "$HUB_LINUX_FIXTURE/build-a"
