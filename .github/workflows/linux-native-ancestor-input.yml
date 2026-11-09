@@ -1,0 +1,127 @@
+name: Observe fixed Linux native-build ancestor inputs
+
+on:
+    push:
+        branches: [codex/linux-native-ancestor-input-fc2]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: linux-native-ancestor-input-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    ancestor-inputs:
+        if: github.run_attempt == '1'
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              with:
+                  node-version: '24.22.0'
+                  package-manager-cache: false
+            - name: Observe output-parent ancestor chain
+              id: output_parent
+              run: |
+                  node --input-type=module - "$PWD/dist-linux-native" <<'JS'
+                  import path from 'node:path';
+                  import * as fs from 'node:fs';
+                  import { linuxNativeBuildAncestorCategory } from './scripts/lib/linux-native-build-ancestors.mjs';
+                  const reportingOwners = new Set();
+                  function reportNativeBuildFailureCode(code) {
+                      const owner = { openIssued: false, openReturned: false, fd: undefined,
+                          closeIssued: false, closeAcknowledged: false, errors: [], keeper: undefined };
+                      reportingOwners.add(owner);
+                      owner.openIssued = true;
+                      try {
+                          owner.fd = fs.openSync(process.env.GITHUB_OUTPUT, 'a');
+                          owner.openReturned = true;
+                          const data = 'failure_code=' + code + '\nfailure_code_complete=true\n';
+                          if (fs.writeSync(owner.fd, data) !== data.length) throw Error('NATIVE_BUILD_DIAGNOSTIC_PARTIAL_WRITE');
+                      } catch (value) {
+                          owner.errors.push(value);
+                      } finally {
+                          if (owner.openReturned) {
+                              owner.closeIssued = true;
+                              try { fs.closeSync(owner.fd); owner.closeAcknowledged = true; }
+                              catch (value) { owner.errors.push(value); }
+                          }
+                      }
+                      if (owner.closeAcknowledged) reportingOwners.delete(owner);
+                      else owner.keeper = setInterval(() => {}, 1000);
+                      return owner;
+                  }
+                  let category = 'unavailable', hasObservationFailure = false, firstObservationFailure;
+                  try {
+                      const uid = process.getuid();
+                      if (process.platform === 'linux' && process.arch === 'x64' && process.versions.node === '24.22.0' && uid > 0 && uid === process.geteuid())
+                          category = linuxNativeBuildAncestorCategory(path.dirname(process.argv[2]), uid);
+                  } catch (value) { hasObservationFailure = true; firstObservationFailure = value; }
+                  if (typeof category !== 'string' || !new Set(["type", "owner", "mode", "canonical", "unavailable", "accepted"]).has(category)) category = 'unavailable';
+                  const reportingOwner = reportNativeBuildFailureCode('output-parent-' + category);
+                  if (reportingOwner.errors.length) process.exitCode = 1;
+                  JS
+            - name:
+                  'Native ancestor input: ${{ steps.output_parent.outputs.failure_code_complete ==
+                  ''true'' &&
+                  contains(fromJSON(''["output-parent-type","output-parent-owner","output-parent-mode","output-parent-canonical","output-parent-unavailable","output-parent-accepted"]''),
+                  steps.output_parent.outputs.failure_code) &&
+                  steps.output_parent.outputs.failure_code || ''output-parent-unavailable'' }}'
+              run: ':'
+            - name: Observe node-headers ancestor chain
+              id: node_headers
+              run: |
+                  node --input-type=module - <<'JS'
+                  import path from 'node:path';
+                  import * as fs from 'node:fs';
+                  import { linuxNativeBuildAncestorCategory } from './scripts/lib/linux-native-build-ancestors.mjs';
+                  const reportingOwners = new Set();
+                  function reportNativeBuildFailureCode(code) {
+                      const owner = { openIssued: false, openReturned: false, fd: undefined,
+                          closeIssued: false, closeAcknowledged: false, errors: [], keeper: undefined };
+                      reportingOwners.add(owner);
+                      owner.openIssued = true;
+                      try {
+                          owner.fd = fs.openSync(process.env.GITHUB_OUTPUT, 'a');
+                          owner.openReturned = true;
+                          const data = 'failure_code=' + code + '\nfailure_code_complete=true\n';
+                          if (fs.writeSync(owner.fd, data) !== data.length) throw Error('NATIVE_BUILD_DIAGNOSTIC_PARTIAL_WRITE');
+                      } catch (value) {
+                          owner.errors.push(value);
+                      } finally {
+                          if (owner.openReturned) {
+                              owner.closeIssued = true;
+                              try { fs.closeSync(owner.fd); owner.closeAcknowledged = true; }
+                              catch (value) { owner.errors.push(value); }
+                          }
+                      }
+                      if (owner.closeAcknowledged) reportingOwners.delete(owner);
+                      else owner.keeper = setInterval(() => {}, 1000);
+                      return owner;
+                  }
+                  let category = 'unavailable', hasObservationFailure = false, firstObservationFailure;
+                  try {
+                      const uid = process.getuid();
+                      if (process.platform === 'linux' && process.arch === 'x64' && process.versions.node === '24.22.0' && uid > 0 && uid === process.geteuid())
+                          category = linuxNativeBuildAncestorCategory(path.resolve(path.dirname(process.execPath), '../include/node'), uid);
+                  } catch (value) { hasObservationFailure = true; firstObservationFailure = value; }
+                  if (typeof category !== 'string' || !new Set(["type", "owner", "mode", "canonical", "unavailable", "accepted"]).has(category)) category = 'unavailable';
+                  const reportingOwner = reportNativeBuildFailureCode('node-headers-' + category);
+                  if (reportingOwner.errors.length) process.exitCode = 1;
+                  JS
+            - name:
+                  'Native ancestor input: ${{ steps.node_headers.outputs.failure_code_complete ==
+                  ''true'' &&
+                  contains(fromJSON(''["node-headers-type","node-headers-owner","node-headers-mode","node-headers-canonical","node-headers-unavailable","node-headers-accepted"]''),
+                  steps.node_headers.outputs.failure_code) &&
+                  steps.node_headers.outputs.failure_code || ''node-headers-unavailable'' }}'
+              run: ':'

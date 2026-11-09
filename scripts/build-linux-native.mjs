@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
+import { linuxNativeBuildAncestorCategory } from './lib/linux-native-build-ancestors.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = path.join(root, 'native/linux-rename-noreplace/rename-noreplace.c');
@@ -60,19 +61,10 @@ function regular(file, maximum, uid) {
     return { bytes, sha256: sha(bytes), fd };
 }
 function ancestors(directory, uid) {
-    let cursor = '/';
-    for (const part of directory.split('/').filter(Boolean)) {
-        cursor = path.posix.join(cursor, part);
-        const stat = fs.lstatSync(cursor);
-        need(
-            stat.isDirectory() &&
-                !stat.isSymbolicLink() &&
-                (stat.uid === 0 || stat.uid === uid) &&
-                (stat.mode & 0o7022) === 0 &&
-                fs.realpathSync(cursor) === cursor,
-            'LINUX_NATIVE_BUILD_PARENT',
-        );
-    }
+    need(
+        linuxNativeBuildAncestorCategory(directory, uid) === 'accepted',
+        'LINUX_NATIVE_BUILD_PARENT',
+    );
 }
 /** One local fixed C/Node-API8 compile into a fresh caller-selected private directory. */
 export async function buildLinuxNative(outputDirectory) {
