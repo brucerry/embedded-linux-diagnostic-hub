@@ -49,6 +49,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
     let child,
         timer,
         primary,
+        failed = false,
         unknown = 0,
         spawned = false,
         exited = false,
@@ -79,7 +80,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             stderrClosed: outputs.stderr.closed,
             listeners: listeners.length,
             unknownOperations: unknown,
-            primaryFailure: Boolean(primary),
+            primaryFailure: failed,
             diagnostics: diagnostics.length,
             directRetired: retired,
             processGroupRetirement: null,
@@ -100,8 +101,8 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
                         : null,
                 exitSignalObserved: exited ? signal !== null : null,
                 closeSignalObserved: closed ? closeSignal !== null : null,
-                controllerSucceeded: retired && !primary,
-                controllerFailed: Boolean(primary),
+                controllerSucceeded: retired && !failed,
+                controllerFailed: failed,
                 stdoutBytes: outputs.stdout.bytes,
                 stderrBytes: outputs.stderr.bytes,
                 wholeGroupRetirement: null,
@@ -115,9 +116,12 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
     });
     retained.add(owner);
     const fail = (error) => {
-        if (primary && error !== primary && !diagnostics.includes(error) && diagnostics.length < 16)
+        if (failed && error !== primary && !diagnostics.includes(error) && diagnostics.length < 16)
             diagnostics.push(error);
-        primary ??= error;
+        if (!failed) {
+            failed = true;
+            primary = error;
+        }
         result.reject(new DiagnosticGatewayCustodyFailure(primary, owner));
     };
     function unexpected(value) {
@@ -155,7 +159,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
                 fail(Error('Incomplete Gateway lifecycle.'));
             if (code !== closeCode || signal !== closeSignal || signal !== null || code !== 0)
                 fail(Error('Unsuccessful or inconsistent Gateway close.'));
-            if (!primary && !inputFinish) fail(Error('Gateway input did not finish.'));
+            if (!failed && !inputFinish) fail(Error('Gateway input did not finish.'));
             const elapsed = ports.now() - started;
             if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > bounds.deadlineMs)
                 fail(Error('Gateway elapsed observation budget exceeded.'));
@@ -170,7 +174,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             retired = true;
             retained.delete(owner);
             closure.resolve(snapshot());
-            if (primary) return;
+            if (failed) return;
             result.resolve({
                 owner: selected.owner,
                 id: selected.id,
@@ -203,7 +207,7 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             bounds.deadlineMs,
         );
         if (timer === undefined || typeof timer?.then === 'function') unexpected(timer);
-        assert.ok(!primary);
+        assert.ok(!failed);
         child = ports.launch(selected.command[0], selected.command.slice(1), {
             cwd: selected.cwd,
             env: selected.env,

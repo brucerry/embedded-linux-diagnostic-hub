@@ -1,0 +1,96 @@
+name: Gateway canonical archive build only
+
+on:
+    push:
+        branches: [ci/v060-gateway-record-20261109]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: gateway-current-build-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    gateway_build:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-gateway-record-20261109' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - name: Admit the original public hosted build job
+              run: |
+                  set -euo pipefail
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-record-20261109
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$RUNNER_ENVIRONMENT" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(id -u)" -gt 0
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: '24.22.0'
+                  cache: ''
+                  package-manager-cache: false
+            - name: Check actual source and fresh dependency inputs
+              run: |
+                  set -euo pipefail
+                  node --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import { readFileSync, lstatSync, realpathSync } from 'node:fs';
+                  import { execFileSync } from 'node:child_process';
+                  import path from 'node:path';
+                  assert.equal(process.platform, 'linux');
+                  assert.equal(process.arch, 'x64');
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.ok(process.getuid() > 0);
+                  for (const name of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH'])
+                    assert.equal(process.env[name], undefined);
+                  const root = realpathSync(process.cwd());
+                  assert.equal(realpathSync(process.env.GITHUB_WORKSPACE), root);
+                  assert.match(process.env.GITHUB_SHA, /^[a-f0-9]{40}$/);
+                  const git = (...args) => execFileSync('/usr/bin/git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+                  assert.equal(event.repository.full_name, process.env.GITHUB_REPOSITORY);
+                  assert.equal(event.repository.private, false);
+                  assert.equal(event.after, process.env.GITHUB_SHA);
+                  assert.equal(event.ref, process.env.GITHUB_REF);
+                  const node = realpathSync(process.execPath);
+                  assert.equal(node, process.execPath);
+                  const npmPackage = path.join(path.dirname(path.dirname(node)), 'lib/node_modules/npm/package.json');
+                  assert.equal(JSON.parse(readFileSync(npmPackage, 'utf8')).version, '11.19.1');
+                  for (const name of ['package.json', 'package-lock.json']) {
+                    const bytes = readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('/usr/bin/git', ['show', 'HEAD:' + name])));
+                    assert.equal(JSON.parse(bytes).version, '0.6.0');
+                  }
+                  for (const name of ['node_modules', 'validation', '.npmrc']) {
+                    try { lstatSync(name); assert.fail('Existing dependency/output/config slot.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  NODE
+            - name: Install locked build tools without package lifecycle scripts
+              run: npm ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund
+            - name: Produce and reread the canonical Gateway archive and build record
+              run: |
+                  set -euo pipefail
+                  node -e "require('node:assert/strict').equal(process.version, 'v24.22.0')"
+                  node scripts/build-gateway-archive.mjs

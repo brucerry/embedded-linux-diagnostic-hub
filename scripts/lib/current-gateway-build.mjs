@@ -208,6 +208,7 @@ export function createCurrentGatewayBuildExecution(selection, ports) {
     let phase = 'build',
         ownerIdentity = null,
         previousId = 0,
+        failed = false,
         primary;
     const execution = Object.freeze({
         context,
@@ -216,7 +217,7 @@ export function createCurrentGatewayBuildExecution(selection, ports) {
         gitEnvironment: cap.gitEnvironment,
         writeExclusive: (file, bytes) => cap.filesystem.writeFile(file, bytes, { flag: 'wx' }),
         async execute(plan) {
-            assert.ok(!primary && owners.size === 0);
+            assert.ok(!failed && owners.size === 0);
             assert.deepEqual(Object.keys(plan).sort(), ['command', 'cwd', 'id', 'owner', 'role']);
             assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.command));
             assert.equal(plan.role, phase);
@@ -248,14 +249,20 @@ export function createCurrentGatewayBuildExecution(selection, ports) {
                         if (lease.done) owners.delete(lease);
                     },
                     (error) => {
-                        primary ??= error;
+                        if (!failed) {
+                            failed = true;
+                            primary = error;
+                        }
                     },
                 );
                 const result = await owner.result;
                 await owner.closed;
                 return result;
             } catch (error) {
-                primary ??= error;
+                if (!failed) {
+                    failed = true;
+                    primary = error;
+                }
                 throw error;
             } finally {
                 lease.done = true;
@@ -266,14 +273,14 @@ export function createCurrentGatewayBuildExecution(selection, ports) {
             assert.equal(phase, 'complete');
             assert.equal(owners.size, 0);
             cap.assertSettled();
-            if (primary) throw primary;
+            if (failed) throw primary;
             retained.delete(execution);
         },
         snapshot: () =>
             Object.freeze({
                 phase,
                 commandOwners: owners.size,
-                failed: Boolean(primary),
+                failed,
                 files: cap.snapshot(),
                 wholeGroupRetirement: null,
                 releaseAcceptance: false,
