@@ -26,6 +26,7 @@
 #include <limits>
 #include <exception>
 #include <iomanip>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -52,6 +53,7 @@ struct Crypto { BCRYPT_ALG_HANDLE algorithm = nullptr; BCRYPT_HASH_HANDLE hash =
 struct Lease { HANDLE handle; bool acquired = false; bool closeAttempted = false, closeAcknowledged = false; DWORD closeError = 0; };
 struct Window { uintptr_t handle; DWORD pid; DWORD thread; bool visible; };
 struct OwnedWindow { uintptr_t handle; DWORD pid; DWORD thread; bool visible; bool minimized; };
+struct SetupControl { uintptr_t handle; DWORD pid, thread; int id; const char* className; const char* label; bool visible, enabled; const char* checkState; };
 constexpr size_t streamLimit = 65536;
 struct StreamCapture {
   Lease* reader = nullptr; Lease* writer = nullptr;
@@ -60,6 +62,11 @@ struct StreamCapture {
 };
 struct Owner {
   napi_env env; std::wstring root; std::array<File, 2> files;
+  // Issued only by prepareSetup; the separate type tag prevents app operations
+  // from consuming a Setup capability or interpreting its package pin as app pins.
+  bool setupOnly = false;
+  bool setupControlsSubmitted = false;
+  File setupFile;
   std::array<Lease, 64> handles{}; size_t handleSlots = 0; std::vector<std::unique_ptr<Crypto>> crypto;
   // The output slot belongs to the existing owner before GetIfTable2 writes it.
   // A failure output is not authority to inspect or free that pointer.
@@ -110,6 +117,7 @@ struct Owner {
 std::mutex ownersMutex;
 std::unordered_set<Owner*> owners;
 const napi_type_tag ownerTag{0x7d1f6914c3714d2aULL, 0x9dfac285f760821eULL};
+const napi_type_tag setupOwnerTag{0xec06546cc12a4adfULL, 0xb4ffdd30516b7509ULL};
 // No finalizer/teardown closes a handle or asserts retirement. Unknown handles stay owned.
 bool hostLifetimeFinished(const Owner* o) {
   return !o->hostAcquireSubmitted || (o->hostFinalizerAcknowledged && o->hostCapRefDeleted && o->hostHookRemoved && !o->hostLifetimeUnknown);
@@ -137,6 +145,11 @@ Owner* owner(napi_env e, napi_value v) {
   bool tagged = false; api(e, napi_check_object_type_tag(e, v, &ownerTag, &tagged)); need(tagged, "CAPABILITY_UNISSUED");
   void* p = nullptr; api(e, napi_unwrap(e, v, &p)); auto* o = static_cast<Owner*>(p);
   std::lock_guard<std::mutex> lock(ownersMutex); need(owners.count(o) == 1 && o->env == e, "CAPABILITY_UNISSUED"); return o;
+}
+Owner* setupOwner(napi_env e, napi_value v) {
+  bool tagged = false; api(e, napi_check_object_type_tag(e, v, &setupOwnerTag, &tagged)); need(tagged, "SETUP_CAPABILITY_UNISSUED");
+  void* p = nullptr; api(e, napi_unwrap(e, v, &p)); auto* o = static_cast<Owner*>(p);
+  std::lock_guard<std::mutex> lock(ownersMutex); need(owners.count(o) == 1 && o->env == e && o->setupOnly, "SETUP_CAPABILITY_UNISSUED"); return o;
 }
 void rootSyntax(const std::wstring& s) {
   need(s.size() >= 4 && s.size() <= 220 && ((s[0] >= L'A' && s[0] <= L'Z') || (s[0] >= L'a' && s[0] <= L'z')) && s[1] == L':' && s[2] == L'\\' && s.back() != L'\\', "ROOT_INVALID");
@@ -221,6 +234,35 @@ void pin(Owner* o) {
     need(sameId(f.id, fileId(f.handle, false)), "FILE_ID_CHANGED");
   }
   o->check(); o->pins = true;
+}
+void pinSetup(Owner* o) {
+  o->check(); need(o->setupOnly, "SETUP_CAPABILITY_REQUIRED"); fitToken(o);
+  const auto drive = o->root.substr(0, 3); need(GetDriveTypeW(drive.c_str()) == DRIVE_FIXED, "LOCAL_FIXED_VOLUME_REQUIRED");
+  std::array<wchar_t, 64> volume{}; if (!GetVolumeNameForVolumeMountPointW(drive.c_str(), volume.data(), DWORD(volume.size()))) fail("LOCAL_VOLUME_GUID");
+  o->volumeRoot = volume.data(); need(o->volumeRoot.rfind(L"\\\\?\\Volume{", 0) == 0 && o->volumeRoot.back() == L'\\', "LOCAL_VOLUME_GUID");
+  std::wstring p = o->volumeRoot; size_t at = 3;
+  openPinned(o, p, true);
+  while (at < o->root.size()) {
+    auto end = o->root.find(L'\\', at); if (end == std::wstring::npos) end = o->root.size();
+    if (p.back() != L'\\') p += L'\\'; p += o->root.substr(at, end - at);
+    HANDLE h = openPinned(o, p, true);
+    if (end == o->root.size()) { o->rootGuid = finalPath(h); o->rootId = fileId(h, true); }
+    at = end + 1;
+  }
+  auto& file = o->setupFile; const auto name = o->rootGuid + L"\\" + file.relative;
+  file.handle = openPinned(o, name, false); file.id = fileId(file.handle, false);
+  need(eq(finalPath(file.handle), name), "SETUP_FILE_PARENT_MISMATCH");
+  LARGE_INTEGER size{}; if (!GetFileSizeEx(file.handle, &size)) fail("SETUP_FILE_SIZE_QUERY");
+  need(size.QuadPart > 0 && uint64_t(size.QuadPart) == file.size, "SETUP_FILE_SIZE");
+  file.digest = digest(o, file); need(file.digest == file.expected, "SETUP_FILE_DIGEST");
+  need(sameId(file.id, fileId(file.handle, false)), "SETUP_FILE_ID_CHANGED"); o->check(); o->pins = true;
+}
+std::string setupPinFacts(Owner* o) {
+  need(o->setupOnly && o->pins, "SETUP_PIN_REQUIRED");
+  std::ostringstream s; s << "{\"name\":\"Diagnostic-Hub-Windows-x64-Setup.exe\",\"bytes\":" << o->setupFile.size
+    << ",\"sha256\":\"" << o->setupFile.digest << "\",\"fileId\":\"" << hex(o->setupFile.id.FileId.Identifier, 16)
+    << "\",\"volumeSerial\":\"" << hex64(o->setupFile.id.VolumeSerialNumber) << "\",\"fileLeaseRetained\":true}";
+  return s.str();
 }
 struct WindowScan { Owner* o; bool overflow = false, cancelled = false; };
 BOOL CALLBACK enumerate(HWND h, LPARAM raw) {
@@ -519,6 +561,183 @@ std::string ownedFacts(Owner* o) {
   }
   s << '}'; return s.str();
 }
+std::string setupRootFacts(Owner* o) {
+  need(o->setupOnly, "SETUP_CAPABILITY_REQUIRED");
+  (void)ownedFacts(o); // Same retained created-HANDLE wait/time/exit checks, no PID lookup.
+  std::ostringstream s; s << "{\"creationAttempted\":" << (o->creationAttempted ? "true" : "false")
+    << ",\"creationReturned\":" << (o->creationReturned ? "true" : "false") << ",\"createdByThisOwner\":" << (o->creationSucceeded ? "true" : "false")
+    << ",\"processHandleRetained\":" << ((o->createdProcess && o->createdProcess->acquired && !o->createdProcess->closeAttempted) ? "true" : "false")
+    << ",\"threadHandleRetained\":" << ((o->createdThread && o->createdThread->acquired && !o->createdThread->closeAttempted) ? "true" : "false")
+    << ",\"unconfirmedHandleOutput\":" << ((!o->creationSucceeded && (o->launched.hProcess || o->launched.hThread)) ? "true" : "false")
+    << ",\"pid\":" << (o->creationSucceeded ? std::to_string(o->launched.dwProcessId) : "null")
+    << ",\"threadId\":" << (o->creationSucceeded ? std::to_string(o->launched.dwThreadId) : "null")
+    << ",\"creationTime100ns\":" << (o->createdTime ? ("\"" + std::to_string(o->createdTime) + "\"") : "null")
+    << ",\"processExitObserved\":" << (o->createdExitObserved ? "true" : "false")
+    << ",\"exitCode\":" << (o->createdExitObserved ? std::to_string(o->createdExitCode) : "null") << '}'; return s.str();
+}
+// Child controls are HWNDs, not child processes. This sampler neither drives the
+// wizard nor turns a displayed label/checkbox into an activation witness.
+struct SetupScan {
+  Owner* o; HWND dialog = nullptr; DWORD thread = 0; size_t dialogs = 0;
+  std::vector<SetupControl>* controls; const char* failure = nullptr;
+  std::exception_ptr exception; size_t enumerated = 0;
+};
+BOOL CALLBACK findSetupDialog(HWND h, LPARAM raw) noexcept {
+  auto* scan = reinterpret_cast<SetupScan*>(raw);
+  try {
+    scan->o->check(); need(++scan->enumerated <= 4096, "SETUP_WINDOW_ENUMERATION_LIMIT"); DWORD pid = 0; const auto thread = GetWindowThreadProcessId(h, &pid);
+    if (pid != scan->o->launched.dwProcessId || !IsWindowVisible(h)) return TRUE;
+    need(thread != 0, "SETUP_DIALOG_CHANGED");
+    std::array<wchar_t, 128> name{}; const auto count = GetClassNameW(h, name.data(), int(name.size()));
+    need(count > 0 && size_t(count) < name.size(), "SETUP_CLASS_UNCONFIRMED");
+    if (size_t(count) == name.size() - 1) return TRUE; // Truncated unknown class, not a dialog assertion.
+    if (wcscmp(name.data(), L"#32770") != 0) return TRUE;
+    ++scan->dialogs; scan->dialog = h; scan->thread = thread; return TRUE;
+  } catch (const Fault& f) { scan->failure = f.code; scan->o->note(f); return FALSE; }
+  catch (...) { scan->exception = std::current_exception(); scan->failure = "SETUP_CALLBACK_UNCONFIRMED"; return FALSE; }
+}
+const char* setupLabel(const wchar_t* value) {
+  // Only exact public shipping labels survive. User paths/version/result text
+  // and all other content are discarded rather than retained in this owner.
+  for (const auto& item : std::initializer_list<std::pair<const wchar_t*, const char*>>{
+    {L"&Next >", "next"}, {L"Next >", "next"}, {L"< &Back", "back"}, {L"< Back", "back"},
+    {L"Cancel", "cancel"}, {L"&Cancel", "cancel"}, {L"&Install", "install"}, {L"Install", "install"},
+    {L"&Finish", "finish"}, {L"Finish", "finish"}, {L"Close", "close"}, {L"&Close", "close"},
+    {L"Application location", "application-location"}, {L"Options and maintenance", "options-maintenance"},
+    {L"Review", "review"}, {L"Choose an action", "choose-action"},
+    {L"Create a Start menu shortcut (recommended)", "start-menu-shortcut"},
+    {L"Create a desktop shortcut", "desktop-shortcut"},
+    {L"Launch after install, update or repair", "launch-choice"},
+    {L"Application folder (select or scroll to read the full path)", "application-folder-label"},
+    {L"Settings and reports folder (retained)", "retained-profile-label"}}) {
+    if (wcscmp(value, item.first) == 0) return item.second;
+  }
+  return "other";
+}
+void setupWindowIdentity(SetupScan* scan, HWND h, DWORD thread) {
+  DWORD pid = 0; const auto currentThread = GetWindowThreadProcessId(h, &pid);
+  need(IsWindow(h) && currentThread == thread && pid == scan->o->launched.dwProcessId
+    && GetAncestor(h, GA_ROOT) == scan->dialog, "SETUP_CONTROL_CHANGED");
+}
+BOOL CALLBACK sampleSetupChild(HWND h, LPARAM raw) noexcept {
+  auto* scan = reinterpret_cast<SetupScan*>(raw);
+  try {
+    scan->o->check(); need(scan->controls->size() < 64, "SETUP_CONTROL_LIMIT");
+    DWORD pid = 0; const auto thread = GetWindowThreadProcessId(h, &pid); need(thread && pid == scan->o->launched.dwProcessId, "SETUP_CONTROL_PROCESS_CHANGED");
+    setupWindowIdentity(scan, h, thread);
+    const auto handle = reinterpret_cast<uintptr_t>(h);
+    for (const auto& row : *scan->controls) need(row.handle != handle, "SETUP_CONTROL_REPEATED");
+    std::array<wchar_t, 128> name{}; const auto count = GetClassNameW(h, name.data(), int(name.size()));
+    need(count > 0 && size_t(count) < name.size(), "SETUP_CLASS_UNCONFIRMED");
+    const char* className = "other";
+    if (size_t(count) < name.size() - 1) {
+      if (eq(name.data(), L"Button")) className = "button";
+      else if (eq(name.data(), L"Static")) className = "static";
+      else if (eq(name.data(), L"Edit")) className = "edit";
+      else if (eq(name.data(), L"ComboBox")) className = "combo";
+      else if (eq(name.data(), L"msctls_progress32")) className = "progress";
+    }
+    const int id = GetDlgCtrlID(h); need(id >= -1 && id <= 65535, "SETUP_CONTROL_ID_BOUND");
+    const bool visible = IsWindowVisible(h) != FALSE, enabled = IsWindowEnabled(h) != FALSE;
+    const char* label = "not-queried"; const char* checkState = "not-checkbox";
+    constexpr UINT timeoutFlags = SMTO_BLOCK | SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT;
+    const bool button = strcmp(className, "button") == 0, staticControl = strcmp(className, "static") == 0;
+    LONG_PTR style = 0;
+    if (button || staticControl) { SetLastError(0); style = GetWindowLongPtrW(h, GWL_STYLE); need(style || GetLastError() == 0, "SETUP_CONTROL_STYLE_UNCONFIRMED"); }
+    const auto staticType = style & SS_TYPEMASK;
+    const bool textStatic = staticControl && (staticType == SS_LEFT || staticType == SS_CENTER || staticType == SS_RIGHT || staticType == SS_SIMPLE || staticType == SS_LEFTNOWORDWRAP);
+    // SS_ICON and other nontext statics can return image-handle bytes for
+    // WM_GETTEXT. They are deliberately not treated as string controls.
+    if (button || textStatic) {
+      std::array<wchar_t, 256> value{}; DWORD_PTR returned = 0;
+      need(SendMessageTimeoutW(h, WM_GETTEXT, value.size(), reinterpret_cast<LPARAM>(value.data()), timeoutFlags, 30, &returned) != 0, "SETUP_CONTROL_TEXT_UNCONFIRMED");
+      need(returned < value.size() && value[returned] == 0, "SETUP_CONTROL_TEXT_BOUND");
+      label = returned == value.size() - 1 ? "other" : setupLabel(value.data()); // Never classify a possibly truncated prefix.
+    }
+    if (button) {
+      const auto type = style & BS_TYPEMASK;
+      if (type == BS_CHECKBOX || type == BS_AUTOCHECKBOX || type == BS_3STATE || type == BS_AUTO3STATE) {
+        DWORD_PTR state = 0; need(SendMessageTimeoutW(h, BM_GETCHECK, 0, 0, timeoutFlags, 30, &state) != 0, "SETUP_CHECK_UNCONFIRMED");
+        need(state == BST_UNCHECKED || state == BST_CHECKED || state == BST_INDETERMINATE, "SETUP_CHECK_INVALID");
+        checkState = state == BST_CHECKED ? "checked" : state == BST_INDETERMINATE ? "indeterminate" : "unchecked";
+      }
+    }
+    scan->o->check(); setupWindowIdentity(scan, h, thread);
+    scan->controls->push_back({handle, pid, thread, id, className, label, visible, enabled, checkState}); return TRUE;
+  } catch (const Fault& f) { scan->failure = f.code; scan->o->note(f); return FALSE; }
+  catch (...) { scan->exception = std::current_exception(); scan->failure = "SETUP_CALLBACK_UNCONFIRMED"; return FALSE; }
+}
+void checkSetupScan(SetupScan& scan) {
+  if (scan.exception) { if (!scan.o->primaryException) scan.o->primaryException = scan.exception; std::rethrow_exception(scan.exception); }
+  if (scan.failure) fail(scan.failure, 0);
+}
+std::string setupControlFacts(Owner* o, std::vector<SetupControl>& controls) {
+  o->check(); auto root = setupRootFacts(o); need(o->creationSucceeded && o->createdTime, "SETUP_CREATED_PROCESS_REQUIRED");
+  controls.clear(); need(controls.capacity() >= 64, "SETUP_CONTROL_STORAGE_REQUIRED");
+  SetupScan scan{o, nullptr, 0, 0, &controls}; const char* reason = "root-exited";
+  if (!o->createdExitObserved) {
+    SetLastError(0); const BOOL enumerated = EnumWindows(findSetupDialog, reinterpret_cast<LPARAM>(&scan)); const auto error = GetLastError();
+    checkSetupScan(scan); if (!enumerated) fail("SETUP_DIALOG_ENUMERATION_UNCONFIRMED", error);
+    reason = scan.dialogs == 0 ? "no-root-dialog" : scan.dialogs == 1 ? "sampled" : "ambiguous-root-dialog";
+    if (scan.dialogs == 1) {
+      setupWindowIdentity(&scan, scan.dialog, scan.thread);
+      // EnumChildWindows' return value is unused by Win32. Callback bookkeeping
+      // and bracket checks, not that value, determine this sample's validity.
+      EnumChildWindows(scan.dialog, sampleSetupChild, reinterpret_cast<LPARAM>(&scan)); checkSetupScan(scan);
+      setupWindowIdentity(&scan, scan.dialog, scan.thread); need(IsWindowVisible(scan.dialog), "SETUP_DIALOG_CHANGED");
+    }
+    o->check(); root = setupRootFacts(o); need(!o->createdExitObserved, "SETUP_ROOT_ENDED_DURING_SAMPLE");
+  }
+  const bool associated = scan.dialogs == 1 && !o->createdExitObserved;
+  std::ostringstream s; s << "{\"root\":" << root << ",\"association\":\"" << (associated ? "owned-root-dialog" : "unassociated")
+    << "\",\"reason\":\"" << reason << "\",\"rootWindow\":";
+  if (associated) s << "{\"handle\":\"" << reinterpret_cast<uintptr_t>(scan.dialog) << "\",\"pid\":" << o->launched.dwProcessId << ",\"threadId\":" << scan.thread << '}';
+  else s << "null";
+  s << ",\"controls\":[";
+  for (size_t i = 0; i < controls.size(); ++i) { const auto& row = controls[i]; if (i) s << ',';
+    s << "{\"handle\":\"" << row.handle << "\",\"pid\":" << row.pid << ",\"threadId\":" << row.thread << ",\"controlId\":" << row.id
+      << ",\"className\":\"" << row.className << "\",\"label\":\"" << row.label << "\",\"visible\":" << (row.visible ? "true" : "false")
+      << ",\"enabled\":" << (row.enabled ? "true" : "false") << ",\"checkState\":\"" << row.checkState << "\"}";
+  }
+  s << "],\"consent\":\"unconfirmed\",\"finishActivation\":\"unconfirmed\",\"descendantsObserved\":false,\"atomicSnapshot\":false}"; return s.str();
+}
+void launchSetup(Owner* o) {
+  o->check(); need(o->setupOnly && o->pins, "SETUP_PIN_REQUIRED");
+  need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
+  std::array<wchar_t, 64> volume{}; if (!GetVolumeNameForVolumeMountPointW(o->root.substr(0, 3).c_str(), volume.data(), DWORD(volume.size()))) fail("SETUP_DRIVE_MAPPING");
+  need(eq(volume.data(), o->volumeRoot), "SETUP_DRIVE_MAPPING_CHANGED");
+  need(sameId(fileId(o->setupFile.handle, false), o->setupFile.id), "SETUP_PIN_CHANGED");
+  const auto executable = o->rootGuid + L"\\Diagnostic-Hub-Windows-x64-Setup.exe";
+  const auto command = L"\"" + executable + L"\" /NOLAUNCH";
+  need(command.size() < 1024 && o->rootGuid.size() < MAX_PATH, "SETUP_COMMAND_BOUND");
+  o->launchCommand.assign(command.begin(), command.end()); o->launchCommand.push_back(0); o->launchCwd = o->rootGuid;
+  o->launchEnvironment.clear();
+  // Fixed inherited profile/system entries only; no Node/Electron mode or caller environment port.
+  for (const auto* name : {L"APPDATA", L"LOCALAPPDATA", L"SystemRoot", L"TEMP", L"TMP", L"USERPROFILE", L"WINDIR"}) {
+    std::array<wchar_t, 1024> value{}; const auto size = GetEnvironmentVariableW(name, value.data(), DWORD(value.size()));
+    need(size > 0 && size < value.size(), "SETUP_ENVIRONMENT_UNAVAILABLE");
+    o->launchEnvironment.insert(o->launchEnvironment.end(), name, name + wcslen(name)); o->launchEnvironment.push_back(L'=');
+    o->launchEnvironment.insert(o->launchEnvironment.end(), value.data(), value.data() + size); o->launchEnvironment.push_back(0);
+  }
+  o->launchEnvironment.push_back(0); need(o->launchEnvironment.size() <= 8192, "SETUP_ENVIRONMENT_BOUND");
+  need(o->handleSlots + 10 <= o->handles.size(), "HANDLE_SLOT_LIMIT"); fitToken(o);
+  o->createdProcess = &o->slot(); o->createdThread = &o->slot(); prepareStdio(o);
+  need(sameId(fileId(o->setupFile.handle, false), o->setupFile.id), "SETUP_PIN_CHANGED");
+  STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = o->stdinReader->handle; startup.StartupInfo.hStdOutput = o->standardOutput.writer->handle; startup.StartupInfo.hStdError = o->standardError.writer->handle; startup.lpAttributeList = o->attributes;
+  o->check(); need(o->hostReferenceAcknowledged && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
+  o->creationAttempted = true;
+  const BOOL ok = CreateProcessW(executable.c_str(), o->launchCommand.data(), nullptr, nullptr, TRUE, CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT, o->launchEnvironment.data(), o->launchCwd.c_str(), &startup.StartupInfo, &o->launched);
+  const auto error = ok ? 0 : GetLastError();
+  o->createdProcess->handle = o->launched.hProcess; o->createdThread->handle = o->launched.hThread;
+  o->createdProcess->acquired = ok && o->launched.hProcess && o->launched.hProcess != INVALID_HANDLE_VALUE;
+  o->createdThread->acquired = ok && o->launched.hThread && o->launched.hThread != INVALID_HANDLE_VALUE;
+  o->creationReturned = true; o->creationSucceeded = ok != FALSE;
+  if (!ok) o->note({"CREATE_PROCESS_FAILED_RETAINED", error});
+  deleteAttributes(o); const bool in = closeLease(o, o->stdinReader), out = closeLease(o, o->standardOutput.writer), err = closeLease(o, o->standardError.writer);
+  need(in && out && err, "STDIO_CHILD_COPY_CLOSE_UNCONFIRMED"); if (!ok) fail("CREATE_PROCESS_FAILED_RETAINED", error);
+  need(o->createdProcess->acquired && o->createdThread->acquired, "CREATION_OUTPUT_UNCONFIRMED"); o->check();
+}
 struct OwnedWindowScan {
   Owner* o; DWORD pid; std::vector<OwnedWindow>* rows;
   bool cancelled = false, overflow = false, changed = false, callbackFailed = false;
@@ -674,8 +893,8 @@ std::string releaseHandles(Owner* o, bool owned = false) {
   o->releaseClosedCount = closed; o->releaseTotalCount = total;
   return releaseFacts(o, owned);
 }
-enum class Operation { Pin, Observe, ObserveInterfaceStatus, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned };
-struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; std::vector<OwnedWindow> ownedWindows; };
+enum class Operation { Pin, Observe, ObserveInterfaceStatus, ReleaseRead, Launch, SampleOwned, ObserveOwnedWindows, DrainStdio, ReleaseOwned, SetupPin, SetupLaunch, SetupSample, SetupControls };
+struct Work { Owner* o; napi_env env; napi_async_work work{}; napi_deferred deferred{}; napi_ref cap{}; bool referenceCreated = false, workCreated = false, queueSubmitted = false; Operation operation = Operation::Pin; const char* failure = nullptr; DWORD pid = 0; uint64_t creation = 0; std::wstring profile; std::string result; std::vector<OwnedWindow> ownedWindows; std::vector<SetupControl> setupControls; };
 void hostCleanupMarker(void* data) noexcept {
   auto* o = static_cast<Owner*>(data); o->hostHookFired.store(true); o->hostEnvironmentClosing.store(true);
   // No close, release, process control, or successful retirement is inferred.
@@ -722,6 +941,10 @@ void execute(napi_env, void* raw) {
       case Operation::DrainStdio: w->result = drainStdio(w->o); break;
       case Operation::ObserveInterfaceStatus: w->result = interfaceStatusFacts(w->o); break;
       case Operation::Pin: pin(w->o); w->result = fileFacts(w->o); break;
+      case Operation::SetupPin: pinSetup(w->o); w->result = setupPinFacts(w->o); break;
+      case Operation::SetupLaunch: launchSetup(w->o); w->result = setupRootFacts(w->o); break;
+      case Operation::SetupSample: w->result = setupRootFacts(w->o); break;
+      case Operation::SetupControls: w->result = setupControlFacts(w->o, w->setupControls); break;
     }
   } catch (const Fault& f) { w->failure = f.code; w->o->note(f); }
   catch (...) { w->failure = "NATIVE_EXCEPTION_RETAINED"; if (!w->o->primaryException) w->o->primaryException = std::current_exception(); w->o->note({w->failure, 0}); }
@@ -734,7 +957,7 @@ void complete(napi_env e, napi_status status, void* raw) {
     // after deleting the strong reference, through the final settlement call.
     napi_value localCap; api(e, napi_get_reference_value(e, w->cap, &localCap));
     need(localCap != nullptr, "COMPLETION_CAP_MISSING");
-    const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::DrainStdio || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
+    const bool terminal = w->operation == Operation::SampleOwned || w->operation == Operation::SetupSample || w->operation == Operation::DrainStdio || w->operation == Operation::ReleaseOwned || w->operation == Operation::ReleaseRead;
     const bool resolve = status == napi_ok && !w->failure && !w->result.empty() && (terminal || (!w->o->failure && !w->o->cancelled.load()));
     const bool joinHost = resolve && w->operation == Operation::ReleaseOwned && w->o->released &&
       w->o->hostAcquireSubmitted && w->o->hostCreateAcknowledged && w->o->hostReferenceAcknowledged &&
@@ -784,11 +1007,24 @@ napi_value prepare(napi_env e, napi_callback_info info) {
     return cap;
   } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
 }
-napi_value acquireHostLifetime(napi_env e, napi_callback_info info) {
+napi_value prepareSetup(napi_env e, napi_callback_info info) {
+  try {
+    size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr)); need(n == 1, "SETUP_PREPARE_ARGUMENTS");
+    Owner* o = nullptr; { std::lock_guard<std::mutex> lock(ownersMutex); need(owners.size() < 32, "OWNER_LIMIT"); auto provisional = std::make_unique<Owner>(); provisional->env = e; provisional->setupOnly = true; owners.insert(provisional.get()); o = provisional.release(); }
+    napi_value cap; api(e, napi_create_object(e, &cap)); api(e, napi_wrap(e, cap, o, finalize, nullptr, nullptr)); api(e, napi_type_tag_object(e, cap, &setupOwnerTag)); api(e, napi_object_freeze(e, cap));
+    // The distinct owner/capability is registered before any Windows API effect.
+    o->closeErrors.reserve(68); o->crypto.reserve(1); o->root = wide(e, prop(e, a[0], "root"), 220); rootSyntax(o->root);
+    auto& file = o->setupFile; file.relative = L"Diagnostic-Hub-Windows-x64-Setup.exe";
+    double size; api(e, napi_get_value_double(e, prop(e, a[0], "bytes"), &size)); need(size > 0 && size <= 2147483648.0 && size == uint64_t(size), "SETUP_FILE_SIZE_BOUND"); file.size = uint64_t(size);
+    file.expected = utf8(e, prop(e, a[0], "sha256"), 64); need(file.expected.size() == 64 && file.expected.find_first_not_of("0123456789abcdef") == std::string::npos, "DIGEST_INVALID");
+    return cap;
+  } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
+}
+napi_value acquireHostLifetimeKind(napi_env e, napi_callback_info info, bool setup) {
   Owner* o = nullptr;
   try {
     size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr)); need(n == 1, "HOST_LIFETIME_ARGUMENTS");
-    o = owner(e, a[0]);
+    o = setup ? setupOwner(e, a[0]) : owner(e, a[0]);
     need(o->pins && !o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->processObserved && !o->launchReserved, "HOST_LIFETIME_NOT_ACTIVE");
     need(!o->hostAcquireSubmitted, "HOST_LIFETIME_ALREADY_SUBMITTED"); o->hostAcquireSubmitted = true;
     api(e, napi_create_reference(e, a[0], 1, &o->hostCapRef)); o->hostCapRefCreated = true;
@@ -806,6 +1042,8 @@ napi_value acquireHostLifetime(napi_env e, napi_callback_info info) {
     napi_throw_error(e, "WINDOWS_NATIVE_HOST_ACQUISITION", "WINDOWS_NATIVE_HOST_ACQUISITION_UNCONFIRMED"); return nullptr;
   }
 }
+napi_value acquireHostLifetime(napi_env e, napi_callback_info i) { return acquireHostLifetimeKind(e, i, false); }
+napi_value acquireSetupLifetime(napi_env e, napi_callback_info i) { return acquireHostLifetimeKind(e, i, true); }
 // Known, unqueued bookkeeping can be released. A failed delete remains retained.
 void unqueuedFailure(Work* w, const Fault& original) noexcept {
   if (!w) return; w->o->note(original);
@@ -816,32 +1054,36 @@ void unqueuedFailure(Work* w, const Fault& original) noexcept {
   if (w->referenceCreated && napi_delete_reference(w->env, w->cap) != napi_ok) acknowledged = false;
   if (acknowledged) { w->o->pendingWork = nullptr; w->o->busy.store(false); delete w; }
 }
-napi_value start(napi_env e, napi_callback_info info, Operation operation) {
+napi_value start(napi_env e, napi_callback_info info, Operation operation, bool setup = false) {
   Work* w = nullptr;
   try {
     const bool observe = operation == Operation::Observe, launch = operation == Operation::Launch;
+    const bool setupLaunch = operation == Operation::SetupLaunch;
     const bool release = operation == Operation::ReleaseRead || operation == Operation::ReleaseOwned;
-    const bool terminal = operation == Operation::SampleOwned || operation == Operation::DrainStdio || operation == Operation::ReleaseOwned;
+    const bool terminal = operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::DrainStdio || operation == Operation::ReleaseOwned;
     size_t n = 3; napi_value a[3]; api(e, napi_get_cb_info(e, info, &n, a, nullptr, nullptr));
-    need(n == (observe ? 3u : launch ? 2u : 1u), "OP_ARGUMENTS"); auto* o = owner(e, a[0]);
+    need(n == (observe ? 3u : launch ? 2u : 1u), "OP_ARGUMENTS"); auto* o = setup ? setupOwner(e, a[0]) : owner(e, a[0]);
     need(!o->busy.load() && !o->releaseSubmitted, "CAPABILITY_NOT_ACTIVE");
     if (!terminal && !release) need(!o->failure && !o->cancelled.load() && !o->hostLifetimeUnknown.load(), "CAPABILITY_NOT_ACTIVE");
     if (operation == Operation::ObserveInterfaceStatus) { need(!o->interfaceSubmitted, "INTERFACE_OPERATION_ALREADY_SUBMITTED"); o->interfaceSubmitted = true; }
-    if (operation == Operation::Pin) need(!o->pins && !o->launchReserved, "OP_ALREADY_SUBMITTED");
+    if (operation == Operation::Pin || operation == Operation::SetupPin) need(!o->pins && !o->launchReserved, "OP_ALREADY_SUBMITTED");
     if (observe) need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
-    if (launch) {
+    if (launch || setupLaunch) {
       need(o->pins && !o->processObserved && !o->launchReserved, "OP_ALREADY_SUBMITTED");
       need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted.load() && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
     }
-    if (operation == Operation::SampleOwned || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
+    if (operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
+    if (operation == Operation::SetupControls) { need(o->creationSucceeded && o->createdTime, "SETUP_CREATED_PROCESS_REQUIRED"); need(!o->setupControlsSubmitted, "SETUP_CONTROLS_ALREADY_SUBMITTED"); o->setupControlsSubmitted = true; }
     if (operation == Operation::ObserveOwnedWindows) need(o->creationSucceeded && o->createdTime && !o->createdExitObserved, "OWNED_WINDOW_PROCESS_REQUIRED");
     if (operation == Operation::ReleaseRead) need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
     // Refusal here precedes release submission/invalidation and closes nothing.
     if (operation == Operation::ReleaseOwned) requireCreatedTerminal(o);
     std::wstring profile;
     if (launch) { profile = wide(e, a[1], 260); const bool sibling = profile == o->root + L".native-launch-profile"; need(sibling || profile == o->root + L"\\native-launch-profile", "FIXED_PROFILE_REQUIRED"); o->siblingProfileRequested = sibling; o->launchReserved = true; }
+    if (setupLaunch) o->launchReserved = true;
     w = new Work{o, e}; w->operation = operation; w->profile = std::move(profile);
     if (operation == Operation::ObserveOwnedWindows) w->ownedWindows.reserve(128); // Before queueing or any window API.
+    if (operation == Operation::SetupControls) w->setupControls.reserve(64);
     if (observe) { double rawPid; api(e, napi_get_value_double(e, a[1], &rawPid)); need(rawPid > 0 && rawPid <= 4294967295.0 && rawPid == uint32_t(rawPid), "PID_INVALID"); w->pid = uint32_t(rawPid); auto s = utf8(e, a[2], 20); need(s[0] != '0' && s.find_first_not_of("0123456789") == std::string::npos, "CREATION_INVALID"); w->creation = 0; for (char digit : s) { auto value = uint64_t(digit - '0'); need(w->creation <= (std::numeric_limits<uint64_t>::max() - value) / 10, "CREATION_OVERFLOW"); w->creation = w->creation * 10 + value; } }
     o->pendingWork = w; o->busy.store(true); if (release) o->releaseSubmitted = true;
     api(e, napi_create_reference(e, a[0], 1, &w->cap)); w->referenceCreated = true;
@@ -868,12 +1110,47 @@ napi_value drainStdioCall(napi_env e, napi_callback_info i) { return start(e, i,
 napi_value releaseOwnedCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::ReleaseOwned); }
 napi_value assertCap(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = owner(e, a[0]); need(!o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->hostLifetimeUnknown.load(), "CAPABILITY_INVALIDATED"); napi_value yes; api(e, napi_get_boolean(e, true, &yes)); return yes; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
 napi_value cancel(napi_env e, napi_callback_info i) { try { size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); owner(e, a[0])->cancelled.store(true); napi_value v; napi_get_undefined(e, &v); return v; } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; } }
+napi_value setupPinCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupPin, true); }
+napi_value setupLaunchCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupLaunch, true); }
+napi_value setupSampleCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupSample, true); }
+napi_value setupControlsCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::SetupControls, true); }
+napi_value setupDrainCall(napi_env e, napi_callback_info i) { return start(e, i, Operation::DrainStdio, true); }
+napi_value setupReleaseCall(napi_env e, napi_callback_info i) {
+  try {
+    size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = setupOwner(e, a[0]);
+    return start(e, i, (o->launchReserved || o->hostAcquireSubmitted) ? Operation::ReleaseOwned : Operation::ReleaseRead, true);
+  } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
+}
+napi_value assertSetupCap(napi_env e, napi_callback_info i) {
+  try {
+    size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); auto* o = setupOwner(e, a[0]);
+    need(!o->busy.load() && !o->releaseSubmitted && !o->cancelled.load() && !o->failure && !o->hostLifetimeUnknown.load(), "SETUP_CAPABILITY_INVALIDATED");
+    napi_value yes; api(e, napi_get_boolean(e, true, &yes)); return yes;
+  } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
+}
+napi_value cancelSetup(napi_env e, napi_callback_info i) {
+  try {
+    size_t n = 1; napi_value a[1]; api(e, napi_get_cb_info(e, i, &n, a, nullptr, nullptr)); need(n == 1, "CAP_ARGUMENT"); setupOwner(e, a[0])->cancelled.store(true);
+    napi_value v; api(e, napi_get_undefined(e, &v)); return v;
+  } catch (const Fault& f) { napi_throw_error(e, f.code, f.code); return nullptr; } catch (...) { napi_throw_error(e, "WINDOWS_NATIVE_EXCEPTION", "WINDOWS_NATIVE_EXCEPTION_RETAINED"); return nullptr; }
+}
 napi_value refuseClose(napi_env e, napi_callback_info) { napi_throw_error(e, "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE", "WINDOWS_ATOMIC_NORMAL_CLOSE_UNAVAILABLE"); return nullptr; }
 napi_value init(napi_env e, napi_value exports) {
   napi_property_descriptor props[] = {{"prepare", nullptr, prepare, nullptr, nullptr, nullptr, napi_default, nullptr}, {"assertCapability", nullptr, assertCap, nullptr, nullptr, nullptr, napi_default, nullptr}, {"pinFiles", nullptr, pinCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"observeProcess", nullptr, processCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"release", nullptr, releaseCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"cancel", nullptr, cancel, nullptr, nullptr, nullptr, napi_default, nullptr}, {"refuseNormalClose", nullptr, refuseClose, nullptr, nullptr, nullptr, napi_default, nullptr}, {"acquireLaunchLifetime", nullptr, acquireHostLifetime, nullptr, nullptr, nullptr, napi_default, nullptr}, {"launchPinnedProcess", nullptr, launchCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"sampleOwnedProcess", nullptr, sampleOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"drainOwnedStdio", nullptr, drainStdioCall, nullptr, nullptr, nullptr, napi_default, nullptr}, {"releaseOwnedProcessHandles", nullptr, releaseOwnedCall, nullptr, nullptr, nullptr, napi_default, nullptr}};
   napi_property_descriptor interfaceStatus = {"observeInterfaceStatus", nullptr, interfaceStatusCall, nullptr, nullptr, nullptr, napi_default, nullptr};
   napi_property_descriptor ownedWindows = {"observeOwnedWindows", nullptr, observeOwnedWindowsCall, nullptr, nullptr, nullptr, napi_default, nullptr};
-  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok || napi_define_properties(e, exports, 1, &interfaceStatus) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
+  napi_property_descriptor setupProps[] = {
+    {"prepareSetup", nullptr, prepareSetup, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"assertSetupCapability", nullptr, assertSetupCap, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"pinSetup", nullptr, setupPinCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"acquireSetupLifetime", nullptr, acquireSetupLifetime, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"launchSetupProcess", nullptr, setupLaunchCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"sampleSetupProcess", nullptr, setupSampleCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"observeSetupControls", nullptr, setupControlsCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"drainSetupStdio", nullptr, setupDrainCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"releaseSetupHandles", nullptr, setupReleaseCall, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"cancelSetup", nullptr, cancelSetup, nullptr, nullptr, nullptr, napi_default, nullptr}};
+  if (napi_define_properties(e, exports, sizeof(props) / sizeof(props[0]), props) != napi_ok || napi_define_properties(e, exports, 1, &ownedWindows) != napi_ok || napi_define_properties(e, exports, 1, &interfaceStatus) != napi_ok || napi_define_properties(e, exports, sizeof(setupProps) / sizeof(setupProps[0]), setupProps) != napi_ok) { napi_throw_error(e, "WINDOWS_NATIVE_EXPORTS", "WINDOWS_NATIVE_EXPORTS"); return nullptr; } return exports;
 }
 } // namespace
 NAPI_MODULE(NODE_GYP_MODULE_NAME, init)
