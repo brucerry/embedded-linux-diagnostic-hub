@@ -95,7 +95,71 @@ jobs:
             - name: Build the desktop and installer helpers
               run: npm run build:desktop
             - name: Build the native rename helper once
-              run: npm run build:linux-native
+              id: native_build
+              run: |
+                  node --input-type=module - "$PWD/dist-linux-native" <<'JS'
+                  import { buildLinuxNative } from './scripts/build-linux-native.mjs';
+                  import * as fs from 'node:fs';
+                  import { types } from 'node:util';
+                  function nativeBuildFailureCode(value) {
+                      if (value === null || typeof value !== 'object' || types.isProxy(value) || !types.isNativeError(value)) return 'unknown';
+                      const message = Object.getOwnPropertyDescriptor(value, 'message');
+                      const code = Object.getOwnPropertyDescriptor(value, 'code');
+                      if ((message && !Object.hasOwn(message, 'value')) || (code && !Object.hasOwn(code, 'value'))) return 'unknown';
+                      const messages = new Set(["LINUX_NATIVE_BUILD_COMPILER_FAILED", "LINUX_NATIVE_BUILD_ELF", "LINUX_NATIVE_BUILD_INPUT", "LINUX_NATIVE_BUILD_INPUT_CHANGED", "LINUX_NATIVE_BUILD_OUTPUT", "LINUX_NATIVE_BUILD_OUTPUT_CHANGED", "LINUX_NATIVE_BUILD_PARENT", "LINUX_NATIVE_BUILD_PLATFORM", "LINUX_NATIVE_BUILD_READ", "LINUX_NATIVE_BUILD_SOURCE_CHANGED", "LINUX_NATIVE_BUILD_USER"]);
+                      const codes = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EACCES", "EPERM", "EEXIST", "ENOSPC", "EROFS", "EMFILE", "ENFILE", "EIO", "EBADF", "ENOMEM", "EAGAIN", "EPIPE"]);
+                      if (message && typeof message.value === 'string' && messages.has(message.value)) return message.value;
+                      if (code && typeof code.value === 'string' && codes.has(code.value)) return code.value;
+                      return 'unknown';
+                  }
+                  const reportingOwners = new Set();
+                  function reportNativeBuildFailureCode(code) {
+                      const owner = { openIssued: false, openReturned: false, fd: undefined,
+                          closeIssued: false, closeAcknowledged: false, errors: [], keeper: undefined };
+                      reportingOwners.add(owner);
+                      owner.openIssued = true;
+                      try {
+                          owner.fd = fs.openSync(process.env.GITHUB_OUTPUT, 'a');
+                          owner.openReturned = true;
+                          const data = 'failure_code=' + code + '\nfailure_code_complete=true\n';
+                          if (fs.writeSync(owner.fd, data) !== data.length) throw Error('NATIVE_BUILD_DIAGNOSTIC_PARTIAL_WRITE');
+                      } catch (value) {
+                          owner.errors.push(value);
+                      } finally {
+                          if (owner.openReturned) {
+                              owner.closeIssued = true;
+                              try { fs.closeSync(owner.fd); owner.closeAcknowledged = true; }
+                              catch (value) { owner.errors.push(value); }
+                          }
+                      }
+                      if (owner.closeAcknowledged) reportingOwners.delete(owner);
+                      else owner.keeper = setInterval(() => {}, 1000);
+                      return owner;
+                  }
+                  let hasFailure = false, firstFailure;
+                  const reportingFailures = [];
+                  try {
+                      const info = await buildLinuxNative(process.argv[2]);
+                      process.stdout.write(JSON.stringify(info) + '\n');
+                  } catch (value) {
+                      hasFailure = true;
+                      firstFailure = value;
+                      process.exitCode = 1;
+                      const code = nativeBuildFailureCode(firstFailure);
+                      const reportingOwner = reportNativeBuildFailureCode(code);
+                      reportingFailures.push(...reportingOwner.errors);
+                      try { process.stderr.write('LINUX_NATIVE_BUILD_FAILED_RETAINED\n'); }
+                      catch (value) { reportingFailures.push(value); }
+                  }
+                  JS
+            - name:
+                  'Native build failure category: ${{
+                  steps.native_build.outputs.failure_code_complete == ''true'' &&
+                  contains(fromJSON(''["LINUX_NATIVE_BUILD_COMPILER_FAILED","LINUX_NATIVE_BUILD_ELF","LINUX_NATIVE_BUILD_INPUT","LINUX_NATIVE_BUILD_INPUT_CHANGED","LINUX_NATIVE_BUILD_OUTPUT","LINUX_NATIVE_BUILD_OUTPUT_CHANGED","LINUX_NATIVE_BUILD_PARENT","LINUX_NATIVE_BUILD_PLATFORM","LINUX_NATIVE_BUILD_READ","LINUX_NATIVE_BUILD_SOURCE_CHANGED","LINUX_NATIVE_BUILD_USER","ENOENT","ENOTDIR","ELOOP","EACCES","EPERM","EEXIST","ENOSPC","EROFS","EMFILE","ENFILE","EIO","EBADF","ENOMEM","EAGAIN","EPIPE","unknown"]''),
+                  steps.native_build.outputs.failure_code) &&
+                  steps.native_build.outputs.failure_code || ''unreported'' }}'
+              if: failure() && steps.native_build.conclusion == 'failure'
+              run: ':'
             - name: Package two real versioned complete payloads
               run: |
                   test ! -e "$HUB_LINUX_FIXTURE/build-a" && test ! -L "$HUB_LINUX_FIXTURE/build-a"
