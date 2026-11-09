@@ -65,7 +65,7 @@ struct Owner {
   // Issued only by prepareSetup; the separate type tag prevents app operations
   // from consuming a Setup capability or interpreting its package pin as app pins.
   bool setupOnly = false;
-  bool setupControlsSubmitted = false;
+  size_t setupControlSamples = 0;
   File setupFile;
   std::array<Lease, 64> handles{}; size_t handleSlots = 0; std::vector<std::unique_ptr<Crypto>> crypto;
   // The output slot belongs to the existing owner before GetIfTable2 writes it.
@@ -1073,7 +1073,7 @@ napi_value start(napi_env e, napi_callback_info info, Operation operation, bool 
       need(o->hostCreateAcknowledged && o->hostReferenceAcknowledged && o->hostHookRegistered && !o->hostReleaseSubmitted.load() && !o->hostEnvironmentClosing.load(), "HOST_LIFETIME_REFERENCE_REQUIRED");
     }
     if (operation == Operation::SampleOwned || operation == Operation::SetupSample || operation == Operation::DrainStdio) need(o->pins, "FILE_PINS_REQUIRED");
-    if (operation == Operation::SetupControls) { need(o->creationSucceeded && o->createdTime, "SETUP_CREATED_PROCESS_REQUIRED"); need(!o->setupControlsSubmitted, "SETUP_CONTROLS_ALREADY_SUBMITTED"); o->setupControlsSubmitted = true; }
+    if (operation == Operation::SetupControls) { need(o->creationSucceeded && o->createdTime, "SETUP_CREATED_PROCESS_REQUIRED"); need(o->setupControlSamples < 32, "SETUP_CONTROL_SAMPLE_LIMIT"); ++o->setupControlSamples; }
     if (operation == Operation::ObserveOwnedWindows) need(o->creationSucceeded && o->createdTime && !o->createdExitObserved, "OWNED_WINDOW_PROCESS_REQUIRED");
     if (operation == Operation::ReleaseRead) need(!o->launchReserved && !o->hostAcquireSubmitted, "OWNED_LAUNCH_RELEASE_REQUIRED");
     // Refusal here precedes release submission/invalidation and closes nothing.
