@@ -331,7 +331,9 @@ export async function createLinuxNativeHost(
             napiVersion,
         });
         const unlinkOwned = checkedLinuxUnlinkBinding(state.module.exports, {
-            platform: 'linux', arch: 'x64', napiVersion,
+            platform: 'linux',
+            arch: 'x64',
+            napiVersion,
         });
         state.stage = 'readback';
         checkParents();

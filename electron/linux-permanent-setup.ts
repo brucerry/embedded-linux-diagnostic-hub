@@ -11,7 +11,10 @@ import {
     type LinuxPromptPort,
 } from './linux-setup-ui.ts';
 import { createLinuxNativeHost, linuxNativeHostFailureCustody } from './linux-native-host.ts';
-import { prepareLinuxNativeDriver, prepareLinuxNativeUninstallDriver } from './linux-native-driver.ts';
+import {
+    prepareLinuxNativeDriver,
+    prepareLinuxNativeUninstallDriver,
+} from './linux-native-driver.ts';
 import { linuxModelReviewSHA256 } from './linux-transaction-model.ts';
 import {
     createLinuxOwnedLaunch,
@@ -25,14 +28,18 @@ export interface LinuxPermanentPrompts {
     now(): number;
 }
 export type LinuxPermanentChoices = Omit<LinuxReviewChoices, 'operation'> & {
-    operation: 'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch' | 'uninstall-current';
+    operation:
+        'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch' | 'uninstall-current';
 };
 /** Keep the legacy read-only argument contract unchanged; resume belongs to this explicit entry. */
 export function linuxPermanentArguments(args: string[]): LinuxPermanentChoices {
     const selected = args.slice();
     let special: 'resume' | 'uninstall-current' | undefined;
     for (let at = 0; at < selected.length; at++) {
-        if (selected[at] === '--operation' && ['resume','uninstall-current'].includes(selected[at + 1])) {
+        if (
+            selected[at] === '--operation' &&
+            ['resume', 'uninstall-current'].includes(selected[at + 1])
+        ) {
             special = selected[at + 1] as typeof special;
             selected[at + 1] = 'review';
         }
@@ -74,7 +81,15 @@ export async function runLinuxPermanentSetup(
     host = structuredClone(host);
     choices = structuredClone(choices);
     if (
-        !['install', 'repair', 'update', 'rollback', 'resume', 'launch','uninstall-current'].includes(choices.operation)
+        ![
+            'install',
+            'repair',
+            'update',
+            'rollback',
+            'resume',
+            'launch',
+            'uninstall-current',
+        ].includes(choices.operation)
     )
         throw Error('LINUX_PERMANENT_OPERATION_REQUIRED');
     const startedMs = prompts.now(),
@@ -109,25 +124,42 @@ export async function runLinuxPermanentSetup(
         state.phase = 'preparing';
         if (choices.operation === 'uninstall-current') {
             if (choices.menu) throw Error('LINUX_UNINSTALL_INITIAL_NO_MENU_REQUIRED');
-            state.uninstall = prepareLinuxNativeUninstallDriver({host,root:choices.root},
-                {startedMs,deadlineMs},state.native.operations,state.native.owner);
-            const review = await state.uninstall.inspect(); gate();
+            state.uninstall = prepareLinuxNativeUninstallDriver(
+                { host, root: choices.root },
+                { startedMs, deadlineMs },
+                state.native.operations,
+                state.native.owner,
+            );
+            const review = await state.uninstall.inspect();
+            gate();
             state.phase = 'prompt';
-            const request = {detail:state.uninstall.describe(review),menu:false,deadlineMs,confirmation:'apply' as const};
-            let reply = await (choices.terminal ? prompts.terminal : prompts.gui).review(request); gate();
+            const request = {
+                detail: state.uninstall.describe(review),
+                menu: false,
+                deadlineMs,
+                confirmation: 'apply' as const,
+            };
+            let reply = await (choices.terminal ? prompts.terminal : prompts.gui).review(request);
+            gate();
             if (reply.status === 'unavailable' && !choices.terminal) {
-                reply = await prompts.terminal.review(request); gate();
+                reply = await prompts.terminal.review(request);
+                gate();
             }
-            if (reply.status === 'cancelled') {state.phase = 'cancelled'; return Object.freeze({status:'cancelled' as const,owner});}
-            if (reply.status !== 'confirmed' || reply.menu !== false) throw Error('LINUX_PERMANENT_PROMPT_UNSETTLED');
+            if (reply.status === 'cancelled') {
+                state.phase = 'cancelled';
+                return Object.freeze({ status: 'cancelled' as const, owner });
+            }
+            if (reply.status !== 'confirmed' || reply.menu !== false)
+                throw Error('LINUX_PERMANENT_PROMPT_UNSETTLED');
             state.phase = 'fresh-review';
-            const fresh = await state.uninstall.inspect(); gate();
+            const fresh = await state.uninstall.inspect();
+            gate();
             if (state.uninstall.reviewHash(fresh) !== state.uninstall.reviewHash(review))
                 throw Error('LINUX_PERMANENT_REVIEW_CHANGED');
             state.phase = 'uninstall-current';
-            const result = await state.uninstall.run(fresh,true);
+            const result = await state.uninstall.run(fresh, true);
             state.phase = result.status === 'current-payload-removed' ? 'finished' : result.status;
-            return Object.freeze({status:result.status,owner,result});
+            return Object.freeze({ status: result.status, owner, result });
         }
         state.preparation = prepareLinuxNativeDriver(
             { host, root: choices.root, action: choices.operation, dataHome, menu: choices.menu },

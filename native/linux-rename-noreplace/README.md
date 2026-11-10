@@ -2,8 +2,8 @@
 
 This revision adds a separate ABI2 removal operation to the borrowed-directory-FD rename binding.
 The new ABI2 source has not been built, loaded or qualified in this task. Prior ABI1 component
-results do not qualify it. There is no install hook or command service.
-Existing `linux-native-backend` defaults remain unchanged (`moveNoReplace=null`).
+results do not qualify it. There is no install hook or command service. Existing
+`linux-native-backend` defaults remain unchanged (`moveNoReplace=null`).
 
 `electron/linux-native-driver.ts` now connects the same guarded transaction algorithm to the
 concrete backend without relabelling native effects as memory. It requires explicit supplied host
@@ -54,20 +54,20 @@ deadline records/retains uncertainty; it does not forcibly bound a stuck synchro
 terminate a child. A future real caller must retain the controller and provide authorized lifetime
 custody. No production entry imports this launcher, and no native application was started here.
 
-Finalize remains unavailable: the current interfaces have no authoritative
-descendant-retirement observer or native Linux window/profile/successor reader. The generic boot
-acknowledgement also does not consume this Linux transaction journal. Direct-child closure, an
-inactive executable scan, a self-reported reply or a synthetic observation supplies none of that
-missing authority. Menu recovery does not add a retirement receipt or deletion capability.
+Finalize remains unavailable: the current interfaces have no authoritative descendant-retirement
+observer or native Linux window/profile/successor reader. The generic boot acknowledgement also does
+not consume this Linux transaction journal. Direct-child closure, an inactive executable scan, a
+self-reported reply or a synthetic observation supplies none of that missing authority. Menu
+recovery does not add a retirement receipt or deletion capability.
 
 ## Initial no-menu current-payload uninstall
 
 The separate permanent entry accepts `--operation uninstall-current`. It uses the actual native
 host, guarded backend, a fresh review and explicit applying confirmation. Only a completed initial
 installation with no menu, previous/staged payload, retained lineage or update-recovery state is
-supported. Active or unknown executable-path observations refuse before removal writes. The
-source folder and profile stay outside the target; settings, reports and original records remain.
-This operation does not Finalize an update or claim that all maintenance artifacts were removed.
+supported. Active or unknown executable-path observations refuse before removal writes. The source
+folder and profile stay outside the target; settings, reports and original records remain. This
+operation does not Finalize an update or claim that all maintenance artifacts were removed.
 
 Under the existing per-root cooperative reservation, the current payload is moved with NOREPLACE
 into a fresh owned0700 quarantine. Original manifest, installation, ownership and journal bytes are
@@ -76,24 +76,24 @@ contains only those originals and exact manifest leaves/directories. Each leaf i
 private `disposal/entry` slot, checked again by identity and bytes, and submitted once to
 `unlinkOwned(parentFD, basename, kind, expectedDev, expectedIno)`. The C export requires an owned
 exact0700 CLOEXEC parent and checks the expected file/directory identity before one direct
-`SYS_unlinkat` attempt. Regular files remain single-link; directories must actually be empty.
-There is no recursive or pathname fallback, retry, restore, profile removal or source removal.
+`SYS_unlinkat` attempt. Regular files remain single-link; directories must actually be empty. There
+is no recursive or pathname fallback, retry, restore, profile removal or source removal.
 
 Linux has no atomic expected-inode compare-and-unlink primitive. This design relies on the private
-disposal directory and cooperative reservation; it does not isolate a malicious writer with the
-same UID. A raced object moved into quarantine is retained on mismatch, never deleted or restored.
-Before each step, the current source, reservation, remaining exact inventory and bounded
-executable-path activity under the actual quarantine/disposal paths are checked. These are
-observations, not an interval-wide inactivity or descendant-retirement guarantee.
+disposal directory and cooperative reservation; it does not isolate a malicious writer with the same
+UID. A raced object moved into quarantine is retained on mismatch, never deleted or restored. Before
+each step, the current source, reservation, remaining exact inventory and bounded executable-path
+activity under the actual quarantine/disposal paths are checked. These are observations, not an
+interval-wide inactivity or descendant-retirement guarantee.
 
 The fsynced state records an issued move/unlink before submission. Failure, cancellation/deadline,
-partial writes or lost acknowledgements retain the owner and first error without automatic replay
-or cleanup. A later explicit invocation requires fresh review/consent and an available reservation;
-it admits only phase-consistent source/disposal presence and original bindings. Corrupt, foreign,
-unsupported or still-owned state refuses. Pending removal blocks ordinary setup/launch. After
-known completion, a later consented fresh no-menu install preserves the complete removal directory
-with NOREPLACE under a name bound to the original installation UUID before creating its new
-journal. This permits a new initial lifecycle while retaining every earlier removal record.
+partial writes or lost acknowledgements retain the owner and first error without automatic replay or
+cleanup. A later explicit invocation requires fresh review/consent and an available reservation; it
+admits only phase-consistent source/disposal presence and original bindings. Corrupt, foreign,
+unsupported or still-owned state refuses. Pending removal blocks ordinary setup/launch. After known
+completion, a later consented fresh no-menu install preserves the complete removal directory with
+NOREPLACE under a name bound to the original installation UUID before creating its new journal. This
+permits a new initial lifecycle while retaining every earlier removal record.
 
 ABI1 modules retain rename support but provide no uninstall capability. The fixed builder receipt
 now truthfully reports ABI2. The adapter captures closed data descriptors and preserves thrown

@@ -232,10 +232,7 @@ test('static C source has exactly two flagged syscalls and no libc/open/close fa
         source,
         /syscall\(SYS_renameat2, source, source_name, target, target_name, RENAME_NOREPLACE\)/,
     );
-    assert.match(
-        source,
-        /syscall\(SYS_unlinkat, parent, name, kind == 1 \? AT_REMOVEDIR : 0\)/,
-    );
+    assert.match(source, /syscall\(SYS_unlinkat, parent, name, kind == 1 \? AT_REMOVEDIR : 0\)/);
     assert.doesNotMatch(
         source,
         /\b(?:rename|renameat|unlink|unlinkat|remove|rmdir|open|openat|close|chmod|fchmod|chown|fork|exec|system)\s*\(/,

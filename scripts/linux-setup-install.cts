@@ -73,7 +73,7 @@ export async function linuxSetupInstallEntry(args: string[]) {
             ? 'Linux setup cancelled before changes.\n'
             : result.status === 'current-payload-removed'
               ? 'Linux current initial no-menu payload removed. Settings, reports and original transaction records are retained.\n'
-            : 'Linux setup operation completed; previous transaction artifacts remain retained.\n',
+              : 'Linux setup operation completed; previous transaction artifacts remain retained.\n',
     );
     return result.status === 'cancelled' ? 1 : 0;
 }

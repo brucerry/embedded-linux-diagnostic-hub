@@ -109,7 +109,8 @@ export interface LinuxModelPlan {
     menu?: LinuxMenuChoice;
     host: LinuxReviewHost;
     root: string;
-    action: 'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch' | 'uninstall-current';
+    action:
+        'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch' | 'uninstall-current';
     transactionId: string;
     installationId: string;
     owner: LinuxModelOwner;
@@ -837,7 +838,15 @@ function validateConfiguration(plan: LinuxModelConfiguration) {
         path.posix.basename(plan.root).startsWith('.DiagnosticHub-') ||
         !uuid.test(plan.transactionId) ||
         !uuid.test(plan.installationId) ||
-        !['install', 'repair', 'update', 'rollback', 'resume', 'launch', 'uninstall-current'].includes(plan.action)
+        ![
+            'install',
+            'repair',
+            'update',
+            'rollback',
+            'resume',
+            'launch',
+            'uninstall-current',
+        ].includes(plan.action)
     )
         throw Error('model plan admission');
     owner(plan.owner);

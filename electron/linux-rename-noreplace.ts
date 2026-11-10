@@ -12,8 +12,10 @@ export type LinuxRenameNoReplace = (
     destinationName: string,
 ) => void;
 export type LinuxUnlinkOwned = (
-    parentFD: number, name: string, kind: 'file' | 'directory',
-    expected: {dev: number; ino: number},
+    parentFD: number,
+    name: string,
+    kind: 'file' | 'directory',
+    expected: { dev: number; ino: number },
 ) => void;
 export const LINUX_RENAME_ABI = Object.freeze({
     abiVersion: 1,
@@ -63,7 +65,8 @@ function name(value: string) {
 /** Caller must verify artifact provenance/path/hash BEFORE any separate, explicitly approved native load. */
 function captureModule(module: unknown, host: LinuxRenameHost) {
     try {
-        if (!host || typeof host !== 'object' || nativeTypes.isProxy(host)) return refusal('ERR_DH_RENAME_HOST');
+        if (!host || typeof host !== 'object' || nativeTypes.isProxy(host))
+            return refusal('ERR_DH_RENAME_HOST');
         const fields = Object.getOwnPropertyDescriptors(host);
         if (
             Reflect.ownKeys(host).length !== 3 ||
@@ -80,11 +83,19 @@ function captureModule(module: unknown, host: LinuxRenameHost) {
     } catch {
         return refusal('ERR_DH_RENAME_HOST');
     }
-    if (!module || typeof module !== 'object' || nativeTypes.isProxy(module) || Array.isArray(module))
+    if (
+        !module ||
+        typeof module !== 'object' ||
+        nativeTypes.isProxy(module) ||
+        Array.isArray(module)
+    )
         return refusal('ERR_DH_RENAME_ABI');
     let descriptors: PropertyDescriptorMap;
-    try { descriptors = Object.getOwnPropertyDescriptors(module); }
-    catch { return refusal('ERR_DH_RENAME_ABI'); }
+    try {
+        descriptors = Object.getOwnPropertyDescriptors(module);
+    } catch {
+        return refusal('ERR_DH_RENAME_ABI');
+    }
     const version = descriptors.abiVersion?.value;
     if (version !== 1 && version !== 2) return refusal('ERR_DH_RENAME_ABI');
     const fields = [
@@ -114,18 +125,24 @@ function captureModule(module: unknown, host: LinuxRenameHost) {
         return refusal('ERR_DH_RENAME_ABI');
     }
     for (const [field, expected] of Object.entries(LINUX_RENAME_ABI))
-        if (descriptors[field].value !== (field === 'abiVersion' ? version : expected)) return refusal('ERR_DH_RENAME_ABI');
-    if (version === 2 && typeof descriptors.unlinkOwned.value !== 'function') return refusal('ERR_DH_RENAME_ABI');
+        if (descriptors[field].value !== (field === 'abiVersion' ? version : expected))
+            return refusal('ERR_DH_RENAME_ABI');
+    if (version === 2 && typeof descriptors.unlinkOwned.value !== 'function')
+        return refusal('ERR_DH_RENAME_ABI');
     const invoke = descriptors.renameNoReplace.value as unknown;
     if (typeof invoke !== 'function') return refusal('ERR_DH_RENAME_ABI');
-    return {version, invoke, unlink: version === 2 ? descriptors.unlinkOwned.value as Function : null};
+    return {
+        version,
+        invoke,
+        unlink: version === 2 ? (descriptors.unlinkOwned.value as Function) : null,
+    };
 }
 
 export function checkedLinuxRenameBinding(
     module: unknown,
     host: LinuxRenameHost,
 ): LinuxRenameNoReplace {
-    const {invoke} = captureModule(module, host);
+    const { invoke } = captureModule(module, host);
     return (sourceFD, sourceName, destinationFD, destinationName) => {
         if (
             ![sourceFD, destinationFD].every(
@@ -161,7 +178,10 @@ export function checkedLinuxRenameBinding(
 }
 
 /** Legacy modules remain usable for rename; only ABI2 supplies removal. Never loads a module. */
-export function checkedLinuxUnlinkBinding(module: unknown, host: LinuxRenameHost): LinuxUnlinkOwned | null {
+export function checkedLinuxUnlinkBinding(
+    module: unknown,
+    host: LinuxRenameHost,
+): LinuxUnlinkOwned | null {
     const captured = captureModule(module, host);
     if (captured.version === 1) return null;
     const invoke = captured.unlink!;
@@ -169,20 +189,45 @@ export function checkedLinuxUnlinkBinding(module: unknown, host: LinuxRenameHost
         if (!expected || typeof expected !== 'object' || nativeTypes.isProxy(expected))
             return refusal('ERR_DH_UNLINK_ARGUMENT');
         const fields = Object.getOwnPropertyDescriptors(expected);
-        if (Reflect.ownKeys(expected).length !== 2 || !fields.dev || !fields.ino ||
-            !Object.hasOwn(fields.dev, 'value') || !Object.hasOwn(fields.ino, 'value'))
+        if (
+            Reflect.ownKeys(expected).length !== 2 ||
+            !fields.dev ||
+            !fields.ino ||
+            !Object.hasOwn(fields.dev, 'value') ||
+            !Object.hasOwn(fields.ino, 'value')
+        )
             return refusal('ERR_DH_UNLINK_ARGUMENT');
-        const dev: unknown = fields.dev.value, ino: unknown = fields.ino.value;
-        if (!Number.isInteger(parentFD) || parentFD < 0 || parentFD > 0x7fffffff ||
-            !name(selected) || (kind !== 'file' && kind !== 'directory') ||
-            typeof dev !== 'number' || !Number.isSafeInteger(dev) || dev < 0 ||
-            typeof ino !== 'number' || !Number.isSafeInteger(ino) || ino <= 0)
+        const dev: unknown = fields.dev.value,
+            ino: unknown = fields.ino.value;
+        if (
+            !Number.isInteger(parentFD) ||
+            parentFD < 0 ||
+            parentFD > 0x7fffffff ||
+            !name(selected) ||
+            (kind !== 'file' && kind !== 'directory') ||
+            typeof dev !== 'number' ||
+            !Number.isSafeInteger(dev) ||
+            dev < 0 ||
+            typeof ino !== 'number' ||
+            !Number.isSafeInteger(ino) ||
+            ino <= 0
+        )
             return refusal('ERR_DH_UNLINK_ARGUMENT');
         // Preserve an actual thrown primary (including undefined); caller retains its owner.
-        const status: unknown = Reflect.apply(invoke, undefined,
-            [parentFD, selected, kind === 'directory' ? 1 : 0, dev, ino]);
+        const status: unknown = Reflect.apply(invoke, undefined, [
+            parentFD,
+            selected,
+            kind === 'directory' ? 1 : 0,
+            dev,
+            ino,
+        ]);
         if (status === 0) return;
-        if (typeof status !== 'number' || !Number.isInteger(status) || status < 1 || status >= codes.length)
+        if (
+            typeof status !== 'number' ||
+            !Number.isInteger(status) ||
+            status < 1 ||
+            status >= codes.length
+        )
             return refusal('ERR_DH_UNLINK_ACK');
         return refusal(codes[status].replace('ERR_DH_RENAME_', 'ERR_DH_UNLINK_'));
     };
