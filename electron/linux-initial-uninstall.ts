@@ -36,6 +36,7 @@ type Snapshot = {
     schemaVersion: 1;
     root: string;
     host: LinuxModelConfiguration['host'];
+    removalOwner: LinuxModelConfiguration['owner'];
     initial: LinuxModelView;
     entries: Entry[];
     maintenance: Entry;
@@ -225,6 +226,7 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             'schemaVersion',
             'root',
             'host',
+            'removalOwner',
             'initial',
             'entries',
             'maintenance',
@@ -242,7 +244,10 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             throw Error('LINUX_UNINSTALL_SNAPSHOT');
         const selected = checkedLinuxModelConfiguration({
             ...configuration,
-            host: liveSource ? configuration.host : snapshot.host,
+            // The installer journal's actor can differ from the actual remover. Preserve the
+            // remover's own historical host/runtime pair; live IO/lease still uses the current owner.
+            host: snapshot.host,
+            owner: snapshot.removalOwner,
             installationId: snapshot.initial.root!.installationId,
             transactionId: snapshot.initial.journal!.transactionId,
         });
@@ -414,7 +419,8 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
         const snapshot: Snapshot = {
             schemaVersion: 1,
             root,
-            host: clone(configuration.host),
+            host: clone(prepared.configuration.host),
+            removalOwner: clone(prepared.configuration.owner),
             initial: clone(prepared.view),
             entries,
             maintenance: entry('', io.stat(work), 'directory'),

@@ -445,41 +445,67 @@ test('actual shipping initial uninstall removes only manifest members and retain
     assert.equal(f.fds.size, 0);
 });
 
-test('classic parent links survive overlapping pins and completed removal archives permit a fresh initial lifecycle', async () => {
+test('classic links and source A install B removal C fresh install preserve historical actors and originals', async () => {
     const f = await installed(true),
         home = f.node('/home/test'),
         beforeHome = home.nlink;
+    const installerSource = f.plan.host.sourceRoot;
+    const installerJournal = bytes(f, work(f) + '/journal.json');
+    const selectSource = (newSource: string) => {
+        const oldSource = f.plan.host.sourceRoot;
+        for (const [name, value] of snapshot(f, oldSource)) {
+            const node = f.node(name);
+            f.file(
+                newSource + name.slice(oldSource.length),
+                Buffer.from(value, 'base64').toString(),
+                node.mode & 0o777,
+            );
+        }
+        f.plan.host.sourceRoot = newSource;
+        f.plan.owner.executable = newSource + '/app/diagnostic-hub';
+        f.ops.executable = f.plan.owner.executable;
+        f.node('/proc/777/exe').target = f.ops.executable;
+        for (const [name, node] of f.nodes)
+            if (node.kind === 'directory')
+                node.nlink =
+                    2 +
+                    Array.from(f.nodes.values() as Iterable<any>).filter(
+                        (child) =>
+                            child.kind === 'directory' &&
+                            child.path !== name &&
+                            path.posix.dirname(child.path) === name,
+                    ).length;
+    };
     const firstId = json(f, f.plan.root + '/' + installation.INSTALLATION_RECORD).installationId;
+    const removerSource = '/home/test/remover-source';
+    selectSource(removerSource);
     assert.equal((await f.run()).status, 'current-payload-removed');
     assert.ok(home.nlink >= 2);
     assert.equal(f.node(work(f) + '-uninstall/disposal').nlink, 2);
     const originals = snapshot(f, work(f) + '-uninstall');
+    const removalSnapshot = json(f, work(f) + '-uninstall/snapshot.json');
+    assert.equal(removalSnapshot.host.sourceRoot, removerSource);
+    assert.equal(removalSnapshot.removalOwner.executable, removerSource + '/app/diagnostic-hub');
+    assert.equal(
+        removalSnapshot.initial.journal.owner.executable,
+        installerSource + '/app/diagnostic-hub',
+    );
+    assert.notEqual(
+        removalSnapshot.removalOwner.executable,
+        removalSnapshot.initial.journal.owner.executable,
+    );
+    assert.deepEqual(
+        bytes(f, work(f) + '-uninstall/original-maintenance/journal.json'),
+        installerJournal,
+    );
     // A subsequent genuine preparation may execute from a separately downloaded complete folder.
-    const oldSource = f.plan.host.sourceRoot,
-        newSource = '/home/test/next-source';
-    for (const [name, value] of snapshot(f, oldSource)) {
-        const node = f.node(name);
-        f.file(
-            newSource + name.slice(oldSource.length),
-            Buffer.from(value, 'base64').toString(),
-            node.mode & 0o777,
-        );
-    }
-    f.plan.host.sourceRoot = newSource;
-    f.plan.owner.executable = newSource + '/app/diagnostic-hub';
-    f.ops.executable = f.plan.owner.executable;
-    f.node('/proc/777/exe').target = f.ops.executable;
-    for (const [name, node] of f.nodes)
-        if (node.kind === 'directory')
-            node.nlink =
-                2 +
-                Array.from(f.nodes.values() as Iterable<any>).filter(
-                    (child) =>
-                        child.kind === 'directory' &&
-                        child.path !== name &&
-                        path.posix.dirname(child.path) === name,
-                ).length;
+    selectSource('/home/test/next-source');
     const again = await f.run('install');
+    assert.equal(
+        again.status,
+        'finished',
+        JSON.stringify(f.core.linuxPermanentSetupDiagnostics(again.owner)),
+    );
     assert.equal(again.result.verdict, 'ACTIVE_PREVIOUS_RETAINED');
     const archive = work(f) + '-removed-' + firstId;
     for (const [name, value] of originals)
@@ -492,6 +518,10 @@ test('classic parent links survive overlapping pins and completed removal archiv
     assert.notEqual(secondId, firstId);
     assert.equal((await f.run()).status, 'current-payload-removed');
     assert.equal(json(f, archive + '/state.json').phase, 'complete');
+    assert.equal(
+        json(f, archive + '/snapshot.json').removalOwner.executable,
+        removerSource + '/app/diagnostic-hub',
+    );
     assert.equal(bytes(f, f.profile).toString(), 'settings-and-reports');
     assert.ok(home.nlink >= beforeHome);
     assert.equal(f.fds.size, 0);
@@ -593,7 +623,13 @@ test('issued unlink failures retain first custody no retry and pending removal b
 });
 
 test('explicit restarted owner resolves lost unlink ACK from observed absence and rejects contradictory progress', async () => {
-    for (const mode of ['resume', 'reappeared', 'original-binding']) {
+    for (const mode of [
+        'resume',
+        'reappeared',
+        'original-binding',
+        'missing-removal-owner',
+        'malformed-removal-owner',
+    ]) {
         const f = await installed();
         let first = true;
         f.afterUnlink = () => {
@@ -627,6 +663,13 @@ test('explicit restarted owner resolves lost unlink ACK from observed absence an
             const entry = saved.entries.find((item: any) => item.path === record.path);
             entry.sha256 = record.sha256;
             entry.bytes = raw.length;
+        }
+        if (mode === 'missing-removal-owner') delete saved.removalOwner;
+        if (mode === 'malformed-removal-owner')
+            saved.removalOwner.executable = '/home/test/foreign-source/app/diagnostic-hub';
+        if (
+            ['original-binding', 'missing-removal-owner', 'malformed-removal-owner'].includes(mode)
+        ) {
             const snapshotRaw = Buffer.from(JSON.stringify(saved));
             f.node(removal + '/snapshot.json').bytes = snapshotRaw;
             state.snapshotSHA256 = hash(snapshotRaw);
