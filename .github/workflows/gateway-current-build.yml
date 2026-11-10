@@ -1,8 +1,8 @@
-name: Gateway canonical archive build only
+name: Gateway canonical build and installed-byte census
 
 on:
     push:
-        branches: [ci/v060-gateway-record-20261109]
+        branches: [ci/v060-gateway-canonical-inputs-20261110]
 
 permissions:
     contents: read
@@ -16,7 +16,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-gateway-record-20261109' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-gateway-canonical-inputs-20261110' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         defaults:
@@ -28,7 +28,7 @@ jobs:
                   set -euo pipefail
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-record-20261109
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-canonical-inputs-20261110
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$RUNNER_ENVIRONMENT" = github-hosted
                   test "$RUNNER_OS" = Linux
@@ -94,3 +94,11 @@ jobs:
                   set -euo pipefail
                   node -e "require('node:assert/strict').equal(process.version, 'v24.22.0')"
                   node scripts/build-gateway-archive.mjs
+            - name: Install the same-job canonical archive and compare original dependency bytes
+              run: |
+                  set -euo pipefail
+                  # One fresh install/cache only. The existing fixed npm ci plan follows the
+                  # original SRI lock's public npm/GitHub fetches; no auxiliary downloader.
+                  # Scripts/optional packages are disabled, fetch-retries=0, proxy/CA trust preserved.
+                  # This observes built/installed bytes, never Gateway loading, runtime or GC.
+                  node scripts/observe-gateway-current-install.mjs

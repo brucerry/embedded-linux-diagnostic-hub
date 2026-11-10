@@ -165,6 +165,99 @@ test('explicit directories and USTAR prefix names preserve one exact package nam
     const f = low(raw);
     assert.equal(inspectLockedDependencyBytes(f.lock, f.archives).files.length, 3);
 });
+// Authored copies of the authentic retained GitHub archive's metadata *features*. No downloaded
+// code is loaded, no archive is extracted, and this comment is not a build/source context.
+const globalComment = (): Member => ({
+    name: 'pax_global_header',
+    type: 103,
+    mode: 0o666,
+    bytes: Buffer.from('52 comment=' + '1'.repeat(40) + '\n'),
+});
+const githubMembers = (): Member[] => [
+    globalComment(),
+    { name: 'owner-repository-1234567/', type: 53, mode: 0o775 },
+    ...members().map((m) => ({
+        ...m,
+        name: m.name.replace(/^package\//, 'owner-repository-1234567/'),
+        mode: 0o664,
+    })),
+];
+function paxRecord(key: string, value: string) {
+    const body = key + '=' + value + '\n';
+    let length = Buffer.byteLength(body) + 2;
+    while (Buffer.byteLength(length + ' ' + body) !== length)
+        length = Buffer.byteLength(length + ' ' + body);
+    return Buffer.from(length + ' ' + body);
+}
+test('single-root GitHub metadata derives unchanged content hashes without applying archive modes', () => {
+    const classic = low(),
+        github = low(tar(githubMembers()));
+    const expected = inspectLockedDependencyBytes(classic.lock, classic.archives);
+    const actual = inspectLockedDependencyBytes(github.lock, github.archives);
+    assert.deepEqual(actual.files, expected.files);
+    assert.equal(actual.packages[0].archiveSHA256, hash(github.archives[0].bytes));
+    assert.notEqual(actual.packages[0].archiveSHA256, expected.packages[0].archiveSHA256);
+    assert.equal('mode' in actual.files[0], false);
+    assert.equal('sourceCommit' in actual, false);
+    assert.equal('comment' in actual, false);
+});
+test('global PAX admits only one initial inert exact comment and rejects override or ambiguous metadata', () => {
+    const invalid = [
+        ...['path', 'linkpath', 'size', 'uid', 'gid', 'mode', 'mtime', 'vendor'].map((key) =>
+            paxRecord(key, '1'.repeat(40)),
+        ),
+        Buffer.concat([globalComment().bytes!, globalComment().bytes!]),
+        Buffer.from('052 comment=' + '1'.repeat(40) + '\n'),
+        Buffer.from('51 comment=' + '1'.repeat(40) + '\n'),
+        Buffer.from('52 comment=' + 'z'.repeat(40) + '\n'),
+        Buffer.from('52 comment=' + '1'.repeat(40) + '\0'),
+        Buffer.from('52 comment=' + '1'.repeat(40)),
+        Buffer.from('52 comment=' + '1'.repeat(40) + '\n\n'),
+        Buffer.alloc(4097, 65),
+    ];
+    for (const bytes of invalid) {
+        const f = low(tar([{ ...globalComment(), bytes }, ...members()]));
+        assert.throws(() => inspectLockedDependencyBytes(f.lock, f.archives));
+    }
+    for (const list of [
+        [members()[0], globalComment(), ...members().slice(1)],
+        [globalComment(), globalComment(), ...members()],
+        [{ ...globalComment(), type: 120 }, ...members()],
+        [{ ...globalComment(), name: 'other-pax-name' }, ...members()],
+        [{ ...globalComment(), mode: 0o644 }, ...members()],
+        [{ ...globalComment(), prefix: 'other' }, ...members()],
+    ]) {
+        const f = low(tar(list));
+        assert.throws(() => inspectLockedDependencyBytes(f.lock, f.archives));
+    }
+});
+test('root-prefix compatibility preserves traversal, alias, link, special-mode and world-write refusals', () => {
+    const badMembers: Member[] = [
+        { name: 'second-root/extra.js' },
+        { name: 'owner-repository-1234567/../escape' },
+        { name: 'owner-repository-1234567/lib/./index.js' },
+        { name: 'owner-repository-1234567/License' },
+        { name: 'owner-repository-1234567/lib', bytes: Buffer.from('parent alias') },
+        { name: 'owner-repository-1234567/link', type: 49 },
+        { name: 'owner-repository-1234567/link', type: 50 },
+        { name: 'owner-repository-1234567/gnu', type: 76 },
+        { name: 'owner-repository-1234567/special', type: 51 },
+        { name: 'owner-repository-1234567/addon.node' },
+        ...[0o666, 0o777, 0o4664, 0o2664, 0o1664, 0o264].map((mode) => ({
+            name: 'owner-repository-1234567/unsafe',
+            mode,
+        })),
+        { name: 'owner-repository-1234567/no-directory-search/', type: 53, mode: 0o664 },
+    ];
+    for (const bad of badMembers) {
+        const f = low(tar([...githubMembers(), bad]));
+        assert.throws(() => inspectLockedDependencyBytes(f.lock, f.archives));
+    }
+    const prefixed = githubMembers();
+    prefixed[2] = { ...prefixed[2], name: 'package.json', prefix: 'owner-repository-1234567' };
+    const f = low(tar(prefixed));
+    assert.equal(inspectLockedDependencyBytes(f.lock, f.archives).files.length, 3);
+});
 for (const control of [
     'gzip-flags',
     'crc',
@@ -192,11 +285,17 @@ for (const control of [
         const f = low(raw);
         assert.throws(() => inspectLockedDependencyBytes(f.lock, f.archives));
     });
-async function fixture(changeInstalled?: (path: string, bytes: Buffer) => Buffer | null) {
+async function fixture(
+    changeInstalled?: (path: string, bytes: Buffer) => Buffer | null,
+    options: { groupWritableArchive?: boolean; unsafeInstalled?: boolean } = {},
+) {
     const source = sourceFixture(),
         bundles = ['ssh2', 'dep'].map((name) => ({
             path: 'node_modules/' + name,
-            list: members(name, name === 'ssh2' ? '1.17.0' : '1.0.0'),
+            list: members(name, name === 'ssh2' ? '1.17.0' : '1.0.0').map((m) => ({
+                ...m,
+                mode: options.groupWritableArchive ? 0o664 : m.mode,
+            })),
         }));
     const archives = bundles.map((b) => ({ path: b.path, bytes: tar(b.list) }));
     const lock: any = structuredClone(source.lock);
@@ -221,7 +320,12 @@ async function fixture(changeInstalled?: (path: string, bytes: Buffer) => Buffer
     const adjust = (s: any, p: string) => ({
         ...s,
         uid: 1000,
-        mode: p === nodePath ? 0o100755 : s.mode,
+        mode:
+            p === nodePath
+                ? 0o100755
+                : options.unsafeInstalled && p.startsWith(root + '/node_modules/')
+                  ? s.mode | 0o020
+                  : s.mode,
     });
     const filesystem = {
         ...f.filesystem.fs,
@@ -259,6 +363,26 @@ async function fixture(changeInstalled?: (path: string, bytes: Buffer) => Buffer
     };
     return { ...f, owner, archives, record, root, child, normal };
 }
+test('archive group-write content is admitted while actual installed group-write still refuses with custody', async () => {
+    const good = await fixture(undefined, { groupWritableArchive: true });
+    await good.owner.observeInstallation();
+    const origin = good.owner.observeDependencyOrigin(good.archives);
+    assert.equal(origin.files.length, 6);
+    assert.equal(origin.loadedCodeObserved, false);
+    const observed = good.owner.observeChild(good.child);
+    good.normal();
+    const result = await observed.completion;
+    await observed.joined;
+    assert.equal(result.record.releaseAcceptance, false);
+    const unsafe = await fixture(undefined, { groupWritableArchive: true, unsafeInstalled: true });
+    await assert.rejects(
+        unsafe.owner.observeInstallation(),
+        (error: any) => error.owner === unsafe.owner,
+    );
+    assert.equal(unsafe.owner.snapshot().phase, 'failed');
+    assert.equal(unsafe.owner.snapshot().descriptors, 0);
+    assert.throws(() => unsafe.owner.observeDependencyOrigin(unsafe.archives));
+});
 test('only internal independently read census can bind retained npm bytes and emit source/artifact identity', async () => {
     const f = await fixture();
     assert.throws(() => f.owner.observeDependencyOrigin(f.archives));

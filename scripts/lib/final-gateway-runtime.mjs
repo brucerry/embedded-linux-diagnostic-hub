@@ -102,15 +102,19 @@ export function createFinalGatewayObserver(
         baseline,
         child,
         primary,
+        failed = false,
         pending = 0,
         sequence = 0;
     let dependencyOrigin;
     const descriptors = new Set(),
         diagnostics = [],
         listeners = new Set();
-    const fail = (error) => {
-        primary ??= error;
-        if (error !== primary && diagnostics.length < 32) diagnostics.push(error);
+    const fail = (error, secondary = false) => {
+        if (!failed) {
+            primary = error;
+            failed = true;
+        } else if ((secondary || error !== primary) && diagnostics.length < 32)
+            diagnostics.push(error);
         phase = 'failed';
     };
     const snapshot = () =>
@@ -118,7 +122,7 @@ export function createFinalGatewayObserver(
             phase,
             pendingIO: pending,
             descriptors: descriptors.size,
-            primaryFailure: Boolean(primary),
+            primaryFailure: failed,
             cleanupDiagnostics: diagnostics.length,
             listenersHeld: listeners.size,
             processRetirementProven: false,
@@ -138,7 +142,10 @@ export function createFinalGatewayObserver(
         assert.ok(before.size <= maximum);
         const lease = { path: file, handle: null };
         descriptors.add(lease);
-        let handle, result, first;
+        let handle,
+            result,
+            first,
+            firstSet = false;
         try {
             handle = await io(() =>
                 filesystem.open(
@@ -177,6 +184,7 @@ export function createFinalGatewayObserver(
             };
         } catch (error) {
             first = error;
+            firstSet = true;
             fail(error);
         }
         if (handle)
@@ -185,11 +193,16 @@ export function createFinalGatewayObserver(
                 descriptors.delete(lease);
                 lease.handle = null;
             } catch (error) {
-                first ??= error;
-                fail(error);
+                // A distinct cleanup failure may equal the first raw value, including undefined.
+                const secondary = firstSet;
+                if (!firstSet) {
+                    first = error;
+                    firstSet = true;
+                }
+                fail(error, secondary);
             }
         // A rejected/unknown open keeps the registered lease. Rejection does not prove no acquisition.
-        if (first) throw first;
+        if (firstSet) throw first;
         return result;
     }
     async function census() {
@@ -349,7 +362,7 @@ export function createFinalGatewayObserver(
                 return structuredClone(dependencyOrigin);
             } catch (error) {
                 fail(error);
-                throw new GatewayRuntimeObservationFailure(error, owner);
+                throw new GatewayRuntimeObservationFailure(primary, owner);
             }
         },
         observeInstallation() {
@@ -364,7 +377,7 @@ export function createFinalGatewayObserver(
                 },
                 (error) => {
                     fail(error);
-                    throw new GatewayRuntimeObservationFailure(error, owner);
+                    throw new GatewayRuntimeObservationFailure(primary, owner);
                 },
             );
             return operation;
@@ -395,7 +408,7 @@ export function createFinalGatewayObserver(
                 spawnIdentity;
             function bad(error) {
                 fail(error);
-                reject(new GatewayRuntimeObservationFailure(error, owner));
+                reject(new GatewayRuntimeObservationFailure(primary, owner));
             }
             function argumentsMatch() {
                 return (
@@ -431,21 +444,21 @@ export function createFinalGatewayObserver(
                     );
                     assert.deepEqual(row.exit, { code: 0, signal: null });
                     assert.deepEqual(row.close, row.exit);
-                    assert.equal(primary, undefined);
+                    assert.equal(failed, false);
                     const after = await census();
                     assert.deepEqual(
                         after,
                         baseline,
                         'Installed bytes changed during owned child lifetime.',
                     );
-                    assert.equal(primary, undefined);
+                    assert.equal(failed, false);
                     assert.deepEqual(
                         identity(),
                         spawnIdentity,
                         'Parent-reported child identity changed during census.',
                     );
                     detach();
-                    assert.equal(primary, undefined);
+                    assert.equal(failed, false);
                     const facts = {
                         schemaVersion: 1,
                         kind: 'final-gateway-runtime-observation',

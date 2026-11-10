@@ -81,7 +81,9 @@ function packageBytes(raw, integrity) {
         parents = new Set();
     let at = 0,
         count = 0,
-        manifest;
+        manifest,
+        root,
+        globalComment = false;
     while (at + 512 <= tar.length && !zero(tar.subarray(at, at + 512))) {
         assert.ok(++count <= L.entries);
         const head = tar.subarray(at, at + 512);
@@ -93,19 +95,56 @@ function packageBytes(raw, integrity) {
                 zero(head.subarray(500)),
             'Unsupported npm tar format.',
         );
-        assert.ok(
-            [0, 48, 53].includes(head[156]) && zero(head.subarray(157, 257)),
-            'Links, PAX, GNU and special members unsupported.',
-        );
-        const directory = head[156] === 53,
+        assert.ok(zero(head.subarray(157, 257)), 'Link targets unsupported.');
+        const type = head[156],
+            directory = type === 53,
             prefix = text(head.subarray(345, 500));
         let name = (prefix ? prefix + '/' : '') + text(head.subarray(0, 100));
         if (directory && name.endsWith('/')) name = name.slice(0, -1);
         canonical(name);
+        const mode = octal(head.subarray(100, 108)),
+            length = octal(head.subarray(124, 136));
+        octal(head.subarray(108, 116), true);
+        octal(head.subarray(116, 124), true);
+        octal(head.subarray(136, 148), true);
+        text(head.subarray(265, 297));
+        text(head.subarray(297, 329));
+        assert.equal(octal(head.subarray(329, 337), true), 0);
+        assert.equal(octal(head.subarray(337, 345), true), 0);
+        const start = at + 512,
+            finish = start + length,
+            next = start + Math.ceil(length / 512) * 512;
+        assert.ok(length <= L.expanded && next <= tar.length && zero(tar.subarray(finish, next)));
+        if (type === 103) {
+            // GitHub's authenticated source tar has one initial global PAX comment. Admit only
+            // this exact inert byte grammar: no path/link/size/ownership overrides or PAX state.
+            // The comment is not source identity; the raw SHA512 SRI above remains authoritative.
+            assert.ok(at === 0 && !globalComment && root === undefined);
+            assert.equal(name, 'pax_global_header');
+            assert.equal(prefix, '');
+            assert.equal(mode, 0o666); // Metadata header, never a file or installed permission.
+            assert.equal(length, 52);
+            assert.match(
+                decoder.decode(tar.subarray(start, finish)),
+                /^52 comment=[a-f0-9]{40}\n$/,
+            );
+            globalComment = true;
+            at = next;
+            continue;
+        }
         assert.ok(
-            (name === 'package' && directory) || name.startsWith('package/'),
-            'Non-package npm namespace.',
+            [0, 48, 53].includes(type),
+            'Links, per-file PAX, GNU and special members unsupported.',
         );
+        const partsOfName = name.split('/');
+        root ??= partsOfName[0];
+        assert.equal(partsOfName[0], root, 'Multiple package archive roots.');
+        assert.ok(partsOfName.length > 1 || directory, 'Package root must be a directory.');
+        // Derive content only. npm legitimately installs SRI-authenticated GitHub tar members
+        // carrying 0664/0775; these archive bits are never applied to a filesystem here. Actual
+        // installed UID/mode/nlink/alias checks remain in final-gateway-runtime.metadata().
+        assert.ok(mode <= 0o777 && !(mode & 0o002) && mode & 0o400);
+        if (directory) assert.ok(mode & 0o100 && length === 0);
         const key = name.toLowerCase();
         assert.ok(
             !seen.has(key) && (directory || !parents.has(key)),
@@ -120,23 +159,8 @@ function packageBytes(raw, integrity) {
             parts.pop();
         }
         seen.set(key, directory ? 'directory' : 'file');
-        const mode = octal(head.subarray(100, 108)),
-            length = octal(head.subarray(124, 136));
-        assert.ok(mode <= 0o777 && !(mode & 0o022) && mode & 0o400);
-        if (directory) assert.ok(mode & 0o100 && length === 0);
-        octal(head.subarray(108, 116), true);
-        octal(head.subarray(116, 124), true);
-        octal(head.subarray(136, 148), true);
-        text(head.subarray(265, 297));
-        text(head.subarray(297, 329));
-        assert.equal(octal(head.subarray(329, 337), true), 0);
-        assert.equal(octal(head.subarray(337, 345), true), 0);
-        const start = at + 512,
-            finish = start + length,
-            next = start + Math.ceil(length / 512) * 512;
-        assert.ok(length <= L.expanded && next <= tar.length && zero(tar.subarray(finish, next)));
         if (!directory) {
-            const relative = name.slice('package/'.length);
+            const relative = partsOfName.slice(1).join('/');
             assert.ok(
                 relative &&
                     !relative.split('/').includes('node_modules') &&

@@ -248,6 +248,170 @@ test('rejected close retains descriptor and primary read failure plus cleanup di
     assert.equal(f.owner.snapshot().descriptors, 1);
     assert.equal(f.owner.diagnostics().filter((e: unknown) => e === cleanup).length, 1);
 });
+test('read and close failures preserve exact falsey primary or secondary values without replacement', async () => {
+    const values = [undefined, null, false, 0];
+    const failures: { primary: unknown; cleanup: unknown }[] = [
+        ...values.flatMap((primary) => values.map((cleanup) => ({ primary, cleanup }))),
+        ...values.map((primary) => ({ primary, cleanup: Error('later close failure') })),
+        ...values.map((cleanup) => ({ primary: Error('original read failure'), cleanup })),
+    ];
+    for (const { primary, cleanup } of failures) {
+        const f = await fixture(),
+            eventStart = f.fsModel.events.length;
+        let reads = 0,
+            closes = 0;
+        f.fsModel.hooks.read = () => {
+            reads++;
+            throw primary;
+        };
+        f.fsModel.hooks.close = () => {
+            closes++;
+            throw cleanup;
+        };
+        const operation = f.owner.observeInstallation();
+        await assert.rejects(operation, (error: any) => {
+            assert.ok(error instanceof GatewayRuntimeObservationFailure);
+            assert.equal(Object.hasOwn(error, 'cause'), true);
+            assert.equal(error.cause, primary);
+            return true;
+        });
+        assert.equal(reads, 1);
+        assert.equal(closes, 1);
+        assert.deepEqual(f.owner.diagnostics(), [cleanup]);
+        assert.equal(f.owner.snapshot().primaryFailure, true);
+        assert.equal(f.owner.snapshot().phase, 'failed');
+        assert.equal(f.owner.snapshot().pendingIO, 0);
+        assert.equal(f.owner.snapshot().descriptors, 1);
+        assert.equal(f.owner.observeInstallation(), operation);
+        assert.equal(
+            f.fsModel.events.slice(eventStart).filter((event: string) => event.startsWith('open:'))
+                .length,
+            1,
+        );
+        const settledEvents = f.fsModel.events.length;
+        assert.throws(() => f.owner.observeChild(f.child), /not ready/);
+        assert.equal(f.fsModel.events.length, settledEvents);
+    }
+});
+test('a falsey close failure stops the census at its first file and retains the unclosed handle', async () => {
+    for (const primary of [undefined, null, false, 0]) {
+        const f = await fixture(),
+            eventStart = f.fsModel.events.length;
+        let closes = 0;
+        f.fsModel.hooks.close = () => {
+            closes++;
+            throw primary;
+        };
+        await assert.rejects(f.owner.observeInstallation(), (error: any) => {
+            assert.ok(error instanceof GatewayRuntimeObservationFailure);
+            assert.equal(Object.hasOwn(error, 'cause'), true);
+            assert.equal(error.cause, primary);
+            return true;
+        });
+        assert.equal(closes, 1);
+        assert.equal(
+            f.fsModel.events.slice(eventStart).filter((event: string) => event.startsWith('open:'))
+                .length,
+            1,
+        );
+        assert.equal(f.owner.snapshot().primaryFailure, true);
+        assert.equal(f.owner.snapshot().descriptors, 1);
+        assert.equal(f.fsModel.handles.size, 1);
+        assert.deepEqual(f.owner.diagnostics(), []);
+        assert.throws(() => f.owner.observeChild(f.child), /not ready/);
+    }
+});
+test('held close acknowledges local custody later without erasing an earlier falsey read failure', async () => {
+    for (const primary of [undefined, null, false, 0]) {
+        const f = await fixture(),
+            entered = deferred(),
+            release = deferred();
+        f.fsModel.hooks.read = () => {
+            throw primary;
+        };
+        f.fsModel.hooks.close = () => {
+            entered.resolve();
+            return release.promise;
+        };
+        const operation = f.owner.observeInstallation();
+        const outcome = operation.then(
+            (value: unknown) => ({ kind: 'fulfilled' as const, value }),
+            (error: unknown) => ({ kind: 'rejected' as const, error }),
+        );
+        try {
+            const checkpoint = await Promise.race([
+                entered.promise.then(() => ({ kind: 'close-entered' as const })),
+                outcome,
+            ]);
+            assert.equal(
+                checkpoint.kind,
+                'close-entered',
+                'Do not hide an early operation failure behind a fixture milestone.',
+            );
+            assert.equal(f.owner.snapshot().primaryFailure, true);
+            assert.equal(f.owner.snapshot().pendingIO, 1);
+            assert.equal(f.owner.snapshot().descriptors, 1);
+            assert.equal(f.owner.observeInstallation(), operation);
+            assert.throws(() => f.owner.observeChild(f.child), /not ready/);
+            release.resolve();
+            const result = await outcome;
+            assert.equal(result.kind, 'rejected');
+            if (result.kind === 'rejected') {
+                assert.ok(result.error instanceof GatewayRuntimeObservationFailure);
+                assert.equal(Object.hasOwn(result.error, 'cause'), true);
+                assert.equal(result.error.cause, primary);
+            }
+            assert.equal(f.owner.snapshot().phase, 'failed');
+            assert.equal(f.owner.snapshot().primaryFailure, true);
+            assert.equal(f.owner.snapshot().pendingIO, 0);
+            assert.equal(f.owner.snapshot().descriptors, 0);
+            assert.equal(f.fsModel.handles.size, 0);
+            assert.deepEqual(f.owner.diagnostics(), []);
+            assert.equal(f.owner.snapshot().processRetirementProven, false);
+        } finally {
+            release.resolve();
+            await outcome;
+        }
+    }
+});
+test('falsey fake-listener cleanup remains failed after late errors and diagnostics stay bounded', async () => {
+    // These are the existing authored EventEmitter ports, never network or product listeners.
+    for (const primary of [undefined, null, false, 0]) {
+        const f = await fixture();
+        await f.owner.observeInstallation();
+        const observation = f.owner.observeChild(f.child);
+        let retireCalls = 0;
+        const secondary = Error('later authored listener retirement failure');
+        f.child.stdout.off = () => {
+            retireCalls++;
+            throw retireCalls === 1 ? primary : secondary;
+        };
+        f.normal();
+        await assert.rejects(observation.completion, (error: any) => {
+            assert.ok(error instanceof GatewayRuntimeObservationFailure);
+            assert.equal(Object.hasOwn(error, 'cause'), true);
+            assert.equal(error.cause, primary);
+            return true;
+        });
+        let joined = false;
+        observation.joined.then(() => {
+            joined = true;
+        });
+        await tick();
+        assert.equal(f.owner.snapshot().primaryFailure, true);
+        assert.equal(f.owner.snapshot().phase, 'failed');
+        assert.equal(f.owner.diagnostics()[0], secondary);
+        for (let n = 0; n < 40; n++) f.child.emit('error', Error('authored late event'));
+        await tick();
+        assert.equal(f.owner.diagnostics().length, 32);
+        assert.equal(f.owner.diagnostics()[0], secondary);
+        assert.equal(f.owner.snapshot().phase, 'failed');
+        assert.equal(f.owner.snapshot().primaryFailure, true);
+        assert.ok(f.owner.snapshot().listenersHeld > 0);
+        assert.equal(joined, false);
+        assert.equal(f.owner.snapshot().processRetirementProven, false);
+    }
+});
 test('unknown open failure is registered before acquisition and cannot be forgotten', async () => {
     const f = await fixture();
     f.fsModel.hooks.open = () => {
