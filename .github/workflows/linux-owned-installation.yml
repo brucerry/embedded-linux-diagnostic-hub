@@ -2,7 +2,7 @@ name: Exercise controlled Linux permanent installation
 
 on:
     push:
-        branches: [codex/linux-private-sdk-product-917]
+        branches: [codex/linux-fixture-deadline-537]
 
 permissions:
     contents: read
