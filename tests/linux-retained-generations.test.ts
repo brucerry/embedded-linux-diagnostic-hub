@@ -18,6 +18,7 @@ const root = new URL('../', import.meta.url);
 const allowed = new Set(
     [
         'electron/linux-native-backend.ts',
+        'electron/linux-initial-uninstall.ts',
         'electron/linux-native-driver.ts',
         'electron/linux-permanent-setup.ts',
         'electron/installation-maintenance.ts',
@@ -51,7 +52,7 @@ for (const name of ['SETUP_OWNER', 'SETUP_PAYLOAD']) {
     maintenance[name] = value.text;
 }
 function subject(
-    relative: 'electron/linux-native-backend.ts' | 'electron/linux-native-driver.ts',
+    relative: 'electron/linux-native-backend.ts' | 'electron/linux-native-driver.ts' | 'electron/linux-initial-uninstall.ts',
     modules: Map<string, unknown>,
 ) {
     const source = read(new URL(relative, root));
@@ -111,6 +112,11 @@ function subject(
     );
     return module.exports;
 }
+const removal = subject('electron/linux-initial-uninstall.ts',new Map<string,unknown>([
+    ['node:path',path],['node:crypto',{createHash,randomUUID:refuse}],
+    ['./linux-transaction-model.ts',model],['../shared/installation.ts',installation],
+    ['./installation-maintenance.ts',maintenance],
+]));
 const backend = subject(
     'electron/linux-native-backend.ts',
     new Map<string, unknown>([
@@ -122,6 +128,7 @@ const backend = subject(
         ['../shared/installation.ts', installation],
         ['./installation-maintenance.ts', maintenance],
         ['./linux-menu-ownership.ts', menu],
+        ['./linux-initial-uninstall.ts',removal],
     ]),
 );
 const nativeDriver = subject(

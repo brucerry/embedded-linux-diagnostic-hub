@@ -33,6 +33,7 @@ import {
     type InstallationManifest,
 } from '../shared/installation.ts';
 import { SETUP_OWNER, SETUP_PAYLOAD } from './installation-maintenance.ts';
+import { createLinuxInitialUninstall } from './linux-initial-uninstall.ts';
 import {
     checkedLinuxMenuRecord,
     desiredLinuxMenu,
@@ -84,6 +85,8 @@ export interface LinuxNativeOps {
               destinationParentFD: number,
               destinationName: string,
           ) => void);
+    /** ABI2 only. Concrete removal admits only a freshly quarantined/verified private slot. */
+    unlinkOwned?: null | import('./linux-rename-noreplace.ts').LinuxUnlinkOwned;
 }
 export interface LinuxNativeWindow {
     startedMs: number;
@@ -226,6 +229,9 @@ function createBackend(
         timers: new Set<ReturnType<typeof setTimeout>>(),
         allocations: new Set<string>(),
         lastReturned: null as unknown,
+        primarySet: false,
+        primary: undefined as unknown,
+        releaseKnown: false,
         lateEvents: 0,
     };
     let attempted = false,
@@ -252,7 +258,8 @@ function createBackend(
         let value: T;
         try {
             value = operation();
-        } catch {
+        } catch (error) {
+            if (!state.primarySet) {state.primarySet = true; state.primary = error;}
             return fail('NATIVE_IO_UNKNOWN');
         }
         state.lastReturned = value;
@@ -300,6 +307,7 @@ function createBackend(
             !Number.isSafeInteger(value.ino) ||
             value.ino <= 0 ||
             value.dev < 0 ||
+            !Number.isSafeInteger(value.nlink) || value.nlink < 1 ||
             (inside(plan.host.home, logical)
                 ? value.uid !== plan.host.uid
                 : value.uid !== 0 && value.uid !== plan.host.uid) ||
@@ -359,6 +367,21 @@ function createBackend(
         return {
             fd,
             check,
+            acknowledgeDirectoryLinks(changes: readonly {path: string; delta: number}[]) {
+                for (const item of held) {
+                    const delta = changes.filter((change) => change.path === item.logical)
+                        .reduce((sum, change) => sum + change.delta, 0);
+                    if (!delta) continue;
+                    const active = fstat(item.fd);
+                    const expectedLinks = item.before.nlink === 1 ? 1 : item.before.nlink + delta;
+                    if (active.dev !== item.before.dev || active.ino !== item.before.ino ||
+                        active.uid !== item.before.uid || active.mode !== item.before.mode ||
+                        active.nlink !== expectedLinks || active.nlink < 1)
+                        fail('NATIVE_PARENT_CHANGED');
+                    item.before = active;
+                }
+                check();
+            },
             finish() {
                 check();
                 for (const item of held.reverse()) close(item.fd);
@@ -725,8 +748,7 @@ function createBackend(
         parent.finish();
         return { identity: id(before), bytes: bytes.length, sha256: hash(bytes) };
     };
-    const observe = (scope: LinuxModelScope): LinuxModelView => {
-        scopeCheck(scope);
+    const sourceObservation = (): LinuxModelSource => {
         procOwner();
         const sourceStat = stat(plan.host.sourceRoot);
         plainDirectory(sourceStat, plan.host.sourceRoot);
@@ -736,6 +758,15 @@ function createBackend(
         if (release.version !== plan.host.version) fail('NATIVE_SOURCE_VERSION');
         inventory(plan.host.sourceRoot, release, [SETUP_PAYLOAD]);
         if (!stable(sourceStat, stat(plan.host.sourceRoot))) fail('NATIVE_SOURCE_CHANGED');
+        return {identity: id(sourceStat),manifest: release,verifiedManifestSHA256: manifestHash(release)};
+    };
+    const observe = (scope: LinuxModelScope): LinuxModelView => {
+        scopeCheck(scope);
+        if (plan.action !== 'uninstall-current') {
+            if (maybeStat(work + '-uninstall') && !completedRemoval) return fail('NATIVE_REMOVAL_PENDING_OR_RETAINED');
+            completedRemoval?.completed();
+        }
+        const source = sourceObservation();
         const workStat = maybeStat(work);
         let journal: LinuxModelJournal | null = null;
         let journalOriginal: { base64: string; sha256: string } | null = null;
@@ -865,11 +896,7 @@ function createBackend(
         }));
         const view: LinuxModelView = {
             parents: parents(),
-            source: {
-                identity: id(sourceStat),
-                manifest: release,
-                verifiedManifestSHA256: manifestHash(release),
-            },
+            source,
             root: payload(fixed.root),
             stage: payload(fixed.stage),
             previous: payload(fixed.previous),
@@ -943,7 +970,11 @@ function createBackend(
                 reject(Error(state.code));
                 return;
             }
-            const done = (error: unknown, value?: T) => {
+            const done = (error: unknown, value?: T, thrown = false) => {
+                const failure = thrown || (error !== null && error !== undefined);
+                // Capture the actual first failure before timer/gate work can produce a secondary.
+                // Repeated callbacks are late failures even when their value is undefined.
+                if ((failure || settled) && !state.primarySet) {state.primarySet=true;state.primary=error;}
                 if (settled) {
                     state.lateEvents++;
                     state.failed = true;
@@ -964,7 +995,7 @@ function createBackend(
                     reject(Error(state.code));
                     return;
                 }
-                if (error !== null && error !== undefined) {
+                if (failure) {
                     state.failed = true;
                     state.code = 'NATIVE_KERNEL_UNKNOWN';
                     reject(Error(state.code));
@@ -981,9 +1012,9 @@ function createBackend(
             };
             try {
                 gate();
-                submit(done);
+                submit((error,value) => done(error,value));
             } catch (error) {
-                done(error);
+                done(error,undefined,true);
             }
         });
     };
@@ -1063,24 +1094,27 @@ function createBackend(
             if (JSON.stringify(current) !== JSON.stringify(expected))
                 return fail('NATIVE_RESERVATION_RELEASE_BINDING');
             await wait<void>((done) => (handle as Server).close((error) => done(error)));
-            if (
-                call(
-                    'server-close-state',
-                    () => !(handle as Server).listening && (handle as Server).address() === null,
-                ) !== true
-            )
-                fail('NATIVE_RELEASE_UNCERTAIN');
-            state.servers.delete(handle as Server);
-            lease = null;
-            leaseIdentity = null;
+            // Adopt terminal owned-resource state before applying a sticky late-error fence.
+            // This read cannot authorize another mutation or clear the recorded failure.
+            state.pending = 'server-close-state';
+            let closed: boolean;
+            try {closed = state.sockets.size === 0 && !(handle as Server).listening && (handle as Server).address() === null;}
+            catch (error) {if (!state.primarySet) {state.primarySet=true;state.primary=error;}return fail('NATIVE_RELEASE_UNCERTAIN');}
+            state.lastReturned = closed; state.pending = null;
+            if (closed) {state.servers.delete(handle as Server);lease=null;leaseIdentity=null;state.releaseKnown=true;}
+            gate();
+            if (!closed) fail('NATIVE_RELEASE_UNCERTAIN');
             return true;
         },
     };
     const protect = async <T>(operation: () => Promise<T> | T) => {
         try {
             gate();
-            return await operation();
-        } catch {
+            const value = await operation();
+            gate();
+            return value;
+        } catch (error) {
+            if (!state.primarySet) {state.primarySet = true; state.primary = error;}
             if (!state.failed) {
                 state.failed = true;
                 state.code = 'NATIVE_REFUSAL';
@@ -1135,6 +1169,7 @@ function createBackend(
             () => state.allocations.add(directory),
         );
         plainDirectory(stat(directory), directory, true);
+        parent.acknowledgeDirectoryLinks([{path: path.posix.dirname(directory), delta: 1}]);
         call('parent-sync', () => fs.fsyncSync(parent.fd));
         parent.finish();
     };
@@ -1144,20 +1179,21 @@ function createBackend(
         exclusive: boolean,
         prior?: Buffer,
         mode = 0o600,
+        cap = MAX_INSTALLATION_MANIFEST_BYTES,
     ) => {
-        if (bytes.length > MAX_INSTALLATION_MANIFEST_BYTES) return fail('NATIVE_WRITE_BOUND');
+        if (bytes.length > cap) return fail('NATIVE_WRITE_BOUND');
         const parent = pin(path.posix.dirname(file)),
             anchored = fdPath(parent.fd) + '/' + path.posix.basename(file),
             before = maybeStat(anchored);
         if (exclusive ? before !== null : before === null) return fail('NATIVE_WRITE_OWNERSHIP');
-        if (before) regular(before, MAX_INSTALLATION_MANIFEST_BYTES, true);
+        if (before) regular(before, cap, true);
         const fd = open(
                 anchored,
                 C.O_RDWR | C.O_NOFOLLOW | C.O_NONBLOCK | (exclusive ? C.O_CREAT | C.O_EXCL : 0),
                 mode,
             ),
             active = fstat(fd);
-        regular(active, MAX_INSTALLATION_MANIFEST_BYTES, true);
+        regular(active, cap, true);
         if (before && !sameInode(before, active)) fail('NATIVE_WRITE_CHANGED');
         if (prior) {
             const old = Buffer.alloc(prior.length + 1);
@@ -1412,6 +1448,7 @@ function createBackend(
                     } else if (!menuAdvance && !sameLinuxMenu(previous.menu, next.menu))
                         fail('NATIVE_MENU_JOURNAL_IDENTITY');
                 }
+                if (completedRemoval && !previous && next.phase === 'copying') completedRemoval.archiveCompleted();
                 const existing = maybeStat(work);
                 if (!existing) mkdirNew(work);
                 else plainDirectory(existing, work, true);
@@ -1550,6 +1587,10 @@ function createBackend(
                 );
                 if (maybeStat(sourceFile) || !sameInode(before, stat(targetFile)))
                     fail('NATIVE_MOVE_CHANGED');
+                const links = [{path: path.posix.dirname(fixed[from]), delta: -1},
+                    {path: path.posix.dirname(fixed[to]), delta: 1}];
+                sourceDirectory.acknowledgeDirectoryLinks(links);
+                targetDirectory.acknowledgeDirectoryLinks(links);
                 call('parent-sync', () => fs.fsyncSync(sourceDirectory.fd));
                 call('parent-sync', () => fs.fsyncSync(targetDirectory.fd));
                 sourceDirectory.finish();
@@ -1663,7 +1704,8 @@ function createBackend(
             });
         },
     };
-    return {
+    let completedRemoval: ReturnType<typeof createLinuxInitialUninstall> | null = null;
+    const backend = {
         selectMenu(selected: boolean) {
             if (
                 !continuation ||
@@ -1683,6 +1725,12 @@ function createBackend(
                 if (!preparing) return fail('NATIVE_PREPARATION_ALREADY_CONSUMED');
                 preparing = false;
                 procOwner();
+                if (plan.action !== 'uninstall-current' && maybeStat(work + '-uninstall')) {
+                    if (plan.action !== 'install' || plan.menu || maybeStat(plan.root) || maybeStat(work))
+                        return fail('NATIVE_REMOVAL_PENDING_OR_RETAINED');
+                    completedRemoval = backend.initialUninstall();
+                    completedRemoval.completed();
+                }
                 let installationId = plan.installationId;
                 const destination = maybeStat(plan.root);
                 if (destination) plainDirectory(destination, plan.root, true);
@@ -1750,6 +1798,84 @@ function createBackend(
         } satisfies LinuxModelKernel,
         effects,
         scope: copy(fixed),
+        /** A distinct, concrete initial-only remover; ordinary install/rollback effects stay unchanged. */
+        initialUninstall(): ReturnType<typeof createLinuxInitialUninstall> {
+            if (plan.menu || !['install','uninstall-current'].includes(plan.action)) return fail('NATIVE_UNINSTALL_SELECTION');
+            let prepared: ReturnType<typeof backend.prepare> | undefined;
+            const removal = work + '-uninstall', payloadRoot = removal + '/payload',
+                disposalRoot = removal + '/disposal';
+            const match = (value: Stats, expected: {dev: number;ino: number;uid: number;mode: number;kind: string;bytes?: number}) =>
+                !value.isSymbolicLink() && value.dev === expected.dev && value.ino === expected.ino &&
+                value.uid === expected.uid && value.mode === expected.mode &&
+                (expected.kind === 'file' ? value.isFile() && value.nlink === 1 && value.size === expected.bytes
+                    : value.isDirectory() && value.nlink > 0);
+            return createLinuxInitialUninstall({
+                configuration: () => copy(plan),
+                async initial() {
+                    if (!prepared) {prepared = backend.prepare(); return prepared;}
+                    const first = await prepared;
+                    return {...first,view: await effects.observe(copy(first.scope))};
+                },
+                kernel: backend.kernel,
+                source: sourceObservation,
+                activity,
+                stat, maybe: maybeStat, names, read, hash: fileHash,
+                mkdir(directory) {
+                    if (![removal,disposalRoot].includes(directory)) return fail('NATIVE_UNINSTALL_PATH');
+                    mkdirNew(directory);
+                },
+                write(file,bytes,exclusive,prior) {
+                    if (![removal + '/snapshot.json',removal + '/state.json'].includes(file))
+                        return fail('NATIVE_UNINSTALL_PATH');
+                    write(file,bytes,exclusive,prior,0o600,MAX_INSTALLATION_MANIFEST_BYTES * 6 + 131072);
+                },
+                move(from,to,expected) {
+                    requireMutation();
+                    if (!(from === fixed.root && to === payloadRoot ||
+                        from === work && to === removal + '/original-maintenance' ||
+                        from === removal && to.startsWith(work + '-removed-') &&
+                            /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(to.slice((work + '-removed-').length)) ||
+                        inside(payloadRoot,from) && to === disposalRoot + '/entry'))
+                        return fail('NATIVE_UNINSTALL_PATH');
+                    const source = pin(path.posix.dirname(from)), target = pin(path.posix.dirname(to));
+                    const sourceName = path.posix.basename(from), targetName = path.posix.basename(to),
+                        sourceFile = fdPath(source.fd) + '/' + sourceName, targetFile = fdPath(target.fd) + '/' + targetName;
+                    if (!match(stat(sourceFile),expected) || maybeStat(targetFile)) return fail('NATIVE_UNINSTALL_CHANGED');
+                    source.check(); target.check();
+                    call('uninstall-move-issued',() => ops.moveNoReplace!(source.fd,sourceName,target.fd,targetName),
+                        () => state.allocations.add(to));
+                    if (maybeStat(sourceFile) || !match(stat(targetFile),expected)) return fail('NATIVE_UNINSTALL_MOVED_FOREIGN');
+                    const links = expected.kind === 'directory' ?
+                        [{path:path.posix.dirname(from),delta:-1},{path:path.posix.dirname(to),delta:1}] : [];
+                    source.acknowledgeDirectoryLinks(links); target.acknowledgeDirectoryLinks(links);
+                    call('parent-sync',() => fs.fsyncSync(source.fd)); call('parent-sync',() => fs.fsyncSync(target.fd));
+                    source.finish(); target.finish();
+                    if (expected.kind === 'file' && fileHash(to,expected.bytes!) !== expected.sha256)
+                        return fail('NATIVE_UNINSTALL_MOVED_FOREIGN');
+                },
+                remove(file,expected) {
+                    if (file !== disposalRoot + '/entry' || !ops.unlinkOwned) return fail('NATIVE_UNINSTALL_PATH');
+                    const parent = pin(disposalRoot), anchored = fdPath(parent.fd) + '/entry';
+                    if ((fstat(parent.fd).mode & 0o7777) !== 0o700 || !match(stat(anchored),expected))
+                        return fail('NATIVE_UNINSTALL_DISPOSAL');
+                    parent.check();
+                    // The controller persisted unlink-issued before entering this single submission.
+                    call('unlink-issued',() => ops.unlinkOwned!(parent.fd,'entry',expected.kind,{dev:expected.dev,ino:expected.ino}));
+                    if (maybeStat(anchored)) return fail('NATIVE_UNINSTALL_UNLINK_ACK');
+                    parent.acknowledgeDirectoryLinks(expected.kind === 'directory' ? [{path:disposalRoot,delta:-1}] : []);
+                    call('parent-sync',() => fs.fsyncSync(parent.fd)); parent.finish();
+                },
+                available: () => Boolean(ops.moveNoReplace && ops.unlinkOwned),
+                diagnostics: () => backend.diagnostics(),
+                healthy: gate,
+                knownRelease: () => state.releaseKnown,
+                reserved() {
+                    gate();procOwner();
+                    if (!lease || !leaseIdentity || !(lease.handle as Server).listening ||
+                        (lease.handle as Server).address() !== '\0' + fixed.key) return fail('NATIVE_RESERVATION_REQUIRED');
+                },
+            });
+        },
         /** A live direct child's initial kernel identity only; not profile/window/loaded-code proof. */
         observeLaunchChild: (pid: number) =>
             protect(async () => {
@@ -1805,6 +1931,8 @@ function createBackend(
             retainedTimers: state.timers.size,
             allocations: state.allocations.size,
             lateEvents: state.lateEvents,
+            primarySet: state.primarySet,
         }),
     };
+    return backend;
 }

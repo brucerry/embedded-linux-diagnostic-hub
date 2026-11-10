@@ -168,7 +168,7 @@ export async function buildLinuxNative(outputDirectory) {
     fs.fsyncSync(directoryFD);
     const info = {
         schemaVersion: 1,
-        abiVersion: 1,
+        abiVersion: 2,
         napiVersion: 8,
         statusVersion: 1,
         platform: 'linux',

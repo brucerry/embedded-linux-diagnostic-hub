@@ -65,6 +65,9 @@ export function captureLinuxNativeHost(input: LinuxNativeOps): LinuxNativeOps {
             host[key] = method(input, key);
         host.moveNoReplace =
             data(input, 'moveNoReplace') === null ? null : method(input, 'moveNoReplace');
+        const remove = Object.getOwnPropertyDescriptor(input, 'unlinkOwned');
+        host.unlinkOwned = !remove || (Object.hasOwn(remove, 'value') && remove.value === null)
+            ? null : method(input, 'unlinkOwned');
         return Object.freeze(host) as unknown as LinuxNativeOps;
     } catch {
         return refuse('ERR_DH_LINUX_DRIVER_HOST');
@@ -240,4 +243,19 @@ export function prepareLinuxNativeDriver(
             transaction: transaction?.summary() ?? null,
         }),
     });
+}
+
+/** Initial/no-menu current-payload uninstall; no implicit native load or generic cleanup fallback. */
+export function prepareLinuxNativeUninstallDriver(
+    input: {host: LinuxReviewHost;root: string},
+    window: LinuxNativeWindow,
+    operations: LinuxNativeOps,
+    actualOwner: LinuxModelOwner,
+) {
+    const selected = structuredClone(input), ops = captureLinuxNativeHost(operations);
+    if (ops.pid !== actualOwner.pid || ops.executable !== actualOwner.executable)
+        return refuse('ERR_DH_LINUX_DRIVER_RUNTIME');
+    const configuration = checkedLinuxModelConfiguration({host:selected.host,root:selected.root,
+        action:'uninstall-current',transactionId:ops.uuid(),installationId:ops.uuid(),owner:{...actualOwner}});
+    return createLinuxNativePreparationBackend(configuration,window,ops).initialUninstall();
 }

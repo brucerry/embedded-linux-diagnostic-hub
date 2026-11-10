@@ -111,13 +111,63 @@ static napi_value rename_noreplace(napi_env env, napi_callback_info info) {
     if (moved == 0) return result(env, DH_OK);
     return result(env, moved == -1 ? error_status(saved_errno) : DH_UNKNOWN);
 }
+static int expected_identity(napi_env env, napi_value value, uint64_t* output) {
+    double number;
+    if (napi_get_value_double(env, value, &number) != napi_ok || !isfinite(number) ||
+        number < 0 || number > 9007199254740991.0) return 0;
+    *output = (uint64_t)number;
+    return (double)*output == number;
+}
+/* Parent anchoring and the target precheck are not atomic compare-and-unlink.
+ * The concrete caller first NOREPLACE-moves a declared leaf into its fresh
+ * private disposal directory and verifies the moved identity/content. Only that
+ * cooperative, exclusively owned disposal slot is admitted by the caller. */
+static napi_value unlink_owned(napi_env env, napi_callback_info info) {
+    napi_value argv[6]; size_t argc = 6;
+    int parent = -1, kind = -1;
+    uint64_t device = 0, inode = 0;
+    char name[256];
+    struct stat directory, target;
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok || argc != 5 ||
+        !descriptor(env, argv[0], &parent) || !basename_utf8(env, argv[1], name) ||
+        !descriptor(env, argv[2], &kind) || (kind != 0 && kind != 1) ||
+        !expected_identity(env, argv[3], &device) ||
+        !expected_identity(env, argv[4], &inode) || inode == 0)
+        return result(env, DH_ARGUMENT);
+    const uid_t uid = getuid();
+    if (uid == 0 || uid != geteuid()) return result(env, DH_PERMISSION);
+    if (fstat(parent, &directory) != 0) return result(env, DH_BAD_FD);
+    const int flags = fcntl(parent, F_GETFD);
+    if (!S_ISDIR(directory.st_mode) || directory.st_nlink == 0 ||
+        directory.st_uid != uid || (directory.st_mode & 07777) != 0700)
+        return result(env, DH_PERMISSION);
+    if (flags < 0 || (flags & FD_CLOEXEC) == 0) return result(env, DH_BAD_FD);
+    if (fstatat(parent, name, &target, AT_SYMLINK_NOFOLLOW) != 0)
+        return result(env, error_status(errno));
+    if ((uint64_t)target.st_dev != device || (uint64_t)target.st_ino != inode ||
+        target.st_uid != uid || (target.st_mode & 07022) != 0 ||
+        (kind == 0 ? !S_ISREG(target.st_mode) || target.st_nlink != 1
+                   : !S_ISDIR(target.st_mode) || target.st_nlink == 0))
+        return result(env, DH_PERMISSION);
+    /* Exactly one direct syscall, no libc pathname fallback or EINTR retry. */
+    long removed;
+#ifdef SYS_unlinkat
+    removed = syscall(SYS_unlinkat, parent, name, kind == 1 ? AT_REMOVEDIR : 0);
+#else
+    return result(env, DH_UNSUPPORTED);
+#endif
+    const int saved_errno = errno;
+    if (removed == 0) return result(env, DH_OK);
+    return result(env, removed == -1 ? error_status(saved_errno) : DH_UNKNOWN);
+}
 static napi_value initialize(napi_env env, napi_value exports) {
-    napi_value abi, api, statuses, platform, arch, method;
-    if (napi_create_int32(env, 1, &abi) != napi_ok || napi_create_int32(env, 8, &api) != napi_ok ||
+    napi_value abi, api, statuses, platform, arch, method, remove_method;
+    if (napi_create_int32(env, 2, &abi) != napi_ok || napi_create_int32(env, 8, &api) != napi_ok ||
         napi_create_int32(env, 1, &statuses) != napi_ok ||
         napi_create_string_utf8(env, "linux", NAPI_AUTO_LENGTH, &platform) != napi_ok ||
         napi_create_string_utf8(env, "x64", NAPI_AUTO_LENGTH, &arch) != napi_ok ||
-        napi_create_function(env, "renameNoReplace", NAPI_AUTO_LENGTH, rename_noreplace, NULL, &method) != napi_ok) {
+        napi_create_function(env, "renameNoReplace", NAPI_AUTO_LENGTH, rename_noreplace, NULL, &method) != napi_ok ||
+        napi_create_function(env, "unlinkOwned", NAPI_AUTO_LENGTH, unlink_owned, NULL, &remove_method) != napi_ok) {
         napi_throw_error(env, "ERR_DH_RENAME_NAPI", "No-replace initialization unavailable");
         return NULL;
     }
@@ -127,7 +177,8 @@ static napi_value initialize(napi_env env, napi_value exports) {
         { "statusVersion", NULL, NULL, NULL, NULL, statuses, napi_enumerable, NULL },
         { "platform", NULL, NULL, NULL, NULL, platform, napi_enumerable, NULL },
         { "arch", NULL, NULL, NULL, NULL, arch, napi_enumerable, NULL },
-        { "renameNoReplace", NULL, NULL, NULL, NULL, method, napi_enumerable, NULL }
+        { "renameNoReplace", NULL, NULL, NULL, NULL, method, napi_enumerable, NULL },
+        { "unlinkOwned", NULL, NULL, NULL, NULL, remove_method, napi_enumerable, NULL }
     };
     if (napi_define_properties(env, exports, sizeof(properties) / sizeof(properties[0]), properties) != napi_ok ||
         napi_object_freeze(env, exports) != napi_ok) {

@@ -109,7 +109,7 @@ export interface LinuxModelPlan {
     menu?: LinuxMenuChoice;
     host: LinuxReviewHost;
     root: string;
-    action: 'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch';
+    action: 'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch' | 'uninstall-current';
     transactionId: string;
     installationId: string;
     owner: LinuxModelOwner;
@@ -837,7 +837,7 @@ function validateConfiguration(plan: LinuxModelConfiguration) {
         path.posix.basename(plan.root).startsWith('.DiagnosticHub-') ||
         !uuid.test(plan.transactionId) ||
         !uuid.test(plan.installationId) ||
-        !['install', 'repair', 'update', 'rollback', 'resume', 'launch'].includes(plan.action)
+        !['install', 'repair', 'update', 'rollback', 'resume', 'launch', 'uninstall-current'].includes(plan.action)
     )
         throw Error('model plan admission');
     owner(plan.owner);
@@ -928,7 +928,8 @@ class LinuxTransactionCore {
         try {
             plan = copy(input);
             validatePlan(plan);
-            if (plan.action === 'launch') throw Error('launch requires the owned-child controller');
+            if (plan.action === 'launch' || plan.action === 'uninstall-current')
+                throw Error('operation requires its separate owned controller');
             if (this.effects.kind !== this.effectKind)
                 throw Error('transaction effects kind differs');
             if (

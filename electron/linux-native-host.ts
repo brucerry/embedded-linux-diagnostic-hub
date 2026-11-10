@@ -5,7 +5,7 @@ import { constants as osConstants } from 'node:os';
 import { types } from 'node:util';
 import type { Stats } from 'node:fs';
 import { physicalFS } from './physical-fs.ts';
-import { checkedLinuxRenameBinding } from './linux-rename-noreplace.ts';
+import { checkedLinuxRenameBinding, checkedLinuxUnlinkBinding } from './linux-rename-noreplace.ts';
 import { linuxProcIdentity, type LinuxNativeOps } from './linux-native-backend.ts';
 import type { LinuxModelOwner } from './linux-transaction-model.ts';
 import {
@@ -330,6 +330,9 @@ export async function createLinuxNativeHost(
             arch: 'x64',
             napiVersion,
         });
+        const unlinkOwned = checkedLinuxUnlinkBinding(state.module.exports, {
+            platform: 'linux', arch: 'x64', napiVersion,
+        });
         state.stage = 'readback';
         checkParents();
         need(
@@ -355,6 +358,7 @@ export async function createLinuxNativeHost(
             later: (callback: () => void, milliseconds: number) => later(callback, milliseconds),
             cancel,
             moveNoReplace,
+            unlinkOwned,
         });
         state.stage = 'ready';
         return Object.freeze({ operations, owner, diagnostics });
