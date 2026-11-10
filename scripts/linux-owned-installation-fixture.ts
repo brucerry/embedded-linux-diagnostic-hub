@@ -99,7 +99,41 @@ export function linuxOwnedFixtureReview(
     );
 }
 
+type FixtureNonpassing = {
+    status: 'retained-nonpassing';
+    phase: string;
+    releaseAcceptance: false;
+};
+
 export async function runLinuxOwnedInstallationFixture(args: string[]) {
+    let expired!: (result: FixtureNonpassing) => void;
+    const deadline = new Promise<FixtureNonpassing>((resolve) => {
+        expired = resolve;
+    });
+    const work = {
+        pending: true,
+        outcome: null as Promise<
+            Awaited<ReturnType<typeof executeLinuxOwnedInstallationFixture>>
+        > | null,
+    };
+    owners.add(work); // Retain the actual work even after the public deadline outcome settles.
+    work.outcome = executeLinuxOwnedInstallationFixture(args, expired).then(
+        (result) => {
+            work.pending = false;
+            return result;
+        },
+        (error) => {
+            work.pending = false;
+            throw error;
+        },
+    );
+    return Promise.race([work.outcome, deadline]);
+}
+
+async function executeLinuxOwnedInstallationFixture(
+    args: string[],
+    expired: (result: FixtureNonpassing) => void,
+) {
     const selected = linuxOwnedFixtureArguments(args);
     const uid = process.getuid?.(),
         home = process.env.HOME ?? '';
@@ -147,6 +181,8 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
         if (!state.firstSet) {
             state.firstSet = true;
             state.first = x;
+        } else {
+            state.lateFailure ??= { value: x };
         }
     };
     const unknown = () =>
@@ -158,6 +194,11 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
     const hold = () => {
         state.keeper ??= setInterval(() => {}, 60000);
     };
+    const nonpassing = (): FixtureNonpassing => ({
+        status: 'retained-nonpassing',
+        phase: state.phase,
+        releaseAcceptance: false,
+    });
     const started = performance.now(),
         until = started + 9 * 60000;
     const gate = () =>
@@ -167,7 +208,8 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
         );
     const timer = setTimeout(() => {
         fail(Error('FIXTURE_DEADLINE'));
-        if (unknown()) hold();
+        hold(); // An unsettled work promise remains owned even when no resource has returned yet.
+        expired(nonpassing());
     }, until - started);
     function ancestry(directory: string) {
         gate();
@@ -468,6 +510,7 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
                     version,
                 );
             const { extractFile } = await import('@electron/asar'); // Data-only ASAR inspection, not application evaluation.
+            gate();
             const packageRaw = extractFile(sourceRoot + '/resources/app.asar', 'package.json');
             need(packageRaw.length <= 65536, 'FIXTURE_ASAR_CAP');
             const pkg = JSON.parse(packageRaw.toString('utf8'));
@@ -642,6 +685,14 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
             });
             state.child = child;
             state.transcript.push({ child, submission }); // Before any await/listener observation.
+            child.on('error', (error) => {
+                if (state.retired) {
+                    state.lateFailure ??= { value: error };
+                    return;
+                }
+                fail(error); // Before the shared observer can reduce the raw command failure.
+                if (unknown()) hold();
+            });
             let stdout = Buffer.alloc(0),
                 stderr = Buffer.alloc(0),
                 outEOF = false,
@@ -774,7 +825,6 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
             'FIXTURE_SOURCE_CHANGED',
         );
         state.phase = 'complete';
-        clearTimeout(timer);
         const result = {
             status: 'completed-controlled-install-update-rollback',
             sourceCommit: commit,
@@ -787,16 +837,20 @@ export async function runLinuxOwnedInstallationFixture(args: string[]) {
             releaseAcceptance: false,
         };
         write('records/final.json', result);
-        state.retired = true;
         return result;
     } catch (error) {
         fail(error);
         if (unknown()) hold();
-        else {
+        return nonpassing();
+    } finally {
+        if (!unknown()) {
             clearTimeout(timer);
+            if (state.keeper !== null) {
+                clearInterval(state.keeper);
+                state.keeper = null;
+            }
             state.retired = true;
         }
-        return { status: 'retained-nonpassing', phase: state.phase, releaseAcceptance: false };
     }
 }
 
