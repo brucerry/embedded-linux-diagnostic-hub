@@ -22,6 +22,7 @@ import { createOwnedWebCapabilities } from '../scripts/lib/owned-web-capabilitie
 import { localSourceProvider } from '../scripts/lib/committed-source-provider.mjs';
 import { observeSourceBridge } from '../scripts/lib/committed-source-bridge.mjs';
 import { startInstrumentedChildOutput } from '../scripts/lib/instrumented-gateway-output.mjs';
+import { startCurrentGatewayHealthRuntime } from '../scripts/lib/current-gateway-health-runtime.mjs';
 import {
     CURRENT_GATEWAY_BUILD_LEAF,
     readCurrentGatewayBuildFile,
@@ -32,7 +33,7 @@ const hash = (b) => createHash('sha256').update(b).digest('hex');
 const sri = (b) => 'sha512-' + createHash('sha512').update(b).digest('base64');
 const cliURL = new URL('../scripts/observe-gateway-current-install.mjs', import.meta.url);
 const cliText = readFileSync(cliURL, 'utf8');
-assert.equal(hash(cliText), '2528c2df6a376406433cbe115d66243e7285e2fe4ecde444919ee6a87358da77');
+assert.equal(hash(cliText), '37e217949ebc81e4b6f7d68a5dea293dce0a5c79d57d17214e9bfbeb1e1ad1fb');
 const tarText = readFileSync(
     new URL('./gateway-dependency-bytes.test.ts', import.meta.url),
     'utf8',
@@ -78,6 +79,8 @@ const declarations = [
     'cacheContentPath',
     'installAndObserve',
     'observeGatewayInstallFromCurrentJob',
+    'observeGatewayRuntimeFromCurrentJob',
+    'observeGatewayCurrentJob',
 ].map((n) => one(cliAST, cliAST.statements, n));
 const main = cliAST.statements.filter(ts.isIfStatement);
 assert.equal(main.length, 1);
@@ -99,6 +102,21 @@ const imports = {
     startDiagnosticGatewayCommand,
     createFinalGatewayObserver,
     startInstrumentedChildOutput,
+    startCurrentGatewayHealthRuntime,
+    createRequire: () => {
+        throw Error('Physical module context is forbidden in the memory projection');
+    },
+    http: {
+        request: () => {
+            throw Error('Physical HTTP is forbidden in the memory projection');
+        },
+    },
+    generateKeyPairSync: () => {
+        throw Error('Physical key generation is forbidden in the memory projection');
+    },
+    randomBytes: () => {
+        throw Error('Physical entropy is forbidden in the memory projection');
+    },
     CURRENT_GATEWAY_BUILD_LEAF,
     readCurrentGatewayBuildFile,
     validateCurrentGatewayBuildContext,
@@ -122,6 +140,7 @@ function project(options = {}) {
     };
     const context = vm.createContext({
         ...imports,
+        ...(options.imports ?? {}),
         Buffer,
         TextDecoder,
         JSON,
@@ -154,7 +173,7 @@ function project(options = {}) {
         declarations.join('\n').replaceAll('import.meta.url', JSON.stringify(cliURL.href)) +
         '\n' +
         report +
-        '\nglobalThis.control={installAndObserve,cacheContentPath,censusFilesystem,npmEnvironment,withoutTrustValues,entry:observeGatewayInstallFromCurrentJob,report,retained};';
+        '\nglobalThis.control={installAndObserve,cacheContentPath,censusFilesystem,npmEnvironment,withoutTrustValues,entry:observeGatewayInstallFromCurrentJob,runtimeEntry:observeGatewayRuntimeFromCurrentJob,report,retained};';
     const output = ts.transpileModule(text, {
         compilerOptions: {
             module: ts.ModuleKind.CommonJS,
@@ -181,8 +200,8 @@ const fixtureOutput = ts.transpileModule(
 new vm.Script(fixtureOutput).runInContext(fixtureContext);
 const { tar, members } = fixtureContext.authored;
 
-async function model() {
-    const p = project();
+async function model(options = {}) {
+    const p = project(options);
     const base = sourceFixture();
     const versions = [
         ['ssh2', '1.17.0'],
@@ -599,5 +618,126 @@ test('actual output reporter owns its keeper before writes and retains raw Error
         }
         assert.equal(writes, 1);
         assert.equal(p.actors(), 0);
+    }
+});
+
+test('actual runtime mode uses the same canonical census owner and retains exact returned observations only after closure', async () => {
+    let selected,
+        started = false,
+        close;
+    const closed = new Promise((resolve) => {
+        close = resolve;
+    });
+    const value = {
+        receipt: { authoredMemoryOnly: true, releaseAcceptance: false },
+        observation: { record: { authoredMemoryOnly: true, loadedDependencyMapping: null } },
+        fixture: { authoredMemoryOnly: true, releaseAcceptance: false },
+    };
+    const m = await model({
+        imports: {
+            createRequire(file) {
+                assert.equal(file, '/project/validation/gateway-runtime/install/package.json');
+                return () => {
+                    throw Error('No actual module load');
+                };
+            },
+            startCurrentGatewayHealthRuntime(selection, ports) {
+                started = true;
+                selected = selection;
+                assert.equal(selection.observer, m.state.observer);
+                assert.equal(
+                    selection.observer.snapshot().pendingIO +
+                        selection.observer.snapshot().descriptors,
+                    0,
+                );
+                assert.equal(m.state.archives.length, 5);
+                assert.equal(typeof ports.loadSSH2, 'function');
+                return {
+                    result: Promise.resolve(value),
+                    closed,
+                    snapshot: () => ({ authoredMemoryOnly: true }),
+                };
+            },
+        },
+    });
+    m.input.runtime = true;
+    m.input.runtimeDirectory = '/project/validation/gateway-runtime'; // Authored MapFS path, not host-isolation evidence.
+    const running = start(m);
+    try {
+        await m.submitted();
+        m.close();
+        for (let i = 0; i < 20000 && !started; i++) await Promise.resolve();
+        assert.equal(started, true);
+        assert.equal(selected.root, m.state.prepared.installRoot);
+        assert.equal(m.state.runtime.closed, false);
+        assert.equal(
+            m.f.filesystem.records.has(
+                '/project/validation/gateway-runtime/observations/runtime.json',
+            ),
+            false,
+        );
+        close();
+        const result = await running.work;
+        assert.equal(result.runtime, value);
+        assert.equal(m.state.runtime.closed, true);
+        for (const file of ['runtime.json', 'direct-child.json', 'unused-target.json'])
+            assert.ok(
+                m.f.filesystem.bytes('/project/validation/gateway-runtime/observations/' + file)
+                    .length > 0,
+            );
+        assert.equal(m.state.phase, 'canonical-health-direct-close-observed');
+        m.files.owner.assertSettled();
+    } finally {
+        close();
+        m.close();
+        await running.outcome;
+    }
+});
+
+test('failed runtime cannot publish successful observations or retire an unjoined owned runtime', async () => {
+    let started = false,
+        close;
+    const closed = new Promise((resolve) => {
+            close = resolve;
+        }),
+        failure = Error('authored memory runtime failure');
+    const m = await model({
+        imports: {
+            createRequire: () => () => {
+                throw Error('No actual module load');
+            },
+            startCurrentGatewayHealthRuntime() {
+                started = true;
+                return {
+                    result: Promise.reject(failure),
+                    closed,
+                    snapshot: () => ({ authoredMemoryOnly: true, failed: true }),
+                };
+            },
+        },
+    });
+    m.input.runtime = true;
+    m.input.runtimeDirectory = '/project/validation/gateway-runtime';
+    const running = start(m);
+    try {
+        await m.submitted();
+        m.close();
+        const outcome = await running.outcome;
+        assert.equal(started, true);
+        assert.equal(outcome.error, failure);
+        assert.equal(m.state.runtime.closed, false);
+        assert.equal(
+            m.f.filesystem.records.has(
+                '/project/validation/gateway-runtime/observations/runtime.json',
+            ),
+            false,
+        );
+        close();
+        await Promise.resolve();
+        assert.equal(m.state.runtime.closed, true);
+    } finally {
+        close();
+        m.close();
+        await running.outcome;
     }
 });

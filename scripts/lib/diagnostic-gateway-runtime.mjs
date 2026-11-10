@@ -60,7 +60,23 @@ export function gatewayInstallPlan(nodePath, npmPath, directory, owner) {
  * @param {null | {attemptId:string, target:{host:string,port:number,fingerprint:string,username:string,password:string}, expectedProbes:Array<{id:string,status:string,exitCode:number,stdoutSHA256:string,stderrSHA256:string}>}} [session]
  */
 export function startDiagnosticGatewayRuntime(input, ports, session = null) {
-    assert.deepEqual(Object.keys(input).sort(), ['nodePath', 'port', 'root', 'token', 'version']);
+    assert.deepEqual(
+        Object.keys(input).sort(),
+        session === null
+            ? ['nodePath', 'port', 'root', 'target', 'token', 'version']
+            : ['nodePath', 'port', 'root', 'token', 'version'],
+    );
+    if (session === null) {
+        // A physical caller must supply its actual owned fixture. Never invent a trusted key/port.
+        assert.deepEqual(Object.keys(input.target).sort(), ['fingerprint', 'host', 'port']);
+        assert.equal(input.target.host, '127.0.0.1');
+        assert.ok(
+            Number.isInteger(input.target.port) &&
+                input.target.port >= 1024 &&
+                input.target.port <= 65535,
+        );
+        assert.match(input.target.fingerprint, /^SHA256:[A-Za-z0-9+/]{43}$/);
+    }
     assert.equal(input.port, 58731);
     assert.match(input.token, /^[a-f0-9]{64}$/);
     assert.equal(input.version, '0.6.0');
@@ -81,7 +97,7 @@ export function startDiagnosticGatewayRuntime(input, ports, session = null) {
         );
     }
     ports = Object.freeze({ ...ports });
-    const selected = { ...input },
+    const selected = { ...input, ...(session === null ? { target: { ...input.target } } : {}) },
         result = deferred(),
         closed = deferred(),
         ready = deferred(),
@@ -292,13 +308,7 @@ export function startDiagnosticGatewayRuntime(input, ports, session = null) {
             HUB_GATEWAY_PORT: String(selected.port),
             HUB_GATEWAY_TOKEN: selected.token,
             HUB_ALLOWED_ORIGINS: 'http://127.0.0.1',
-            HUB_TARGETS_JSON: JSON.stringify([
-                preparedSession?.target ?? {
-                    host: '127.0.0.1',
-                    port: 1,
-                    fingerprint: 'SHA256:' + 'A'.repeat(43),
-                },
-            ]),
+            HUB_TARGETS_JSON: JSON.stringify([preparedSession?.target ?? selected.target]),
         };
         child = ports.launch(selected.nodePath, [selected.root + '/dist-gateway/main.cjs'], {
             cwd: selected.root,

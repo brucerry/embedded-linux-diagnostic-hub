@@ -4,7 +4,9 @@ import * as fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
+import * as http from 'node:http';
 import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { createOwnedWebFiles } from './lib/owned-web-files.mjs';
@@ -18,6 +20,7 @@ import { gatewayInstallPlan } from './lib/diagnostic-gateway-runtime.mjs';
 import { startDiagnosticGatewayCommand } from './lib/diagnostic-gateway-command.mjs';
 import { createFinalGatewayObserver } from './lib/final-gateway-runtime.mjs';
 import { startInstrumentedChildOutput } from './lib/instrumented-gateway-output.mjs';
+import { startCurrentGatewayHealthRuntime } from './lib/current-gateway-health-runtime.mjs';
 import {
     CURRENT_GATEWAY_BUILD_LEAF,
     readCurrentGatewayBuildFile,
@@ -141,7 +144,10 @@ async function installAndObserve(state, input, filesystem, writeExclusive, comma
         .filter((name) => name && !lock.packages[name].optional)
         .sort();
     assert.equal(required.length, 5, 'The current Gateway has five required original archives.');
-    const directory = input.root + '/validation/gateway-runtime';
+    const directory =
+        input.runtime === true
+            ? input.runtimeDirectory
+            : input.root + '/validation/gateway-runtime';
     state.phase = 'prepare-installation';
     state.prepared = await prepareDiagnosticGatewayInstall(
         input.archive,
@@ -250,13 +256,92 @@ async function installAndObserve(state, input, filesystem, writeExclusive, comma
     );
     gate(state);
     assert.equal(observer.snapshot().pendingIO + observer.snapshot().descriptors, 0);
+    let runtime;
+    if (input.runtime === true) {
+        state.phase = 'canonical-runtime';
+        const lease = { owner: null, closed: false };
+        state.runtime = lease; // Before module/key/listener/child acquisition can become uncertain.
+        const installedRequire = createRequire(state.prepared.installRoot + '/package.json');
+        lease.owner = startCurrentGatewayHealthRuntime(
+            {
+                root: state.prepared.installRoot,
+                nodePath: input.nodePath,
+                version: record.context.version,
+                observer,
+            },
+            {
+                ...commandPorts,
+                request: (...args) => http.request(...args),
+                keyPair: () => generateKeyPairSync('rsa', { modulusLength: 2048 }),
+                randomBytes,
+                loadSSH2() {
+                    // Data-only Node resolution must still find optional native paths absent.
+                    // No preload, loader hook, alternate module namespace or package substitution.
+                    for (const [parent, specifier] of [
+                        ['lib/protocol/constants.js', 'cpu-features'],
+                        ['lib/protocol/crypto.js', './crypto/build/Release/sshcrypto.node'],
+                    ]) {
+                        const scoped = createRequire(
+                            state.prepared.installRoot + '/node_modules/ssh2/' + parent,
+                        );
+                        let absent = false;
+                        try {
+                            scoped.resolve(specifier);
+                        } catch (error) {
+                            if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+                            absent = true;
+                        }
+                        assert.ok(absent, 'Unexpected optional native dependency resolution.');
+                    }
+                    const ssh2 = installedRequire('ssh2'),
+                        crypto = installedRequire(
+                            state.prepared.installRoot +
+                                '/node_modules/ssh2/lib/protocol/crypto.js',
+                        );
+                    assert.equal(crypto.bindingAvailable, false);
+                    return { ssh2, initialization: crypto.init };
+                },
+            },
+        );
+        void lease.owner.closed.then(
+            () => {
+                lease.closed = true;
+            },
+            (error) => fail(state, error),
+        );
+        runtime = await lease.owner.result;
+        await lease.owner.closed;
+        gate(state);
+        for (const [name, value] of [
+            ['runtime.json', runtime.receipt],
+            ['direct-child.json', runtime.observation.record],
+            ['unused-target.json', runtime.fixture],
+        ]) {
+            await writeExclusive(
+                directory + '/observations/' + name,
+                Buffer.from(JSON.stringify(value) + '\n'),
+            );
+            gate(state);
+        }
+    }
     state.phase = 'built-census-only';
-    return { installation: state.installation, dependencyOrigin: state.origin };
+    if (runtime) state.phase = 'canonical-health-direct-close-observed';
+    return {
+        installation: state.installation,
+        dependencyOrigin: state.origin,
+        ...(runtime ? { runtime } : {}),
+    };
 }
 
 /** Physical same-job entry. Metadata preconditions remain separate from GitHub authentication.
  * No supplied input paths, fabricated GitHub variables, old records or runtime activation. */
 export async function observeGatewayInstallFromCurrentJob() {
+    return observeGatewayCurrentJob(false);
+}
+export async function observeGatewayRuntimeFromCurrentJob() {
+    return observeGatewayCurrentJob(true);
+}
+async function observeGatewayCurrentJob(runtime) {
     assert.equal(activated, false, 'Current-job install entry is one-use.');
     activated = true;
     const state = {
@@ -276,6 +361,7 @@ export async function observeGatewayInstallFromCurrentJob() {
         outputAttempted: false,
         keeper: null,
         retired: false,
+        runtime: null,
     };
     const owner = Object.freeze({
         snapshot: () =>
@@ -288,6 +374,7 @@ export async function observeGatewayInstallFromCurrentJob() {
                 observer: state.observer?.snapshot() ?? null,
                 loadedCodeObserved: false,
                 runtimeGCObserved: false,
+                runtime: state.runtime?.owner?.snapshot() ?? null,
                 wholeGroupRetirement: null,
                 releaseAcceptance: false,
             }),
@@ -328,7 +415,12 @@ export async function observeGatewayInstallFromCurrentJob() {
         opendir: (...args) => nativeCall(async () => handlePorts(await fs.opendir(...args), true)),
     };
     function known() {
-        if (state.pending || state.commands.some((x) => !x.owner || !x.closed)) return false;
+        if (
+            state.pending ||
+            state.commands.some((x) => !x.owner || !x.closed) ||
+            (state.runtime && !state.runtime.closed)
+        )
+            return false;
         try {
             capabilities?.assertSettled();
             files?.owner.assertSettled();
@@ -353,7 +445,8 @@ export async function observeGatewayInstallFromCurrentJob() {
         assert.equal(process.arch, 'x64');
         assert.equal(process.version, 'v24.22.0');
         assert.deepEqual(process.execArgv, []);
-        assert.equal(process.argv.length, 2);
+        assert.equal(process.argv.length, runtime ? 3 : 2);
+        if (runtime) assert.equal(process.argv[2], '--runtime');
         const uid = process.getuid();
         assert.ok(Number.isSafeInteger(uid) && uid > 0);
         for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH'])
@@ -388,6 +481,32 @@ export async function observeGatewayInstallFromCurrentJob() {
         assert.equal(context.event, 'push');
         assert.equal(event.after, context.sha);
         assert.equal(event.ref, context.ref);
+        let runtimeDirectory;
+        if (runtime) {
+            // Build tools include optional packages; a child installation under the checkout
+            // would inherit their Node lookup paths. Use a NEW job-temp namespace instead.
+            const temporary = await io.realpath(env.RUNNER_TEMP);
+            assert.equal(temporary, env.RUNNER_TEMP);
+            assert.ok(temporary !== root && !temporary.startsWith(root + '/'));
+            const info = await io.lstat(temporary);
+            assert.ok(
+                info.isDirectory() &&
+                    !info.isSymbolicLink() &&
+                    info.uid === uid &&
+                    !(info.mode & 0o7022),
+            );
+            const namespace =
+                temporary +
+                '/diagnostic-hub-gateway-' +
+                context.runId +
+                '-attempt-' +
+                context.runAttempt;
+            await io.mkdir(namespace);
+            gate(state); // EEXIST refuses old data; no adoption or retry.
+            await io.mkdir(namespace + '/validation');
+            gate(state);
+            runtimeDirectory = namespace + '/validation/gateway-runtime';
+        }
         const nodePath = await io.realpath(process.execPath);
         assert.equal(nodePath, process.execPath);
         const gitPath = await io.realpath('/usr/bin/git');
@@ -518,6 +637,8 @@ export async function observeGatewayInstallFromCurrentJob() {
                 eventBytes,
                 toolchainOriginals,
                 environment: npmEnvironment(environment, env),
+                runtime,
+                runtimeDirectory,
             },
             capabilities.filesystem,
             (file, bytes) => capabilities.filesystem.writeFile(file, bytes, { flag: 'wx' }),
@@ -610,12 +731,17 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         }
     }
     try {
-        await observeGatewayInstallFromCurrentJob();
+        const runtime = process.argv[2] === '--runtime';
+        await (runtime
+            ? observeGatewayRuntimeFromCurrentJob()
+            : observeGatewayInstallFromCurrentJob());
         attempted = true;
         await report(
             process.stdout,
             Buffer.from(
-                'Gateway canonical install census and original dependency bytes compared; built-only, no runtime/GC/release acceptance.\n',
+                runtime
+                    ? 'Gateway canonical install, health/auth and owned direct close observed; no SSH connection, GC or release acceptance.\n'
+                    : 'Gateway canonical install census and original dependency bytes compared; built-only, no runtime/GC/release acceptance.\n',
             ),
         );
     } catch {

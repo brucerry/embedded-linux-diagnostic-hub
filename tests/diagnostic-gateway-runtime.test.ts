@@ -33,6 +33,8 @@ const input = () => ({
     port: 58731,
     token: 'a'.repeat(64),
     version: '0.6.0',
+    // Authored memory-only target, never a trusted physical device configuration.
+    target: { host: '127.0.0.1', port: 60001, fingerprint: 'SHA256:' + 'B'.repeat(43) },
 });
 function fixture() {
     const child: any = new EventEmitter(),
@@ -420,4 +422,18 @@ test('wrong archive bytes fail before directory creation or writes', async () =>
         ),
     );
     assert.equal(fs.records.has('/project/validation/gateway-runtime'), false);
+});
+
+test('health-only runtime requires an explicit loopback fixture target before any acquisition', () => {
+    for (const mode of ['missing', 'host', 'port', 'fingerprint']) {
+        const selected: any = input(),
+            f = fixture();
+        if (mode === 'missing') delete selected.target;
+        if (mode === 'host') selected.target.host = 'untrusted-target';
+        if (mode === 'port') selected.target.port = 1;
+        if (mode === 'fingerprint') selected.target.fingerprint = 'placeholder';
+        assert.throws(() => startDiagnosticGatewayRuntime(selected, f.ports));
+        assert.equal(f.calls.length, 0);
+        assert.equal(f.timers.length, 0);
+    }
 });
