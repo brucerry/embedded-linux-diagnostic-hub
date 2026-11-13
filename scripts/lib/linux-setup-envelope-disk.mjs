@@ -149,7 +149,13 @@ export function createLinuxEnvelopeDisk() {
         if (
             process.platform !== 'linux' ||
             process.arch !== 'x64' ||
-            process.versions.electron ||
+            (process.versions.electron &&
+                !(
+                    p.appRunSource === 'resources/linux-installed-AppRun' &&
+                    process.env.ELECTRON_RUN_AS_NODE === '1' &&
+                    process.execPath === p.sourceRoot + '/diagnostic-hub' &&
+                    process.argv[1] === p.sourceRoot + '/resources/linux-setup-bootstrap.cjs'
+                )) ||
             !process.getuid ||
             !process.geteuid ||
             process.getuid() !== p.uid ||
@@ -334,10 +340,11 @@ export function createLinuxEnvelopeDisk() {
         await ancestors(p, directory);
     }
     async function tree(p, base) {
+        const expectedFiles = base === p.sourceRoot && p.inputFiles ? p.inputFiles : p.files;
         const entries = [],
             identities = [];
         const children = new Map([['', new Set()]]);
-        for (const file of p.files) {
+        for (const file of expectedFiles) {
             const parts = file.path.split('/');
             let directory = '';
             for (let at = 0; at < parts.length; at++) {
@@ -355,7 +362,7 @@ export function createLinuxEnvelopeDisk() {
             if (directory)
                 entries.push({ kind: 'directory', path: directory, mode: observed.mode & 0o777 });
         }
-        for (const file of p.files) {
+        for (const file of expectedFiles) {
             const full = path.posix.join(base, file.path),
                 observed = await digest(p, full, file);
             entries.push({
@@ -531,7 +538,10 @@ export function createLinuxEnvelopeDisk() {
                     throw Error('LINUX_OBSERVATION_ARCHIVE_CHANGED');
                 await closed(handle); // Success only; uncertain stream paths keep their registered handle.
                 const mapped = normalizeLinuxPackagerCensus(census, p.archive.asset);
-                assertLinuxObservedMembers(p, mapped.payloadEntries);
+                assertLinuxObservedMembers(
+                    p.inputFiles ? { ...p, files: p.inputFiles } : p,
+                    mapped.payloadEntries,
+                );
                 stage = 'tree';
                 const base = path.posix.join(p.outputRoot, 'app');
                 await ancestors(p, base);
@@ -689,7 +699,10 @@ export function createLinuxEnvelopeDisk() {
             context(p);
             await digest(
                 p,
-                path.posix.join(p.sourceRoot, file.path),
+                path.posix.join(
+                    p.sourceRoot,
+                    p.appRunSource && file.path === 'AppRun' ? p.appRunSource : file.path,
+                ),
                 file,
                 path.posix.join(p.outputRoot, 'app', file.path),
             );

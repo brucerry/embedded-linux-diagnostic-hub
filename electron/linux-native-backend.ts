@@ -5,9 +5,11 @@ import type { Stats, Dir } from 'node:fs';
 import { physicalFS } from './physical-fs.ts';
 import {
     checkedLinuxModelPlan,
+    checkedLinuxModelConfiguration,
     checkedLinuxModelView,
     linuxModelReviewSHA256,
     type LinuxModelPlan,
+    type LinuxModelConfiguration,
     type LinuxModelScope,
     type LinuxModelView,
     type LinuxModelSource,
@@ -18,6 +20,11 @@ import {
     type LinuxModelLease,
     type LinuxReservationIdentity,
     type LinuxMemoryEffects,
+    type LinuxRetainedGeneration,
+    MAX_LINUX_RETAINED_GENERATIONS,
+    assertLinuxInitialFinalizePreimages,
+    assertLinuxFinalizePreimages,
+    type LinuxModelCleanup,
 } from './linux-transaction-model.ts';
 import {
     INSTALLATION_PRODUCT,
@@ -29,6 +36,25 @@ import {
     type InstallationManifest,
 } from '../shared/installation.ts';
 import { SETUP_OWNER, SETUP_PAYLOAD } from './installation-maintenance.ts';
+import { createLinuxInitialUninstall } from './linux-initial-uninstall.ts';
+import {
+    createLinuxRetainedCleanup,
+    checkedLinuxRetainedSealIntent,
+    type LinuxRetainedSealIntent,
+    type LinuxRetainedCleanupSnapshot,
+    type LinuxRetainedCleanupEntry,
+    bindLinuxSealInterruption,
+    isLinuxSealInterruption,
+    type LinuxSealInterruptionSelection,
+    type LinuxSealInterruptionRead,
+    type LinuxSealInterruption,
+} from './linux-retained-cleanup.ts';
+export {
+    createLinuxSealInterruptionSelection,
+    isLinuxSealInterruption,
+    type LinuxSealInterruptionSelection,
+    type LinuxSealInterruption,
+} from './linux-retained-cleanup.ts';
 import {
     checkedLinuxMenuRecord,
     desiredLinuxMenu,
@@ -80,6 +106,8 @@ export interface LinuxNativeOps {
               destinationParentFD: number,
               destinationName: string,
           ) => void);
+    /** ABI2 only. Concrete removal admits only a freshly quarantined/verified private slot. */
+    unlinkOwned?: null | import('./linux-rename-noreplace.ts').LinuxUnlinkOwned;
 }
 export interface LinuxNativeWindow {
     startedMs: number;
@@ -149,10 +177,47 @@ export function createLinuxNativeBackend(
     input: LinuxModelPlan,
     window: LinuxNativeWindow,
     supplied?: LinuxNativeOps,
+    sealInterruptionSelection?: LinuxSealInterruptionSelection,
 ) {
-    const plan = checkedLinuxModelPlan(input),
-        ops = supplied ?? defaultOps(),
-        fs = ops.fs,
+    const plan = checkedLinuxModelPlan(input);
+    return createBackend(
+        plan,
+        window,
+        supplied ?? defaultOps(),
+        false,
+        Boolean(plan.review.history),
+        undefined,
+        sealInterruptionSelection,
+    );
+}
+/** Own a real read-only preparation before a prompt. No fabricated review or consent is supplied. */
+export function createLinuxNativePreparationBackend(
+    input: LinuxModelConfiguration,
+    window: LinuxNativeWindow,
+    supplied: LinuxNativeOps,
+    menuDataHome?: string,
+) {
+    return createBackend(
+        checkedLinuxModelConfiguration(input),
+        window,
+        supplied,
+        true,
+        false,
+        menuDataHome,
+    );
+}
+function createBackend(
+    selected: LinuxModelConfiguration,
+    window: LinuxNativeWindow,
+    ops: LinuxNativeOps,
+    preparing: boolean,
+    retainedHistory = false,
+    menuDataHome?: string,
+    sealInterruptionSelection?: LinuxSealInterruptionSelection,
+) {
+    let plan = selected;
+    const continuation = preparing || retainedHistory;
+    const fs = ops.fs,
         C = fs.constants;
     if (ops.platform !== 'linux' || ops.arch !== 'x64') throw Error('NATIVE_UNSUPPORTED_PLATFORM');
     if (
@@ -177,7 +242,7 @@ export function createLinuxNativeBackend(
         uid: plan.host.uid,
         key: 'dh-linux-' + hash(plan.host.uid + '\0' + plan.root),
     };
-    const menuPaths = plan.menu ? linuxMenuPaths(plan, work) : null;
+    let menuPaths = plan.menu ? linuxMenuPaths(plan, work) : null;
     const state = {
         failed: false,
         code: 'UNSTARTED',
@@ -189,11 +254,17 @@ export function createLinuxNativeBackend(
         timers: new Set<ReturnType<typeof setTimeout>>(),
         allocations: new Set<string>(),
         lastReturned: null as unknown,
+        primarySet: false,
+        primary: undefined as unknown,
+        releaseKnown: false,
+        finalizeSubmitted: false,
         lateEvents: 0,
     };
     let attempted = false,
         lease: LinuxModelLease | null = null,
         leaseIdentity: LinuxReservationIdentity | null = null;
+    let retainedCleanup: ReturnType<typeof createLinuxRetainedCleanup> | null = null;
+    const cleanupReaders = new Map<string, ReturnType<typeof createLinuxRetainedCleanup>>();
     const fail = (code: string): never => {
         state.failed = true;
         state.code = code;
@@ -205,6 +276,18 @@ export function createLinuxNativeBackend(
         if (!Number.isFinite(now) || now < window.startedMs || now >= window.deadlineMs)
             fail('NATIVE_DEADLINE');
     };
+    let readSealInterruption: (() => LinuxSealInterruptionRead) | null = null;
+    const sealInterruption =
+        sealInterruptionSelection !== undefined
+            ? bindLinuxSealInterruption(
+                  sealInterruptionSelection,
+                  selected as LinuxModelPlan,
+                  () => {
+                      if (!readSealInterruption) return fail('NATIVE_FINALIZE_INTERRUPTION_STAGE');
+                      return readSealInterruption();
+                  },
+              )
+            : null;
     const call = <T>(
         stage: string,
         operation: () => T,
@@ -215,7 +298,11 @@ export function createLinuxNativeBackend(
         let value: T;
         try {
             value = operation();
-        } catch {
+        } catch (error) {
+            if (!state.primarySet) {
+                state.primarySet = true;
+                state.primary = error;
+            }
             return fail('NATIVE_IO_UNKNOWN');
         }
         state.lastReturned = value;
@@ -263,6 +350,8 @@ export function createLinuxNativeBackend(
             !Number.isSafeInteger(value.ino) ||
             value.ino <= 0 ||
             value.dev < 0 ||
+            !Number.isSafeInteger(value.nlink) ||
+            value.nlink < 1 ||
             (inside(plan.host.home, logical)
                 ? value.uid !== plan.host.uid
                 : value.uid !== 0 && value.uid !== plan.host.uid) ||
@@ -322,6 +411,27 @@ export function createLinuxNativeBackend(
         return {
             fd,
             check,
+            acknowledgeDirectoryLinks(changes: readonly { path: string; delta: number }[]) {
+                for (const item of held) {
+                    const delta = changes
+                        .filter((change) => change.path === item.logical)
+                        .reduce((sum, change) => sum + change.delta, 0);
+                    if (!delta) continue;
+                    const active = fstat(item.fd);
+                    const expectedLinks = item.before.nlink === 1 ? 1 : item.before.nlink + delta;
+                    if (
+                        active.dev !== item.before.dev ||
+                        active.ino !== item.before.ino ||
+                        active.uid !== item.before.uid ||
+                        active.mode !== item.before.mode ||
+                        active.nlink !== expectedLinks ||
+                        active.nlink < 1
+                    )
+                        fail('NATIVE_PARENT_CHANGED');
+                    item.before = active;
+                }
+                check();
+            },
             finish() {
                 check();
                 for (const item of held.reverse()) close(item.fd);
@@ -610,13 +720,23 @@ export function createLinuxNativeBackend(
             ),
         };
     };
-    const activity = (): LinuxModelView['activity'] => {
-        const result: LinuxModelView['activity'] = {
+    const activity = (retained: string[] = []) => {
+        const locations = {
+            root: fixed.root,
+            stage: fixed.stage,
+            previous: fixed.previous,
+            ...Object.fromEntries(retained.map((file, index) => ['retained-' + index, file])),
+        };
+        const result: Record<string, 'inactive' | 'active' | 'unknown'> = {
             root: 'inactive',
             stage: 'inactive',
             previous: 'inactive',
+            ...Object.fromEntries(
+                retained.map((_, index) => ['retained-' + index, 'inactive' as const]),
+            ),
         };
-        const unknown = () => ({ root: 'unknown', stage: 'unknown', previous: 'unknown' }) as const;
+        const unknown = () =>
+            Object.fromEntries(Object.keys(locations).map((key) => [key, 'unknown' as const]));
         const before = names('/proc', MAX_PIDS + 1024).filter((name) => /^[1-9][0-9]*$/.test(name));
         if (before.length > MAX_PIDS) return unknown();
         for (const text of before) {
@@ -650,8 +770,8 @@ export function createLinuxNativeBackend(
             );
             if (first.startTicks !== last.startTicks || !sameInode(owner, stat(directory)))
                 return unknown();
-            for (const slot of ['root', 'stage', 'previous'] as const)
-                if (inside(fixed[slot], executable)) result[slot] = 'active';
+            for (const [slot, location] of Object.entries(locations))
+                if (inside(location, executable)) result[slot] = 'active';
         }
         if (
             JSON.stringify(before) !==
@@ -678,8 +798,7 @@ export function createLinuxNativeBackend(
         parent.finish();
         return { identity: id(before), bytes: bytes.length, sha256: hash(bytes) };
     };
-    const observe = (scope: LinuxModelScope): LinuxModelView => {
-        scopeCheck(scope);
+    const sourceObservation = (): LinuxModelSource => {
         procOwner();
         const sourceStat = stat(plan.host.sourceRoot);
         plainDirectory(sourceStat, plan.host.sourceRoot);
@@ -689,34 +808,231 @@ export function createLinuxNativeBackend(
         if (release.version !== plan.host.version) fail('NATIVE_SOURCE_VERSION');
         inventory(plan.host.sourceRoot, release, [SETUP_PAYLOAD]);
         if (!stable(sourceStat, stat(plan.host.sourceRoot))) fail('NATIVE_SOURCE_CHANGED');
+        return {
+            identity: id(sourceStat),
+            manifest: release,
+            verifiedManifestSHA256: manifestHash(release),
+        };
+    };
+    const observe = (scope: LinuxModelScope): LinuxModelView => {
+        scopeCheck(scope);
+        if (plan.action !== 'uninstall-current') {
+            if (maybeStat(work + '-uninstall') && !completedRemoval)
+                return fail('NATIVE_REMOVAL_PENDING_OR_RETAINED');
+            completedRemoval?.completed();
+        }
+        const source = sourceObservation();
         const workStat = maybeStat(work);
         let journal: LinuxModelJournal | null = null;
+        let journalOriginal: { base64: string; sha256: string } | null = null;
+        let completed: NonNullable<LinuxModelView['history']>['completed'] = null;
+        let lineage: LinuxRetainedGeneration[] = [];
         if (workStat) {
             plainDirectory(workStat, work, true);
+            const entries = names(
+                work,
+                (menuPaths ? 5 : 3) + (continuation ? 1 + MAX_LINUX_RETAINED_GENERATIONS * 2 : 0),
+            );
+            if (!continuation) {
+                const legacy = new Set([
+                    'journal.json',
+                    path.posix.basename(fixed.stage),
+                    path.posix.basename(fixed.previous),
+                    ...(menuPaths ? ['menu-candidate.desktop', 'menu-previous.desktop'] : []),
+                ]);
+                if (entries.some((name) => !legacy.has(name))) fail('NATIVE_FOREIGN_MAINTENANCE');
+            }
+            if (continuation && maybeStat(work + '/completed-journal.json')) {
+                const bytes = read(work + '/completed-journal.json', 8192);
+                completed = {
+                    journal: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)),
+                    base64: bytes.toString('base64'),
+                    sha256: hash(bytes),
+                };
+            }
+            if (maybeStat(work + '/journal.json')) {
+                if (continuation) {
+                    const bytes = read(work + '/journal.json', 8192);
+                    journal = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+                    journalOriginal = { base64: bytes.toString('base64'), sha256: hash(bytes) };
+                } else journal = json(work + '/journal.json') as LinuxModelJournal;
+            } else if (
+                !completed &&
+                !state.allocations.has(work) &&
+                !(
+                    plan.action === 'finalize' &&
+                    maybeStat(work + '-finalize-' + plan.transactionId + '/seal-intent.json')
+                )
+            )
+                fail('NATIVE_FOREIGN_MAINTENANCE');
+            const archives = entries.filter((name) =>
+                /^retained-journal-[a-f0-9-]{36}\.json$/.test(name),
+            );
+            if (
+                archives.length > MAX_LINUX_RETAINED_GENERATIONS ||
+                (archives.length && (!completed || menuPaths))
+            )
+                fail('NATIVE_RETAINED_HISTORY');
+            const unordered: LinuxRetainedGeneration[] = archives.map((name) => {
+                const bytes = read(work + '/' + name, 8192),
+                    saved = JSON.parse(
+                        new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+                    ) as LinuxModelJournal;
+                if (
+                    typeof saved.transactionId !== 'string' ||
+                    name !== 'retained-journal-' + saved.transactionId + '.json' ||
+                    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+                        saved.transactionId,
+                    )
+                )
+                    return fail('NATIVE_RETAINED_HISTORY');
+                const previous = payload(work + '/previous-' + saved.transactionId);
+                if (!previous) return fail('NATIVE_RETAINED_HISTORY');
+                return {
+                    archived: true,
+                    base64: bytes.toString('base64'),
+                    sha256: hash(bytes),
+                    journal: saved,
+                    previous,
+                    activity: 'inactive',
+                };
+            });
+            let preceding = completed?.journal;
+            while (unordered.length) {
+                const next = unordered.filter(
+                    (entry) =>
+                        entry.previous.transactionId === preceding?.transactionId &&
+                        entry.journal.previousSHA256 === preceding?.candidateSHA256,
+                );
+                if (next.length !== 1) fail('NATIVE_RETAINED_CHAIN');
+                const selected = next[0];
+                lineage.push(selected);
+                unordered.splice(unordered.indexOf(selected), 1);
+                preceding = selected.journal;
+            }
+            if (
+                continuation &&
+                completed &&
+                journal &&
+                journal.transactionId !== plan.transactionId &&
+                journal.phase === 'candidate-active' &&
+                journal.previousSHA256 !== null
+            ) {
+                if (
+                    menuPaths ||
+                    lineage.length >= MAX_LINUX_RETAINED_GENERATIONS ||
+                    !journalOriginal
+                )
+                    fail('NATIVE_RETAINED_HISTORY');
+                const previous = payload(work + '/previous-' + journal.transactionId);
+                if (!previous) fail('NATIVE_RETAINED_HISTORY');
+                lineage.push({
+                    archived: false,
+                    ...journalOriginal!,
+                    journal,
+                    previous: previous!,
+                    activity: 'inactive',
+                });
+            }
             const allowed = new Set([
                 'journal.json',
+                ...(continuation ? ['completed-journal.json'] : []),
                 path.posix.basename(fixed.stage),
                 path.posix.basename(fixed.previous),
                 ...(menuPaths ? ['menu-candidate.desktop', 'menu-previous.desktop'] : []),
+                ...lineage.flatMap((entry) => [
+                    'previous-' + entry.journal.transactionId,
+                    ...(entry.archived
+                        ? ['retained-journal-' + entry.journal.transactionId + '.json']
+                        : []),
+                ]),
             ]);
-            if (names(work, menuPaths ? 5 : 3).some((name) => !allowed.has(name)))
-                fail('NATIVE_FOREIGN_MAINTENANCE');
-            if (maybeStat(work + '/journal.json'))
-                journal = json(work + '/journal.json') as LinuxModelJournal;
-            else if (!state.allocations.has(work)) fail('NATIVE_FOREIGN_MAINTENANCE');
+            if (entries.some((name) => !allowed.has(name))) fail('NATIVE_FOREIGN_MAINTENANCE');
+        }
+        const sampledActivity = activity(
+            lineage.map((entry) => work + '/previous-' + entry.journal.transactionId),
+        );
+        lineage = lineage.map((entry, index) => ({
+            ...entry,
+            activity: sampledActivity['retained-' + index],
+        }));
+        const cleanupTransaction =
+            journal?.phase === 'candidate-confirmed'
+                ? journal.transactionId
+                : completed?.journal.phase === 'candidate-confirmed'
+                  ? completed.journal.transactionId
+                  : journal && maybeStat(work + '-finalize-' + journal.transactionId)
+                    ? journal.transactionId
+                    : plan.action === 'finalize' &&
+                        maybeStat(work + '-finalize-' + plan.transactionId + '/seal-intent.json')
+                      ? plan.transactionId
+                      : null;
+        let cleanup: LinuxModelCleanup | undefined;
+        if (cleanupTransaction) {
+            let reader = cleanupReaders.get(cleanupTransaction);
+            if (!reader) {
+                reader = cleanupController(cleanupTransaction);
+                cleanupReaders.set(cleanupTransaction, reader);
+            }
+            const stored = reader.stored();
+            if (!stored.progress || !stored.rawSnapshot)
+                return fail('NATIVE_FINALIZE_LEDGER_REQUIRED');
+            cleanup = {
+                configuration: copy(stored.snapshot.configuration),
+                initial: copy(stored.snapshot.initial),
+                snapshotSHA256: hash(stored.rawSnapshot),
+                entries: stored.snapshot.entries.length,
+                progress: {
+                    phase: stored.progress.phase,
+                    index: stored.progress.index,
+                    leaf: stored.progress.leaf,
+                },
+                ...(stored.seal
+                    ? { seal: { intentSHA256: stored.seal.intentSHA256, state: stored.seal.state } }
+                    : {}),
+            };
+            // The ledger verifies the physical remaining predecessor; this descriptor is historical.
+            const initial = stored.snapshot.initial,
+                original = initial.history!.journalOriginal!,
+                initialCompleted = initial.history!.completed!,
+                ledger = work + '-finalize-' + cleanupTransaction;
+            const savedCurrent = ledger + '/original-journal.json',
+                savedCompleted = ledger + '/original-completed-journal.json';
+            if (
+                stored.seal ||
+                journal?.phase === 'candidate-confirmed' ||
+                completed?.journal.phase === 'candidate-confirmed'
+            ) {
+                if (
+                    stored.progress.phase !== 'complete' ||
+                    read(savedCurrent, 8192).toString('base64') !== original.base64 ||
+                    read(savedCompleted, 8192).toString('base64') !== initialCompleted.base64
+                )
+                    return fail('NATIVE_FINALIZE_ANCHOR_ORIGINALS');
+            }
         }
         const view: LinuxModelView = {
             parents: parents(),
-            source: {
-                identity: id(sourceStat),
-                manifest: release,
-                verifiedManifestSHA256: manifestHash(release),
-            },
+            source,
             root: payload(fixed.root),
             stage: payload(fixed.stage),
             previous: payload(fixed.previous),
             journal,
-            activity: activity(),
+            ...(continuation
+                ? {
+                      history: {
+                          journalOriginal,
+                          completed,
+                          ...(lineage.length ? { lineage } : {}),
+                          ...(cleanup ? { cleanup } : {}),
+                      },
+                  }
+                : {}),
+            activity: {
+                root: sampledActivity.root,
+                stage: sampledActivity.stage,
+                previous: sampledActivity.previous,
+            },
             ...(menuPaths
                 ? {
                       menu: {
@@ -732,6 +1048,17 @@ export function createLinuxNativeBackend(
             {
                 ...copy(view),
                 activity: { root: 'inactive', stage: 'inactive', previous: 'inactive' },
+                ...(view.history?.lineage
+                    ? {
+                          history: {
+                              ...view.history,
+                              lineage: view.history.lineage.map((entry) => ({
+                                  ...entry,
+                                  activity: 'inactive' as const,
+                              })),
+                          },
+                      }
+                    : {}),
             },
             plan,
         );
@@ -761,7 +1088,14 @@ export function createLinuxNativeBackend(
                 reject(Error(state.code));
                 return;
             }
-            const done = (error: unknown, value?: T) => {
+            const done = (error: unknown, value?: T, thrown = false) => {
+                const failure = thrown || (error !== null && error !== undefined);
+                // Capture the actual first failure before timer/gate work can produce a secondary.
+                // Repeated callbacks are late failures even when their value is undefined.
+                if ((failure || settled) && !state.primarySet) {
+                    state.primarySet = true;
+                    state.primary = error;
+                }
                 if (settled) {
                     state.lateEvents++;
                     state.failed = true;
@@ -782,7 +1116,7 @@ export function createLinuxNativeBackend(
                     reject(Error(state.code));
                     return;
                 }
-                if (error !== null && error !== undefined) {
+                if (failure) {
                     state.failed = true;
                     state.code = 'NATIVE_KERNEL_UNKNOWN';
                     reject(Error(state.code));
@@ -799,9 +1133,9 @@ export function createLinuxNativeBackend(
             };
             try {
                 gate();
-                submit(done);
+                submit((error, value) => done(error, value));
             } catch (error) {
-                done(error);
+                done(error, undefined, true);
             }
         });
     };
@@ -881,24 +1215,46 @@ export function createLinuxNativeBackend(
             if (JSON.stringify(current) !== JSON.stringify(expected))
                 return fail('NATIVE_RESERVATION_RELEASE_BINDING');
             await wait<void>((done) => (handle as Server).close((error) => done(error)));
-            if (
-                call(
-                    'server-close-state',
-                    () => !(handle as Server).listening && (handle as Server).address() === null,
-                ) !== true
-            )
-                fail('NATIVE_RELEASE_UNCERTAIN');
-            state.servers.delete(handle as Server);
-            lease = null;
-            leaseIdentity = null;
+            // Adopt terminal owned-resource state before applying a sticky late-error fence.
+            // This read cannot authorize another mutation or clear the recorded failure.
+            state.pending = 'server-close-state';
+            let closed: boolean;
+            try {
+                closed =
+                    state.sockets.size === 0 &&
+                    !(handle as Server).listening &&
+                    (handle as Server).address() === null;
+            } catch (error) {
+                if (!state.primarySet) {
+                    state.primarySet = true;
+                    state.primary = error;
+                }
+                return fail('NATIVE_RELEASE_UNCERTAIN');
+            }
+            state.lastReturned = closed;
+            state.pending = null;
+            if (closed) {
+                state.servers.delete(handle as Server);
+                lease = null;
+                leaseIdentity = null;
+                state.releaseKnown = true;
+            }
+            gate();
+            if (!closed) fail('NATIVE_RELEASE_UNCERTAIN');
             return true;
         },
     };
     const protect = async <T>(operation: () => Promise<T> | T) => {
         try {
             gate();
-            return await operation();
-        } catch {
+            const value = await operation();
+            gate();
+            return value;
+        } catch (error) {
+            if (!state.primarySet) {
+                state.primarySet = true;
+                state.primary = error;
+            }
             if (!state.failed) {
                 state.failed = true;
                 state.code = 'NATIVE_REFUSAL';
@@ -953,6 +1309,7 @@ export function createLinuxNativeBackend(
             () => state.allocations.add(directory),
         );
         plainDirectory(stat(directory), directory, true);
+        parent.acknowledgeDirectoryLinks([{ path: path.posix.dirname(directory), delta: 1 }]);
         call('parent-sync', () => fs.fsyncSync(parent.fd));
         parent.finish();
     };
@@ -962,21 +1319,31 @@ export function createLinuxNativeBackend(
         exclusive: boolean,
         prior?: Buffer,
         mode = 0o600,
+        cap = MAX_INSTALLATION_MANIFEST_BYTES,
+        expected?: Pick<Stats, 'dev' | 'ino' | 'uid' | 'mode'>,
     ) => {
-        if (bytes.length > MAX_INSTALLATION_MANIFEST_BYTES) return fail('NATIVE_WRITE_BOUND');
+        if (bytes.length > cap) return fail('NATIVE_WRITE_BOUND');
         const parent = pin(path.posix.dirname(file)),
             anchored = fdPath(parent.fd) + '/' + path.posix.basename(file),
             before = maybeStat(anchored);
         if (exclusive ? before !== null : before === null) return fail('NATIVE_WRITE_OWNERSHIP');
-        if (before) regular(before, MAX_INSTALLATION_MANIFEST_BYTES, true);
+        if (before) regular(before, cap, true);
         const fd = open(
                 anchored,
                 C.O_RDWR | C.O_NOFOLLOW | C.O_NONBLOCK | (exclusive ? C.O_CREAT | C.O_EXCL : 0),
                 mode,
             ),
             active = fstat(fd);
-        regular(active, MAX_INSTALLATION_MANIFEST_BYTES, true);
+        regular(active, cap, true);
         if (before && !sameInode(before, active)) fail('NATIVE_WRITE_CHANGED');
+        if (
+            expected &&
+            (active.dev !== expected.dev ||
+                active.ino !== expected.ino ||
+                active.uid !== expected.uid ||
+                active.mode !== expected.mode)
+        )
+            fail('NATIVE_WRITE_EXPECTED_IDENTITY');
         if (prior) {
             const old = Buffer.alloc(prior.length + 1);
             let total = 0;
@@ -1081,8 +1448,495 @@ export function createLinuxNativeBackend(
         destinationParent.finish();
         if (fileHash(target, bytes) !== sha256) fail('NATIVE_COPY_READBACK');
     };
+    const cleanupController = (
+        transactionId: string,
+        live: () => void = () => fail('NATIVE_FINALIZE_LIVE_REQUIRED'),
+        observeOwner: () => Promise<void> = async () => fail('NATIVE_FINALIZE_LIVE_REQUIRED'),
+    ) => {
+        const configuration = checkedLinuxModelConfiguration({
+                host: plan.host,
+                root: plan.root,
+                action: 'finalize',
+                transactionId,
+                installationId: plan.installationId,
+                owner: plan.owner,
+                ...(plan.menu ? { menu: plan.menu } : {}),
+            }),
+            ledger = work + '-finalize-' + transactionId,
+            previous = work + '/previous-' + transactionId,
+            payloadRoot = ledger + '/payload',
+            disposalRoot = ledger + '/disposal',
+            selectedSource = sourceObservation();
+        const match = (value: Stats, expected: LinuxRetainedCleanupEntry) =>
+            !value.isSymbolicLink() &&
+            value.dev === expected.dev &&
+            value.ino === expected.ino &&
+            value.uid === expected.uid &&
+            value.mode === expected.mode &&
+            (expected.kind === 'file'
+                ? value.isFile() && value.nlink === 1 && value.size === expected.bytes
+                : value.isDirectory() && value.nlink > 0);
+        const checkLive = () => {
+            gate();
+            procOwner();
+            live();
+        };
+        return createLinuxRetainedCleanup({
+            configuration: () => copy(configuration),
+            async initial() {
+                const actual = observe(copy(fixed));
+                if (
+                    actual.activity.root !== 'active' ||
+                    actual.activity.stage !== 'inactive' ||
+                    actual.activity.previous !== 'inactive'
+                )
+                    return fail('NATIVE_FINALIZE_ACTIVITY');
+                return {
+                    ...actual,
+                    activity: {
+                        root: 'inactive',
+                        stage: 'inactive',
+                        previous: 'inactive',
+                    } as const,
+                };
+            },
+            stat,
+            maybe: maybeStat,
+            names,
+            read,
+            hash: fileHash,
+            async guard(snapshot) {
+                if (!lease || !leaseIdentity) return fail('NATIVE_RESERVATION_REQUIRED');
+                await kernel.current(lease.handle);
+                await observeOwner();
+                gate();
+                procOwner();
+                const sampled = activity([previous, payloadRoot, disposalRoot]);
+                if (
+                    sampled.root !== 'active' ||
+                    Object.entries(sampled).some(
+                        ([slot, value]) => slot !== 'root' && value !== 'inactive',
+                    )
+                )
+                    return fail('NATIVE_FINALIZE_ACTIVITY');
+                if (
+                    JSON.stringify(payload(fixed.root)) !== JSON.stringify(snapshot.initial.root) ||
+                    JSON.stringify(sourceObservation()) !== JSON.stringify(selectedSource) ||
+                    selectedSource.verifiedManifestSHA256 !==
+                        snapshot.initial.source.verifiedManifestSHA256
+                )
+                    return fail('NATIVE_FINALIZE_CURRENT_CHANGED');
+                parents();
+                const original = snapshot.initial.history!.journalOriginal!,
+                    originalJournal = snapshot.initial.journal!,
+                    completed = snapshot.initial.history!.completed!,
+                    currentBytes = read(work + '/journal.json', 8192).toString('base64'),
+                    confirmedBytes = Buffer.from(
+                        JSON.stringify({ ...originalJournal, phase: 'candidate-confirmed' }),
+                    ).toString('base64');
+                if (currentBytes !== original.base64 && currentBytes !== confirmedBytes)
+                    return fail('NATIVE_FINALIZE_ORIGINAL');
+                const originalCompleted = work + '/completed-journal.json',
+                    savedCompleted = ledger + '/original-completed-journal.json';
+                if (
+                    Boolean(maybeStat(originalCompleted)) === Boolean(maybeStat(savedCompleted)) ||
+                    read(
+                        maybeStat(originalCompleted) ? originalCompleted : savedCompleted,
+                        8192,
+                    ).toString('base64') !== completed.base64
+                )
+                    return fail('NATIVE_FINALIZE_COMPLETED_ORIGINAL');
+                checkLive();
+            },
+            live: checkLive,
+            mkdir(directory) {
+                if (![ledger, disposalRoot].includes(directory))
+                    return fail('NATIVE_FINALIZE_PATH');
+                mkdirNew(directory);
+            },
+            write(file, bytes, exclusive, prior) {
+                if (![ledger + '/snapshot.json', ledger + '/state.json'].includes(file))
+                    return fail('NATIVE_FINALIZE_PATH');
+                write(
+                    file,
+                    bytes,
+                    exclusive,
+                    prior,
+                    0o600,
+                    MAX_INSTALLATION_MANIFEST_BYTES * 6 + 131072,
+                );
+            },
+            move(from, to, expected) {
+                requireMutation();
+                if (!(
+                    (from === previous && to === payloadRoot) ||
+                    (inside(payloadRoot, from) && to === disposalRoot + '/entry')
+                ))
+                    return fail('NATIVE_FINALIZE_PATH');
+                const source = pin(path.posix.dirname(from)),
+                    target = pin(path.posix.dirname(to)),
+                    sourceName = path.posix.basename(from),
+                    targetName = path.posix.basename(to),
+                    sourceFile = fdPath(source.fd) + '/' + sourceName,
+                    targetFile = fdPath(target.fd) + '/' + targetName;
+                if (!match(stat(sourceFile), expected) || maybeStat(targetFile))
+                    return fail('NATIVE_FINALIZE_CHANGED');
+                source.check();
+                target.check();
+                checkLive();
+                call(
+                    'finalize-move-issued',
+                    () => ops.moveNoReplace!(source.fd, sourceName, target.fd, targetName),
+                    () => state.allocations.add(to),
+                );
+                if (maybeStat(sourceFile) || !match(stat(targetFile), expected))
+                    return fail('NATIVE_FINALIZE_MOVED_FOREIGN');
+                const links =
+                    expected.kind === 'directory'
+                        ? [
+                              { path: path.posix.dirname(from), delta: -1 },
+                              { path: path.posix.dirname(to), delta: 1 },
+                          ]
+                        : [];
+                source.acknowledgeDirectoryLinks(links);
+                target.acknowledgeDirectoryLinks(links);
+                call('parent-sync', () => fs.fsyncSync(source.fd));
+                call('parent-sync', () => fs.fsyncSync(target.fd));
+                source.finish();
+                target.finish();
+                if (expected.kind === 'file' && fileHash(to, expected.bytes!) !== expected.sha256)
+                    return fail('NATIVE_FINALIZE_MOVED_FOREIGN');
+            },
+            remove(file, expected) {
+                if (file !== disposalRoot + '/entry' || !ops.unlinkOwned)
+                    return fail('NATIVE_FINALIZE_PATH');
+                const parent = pin(disposalRoot),
+                    anchored = fdPath(parent.fd) + '/entry';
+                if ((fstat(parent.fd).mode & 0o7777) !== 0o700 || !match(stat(anchored), expected))
+                    return fail('NATIVE_FINALIZE_DISPOSAL');
+                parent.check();
+                checkLive();
+                call('finalize-unlink-issued', () =>
+                    ops.unlinkOwned!(parent.fd, 'entry', expected.kind, {
+                        dev: expected.dev,
+                        ino: expected.ino,
+                    }),
+                );
+                if (maybeStat(anchored)) return fail('NATIVE_FINALIZE_UNLINK_ACK');
+                parent.acknowledgeDirectoryLinks(
+                    expected.kind === 'directory' ? [{ path: disposalRoot, delta: -1 }] : [],
+                );
+                call('parent-sync', () => fs.fsyncSync(parent.fd));
+                parent.finish();
+            },
+        });
+    };
+    /** Immutable intent issues two ordered NOREPLACE operations. The active journal is never rewritten. */
+    const publishRetainedSeal = async (
+        completed: ReturnType<ReturnType<typeof createLinuxRetainedCleanup>['stored']>,
+        guardSeal: () => Promise<void>,
+        live: () => void,
+        interruption: typeof sealInterruption = null,
+    ) => {
+        const snapshot = completed.snapshot,
+            transactionId = snapshot.configuration.transactionId,
+            ledger = work + '-finalize-' + transactionId,
+            intentFile = ledger + '/seal-intent.json',
+            stageFile = ledger + '/confirmed-journal.json',
+            retiredFile = ledger + '/unconfirmed-journal.json',
+            currentFile = work + '/journal.json',
+            original = snapshot.initial.history!.journalOriginal!,
+            confirmedBytes = Buffer.from(
+                JSON.stringify({ ...snapshot.initial.journal!, phase: 'candidate-confirmed' }),
+            ),
+            reader = cleanupController(transactionId);
+        if (confirmedBytes.length > 8192) return fail('NATIVE_FINALIZE_SEAL_BOUND');
+        const matches = (value: Stats, wanted: LinuxRetainedCleanupEntry) =>
+            !value.isSymbolicLink() &&
+            value.isFile() &&
+            value.nlink === 1 &&
+            value.dev === wanted.dev &&
+            value.ino === wanted.ino &&
+            value.uid === wanted.uid &&
+            value.mode === wanted.mode &&
+            value.size === wanted.bytes;
+        let intentIssuedHere = false;
+        if (interruption && maybeStat(intentFile))
+            return fail('NATIVE_FINALIZE_INTERRUPTION_NOT_FRESH');
+        if (!maybeStat(intentFile)) {
+            await guardSeal();
+            if (
+                maybeStat(stageFile) ||
+                maybeStat(retiredFile) ||
+                read(currentFile, 8192).toString('base64') !== original.base64
+            )
+                return fail('NATIVE_FINALIZE_SEAL_UNISSUED');
+            const before = stat(currentFile);
+            regular(before, 8192, true);
+            const parent = pin(ledger);
+            parent.check();
+            live();
+            const fd = open(
+                    fdPath(parent.fd) + '/confirmed-journal.json',
+                    C.O_RDWR | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW | C.O_NONBLOCK,
+                    0o600,
+                ),
+                staged = fstat(fd);
+            regular(staged, 8192, true);
+            if (staged.size !== 0 || !sameInode(staged, stat(stageFile)))
+                return fail('NATIVE_FINALIZE_STAGE_CREATE');
+            call('file-sync', () => fs.fsyncSync(fd));
+            call('parent-sync', () => fs.fsyncSync(parent.fd));
+            close(fd);
+            parent.finish();
+            const intent: LinuxRetainedSealIntent = {
+                schemaVersion: 1,
+                root: plan.root,
+                installationId: plan.installationId,
+                transactionId,
+                uid: plan.host.uid,
+                snapshotSHA256: hash(completed.rawSnapshot!),
+                original: {
+                    path: 'journal.json',
+                    kind: 'file',
+                    dev: before.dev,
+                    ino: before.ino,
+                    uid: before.uid,
+                    mode: before.mode,
+                    bytes: before.size,
+                    sha256: original.sha256,
+                },
+                staged: {
+                    path: 'confirmed-journal.json',
+                    kind: 'file',
+                    dev: staged.dev,
+                    ino: staged.ino,
+                    uid: staged.uid,
+                    mode: staged.mode,
+                    bytes: confirmedBytes.length,
+                    sha256: hash(confirmedBytes),
+                },
+            };
+            checkedLinuxRetainedSealIntent(intent, snapshot, hash(completed.rawSnapshot!));
+            // Failure before this immutable record is complete cannot authorize repair of the orphan.
+            live();
+            write(intentFile, Buffer.from(JSON.stringify(intent)), true, undefined, 0o600, 8192);
+            intentIssuedHere = true;
+        }
+        let stored = reader.stored();
+        if (!stored.seal) return fail('NATIVE_FINALIZE_SEAL_INTENT_REQUIRED');
+        // A previous writer may have lost its fsync acknowledgement. Establish durability of
+        // this exact visible intent before relying on it for either ordered rename.
+        await guardSeal();
+        const intentParent = pin(ledger),
+            intentPath = fdPath(intentParent.fd) + '/seal-intent.json',
+            intentBefore = stat(intentPath);
+        regular(intentBefore, 8192, true);
+        intentParent.check();
+        const intentFD = open(intentPath, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+        if (
+            !sameInode(intentBefore, fstat(intentFD)) ||
+            hash(read(intentFile, 8192)) !== stored.seal.intentSHA256
+        )
+            return fail('NATIVE_FINALIZE_SEAL_INTENT_CHANGED');
+        live();
+        call('file-sync', () => fs.fsyncSync(intentFD));
+        call('parent-sync', () => fs.fsyncSync(intentParent.fd));
+        if (!stable(intentBefore, fstat(intentFD)) || !sameInode(intentBefore, stat(intentPath)))
+            return fail('NATIVE_FINALIZE_SEAL_INTENT_CHANGED');
+        close(intentFD);
+        intentParent.finish();
+        if (interruption) {
+            if (!intentIssuedHere || stored.seal.state !== 'preparing')
+                return fail('NATIVE_FINALIZE_INTERRUPTION_NOT_PREPARING');
+            await guardSeal();
+            readSealInterruption = () => {
+                gate();
+                live();
+                const cleanup = reader.stored(),
+                    staged = stat(stageFile);
+                regular(staged, 8192, true);
+                if (
+                    cleanup.seal?.state !== 'preparing' ||
+                    staged.size !== 0 ||
+                    !matches(staged, { ...cleanup.seal.intent.staged, bytes: 0 })
+                )
+                    return fail('NATIVE_FINALIZE_INTERRUPTION_STAGE_CHANGED');
+                const digest = fileHash(stageFile, 0),
+                    view = observe(copy(fixed));
+                if (!stable(staged, stat(stageFile)))
+                    return fail('NATIVE_FINALIZE_INTERRUPTION_STAGE_CHANGED');
+                live();
+                gate();
+                return {
+                    view,
+                    cleanup,
+                    staged: { ...cleanup.seal.intent.staged, bytes: 0, sha256: digest },
+                    fileDescriptors: state.fds.size,
+                    directories: state.dirs.size,
+                    pending: state.pending,
+                };
+            };
+            try {
+                return interruption.pause();
+            } finally {
+                readSealInterruption = null;
+            }
+        }
+        if (stored.seal.state === 'preparing') {
+            await guardSeal();
+            live();
+            const wanted = stored.seal.intent.staged,
+                before = stat(stageFile);
+            if (
+                !matches(before, { ...wanted, bytes: before.size }) ||
+                before.size > confirmedBytes.length
+            )
+                return fail('NATIVE_FINALIZE_STAGE_CHANGED');
+            const prior = read(stageFile, 8192);
+            if (
+                prior.length !== before.size ||
+                !prior.equals(confirmedBytes.subarray(0, prior.length)) ||
+                !stable(before, stat(stageFile))
+            )
+                return fail('NATIVE_FINALIZE_STAGE_CHANGED');
+            live();
+            write(stageFile, confirmedBytes, false, prior, 0o600, 8192, wanted);
+            stored = reader.stored();
+        }
+        const moveIssued = async (
+            fromDirectory: string,
+            fromName: string,
+            toDirectory: string,
+            toName: string,
+            wanted: LinuxRetainedCleanupEntry,
+        ) => {
+            await guardSeal();
+            const source = pin(fromDirectory),
+                target = pin(toDirectory),
+                from = fdPath(source.fd) + '/' + fromName,
+                to = fdPath(target.fd) + '/' + toName;
+            if (
+                !matches(stat(from), wanted) ||
+                maybeStat(to) ||
+                fileHash(fromDirectory + '/' + fromName, wanted.bytes!) !== wanted.sha256
+            )
+                return fail('NATIVE_FINALIZE_SEAL_MOVE_CHANGED');
+            source.check();
+            target.check();
+            live();
+            call(
+                'finalize-seal-noreplace',
+                () => ops.moveNoReplace!(source.fd, fromName, target.fd, toName),
+                () => state.allocations.add(toDirectory + '/' + toName),
+            );
+            if (
+                maybeStat(from) ||
+                !matches(stat(to), wanted) ||
+                fileHash(toDirectory + '/' + toName, wanted.bytes!) !== wanted.sha256
+            )
+                return fail('NATIVE_FINALIZE_SEAL_MOVE_ACK');
+            call('parent-sync', () => fs.fsyncSync(source.fd));
+            call('parent-sync', () => fs.fsyncSync(target.fd));
+            source.finish();
+            target.finish();
+        };
+        if (stored.seal?.state === 'ready') {
+            await guardSeal();
+            const intent = stored.seal.intent,
+                parent = pin(ledger);
+            parent.check();
+            const fd = open(
+                fdPath(parent.fd) + '/confirmed-journal.json',
+                C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK,
+            );
+            if (!matches(fstat(fd), intent.staged) || !matches(stat(stageFile), intent.staged))
+                return fail('NATIVE_FINALIZE_STAGE_CHANGED');
+            call('file-sync', () => fs.fsyncSync(fd));
+            call('parent-sync', () => fs.fsyncSync(parent.fd));
+            close(fd);
+            parent.finish();
+            if (fileHash(stageFile, confirmedBytes.length) !== hash(confirmedBytes))
+                return fail('NATIVE_FINALIZE_STAGE_CHANGED');
+            await moveIssued(
+                work,
+                'journal.json',
+                ledger,
+                'unconfirmed-journal.json',
+                intent.original,
+            );
+            stored = reader.stored();
+        }
+        if (stored.seal?.state === 'gap') {
+            await moveIssued(
+                ledger,
+                'confirmed-journal.json',
+                work,
+                'journal.json',
+                stored.seal.intent.staged,
+            );
+            stored = reader.stored();
+        }
+        if (stored.seal?.state !== 'published') return fail('NATIVE_FINALIZE_SEAL_INCOMPLETE');
+        await guardSeal();
+        return stored;
+    };
     const effects: LinuxUnqualifiedEffects = {
         kind: 'native-unqualified',
+        handoff(scope, expected) {
+            return protect(async () => {
+                requireMutation();
+                const actual = await guard(copy(scope), copy(expected));
+                const pending = actual.history?.lineage?.at(-1);
+                if (
+                    !continuation ||
+                    !actual.history?.journalOriginal ||
+                    (actual.history.completed && (!pending || pending.archived)) ||
+                    !actual.journal ||
+                    !['candidate-active', 'candidate-confirmed'].includes(actual.journal.phase) ||
+                    (actual.journal.previousSHA256 !== null &&
+                        !pending &&
+                        actual.journal.phase !== 'candidate-confirmed') ||
+                    !actual.root ||
+                    actual.stage ||
+                    actual.previous ||
+                    actual.root.transactionId !== actual.journal.transactionId ||
+                    actual.root.verifiedManifestSHA256 !== actual.journal.candidateSHA256 ||
+                    actual.journal.transactionId === plan.transactionId
+                )
+                    return fail('NATIVE_COMPLETED_HANDOFF');
+                const parent = pin(work),
+                    source = fdPath(parent.fd) + '/journal.json',
+                    targetName = pending
+                        ? 'retained-journal-' + actual.journal.transactionId + '.json'
+                        : 'completed-journal.json',
+                    target = fdPath(parent.fd) + '/' + targetName,
+                    before = stat(source);
+                regular(before, 8192, true);
+                if (
+                    maybeStat(target) ||
+                    read(work + '/journal.json', 8192).toString('base64') !==
+                        actual.history.journalOriginal.base64
+                )
+                    return fail('NATIVE_COMPLETED_HANDOFF_CHANGED');
+                parent.check();
+                call(
+                    'completed-journal-noreplace',
+                    () => ops.moveNoReplace!(parent.fd, 'journal.json', parent.fd, targetName),
+                    () => state.allocations.add(work + '/' + targetName),
+                );
+                if (
+                    maybeStat(source) ||
+                    !sameInode(before, stat(target)) ||
+                    read(work + '/' + targetName, 8192).toString('base64') !==
+                        actual.history.journalOriginal.base64
+                )
+                    return fail('NATIVE_COMPLETED_HANDOFF_CHANGED');
+                call('parent-sync', () => fs.fsyncSync(parent.fd));
+                parent.finish();
+                return observe(copy(scope));
+            });
+        },
         observe(scope) {
             return protect(() => observe(copy(scope)));
         },
@@ -1095,7 +1949,24 @@ export function createLinuxNativeBackend(
                 const nextBytes = Buffer.from(JSON.stringify(next));
                 if (nextBytes.length > 8192) fail('NATIVE_JOURNAL_BOUND');
                 const actual = await guard(scope, expected);
-                checkedLinuxModelView({ ...copy(actual), journal: next }, plan);
+                checkedLinuxModelView(
+                    {
+                        ...copy(actual),
+                        journal: next,
+                        ...(actual.history
+                            ? {
+                                  history: {
+                                      ...copy(actual.history),
+                                      journalOriginal: {
+                                          base64: nextBytes.toString('base64'),
+                                          sha256: hash(nextBytes),
+                                      },
+                                  },
+                              }
+                            : {}),
+                    },
+                    plan,
+                );
                 const previous = actual.journal;
                 space(actual, previous === null && next.phase === 'copying');
                 const phases: Record<string, string[]> = {
@@ -1161,6 +2032,8 @@ export function createLinuxNativeBackend(
                     } else if (!menuAdvance && !sameLinuxMenu(previous.menu, next.menu))
                         fail('NATIVE_MENU_JOURNAL_IDENTITY');
                 }
+                if (completedRemoval && !previous && next.phase === 'copying')
+                    completedRemoval.archiveCompleted();
                 const existing = maybeStat(work);
                 if (!existing) mkdirNew(work);
                 else plainDirectory(existing, work, true);
@@ -1169,7 +2042,11 @@ export function createLinuxNativeBackend(
                     work + '/journal.json',
                     nextBytes,
                     previous === null,
-                    previous ? Buffer.from(JSON.stringify(previous)) : undefined,
+                    previous
+                        ? actual.history?.journalOriginal
+                            ? Buffer.from(actual.history.journalOriginal.base64, 'base64')
+                            : Buffer.from(JSON.stringify(previous))
+                        : undefined,
                 );
                 return observe(scope);
             });
@@ -1295,6 +2172,12 @@ export function createLinuxNativeBackend(
                 );
                 if (maybeStat(sourceFile) || !sameInode(before, stat(targetFile)))
                     fail('NATIVE_MOVE_CHANGED');
+                const links = [
+                    { path: path.posix.dirname(fixed[from]), delta: -1 },
+                    { path: path.posix.dirname(fixed[to]), delta: 1 },
+                ];
+                sourceDirectory.acknowledgeDirectoryLinks(links);
+                targetDirectory.acknowledgeDirectoryLinks(links);
                 call('parent-sync', () => fs.fsyncSync(sourceDirectory.fd));
                 call('parent-sync', () => fs.fsyncSync(targetDirectory.fd));
                 sourceDirectory.finish();
@@ -1408,7 +2291,123 @@ export function createLinuxNativeBackend(
             });
         },
     };
-    return {
+    let completedRemoval: ReturnType<typeof createLinuxInitialUninstall> | null = null;
+    const backend = {
+        selectMenu(selected: boolean) {
+            if (
+                !continuation ||
+                !plan.menu ||
+                attempted ||
+                lease ||
+                state.failed ||
+                typeof selected !== 'boolean'
+            )
+                return fail('NATIVE_MENU_SELECTION');
+            plan = checkedLinuxModelConfiguration({ ...plan, menu: { ...plan.menu, selected } });
+        },
+        /** This only derives operation IDs from actual bounded originals, once.
+         * Every later prompt/transaction still compares a fresh complete view. */
+        prepare: () =>
+            protect(async () => {
+                if (!preparing) return fail('NATIVE_PREPARATION_ALREADY_CONSUMED');
+                preparing = false;
+                procOwner();
+                if (plan.action !== 'uninstall-current' && maybeStat(work + '-uninstall')) {
+                    if (
+                        plan.action !== 'install' ||
+                        plan.menu ||
+                        maybeStat(plan.root) ||
+                        maybeStat(work)
+                    )
+                        return fail('NATIVE_REMOVAL_PENDING_OR_RETAINED');
+                    completedRemoval = backend.initialUninstall();
+                    completedRemoval.completed();
+                }
+                let installationId = plan.installationId;
+                const destination = maybeStat(plan.root);
+                if (destination) plainDirectory(destination, plan.root, true);
+                const recordPath = plan.root + '/' + INSTALLATION_RECORD;
+                const hasRecord = Boolean(maybeStat(recordPath));
+                if (hasRecord)
+                    installationId = validateInstallationRecord(json(recordPath)).installationId;
+                if (hasRecord && !plan.menu) {
+                    const owner = json(plan.root + '/' + SETUP_OWNER) as {
+                        integrations?: unknown[];
+                    };
+                    if (Array.isArray(owner.integrations) && owner.integrations.length === 1) {
+                        if (!menuDataHome) return fail('NATIVE_MENU_REVIEW_REQUIRED');
+                        plan = checkedLinuxModelConfiguration({
+                            ...plan,
+                            installationId,
+                            menu: { dataHome: menuDataHome, selected: true },
+                        });
+                    }
+                }
+                let transactionId = plan.transactionId;
+                const maintenance = maybeStat(work);
+                if (maintenance) plainDirectory(maintenance, work, true);
+                if (maybeStat(work + '/journal.json')) {
+                    const journal = json(work + '/journal.json') as LinuxModelJournal;
+                    if (!hasRecord) installationId = journal.installationId;
+                    if (
+                        journal.root !== plan.root ||
+                        journal.uid !== plan.host.uid ||
+                        journal.installationId !== installationId ||
+                        typeof journal.transactionId !== 'string' ||
+                        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+                            journal.transactionId,
+                        )
+                    )
+                        return fail('NATIVE_PREPARATION_JOURNAL');
+                    const confirmedContinuation =
+                        journal.phase === 'candidate-confirmed' &&
+                        !plan.menu &&
+                        !maybeStat(work + '/completed-journal.json');
+                    if (
+                        !['install', 'repair', 'update'].includes(plan.action) ||
+                        (!confirmedContinuation &&
+                            (journal.phase !== 'candidate-active' ||
+                                (journal.previousSHA256 === null
+                                    ? Boolean(maybeStat(work + '/completed-journal.json'))
+                                    : Boolean(plan.menu) ||
+                                      !maybeStat(work + '/completed-journal.json'))))
+                    )
+                        transactionId = journal.transactionId;
+                } else if (continuation && maybeStat(work + '/completed-journal.json')) {
+                    const journal = json(work + '/completed-journal.json') as LinuxModelJournal;
+                    if (!hasRecord) return fail('NATIVE_COMPLETED_RECOVERY_ROOT');
+                    if (journal.installationId !== installationId)
+                        return fail('NATIVE_COMPLETED_RECOVERY_ID');
+                    if (['launch', 'finalize'].includes(plan.action))
+                        transactionId = journal.transactionId;
+                } else if (plan.action === 'finalize' && hasRecord && !plan.menu) {
+                    const owner = json(plan.root + '/' + SETUP_OWNER) as {
+                        root?: unknown;
+                        installationId?: unknown;
+                        transactionId?: unknown;
+                    };
+                    if (
+                        owner.root !== plan.root ||
+                        owner.installationId !== installationId ||
+                        typeof owner.transactionId !== 'string' ||
+                        !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+                            owner.transactionId,
+                        ) ||
+                        !maybeStat(work + '-finalize-' + owner.transactionId + '/seal-intent.json')
+                    )
+                        return fail('NATIVE_FINALIZE_GAP_BINDING');
+                    transactionId = owner.transactionId;
+                }
+                plan = checkedLinuxModelConfiguration({ ...plan, installationId, transactionId });
+                fixed.stage = work + '/stage-' + transactionId;
+                fixed.previous = work + '/previous-' + transactionId;
+                menuPaths = plan.menu ? linuxMenuPaths(plan, work) : null;
+                return {
+                    configuration: copy(plan),
+                    scope: copy(fixed),
+                    view: observe(copy(fixed)),
+                };
+            }),
         kernel: {
             acquire: (wanted) => protect(() => kernel.acquire(wanted)),
             current: (handle) => protect(() => kernel.current(handle)),
@@ -1416,6 +2415,433 @@ export function createLinuxNativeBackend(
         } satisfies LinuxModelKernel,
         effects,
         scope: copy(fixed),
+        /** Explicit Finalize owner calls this after its live private-channel confirmation. */
+        finalizeInitial: (
+            scope: LinuxModelScope,
+            expected: LinuxModelView,
+            beforeCommit: () => void,
+        ) =>
+            protect(async () => {
+                if (
+                    plan.action !== 'finalize' ||
+                    !lease ||
+                    !ops.moveNoReplace ||
+                    state.finalizeSubmitted ||
+                    typeof beforeCommit !== 'function'
+                )
+                    return fail('NATIVE_FINALIZE_SELECTION');
+                state.finalizeSubmitted = true;
+                scope = copy(scope);
+                expected = copy(expected);
+                await kernel.current(lease.handle);
+                scopeCheck(scope);
+                const actual = observe(copy(scope));
+                if (
+                    actual.activity.root !== 'active' ||
+                    actual.activity.stage !== 'inactive' ||
+                    actual.activity.previous !== 'inactive'
+                )
+                    return fail('NATIVE_FINALIZE_ACTIVITY');
+                const normalized = {
+                    ...copy(actual),
+                    activity: {
+                        root: 'inactive',
+                        stage: 'inactive',
+                        previous: 'inactive',
+                    } as const,
+                };
+                checkedLinuxModelView(normalized, plan);
+                assertLinuxInitialFinalizePreimages(normalized, plan);
+                if (
+                    linuxModelReviewSHA256(normalized) !== linuxModelReviewSHA256(expected) ||
+                    !actual.journal ||
+                    !actual.history?.journalOriginal
+                )
+                    return fail('NATIVE_FINALIZE_CHANGED');
+                const original = actual.history.journalOriginal,
+                    parent = pin(work),
+                    source = fdPath(parent.fd) + '/journal.json',
+                    target = fdPath(parent.fd) + '/completed-journal.json';
+                const before = stat(source);
+                regular(before, 8192, true);
+                if (
+                    maybeStat(target) ||
+                    read(work + '/journal.json', 8192).toString('base64') !== original.base64
+                )
+                    return fail('NATIVE_FINALIZE_ORIGINAL');
+                parent.check();
+                beforeCommit(); // Actual launch owner checks its live child/readback after the final await.
+                call(
+                    'initial-finalize-noreplace',
+                    () =>
+                        ops.moveNoReplace!(
+                            parent.fd,
+                            'journal.json',
+                            parent.fd,
+                            'completed-journal.json',
+                        ),
+                    () => state.allocations.add(work + '/completed-journal.json'),
+                );
+                if (
+                    maybeStat(source) ||
+                    !sameInode(before, stat(target)) ||
+                    read(work + '/completed-journal.json', 8192).toString('base64') !==
+                        original.base64
+                )
+                    return fail('NATIVE_FINALIZE_ARCHIVE_CHANGED');
+                call('parent-sync', () => fs.fsyncSync(parent.fd));
+                parent.finish();
+                const returned = observe(copy(scope));
+                const wanted = {
+                    ...copy(actual),
+                    journal: null,
+                    history: {
+                        journalOriginal: null,
+                        completed: { ...copy(original), journal: copy(actual.journal) },
+                    },
+                };
+                if (linuxModelReviewSHA256(returned) !== linuxModelReviewSHA256(wanted))
+                    return fail('NATIVE_FINALIZE_RETURN_CHANGED');
+                return returned;
+            }),
+        /** Actual first-predecessor cleanup; all originals survive outside the live payload. */
+        finalizeRetained: (
+            scope: LinuxModelScope,
+            expected: LinuxModelView,
+            beforeCommit: () => void,
+            observeOwner: () => Promise<void>,
+        ) =>
+            protect(async () => {
+                if (
+                    plan.action !== 'finalize' ||
+                    !lease ||
+                    !ops.moveNoReplace ||
+                    !ops.unlinkOwned ||
+                    state.finalizeSubmitted ||
+                    typeof beforeCommit !== 'function' ||
+                    typeof observeOwner !== 'function'
+                )
+                    return fail('NATIVE_FINALIZE_SELECTION');
+                state.finalizeSubmitted = true;
+                scope = copy(scope);
+                expected = copy(expected);
+                await kernel.current(lease.handle);
+                scopeCheck(scope);
+                const actual = observe(scope),
+                    normalized = {
+                        ...copy(actual),
+                        activity: {
+                            root: 'inactive',
+                            stage: 'inactive',
+                            previous: 'inactive',
+                        } as const,
+                    };
+                checkedLinuxModelView(normalized, plan);
+                assertLinuxFinalizePreimages(normalized, plan);
+                if (
+                    actual.activity.root !== 'active' ||
+                    actual.activity.stage !== 'inactive' ||
+                    actual.activity.previous !== 'inactive' ||
+                    linuxModelReviewSHA256(normalized) !== linuxModelReviewSHA256(expected)
+                )
+                    return fail('NATIVE_FINALIZE_CHANGED');
+                retainedCleanup = cleanupController(plan.transactionId, beforeCommit, observeOwner);
+                const review = await retainedCleanup.inspect();
+                const completed = await retainedCleanup.run(review);
+                if (!completed.progress || completed.progress.phase !== 'complete')
+                    return fail('NATIVE_FINALIZE_INCOMPLETE');
+                const snapshot = completed.snapshot,
+                    ledger = work + '-finalize-' + plan.transactionId,
+                    original = snapshot.initial.history!.journalOriginal!,
+                    baseline = snapshot.initial.history!.completed!,
+                    originalBytes = Buffer.from(original.base64, 'base64'),
+                    savedCurrent = ledger + '/original-journal.json',
+                    savedCompleted = ledger + '/original-completed-journal.json';
+                const sealGuard = async () => {
+                    await kernel.current(lease!.handle);
+                    gate();
+                    await observeOwner();
+                    const fresh = observe(scope);
+                    if (
+                        fresh.activity.root !== 'active' ||
+                        fresh.activity.stage !== 'inactive' ||
+                        fresh.activity.previous !== 'inactive' ||
+                        JSON.stringify(fresh.root) !== JSON.stringify(snapshot.initial.root) ||
+                        JSON.stringify(fresh.source) !== JSON.stringify(expected.source) ||
+                        fresh.history?.cleanup?.snapshotSHA256 !== hash(completed.rawSnapshot!) ||
+                        fresh.history.cleanup.progress.phase !== 'complete'
+                    )
+                        return fail('NATIVE_FINALIZE_SEAL_CHANGED');
+                    beforeCommit();
+                };
+                await sealGuard();
+                if (!maybeStat(savedCurrent))
+                    write(savedCurrent, originalBytes, true, undefined, 0o600, 8192);
+                if (read(savedCurrent, 8192).toString('base64') !== original.base64)
+                    return fail('NATIVE_FINALIZE_SAVED_ORIGINAL');
+                await sealGuard();
+                const sourceName = 'completed-journal.json',
+                    targetName = 'original-completed-journal.json',
+                    currentBaseline = work + '/' + sourceName;
+                if (maybeStat(currentBaseline)) {
+                    if (
+                        maybeStat(savedCompleted) ||
+                        read(currentBaseline, 8192).toString('base64') !== baseline.base64
+                    )
+                        return fail('NATIVE_FINALIZE_BASELINE_CHANGED');
+                    const source = pin(work),
+                        target = pin(ledger),
+                        from = fdPath(source.fd) + '/' + sourceName,
+                        to = fdPath(target.fd) + '/' + targetName,
+                        before = stat(from);
+                    regular(before, 8192, true);
+                    source.check();
+                    target.check();
+                    beforeCommit();
+                    call(
+                        'finalize-original-noreplace',
+                        () => ops.moveNoReplace!(source.fd, sourceName, target.fd, targetName),
+                        () => state.allocations.add(savedCompleted),
+                    );
+                    if (
+                        maybeStat(from) ||
+                        !sameInode(before, stat(to)) ||
+                        read(savedCompleted, 8192).toString('base64') !== baseline.base64
+                    )
+                        return fail('NATIVE_FINALIZE_BASELINE_ACK');
+                    call('parent-sync', () => fs.fsyncSync(source.fd));
+                    call('parent-sync', () => fs.fsyncSync(target.fd));
+                    source.finish();
+                    target.finish();
+                } else if (read(savedCompleted, 8192).toString('base64') !== baseline.base64)
+                    return fail('NATIVE_FINALIZE_BASELINE_MISSING');
+                await sealGuard();
+                const publication = await publishRetainedSeal(
+                    completed,
+                    sealGuard,
+                    beforeCommit,
+                    sealInterruption,
+                );
+                if (isLinuxSealInterruption(publication)) return publication;
+                const returned = observe(scope);
+                if (
+                    returned.journal?.phase !== 'candidate-confirmed' ||
+                    returned.previous ||
+                    returned.history?.cleanup?.progress.phase !== 'complete'
+                )
+                    return fail('NATIVE_FINALIZE_SEAL_ACK');
+                return returned;
+            }),
+        /** Private source qualifier must validate a pause belongs to this exact backend. */
+        sealInterruptionObservation(value: LinuxSealInterruption) {
+            if (!sealInterruption) return fail('NATIVE_FINALIZE_INTERRUPTION_UNSELECTED');
+            return sealInterruption.observation(value);
+        },
+        /** Finish only a previously issued seal after explicit consent; no new app or UI claim. */
+        recoverRetainedSeal: (
+            scope: LinuxModelScope,
+            expected: LinuxModelView,
+            beforeCommit: () => void,
+        ) =>
+            protect(async () => {
+                if (
+                    plan.action !== 'finalize' ||
+                    !lease ||
+                    !ops.moveNoReplace ||
+                    state.finalizeSubmitted ||
+                    typeof beforeCommit !== 'function'
+                )
+                    return fail('NATIVE_FINALIZE_RECOVERY_SELECTION');
+                state.finalizeSubmitted = true;
+                scope = copy(scope);
+                expected = copy(expected);
+                scopeCheck(scope);
+                retainedCleanup = cleanupController(plan.transactionId);
+                const completed = retainedCleanup.stored();
+                if (
+                    !completed.seal ||
+                    completed.seal.state === 'published' ||
+                    completed.progress?.phase !== 'complete'
+                )
+                    return fail('NATIVE_FINALIZE_RECOVERY_UNISSUED');
+                const guardRecovery = async () => {
+                    await kernel.current(lease!.handle);
+                    gate();
+                    procOwner();
+                    const fresh = observe(scope);
+                    if (
+                        Object.values(fresh.activity).some((value) => value !== 'inactive') ||
+                        JSON.stringify(fresh.root) !== JSON.stringify(expected.root) ||
+                        JSON.stringify(fresh.source) !== JSON.stringify(expected.source) ||
+                        fresh.history?.cleanup?.snapshotSHA256 !== hash(completed.rawSnapshot!) ||
+                        fresh.history.cleanup.seal?.intentSHA256 !== completed.seal!.intentSHA256
+                    )
+                        return fail('NATIVE_FINALIZE_RECOVERY_CHANGED');
+                    beforeCommit();
+                };
+                await guardRecovery();
+                await publishRetainedSeal(completed, guardRecovery, beforeCommit);
+                const returned = observe(scope);
+                if (
+                    returned.journal?.phase !== 'candidate-confirmed' ||
+                    returned.history?.cleanup?.seal?.state !== 'published'
+                )
+                    return fail('NATIVE_FINALIZE_RECOVERY_ACK');
+                return returned;
+            }),
+        /** A distinct, concrete initial-only remover; ordinary install/rollback effects stay unchanged. */
+        initialUninstall(): ReturnType<typeof createLinuxInitialUninstall> {
+            if (plan.menu || !['install', 'uninstall-current'].includes(plan.action))
+                return fail('NATIVE_UNINSTALL_SELECTION');
+            let prepared: ReturnType<typeof backend.prepare> | undefined;
+            const removal = work + '-uninstall',
+                payloadRoot = removal + '/payload',
+                disposalRoot = removal + '/disposal';
+            const match = (
+                value: Stats,
+                expected: {
+                    dev: number;
+                    ino: number;
+                    uid: number;
+                    mode: number;
+                    kind: string;
+                    bytes?: number;
+                },
+            ) =>
+                !value.isSymbolicLink() &&
+                value.dev === expected.dev &&
+                value.ino === expected.ino &&
+                value.uid === expected.uid &&
+                value.mode === expected.mode &&
+                (expected.kind === 'file'
+                    ? value.isFile() && value.nlink === 1 && value.size === expected.bytes
+                    : value.isDirectory() && value.nlink > 0);
+            return createLinuxInitialUninstall({
+                configuration: () => copy(plan),
+                async initial() {
+                    if (!prepared) {
+                        prepared = backend.prepare();
+                        return prepared;
+                    }
+                    const first = await prepared;
+                    return { ...first, view: await effects.observe(copy(first.scope)) };
+                },
+                kernel: backend.kernel,
+                source: sourceObservation,
+                activity,
+                stat,
+                maybe: maybeStat,
+                names,
+                read,
+                hash: fileHash,
+                mkdir(directory) {
+                    if (![removal, disposalRoot].includes(directory))
+                        return fail('NATIVE_UNINSTALL_PATH');
+                    mkdirNew(directory);
+                },
+                write(file, bytes, exclusive, prior) {
+                    if (![removal + '/snapshot.json', removal + '/state.json'].includes(file))
+                        return fail('NATIVE_UNINSTALL_PATH');
+                    write(
+                        file,
+                        bytes,
+                        exclusive,
+                        prior,
+                        0o600,
+                        MAX_INSTALLATION_MANIFEST_BYTES * 6 + 131072,
+                    );
+                },
+                move(from, to, expected) {
+                    requireMutation();
+                    if (!(
+                        (from === fixed.root && to === payloadRoot) ||
+                        (from === work && to === removal + '/original-maintenance') ||
+                        (from === removal &&
+                            to.startsWith(work + '-removed-') &&
+                            /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(
+                                to.slice((work + '-removed-').length),
+                            )) ||
+                        (inside(payloadRoot, from) && to === disposalRoot + '/entry')
+                    ))
+                        return fail('NATIVE_UNINSTALL_PATH');
+                    const source = pin(path.posix.dirname(from)),
+                        target = pin(path.posix.dirname(to));
+                    const sourceName = path.posix.basename(from),
+                        targetName = path.posix.basename(to),
+                        sourceFile = fdPath(source.fd) + '/' + sourceName,
+                        targetFile = fdPath(target.fd) + '/' + targetName;
+                    if (!match(stat(sourceFile), expected) || maybeStat(targetFile))
+                        return fail('NATIVE_UNINSTALL_CHANGED');
+                    source.check();
+                    target.check();
+                    call(
+                        'uninstall-move-issued',
+                        () => ops.moveNoReplace!(source.fd, sourceName, target.fd, targetName),
+                        () => state.allocations.add(to),
+                    );
+                    if (maybeStat(sourceFile) || !match(stat(targetFile), expected))
+                        return fail('NATIVE_UNINSTALL_MOVED_FOREIGN');
+                    const links =
+                        expected.kind === 'directory'
+                            ? [
+                                  { path: path.posix.dirname(from), delta: -1 },
+                                  { path: path.posix.dirname(to), delta: 1 },
+                              ]
+                            : [];
+                    source.acknowledgeDirectoryLinks(links);
+                    target.acknowledgeDirectoryLinks(links);
+                    call('parent-sync', () => fs.fsyncSync(source.fd));
+                    call('parent-sync', () => fs.fsyncSync(target.fd));
+                    source.finish();
+                    target.finish();
+                    if (
+                        expected.kind === 'file' &&
+                        fileHash(to, expected.bytes!) !== expected.sha256
+                    )
+                        return fail('NATIVE_UNINSTALL_MOVED_FOREIGN');
+                },
+                remove(file, expected) {
+                    if (file !== disposalRoot + '/entry' || !ops.unlinkOwned)
+                        return fail('NATIVE_UNINSTALL_PATH');
+                    const parent = pin(disposalRoot),
+                        anchored = fdPath(parent.fd) + '/entry';
+                    if (
+                        (fstat(parent.fd).mode & 0o7777) !== 0o700 ||
+                        !match(stat(anchored), expected)
+                    )
+                        return fail('NATIVE_UNINSTALL_DISPOSAL');
+                    parent.check();
+                    // The controller persisted unlink-issued before entering this single submission.
+                    call('unlink-issued', () =>
+                        ops.unlinkOwned!(parent.fd, 'entry', expected.kind, {
+                            dev: expected.dev,
+                            ino: expected.ino,
+                        }),
+                    );
+                    if (maybeStat(anchored)) return fail('NATIVE_UNINSTALL_UNLINK_ACK');
+                    parent.acknowledgeDirectoryLinks(
+                        expected.kind === 'directory' ? [{ path: disposalRoot, delta: -1 }] : [],
+                    );
+                    call('parent-sync', () => fs.fsyncSync(parent.fd));
+                    parent.finish();
+                },
+                available: () => Boolean(ops.moveNoReplace && ops.unlinkOwned),
+                diagnostics: () => backend.diagnostics(),
+                healthy: gate,
+                knownRelease: () => state.releaseKnown,
+                reserved() {
+                    gate();
+                    procOwner();
+                    if (
+                        !lease ||
+                        !leaseIdentity ||
+                        !(lease.handle as Server).listening ||
+                        (lease.handle as Server).address() !== '\0' + fixed.key
+                    )
+                        return fail('NATIVE_RESERVATION_REQUIRED');
+                },
+            });
+        },
         /** A live direct child's initial kernel identity only; not profile/window/loaded-code proof. */
         observeLaunchChild: (pid: number) =>
             protect(async () => {
@@ -1471,6 +2897,8 @@ export function createLinuxNativeBackend(
             retainedTimers: state.timers.size,
             allocations: state.allocations.size,
             lateEvents: state.lateEvents,
+            primarySet: state.primarySet,
         }),
     };
+    return backend;
 }

@@ -18,6 +18,7 @@ import { observeLinuxSetupReadiness } from './linux-setup-readiness';
 import {
     createLinuxNativeSetupReadback,
     LINUX_SETUP_READBACK_ENV,
+    LINUX_SETUP_QUIT_ENV,
 } from './linux-setup-readback-native';
 import { configureSerial } from './serial';
 import { AutomationActivity } from './automation-activity';
@@ -118,19 +119,26 @@ if (process.argv.includes('--diagnostic-hub-setup-worker')) {
         startup = { delivery: 'unavailable', currentPath: null };
     }
     // Own an opted-in inherited channel before quit registration or readiness/window awaits.
-    linuxSetupReadback = createLinuxNativeSetupReadback({
-        enabled:
-            ownsProfile &&
-            process.platform === 'linux' &&
-            startup.installation?.manifest.layout === 'linux-folder' &&
-            app.isPackaged &&
-            process.env[LINUX_SETUP_READBACK_ENV] === '1',
-        platform: process.platform,
-        layout: startup.installation?.manifest.layout,
-        packaged: app.isPackaged,
-        uid: process.getuid?.() ?? -1,
-        euid: process.geteuid?.() ?? -1,
-    });
+    linuxSetupReadback = createLinuxNativeSetupReadback(
+        {
+            enabled:
+                ownsProfile &&
+                process.platform === 'linux' &&
+                startup.installation?.manifest.layout === 'linux-folder' &&
+                app.isPackaged &&
+                process.env[LINUX_SETUP_READBACK_ENV] === '1',
+            platform: process.platform,
+            layout: startup.installation?.manifest.layout,
+            packaged: app.isPackaged,
+            uid: process.getuid?.() ?? -1,
+            euid: process.geteuid?.() ?? -1,
+            cooperativeQuit: process.env[LINUX_SETUP_QUIT_ENV] === '1',
+        },
+        undefined,
+        () => {
+            app.quit();
+        },
+    );
     app.on('second-instance', () => {
         if (window && !window.isDestroyed()) {
             if (window.isMinimized()) window.restore();

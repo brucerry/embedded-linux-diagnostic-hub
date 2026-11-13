@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reviewed portable Linux delivery. Permanent managed layouts remain separately gated.
+# Reviewed portable Linux delivery plus an explicit metadata-bound permanent-folder branch.
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -18,6 +18,8 @@ permanent_choice=0
 install_directory=
 install_choice=0
 menu_choice=
+operation=install
+operation_choice=0
 while (( $# )); do
     case "$1" in
         --version|--format|--directory|--install-directory)
@@ -29,6 +31,10 @@ while (( $# )); do
                 --install-directory) [[ $install_choice == 0 ]] || fail 'Repeated permanent setup choice.'; install_directory=$2; install_choice=1; permanent_choice=1 ;;
             esac
             shift 2 ;;
+        --operation)
+            (( $# >= 2 )) || fail 'Missing permanent operation.'
+            [[ $operation_choice == 0 && ( $2 == install || $2 == repair || $2 == update ) ]] || fail 'Permanent operation must be one explicit install, repair or update choice.'
+            operation=$2; operation_choice=1; permanent_choice=1; shift 2 ;;
         --download-only) download_only=1; portable_choice=1; shift ;;
         --portable) portable_choice=1; shift ;;
         --menu|--no-menu)
@@ -36,14 +42,16 @@ while (( $# )); do
             menu_choice=$1; permanent_choice=1; shift ;;
         --terminal) terminal_review=1; shift ;;
         --no-launch) no_launch=1; shift ;;
-        --help|-h) printf '%s\n' 'Usage: download-run.sh [--version vX.Y.Z] [--format AppImage|tar.gz] [--directory PATH] [--download-only] [--no-launch] [--terminal] [--portable] [--install-directory PATH] [--menu|--no-menu] (permanent setup is unavailable until qualified)'; exit 0 ;;
+        --help|-h) printf '%s\n' 'Usage: download-run.sh [--version vX.Y.Z] [--format AppImage|tar.gz] [--directory PATH] [--download-only] [--no-launch] [--terminal] [--portable] [--install-directory PATH] [--operation install|repair|update] [--menu|--no-menu] (permanent setup requires --install-directory and complete selected-release metadata)'; exit 0 ;;
         *) fail "Unknown option: $1" ;;
     esac
 done
 # New permanent intent never reinterprets the historical cache/format/download-only options.
 if [[ $permanent_choice == 1 ]]; then
     [[ $portable_choice == 0 ]] || fail 'Permanent setup choices conflict with portable format/cache/download-only choices.'
-    fail 'Permanent AppDir setup is not qualified. No download or installation was attempted. Use --portable or --download-only for the same selected release.'
+    [[ $install_choice == 1 && -n $install_directory ]] || fail 'Permanent setup requires an explicit --install-directory.'
+    [[ $install_directory == /* && $install_directory != / && ${#install_directory} -le 240 && $install_directory != *[[:cntrl:]]* && $install_directory != *'\'* ]] || fail 'Permanent installation requires an explicit absolute path without control characters.'
+    format=tar.gz # The permanent source layout is fixed, never inferred from portable choices.
 fi
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail "This desktop release requires Linux x86_64. Use the web workspace: $website"
 [[ $download_only == 1 || $EUID != 0 ]] || fail 'Run as your normal desktop user; administrator/root access is not needed.'
@@ -306,7 +314,13 @@ hub_json_string() {
 }
 # END LINUX METADATA
 
-download_parent="$(CDPATH= cd -- "${TMPDIR:-/tmp}" && pwd -P)" || fail 'Temporary storage is unavailable.'
+if [[ $permanent_choice == 1 ]]; then
+    [[ -n ${HOME:-} && $HOME == /* ]] || fail 'Permanent setup requires the actual canonical home directory.'
+    download_parent="$(CDPATH= cd -- "$HOME" && pwd -P)" || fail 'Home storage is unavailable.'
+    [[ $download_parent == "$HOME" && $(stat -c %u -- "$download_parent") == "$EUID" ]] || fail 'Permanent scratch requires the actual owned home, without an alias.'
+else
+    download_parent="$(CDPATH= cd -- "${TMPDIR:-/tmp}" && pwd -P)" || fail 'Temporary storage is unavailable.'
+fi
 hub_track_directory_path "$download_parent" || fail 'Temporary ancestry is unsafe.'
 hub_assert_existing_directory "$download_parent" || fail 'Temporary ancestry changed.'
 staged="$(mktemp -d "$download_parent/DiagnosticHub-download.XXXXXXXX")"
@@ -318,6 +332,10 @@ directory_tracked=0
 cleanup() {
     local status=$?
     trap - EXIT INT TERM
+    if [[ $permanent_choice == 1 ]]; then
+        printf 'Permanent setup sources remain retained in %s. No automatic cleanup is performed.\n' "$staged" >&2
+        exit "$status"
+    fi
     if [ "$hub_guard_failed" -ne 0 ] || ! hub_assert_tree_bindings "$staged"; then
         printf 'Scratch identity changed; preserve %s and %s.\n' "$staged" "$install_stage" >&2
         [ "$status" -ne 0 ] || status=1; exit "$status"
@@ -368,7 +386,9 @@ source_available=0
 source_commit=unavailable
 release_fetched=0
 info_fetched=0
-if fetch_metadata "https://api.github.com/repos/$repo/releases/tags/$version" "$staged/selected-release.json" 2097152; then
+release_metadata_cap=2097152
+[[ $permanent_choice == 0 ]] || release_metadata_cap=65536
+if fetch_metadata "https://api.github.com/repos/$repo/releases/tags/$version" "$staged/selected-release.json" "$release_metadata_cap"; then
     selected_tag=$(hub_json_string "$staged/selected-release.json" tag_name) || fail 'Invalid selected release metadata.'
     selected_commit=$(hub_json_string "$staged/selected-release.json" target_commitish) || fail 'Invalid release source commit.'
     draft=$(hub_json_scalar "$staged/selected-release.json" draft) || fail 'Missing release publication state.'
@@ -393,19 +413,6 @@ elif [[ $download_only != 1 ]]; then
     fail "Selected release source metadata is unavailable. Use --download-only for a checksum-only legacy download or the web workspace: $website"
 fi
 
-directory=${directory:-${XDG_DATA_HOME:-$HOME/.local/share}/DiagnosticHub/downloads/$version}
-directory=$(realpath -m -- "$directory") || fail 'Destination cannot be resolved.'
-hub_track_directory_path "$directory" || fail 'Destination ancestry is unsafe.'
-directory_tracked=1
-target="$directory/$asset"
-check_existing_package() {
-    hub_assert_directory_path "$directory" || return 1
-    if [[ -e $target || -L $target ]]; then
-        [[ -f $target && ! -L $target && $(stat -c %h -- "$target") == 1 ]] || fail 'Existing package is aliased or not a regular single-link file; choose another folder.'
-        [[ $(sha256sum -- "$target" | cut -d' ' -f1) == "$app_checksum" ]] || fail 'Existing package differs from the verified release; preserve it and choose another folder.'
-    fi
-}
-check_existing_package
 hub_bounded_tar_listing() {
     awk '{ bytes+=length($0)+1; count++; if(length($0)>4096 || bytes>4194304 || count>20000) exit 1; print } END { if(count==0) exit 1 }'
 }
@@ -440,6 +447,53 @@ hub_validate_portable_tar() {
     [[ -z $(sort "$names" | uniq -d) ]]
 }
 
+
+if [[ $permanent_choice == 1 ]]; then
+    [[ $source_available == 1 && $format == tar.gz ]] || fail 'Permanent setup requires the complete selected source records and fixed tar package.'
+    hub_validate_portable_tar || fail 'Permanent archive paths, types or inventory are unsupported; preserve sources.'
+    # Preserve the observed archive modes only after refusing all shared-write/privileged entries.
+    awk 'substr($1,6,1)=="w" || substr($1,9,1)=="w" { exit 1 }' "$staged/archive-details.txt" || fail 'Permanent payload contains shared-write members.'
+    extracted="$staged/extracted"
+    hub_make_new_directory "$extracted" || fail 'Permanent extraction parent changed.'
+    hub_assert_existing_directory "$extracted" || fail 'Permanent extraction parent changed.'
+    tar --extract --gzip --file "$staged/$asset" --directory "$extracted" --no-same-owner --same-permissions --delay-directory-restore || fail 'Permanent extraction failed; retain this scratch.'
+    flat="$extracted/Diagnostic-Hub-linux-x64"
+    hub_track_directory_path "$flat" || fail 'Permanent archive wrapper is missing or aliased.'
+    hub_assert_existing_directory "$flat" || fail 'Permanent archive wrapper changed.'
+    for member in "$flat/diagnostic-hub" "$flat/resources/linux-setup-bootstrap.cjs"; do
+        [[ -f $member && ! -L $member && $(stat -c %h -- "$member") == 1 && $(stat -c %u -- "$member") == "$EUID" ]] || fail 'This selected release has no regular owned permanent bootstrap/runtime.'
+    done
+    [[ -x $flat/diagnostic-hub && $(wc -c < "$flat/resources/linux-setup-bootstrap.cjs") -gt 0 && $(wc -c < "$flat/resources/linux-setup-bootstrap.cjs") -le 1048576 ]] || fail 'Permanent bootstrap/runtime is unavailable in this selected release.'
+    envelope="$staged/prepared-envelope"
+    hub_expect_new_destination "$envelope" || fail 'Permanent envelope destination already exists.'
+    args=(--archive "$staged/$asset" --release-record "$staged/selected-release.json" --build-record "$staged/linux-build-info.json" --envelope-directory "$envelope" --install-directory "$install_directory" --version "$version" --operation "$operation")
+    [[ -z $menu_choice ]] || args+=("$menu_choice")
+    [[ $terminal_review == 0 ]] || args+=(--terminal)
+    [[ $no_launch == 0 ]] || args+=(--no-launch)
+    printf 'Selected unsigned release integrity verified. Permanent operation still requires the actual installer review/consent.\nSources remain retained in %s.\n' "$staged"
+    hub_assert_tree_bindings "$staged" || fail 'Permanent source ancestry changed before handoff.'
+    # Borrow these active inputs; no EXIT/signal trap may delete them after handoff.
+    trap - EXIT INT TERM
+    unset NODE_OPTIONS NODE_PATH APPIMAGE APPDIR PORTABLE_EXECUTABLE_FILE PORTABLE_EXECUTABLE_DIR PORTABLE_EXECUTABLE_APP_FILENAME
+    export ELECTRON_RUN_AS_NODE=1
+    export LD_LIBRARY_PATH="$flat/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    exec "$flat/diagnostic-hub" "$flat/resources/linux-setup-bootstrap.cjs" "${args[@]}"
+fi
+
+directory=${directory:-${XDG_DATA_HOME:-$HOME/.local/share}/DiagnosticHub/downloads/$version}
+directory=$(realpath -m -- "$directory") || fail 'Destination cannot be resolved.'
+hub_track_directory_path "$directory" || fail 'Destination ancestry is unsafe.'
+directory_tracked=1
+target="$directory/$asset"
+check_existing_package() {
+    hub_assert_directory_path "$directory" || return 1
+    if [[ -e $target || -L $target ]]; then
+        [[ -f $target && ! -L $target && $(stat -c %h -- "$target") == 1 ]] || fail 'Existing package is aliased or not a regular single-link file; choose another folder.'
+        [[ $(sha256sum -- "$target" | cut -d' ' -f1) == "$app_checksum" ]] || fail 'Existing package differs from the verified release; preserve it and choose another folder.'
+    fi
+}
+check_existing_package
+
 desktop_available=0
 [[ -z ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || desktop_available=1
 launch_allowed=0
@@ -463,7 +517,7 @@ Package: $target
 
 $layout_note
 $launch_reason
-Existing profiles/reports are retained. This helper adds no shortcuts or installed identity. Permanent managed/folder setup remains unavailable until its native contract is qualified.
+Existing profiles/reports are retained. This helper adds no shortcuts or installed identity. Permanent folder setup is a separate explicit --install-directory flow with its own review.
 No sudo, FUSE installation, sandbox override or host permission change. Unsigned package; publisher metadata/checksum integrity is not an independent signature."
 review_file="$staged/review.txt"
 hub_guard_new_file "$review_file" || fail 'Unsafe review scratch.'

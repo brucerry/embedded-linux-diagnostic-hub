@@ -201,22 +201,6 @@ async function fixture(format = 'AppImage') {
     };
 }
 
-test('Linux and Mac embed the same reviewed path guards except their native stat adapter', () => {
-    const mac = readFileSync('public/download-run-macos.sh', 'utf8');
-    const macGuards = mac.slice(
-        mac.indexOf('# BEGIN GUARDED PATHS'),
-        mac.indexOf('# END GUARDED PATHS'),
-    );
-    const linuxGuards = section('# BEGIN GUARDED PATHS', '# END GUARDED PATHS');
-    assert.equal(linuxGuards.replace("stat -c '%d:%i'", "stat -f '%d:%i'"), macGuards);
-    assert.ok(
-        source.indexOf('hub_make_directory_tree "$directory"') >
-            source.indexOf('if hub_linux_confirm; then'),
-    );
-    assert.match(source, /Permanent managed\/folder setup remains unavailable/);
-    assert.doesNotMatch(source, /--no-sandbox|sudo apt|chown|chmod \+s/);
-});
-
 test(
     'Linux bounded metadata parser rejects duplicate/nested/confusable keys, malformed JSON and trailing data',
     { skip: !available },

@@ -1167,9 +1167,13 @@ test('owned launch optionally reads its actual channel and rechecks child genera
     const result = await pending;
     assert.equal(result.verdict, 'DIRECT_CHILD_CLOSED_RETAINED');
     assert.equal(result.readback!.channelBoundFreshReadback, true);
-    assert.equal(result.reservation, 'held');
+    assert.equal(result.reservation, 'none');
     assert.equal(result.successorVerified, false);
-    assert.equal(f.server.closed, 1);
+    assert.equal(f.server.closed, 2);
+    assert.equal(f.server.listening, false);
+    assert.equal(f.controller.diagnostics().retainedServers, 0);
+    assert.equal(f.controller.diagnostics().retainedSockets, 0);
+    assert.equal(f.controller.diagnostics().retainedTimers, 0);
     assert.equal(f.pair!.parent.closed, true);
     await main.joinClosure();
     assert.equal((f.requests[0] as { readback?: boolean }).readback, true);
@@ -1212,6 +1216,7 @@ test('owned folder launch uses guarded exact executable, captured local environm
             root: expectedRoot,
             environment: {
                 HOME: '/home/test',
+                XDG_CONFIG_HOME: '/home/test/data',
                 PATH: '/usr/bin:/bin',
                 LANG: 'C.UTF-8',
                 LC_ALL: 'C.UTF-8',
@@ -1228,14 +1233,17 @@ test('owned folder launch uses guarded exact executable, captured local environm
     assert.equal(result.identityObserved, true);
     assert.equal(result.childOwned, false);
     assert.equal(result.timerOwned, false);
-    assert.equal(result.reservation, 'held');
+    assert.equal(result.reservation, 'none');
     assert.equal(result.successorVerified, false);
     assert.equal(result.wholeGroupRetirement, false);
     assert.equal(result.nativeQualified, false);
     assert.equal(result.productionDispatch, false);
     assert.doesNotMatch(JSON.stringify(result), /private-output-canary|\/home/);
-    assert.equal(f.controller.diagnostics().retainedServers, 1);
-    assert.equal(f.server.closed, 1);
+    assert.equal(f.controller.diagnostics().retainedServers, 0);
+    assert.equal(f.controller.diagnostics().retainedSockets, 0);
+    assert.equal(f.controller.diagnostics().retainedTimers, 0);
+    assert.equal(f.server.closed, 2);
+    assert.equal(f.server.listening, false);
     assert.equal(f.fds.size, 0);
     const count = f.calls.length;
     await assert.rejects(f.controller.run(), /consumed/);

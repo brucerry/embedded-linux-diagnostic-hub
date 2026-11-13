@@ -131,14 +131,13 @@ export function useDeviceSession(onResetView: () => void) {
                 const wasConnected = connectedRef.current;
                 setActiveDevice(null);
                 connectedRef.current = false;
+                setConnected(false);
                 if (reason === 'update') {
-                    setConnected(false);
                     pauseLiveUpdates();
                     setError('');
                     return;
                 }
                 if (!wasConnected || disconnectingRef.current) return;
-                setConnected(false);
                 setError('SSH closed unexpectedly. Reconnect to resume updates.');
                 void transport.disconnect().catch(() => {});
             }),
@@ -236,11 +235,14 @@ export function useDeviceSession(onResetView: () => void) {
         const generation = ++dataGeneration.current;
         setConnecting(true);
         setConnectionProgress('');
-        setActiveDevice(null);
         setError('');
         try {
+            if (connected && transport)
+                await (transport instanceof GatewayClient
+                    ? transport.disconnect(true)
+                    : transport.disconnect());
             connectedRef.current = false;
-            if (connected && transport) await transport.disconnect();
+            setActiveDevice(null);
             setConnected(false);
             const active = bridge ?? (settings ? new GatewayClient(settings) : null);
             if (!active) throw new Error('Enter your gateway address and access token.');
@@ -336,12 +338,13 @@ export function useDeviceSession(onResetView: () => void) {
         try {
             await transport?.disconnect();
             setNotice('Disconnected · last SSH snapshot retained');
-        } catch (err) {
-            setError(message(err));
-        } finally {
+            connectedRef.current = false;
             setConnected(false);
             setActiveDevice(null);
             setGateway(null);
+        } catch (err) {
+            setError(message(err));
+        } finally {
             disconnectingRef.current = false;
             setDisconnecting(false);
         }

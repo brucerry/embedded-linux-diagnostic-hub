@@ -1,0 +1,338 @@
+name: v0.6.0 source-bound build-only qualification
+
+on:
+    push:
+        branches: [ci/v060-build-only-20261113]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: v060-build-only-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    gateway_build:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-build-only-20261113' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 15
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: '24.22.0'
+                  cache: ''
+                  package-manager-cache: false
+            - name: Bind actual public source, job, tools and fresh build scratch
+              run: |
+                  set -euo pipefail
+                  node --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import fs from 'node:fs';
+                  import path from 'node:path';
+                  import { execFileSync } from 'node:child_process';
+                  import { validateCurrentGatewayBuildContext } from './scripts/lib/current-gateway-build.mjs';
+                  assert.equal(process.platform, 'linux');
+                  assert.equal(process.arch, 'x64');
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.ok(process.getuid() > 0 && process.getuid() === process.geteuid());
+                  for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH']) assert.equal(process.env[key], undefined);
+                  const root = fs.realpathSync(process.cwd());
+                  assert.equal(fs.realpathSync(process.env.GITHUB_WORKSPACE), root);
+                  const git = (...args) => execFileSync('/usr/bin/git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+                  validateCurrentGatewayBuildContext({ repository: process.env.GITHUB_REPOSITORY, private: event.repository.private,
+                    event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA,
+                    runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, jobKey: process.env.GITHUB_JOB,
+                    workflowRef: process.env.GITHUB_WORKFLOW_REF, workflowSHA: process.env.GITHUB_WORKFLOW_SHA,
+                    runner: process.env.RUNNER_ENVIRONMENT, system: process.env.RUNNER_OS, arch: process.env.RUNNER_ARCH });
+                  assert.equal(event.repository.full_name, process.env.GITHUB_REPOSITORY);
+                  assert.equal(event.after, process.env.GITHUB_SHA);
+                  assert.equal(event.ref, 'refs/heads/ci/v060-build-only-20261113');
+                  const node = fs.realpathSync(process.execPath);
+                  assert.equal(node, process.execPath);
+                  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(node)), 'lib/node_modules/npm/package.json'))).version, '11.19.1');
+                  for (const name of ['package.json', 'package-lock.json']) {
+                    const bytes = fs.readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('/usr/bin/git', ['show', 'HEAD:' + name])));
+                    assert.equal(JSON.parse(bytes).version, '0.6.0');
+                  }
+                  for (const name of ['node_modules', 'validation', '.npmrc']) {
+                    try { fs.lstatSync(name); assert.fail('Existing dependency/output/config slot.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  const scratch = process.env.RUNNER_TEMP + '/dh-v060-build-' + process.env.GITHUB_RUN_ID + '-attempt-1-gateway';
+                  fs.mkdirSync(scratch, { mode: 0o700 });
+                  fs.appendFileSync(process.env.GITHUB_ENV, 'npm_config_cache=' + scratch + '/npm-downloads\n');
+                  NODE
+            - name: Install locked Gateway build tools without lifecycle scripts
+              run:
+                  npm ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund
+                  --fetch-retries=0
+            - name: Build and reread canonical Gateway archive, checksum and original build record
+              # Existing producer validates the real current job/source/tool bindings. Its build
+              # and offline lock commands do not import SSH2 or start the Gateway. No runtime,
+              # dependency-install observer, SSH, session GC, upload or cleanup follows.
+              run: node scripts/build-gateway-archive.mjs
+
+    linux_payloads:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-build-only-20261113' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        env:
+            NODE_DISABLE_COMPILE_CACHE: '1'
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Prepare the existing complete pinned private Node SDK
+              # The unchanged preparer verifies the official complete archive and critical
+              # Node/npm/header bytes in a fresh HOME namespace. No hosted cache is modified.
+              run: python3 -B -I scripts/prepare-linux-private-sdk.py
+            - name: Bind Linux source, genuine private SDK and fresh output locations
+              run: |
+                  set -euo pipefail
+                  test "$(command -v node)" = "$HUB_PRIVATE_NODE"
+                  "$HUB_PRIVATE_NODE" --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import fs from 'node:fs';
+                  import path from 'node:path';
+                  import { createHash } from 'node:crypto';
+                  import { execFileSync } from 'node:child_process';
+                  assert.equal(process.platform, 'linux');
+                  assert.equal(process.arch, 'x64');
+                  assert.equal(process.version, 'v24.22.0');
+                  assert.ok(process.getuid() > 0 && process.getuid() === process.geteuid());
+                  assert.equal(process.env.RUNNER_ENVIRONMENT, 'github-hosted');
+                  assert.equal(process.env.RUNNER_OS, 'Linux');
+                  assert.equal(process.env.RUNNER_ARCH, 'X64');
+                  assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
+                  assert.equal(process.env.GITHUB_EVENT_NAME, 'push');
+                  assert.equal(process.env.GITHUB_REF, 'refs/heads/ci/v060-build-only-20261113');
+                  assert.equal(process.env.GITHUB_WORKFLOW_SHA, process.env.GITHUB_SHA);
+                  assert.match(process.env.GITHUB_SHA, /^[a-f0-9]{40}$/);
+                  for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH', 'USE_HARD_LINKS', 'VITEST']) assert.equal(process.env[key], undefined);
+                  const root = fs.realpathSync(process.cwd());
+                  assert.equal(fs.realpathSync(process.env.GITHUB_WORKSPACE), root);
+                  const git = (...args) => execFileSync('/usr/bin/git', args, { encoding: 'utf8' }).trim();
+                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
+                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+                  const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+                  assert.equal(event.repository.full_name, 'brucerry/embedded-linux-diagnostic-hub');
+                  assert.equal(event.repository.private, false);
+                  assert.equal(event.after, process.env.GITHUB_SHA);
+                  assert.equal(event.ref, process.env.GITHUB_REF);
+                  const node = fs.realpathSync(process.execPath);
+                  assert.equal(node, process.execPath);
+                  const sdk = process.env.HUB_PRIVATE_SDK_ROOT;
+                  assert.equal(fs.realpathSync(sdk), sdk);
+                  assert.ok(sdk.startsWith(process.env.HOME + '/'));
+                  assert.equal(node, sdk + '/bin/node');
+                  assert.equal(node, process.env.HUB_PRIVATE_NODE);
+                  assert.equal(process.env.HUB_PRIVATE_NPM, sdk + '/lib/node_modules/npm/bin/npm-cli.js');
+                  assert.equal(fs.realpathSync(process.env.HUB_PRIVATE_NPM), process.env.HUB_PRIVATE_NPM);
+                  const selected = fs.lstatSync(node, { bigint: true });
+                  const executing = fs.statSync('/proc/self/exe', { bigint: true });
+                  assert.ok(selected.isFile() && !selected.isSymbolicLink() && selected.nlink === 1n && selected.uid === BigInt(process.getuid()) && !(selected.mode & 0o7022n));
+                  for (const key of ['dev', 'ino', 'uid', 'nlink', 'size']) assert.equal(executing[key], selected[key]);
+                  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                  const nodeSHA256 = '67ca5783febb8bf85736c79fcdd92c8d6d465a0eb2a082672bcdfa76a506751c';
+                  assert.equal(hash(fs.readFileSync(node)), nodeSHA256);
+                  assert.equal(hash(fs.readFileSync('/proc/self/exe')), nodeSHA256);
+                  const inputs = {
+                    'lib/node_modules/npm/package.json': [6597, 'f6478d5600180a23f73e4217610c7709a71cedb4ae13f6c3e15ecb457f5d4fd6'],
+                    'lib/node_modules/npm/bin/npm-cli.js': [54, '8e5f6f3429f8cdbe693cdc29904e9d5a7b127a494bd15c804bd54c7403bfcbe7'],
+                    'include/node/node_api.h': [10370, '2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a'],
+                    'include/node/node_api_types.h': [1930, 'a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00'],
+                    'include/node/js_native_api.h': [33170, '82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840'],
+                    'include/node/js_native_api_types.h': [7871, '4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0'],
+                  };
+                  for (const [relative, [bytes, sha256]] of Object.entries(inputs)) {
+                    const file = sdk + '/' + relative, stat = fs.lstatSync(file), data = fs.readFileSync(file);
+                    assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1 && stat.uid === process.getuid() && !(stat.mode & 0o7022));
+                    assert.equal(fs.realpathSync(file), file);
+                    assert.equal(data.length, bytes);
+                    assert.equal(hash(data), sha256);
+                  }
+                  const selectedAfter = fs.lstatSync(node, { bigint: true });
+                  for (const key of ['dev', 'ino', 'uid', 'nlink', 'size', 'mtimeNs', 'ctimeNs']) assert.equal(selectedAfter[key], selected[key]);
+                  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(node)), 'lib/node_modules/npm/package.json'))).version, '11.19.1');
+                  for (const name of ['package.json', 'package-lock.json']) {
+                    const bytes = fs.readFileSync(name);
+                    assert.ok(bytes.equals(execFileSync('/usr/bin/git', ['show', 'HEAD:' + name])));
+                    assert.equal(JSON.parse(bytes).version, '0.6.0');
+                  }
+                  for (const name of ['node_modules', 'dist', 'dist-electron', 'dist-linux-native', 'validation', 'release', '.npmrc']) {
+                    try { fs.lstatSync(name); assert.fail('Existing dependency/output/config slot.'); }
+                    catch (error) { if (error.code !== 'ENOENT') throw error; }
+                  }
+                  for (const file of ['/usr/bin/cc', '/usr/bin/7z']) fs.accessSync(file, fs.constants.X_OK);
+                  const scratch = process.env.RUNNER_TEMP + '/dh-v060-build-' + process.env.GITHUB_RUN_ID + '-attempt-1-linux';
+                  fs.mkdirSync(scratch, { mode: 0o700 });
+                  for (const name of ['npm-downloads', 'electron-downloads', 'builder-downloads', 'tmp']) fs.mkdirSync(scratch + '/' + name, { mode: 0o700 });
+                  fs.appendFileSync(process.env.GITHUB_ENV, 'HUB_BUILD_ROOT=' + scratch + '\nnpm_config_cache=' + scratch + '/npm-downloads\nelectron_config_cache=' + scratch + '/electron-downloads\nELECTRON_BUILDER_CACHE=' + scratch + '/builder-downloads\nELECTRON_BUILDER_7ZIP_PATH=/usr/bin/7z\nTMPDIR=' + scratch + '/tmp\n');
+                  NODE
+                  test "$("$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" --version)" = 11.19.1
+            - name: Install locked application build tools without lifecycle scripts
+              run: |
+                  set -euo pipefail
+                  "$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund --fetch-retries=0
+                  test ! -e node_modules/.bin/node && test ! -L node_modules/.bin/node
+            - name: Verify and download only the pinned Electron packaging runtime
+              env:
+                  ELECTRON_INSTALL_PLATFORM: linux
+                  ELECTRON_INSTALL_ARCH: x64
+              run: |
+                  set -euo pipefail
+                  "$HUB_PRIVATE_NODE" <<'NODE'
+                  const assert = require('node:assert/strict');
+                  const fs = require('node:fs');
+                  const crypto = require('node:crypto');
+                  const settings = ['mirror', 'nightlymirror', 'customdir', 'customfilename', 'customversion'];
+                  const overrides = new Set(settings.flatMap(key => ['electron', 'npmconfigelectron', 'npmpackageconfigelectron'].map(prefix => prefix + key)));
+                  for (const key of ['electronoverridedistpath', 'electronuseremotechecksums', 'npmconfigelectronuseremotechecksums', 'napirsnativelibrarypath']) overrides.add(key);
+                  for (const key of Object.keys(process.env)) assert(!overrides.has(key.toLowerCase().replaceAll('_', '')), 'Electron build input override unavailable');
+                  assert.equal(require('./node_modules/electron/package.json').version, '44.5.1');
+                  assert.equal(require('./node_modules/electron/checksums.json')['electron-v44.5.1-linux-x64.zip'], '5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5');
+                  assert.equal(crypto.createHash('sha256').update(fs.readFileSync('node_modules/electron/install.js')).digest('hex'), '3b9e0c3c9070edbdb732dc05ed23c6f1c6b7a404bd623033a2f0b71052534e93');
+                  NODE
+                  "$HUB_PRIVATE_NODE" node_modules/electron/install.js
+            - name: Typecheck the actual application source
+              run: '"$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" run typecheck'
+            - name: Build the production renderer with the locked build toolchain
+              run: '"$HUB_PRIVATE_NODE" node_modules/vite/bin/vite.js build'
+            - name: Compile desktop and permanent-setup helper bundles without executing them
+              run: '"$HUB_PRIVATE_NODE" "$HUB_PRIVATE_NPM" run build:desktop'
+            - name: Compile and inspect native rename output without loading it
+              run:
+                  '"$HUB_PRIVATE_NODE" scripts/build-linux-native.mjs --output-dir
+                  "$PWD/dist-linux-native"'
+            - name: Package same-source qualification A payload without launching it
+              # The existing future current-B fixture requires A then B. This is a same-source
+              # prerelease qualification payload, never an authentic historical release.
+              run: |
+                  set -euo pipefail
+                  test ! -e "$HUB_BUILD_ROOT/build-a" && test ! -L "$HUB_BUILD_ROOT/build-a"
+                  "$HUB_PRIVATE_NODE" node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0-qualification.0 --config.directories.output="$HUB_BUILD_ROOT/build-a"
+            - name: Package same-source current B payload without launching it
+              run: |
+                  set -euo pipefail
+                  test ! -e "$HUB_BUILD_ROOT/build-b" && test ! -L "$HUB_BUILD_ROOT/build-b"
+                  "$HUB_PRIVATE_NODE" node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0 --config.directories.output="$HUB_BUILD_ROOT/build-b"
+            - name:
+                  Compare original tar censuses, AppDir inventories and packaged helper bytes as
+                  data
+              # Existing archive readers decode bytes only. No extraction executable, AppRun,
+              # Electron executable, installer/fixture, .node import, Finalize or removal runs.
+              # All outputs remain runner-local; no artifact/cache upload or cleanup is selected.
+              run: |
+                  set -euo pipefail
+                  "$HUB_PRIVATE_NODE" --import ./node_modules/tsx/dist/loader.mjs --input-type=module <<'NODE'
+                  import assert from 'node:assert/strict';
+                  import fs from 'node:fs';
+                  import { createHash } from 'node:crypto';
+                  import { execFileSync } from 'node:child_process';
+                  import { extractFile } from '@electron/asar';
+                  import { observeLinuxGzipTar, linuxObservationWindow } from './scripts/lib/linux-archive-members.mjs';
+                  import { normalizeLinuxPackagerCensus } from './scripts/lib/linux-release-observation.ts';
+                  import { verifyDesktopPackageBundles } from './scripts/lib/desktop-package-bundles.mjs';
+                  import { validateLinuxReviewCapability, reviewBundleHash } from './scripts/lib/linux-review-package.mjs';
+                  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                  const asset = 'Diagnostic-Hub-linux-x64.tar.gz';
+                  for (const [role, version] of [['a', '0.6.0-qualification.0'], ['b', '0.6.0']]) {
+                    const directory = process.env.HUB_BUILD_ROOT + '/build-' + role;
+                    const root = directory + '/linux-unpacked';
+                    const archive = directory + '/' + asset;
+                    const archiveStat = fs.lstatSync(archive);
+                    assert.ok(archiveStat.isFile() && !archiveStat.isSymbolicLink() && archiveStat.nlink === 1);
+                    assert.ok(archiveStat.size > 0 && archiveStat.size <= 2 * 1024 ** 3);
+                    const archiveBytes = fs.readFileSync(archive);
+                    const expected = { bytes: archiveBytes.length, sha256: hash(archiveBytes) };
+                    const startedMs = performance.now();
+                    const window = linuxObservationWindow({ requestId: role.repeat(32), startedMs, deadlineMs: startedMs + 120000, now: () => performance.now() });
+                    const chunks = async function* () { for (let offset = 0; offset < archiveBytes.length; offset += 65536) yield archiveBytes.subarray(offset, offset + 65536); };
+                    const census = await observeLinuxGzipTar(chunks(), expected, window);
+                    const mapped = normalizeLinuxPackagerCensus(census, asset);
+                    const actual = [];
+                    function inventory(directory, prefix = '') {
+                      for (const name of fs.readdirSync(directory).sort()) {
+                        const file = directory + '/' + name, relative = prefix + name, stat = fs.lstatSync(file);
+                        assert.equal(stat.isSymbolicLink(), false);
+                        if (stat.isDirectory()) inventory(file, relative + '/');
+                        else {
+                          assert.ok(stat.isFile() && stat.nlink === 1);
+                          const bytes = fs.readFileSync(file);
+                          actual.push({ path: relative, bytes: bytes.length, sha256: hash(bytes), mode: stat.mode & 0o777 });
+                        }
+                      }
+                    }
+                    inventory(root);
+                    const compare = (left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+                    const declared = mapped.payloadEntries.filter(row => row.kind === 'file').map(({ path, bytes, sha256, mode }) => ({ path, bytes, sha256, mode }));
+                    assert.deepEqual(actual.sort(compare), declared.sort(compare));
+                    const asar = root + '/resources/app.asar';
+                    const pkg = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
+                    assert.equal(pkg.name, 'embedded-linux-diagnostic-hub');
+                    assert.equal(pkg.version, version);
+                    await verifyDesktopPackageBundles({ readBuild: file => fs.readFileSync(file), readPackaged: file => extractFile(asar, file) });
+                    function renderer(directory, prefix = 'dist/') {
+                      for (const name of fs.readdirSync(directory)) {
+                        const file = directory + '/' + name, member = prefix + name, stat = fs.lstatSync(file);
+                        assert.equal(stat.isSymbolicLink(), false);
+                        if (stat.isDirectory()) renderer(file, member + '/');
+                        else {
+                          assert.ok(stat.isFile());
+                          assert.ok(fs.readFileSync(file).equals(extractFile(asar, member)));
+                        }
+                      }
+                    }
+                    renderer('dist');
+                    for (const name of ['linux-setup-review.cjs', 'linux-setup-install.cjs', 'linux-setup-bootstrap.cjs']) {
+                      const bytes = fs.readFileSync('dist-electron/' + name);
+                      assert.ok(bytes.equals(fs.readFileSync(root + '/resources/' + name)));
+                      assert.ok(bytes.equals(extractFile(asar, 'dist-electron/' + name)));
+                    }
+                    for (const [input, output] of [['dist-linux-native/diagnostic_hub_rename_noreplace.node', 'resources/diagnostic_hub_rename_noreplace.node'], ['scripts/linux-setup-install.sh', 'resources/linux-setup-install.sh'], ['scripts/linux-installed-launcher.sh', 'resources/linux-installed-AppRun'], ['scripts/linux-launcher.sh', 'AppRun']])
+                      assert.ok(fs.readFileSync(input).equals(fs.readFileSync(root + '/' + output)));
+                    const review = fs.readFileSync(root + '/resources/linux-setup-review.cjs');
+                    const capability = validateLinuxReviewCapability(JSON.parse(fs.readFileSync(root + '/resources/linux-setup-review.json')), version);
+                    assert.equal(capability.bytes, review.length);
+                    assert.equal(capability.sha256, reviewBundleHash(review));
+                    const executable = fs.readFileSync(root + '/diagnostic-hub');
+                    assert.ok(executable.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])));
+                    assert.equal(executable[4], 2);
+                    assert.equal(executable.readUInt16LE(18), 62);
+                    assert.ok(fs.readFileSync(archive).equals(archiveBytes));
+                    fs.writeFileSync(directory + '/linux-tar-census.json', JSON.stringify(census) + '\n', { flag: 'wx', mode: 0o600 });
+                  }
+                  assert.equal(execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), process.env.GITHUB_SHA);
+                  assert.equal(execFileSync('/usr/bin/git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim(), '');
+                  NODE

@@ -1,6 +1,9 @@
 const { copyFile, chmod } = require('node:fs/promises');
 const path = require('node:path');
-const { createReviewPackager } = require('./lib/linux-review-after-pack.cjs');
+const {
+    createReviewPackager,
+    createInstallPackager,
+} = require('./lib/linux-review-after-pack.cjs');
 
 module.exports = async ({ electronPlatformName, appOutDir, arch, packager }) => {
     if (electronPlatformName !== 'linux') return;
@@ -11,6 +14,19 @@ module.exports = async ({ electronPlatformName, appOutDir, arch, packager }) => 
         arch: arch === 1 ? 'x64' : 'unsupported',
         version: packager.appInfo.version,
         source: path.join(__dirname, '..', 'dist-electron', 'linux-setup-review.cjs'),
+    });
+    await createInstallPackager()({
+        appOutDir,
+        entry: path.join(__dirname, '..', 'dist-electron', 'linux-setup-install.cjs'),
+        bootstrap: path.join(__dirname, '..', 'dist-electron', 'linux-setup-bootstrap.cjs'),
+        native: path.join(
+            __dirname,
+            '..',
+            'dist-linux-native',
+            'diagnostic_hub_rename_noreplace.node',
+        ),
+        launcher: path.join(__dirname, 'linux-setup-install.sh'),
+        installedLauncher: path.join(__dirname, 'linux-installed-launcher.sh'),
     });
     // The AppImage target copies this over its generated launcher, preserving sandbox behavior.
     const launcher = path.join(appOutDir, 'AppRun');

@@ -1,13 +1,21 @@
 import {
     createLinuxNativeBackend,
+    createLinuxNativePreparationBackend,
     type LinuxNativeOps,
     type LinuxNativeWindow,
 } from './linux-native-backend.ts';
 import {
     checkedLinuxModelPlan,
+    checkedLinuxModelConfiguration,
+    checkedLinuxModelView,
+    linuxModelReviewSHA256,
     createLinuxNativeTransaction,
+    assertLinuxFinalizePreimages,
     type LinuxModelPlan,
+    type LinuxModelOwner,
+    type LinuxModelView,
 } from './linux-transaction-model.ts';
+import type { LinuxReviewHost } from './linux-setup-review.ts';
 
 function refuse(code: string): never {
     throw Error(code);
@@ -58,6 +66,11 @@ export function captureLinuxNativeHost(input: LinuxNativeOps): LinuxNativeOps {
             host[key] = method(input, key);
         host.moveNoReplace =
             data(input, 'moveNoReplace') === null ? null : method(input, 'moveNoReplace');
+        const remove = Object.getOwnPropertyDescriptor(input, 'unlinkOwned');
+        host.unlinkOwned =
+            !remove || (Object.hasOwn(remove, 'value') && remove.value === null)
+                ? null
+                : method(input, 'unlinkOwned');
         return Object.freeze(host) as unknown as LinuxNativeOps;
     } catch {
         return refuse('ERR_DH_LINUX_DRIVER_HOST');
@@ -115,4 +128,179 @@ export function createLinuxNativeDriver(
             ] as const),
         }),
     });
+}
+
+/** Actual read-only snapshot preparation for the shipping complete-folder caller.
+ * The old full-plan driver remains unchanged. No empty/inactive review is invented. */
+export function prepareLinuxNativeDriver(
+    input: {
+        host: LinuxReviewHost;
+        root: string;
+        action: LinuxModelPlan['action'];
+        dataHome: string;
+        menu: boolean;
+    },
+    window: LinuxNativeWindow,
+    operations: LinuxNativeOps,
+    actualOwner: LinuxModelOwner,
+) {
+    const selected = structuredClone(input),
+        ops = captureLinuxNativeHost(operations);
+    if (ops.pid !== actualOwner.pid || ops.executable !== actualOwner.executable)
+        return refuse('ERR_DH_LINUX_DRIVER_RUNTIME');
+    const configuration = checkedLinuxModelConfiguration({
+        host: selected.host,
+        root: selected.root,
+        action: selected.action,
+        transactionId: ops.uuid(),
+        installationId: ops.uuid(),
+        owner: { ...actualOwner },
+        ...(selected.menu ? { menu: { dataHome: selected.dataHome, selected: true } } : {}),
+    });
+    const backend = createLinuxNativePreparationBackend(
+        configuration,
+        window,
+        ops,
+        selected.dataHome,
+    );
+    let candidate: ReturnType<typeof backend.prepare> | undefined;
+    let prepared: Awaited<ReturnType<typeof backend.prepare>> | undefined;
+    let used = false;
+    let transaction: ReturnType<typeof createLinuxNativeTransaction> | undefined;
+    const requirePrepared = () => {
+        if (!prepared) return refuse('ERR_DH_LINUX_DRIVER_PREPARATION');
+        return prepared;
+    };
+    return Object.freeze({
+        async inspect() {
+            if (!candidate) {
+                candidate = backend.prepare(); // Adopt the operation before its first await.
+                prepared = await candidate;
+                if (
+                    selected.action !== 'finalize' &&
+                    prepared.view.history?.cleanup?.seal &&
+                    prepared.view.history.cleanup.seal.state !== 'published'
+                )
+                    return refuse('ERR_DH_LINUX_SEAL_RECOVERY_REQUIRED');
+                if (selected.action === 'finalize')
+                    assertLinuxFinalizePreimages(prepared.view, prepared.configuration);
+                if (
+                    selected.action === 'finalize' &&
+                    (prepared.view.previous || prepared.view.history?.cleanup) &&
+                    !ops.unlinkOwned
+                )
+                    return refuse('ERR_DH_LINUX_FINALIZE_UNLINK_REQUIRED');
+                return structuredClone(prepared.view);
+            }
+            await candidate;
+            const view = await backend.effects.observe(structuredClone(requirePrepared().scope));
+            if (
+                selected.action !== 'finalize' &&
+                view.history?.cleanup?.seal &&
+                view.history.cleanup.seal.state !== 'published'
+            )
+                return refuse('ERR_DH_LINUX_SEAL_RECOVERY_REQUIRED');
+            if (selected.action === 'finalize')
+                assertLinuxFinalizePreimages(view, requirePrepared().configuration);
+            if (
+                selected.action === 'finalize' &&
+                (view.previous || view.history?.cleanup) &&
+                !ops.unlinkOwned
+            )
+                return refuse('ERR_DH_LINUX_FINALIZE_UNLINK_REQUIRED');
+            return view;
+        },
+        describe(view: LinuxModelView) {
+            const captured = requirePrepared();
+            checkedLinuxModelView(view, captured.configuration);
+            return (
+                'Diagnostic Hub Linux setup\nOperation: ' +
+                selected.action +
+                '\nApplication: ' +
+                selected.root +
+                '\nCandidate version: ' +
+                view.source.manifest.version +
+                '\nInstalled version: ' +
+                (view.root?.manifest.version ?? 'none') +
+                '\nSettings/reports: ' +
+                selected.host.appData +
+                '/DiagnosticHub/profiles/' +
+                captured.configuration.installationId +
+                (selected.action === 'finalize'
+                    ? view.history?.cleanup?.seal && view.history.cleanup.seal.state !== 'published'
+                        ? '\nFinish interrupted update confirmation. The previous application copy is already removed. Settings, reports and recovery records are retained. No application launch or new boot observation is performed.'
+                        : view.previous || view.history?.cleanup
+                          ? '\nConfirm the current no-menu app while it is ready, then remove only the previous application payload. Settings, reports and original recovery records are retained.'
+                          : '\nConfirm this initial no-menu installation while its app is ready. Original records are retained; no previous payload exists.'
+                    : '\nPrevious payloads are retained. No Finalize or removal is performed.')
+            );
+        },
+        menuSelected(view: LinuxModelView) {
+            return Boolean(view.root?.menu);
+        },
+        plan(view: LinuxModelView, menu: boolean) {
+            const captured = requirePrepared();
+            if (typeof menu !== 'boolean' || (!captured.configuration.menu && menu))
+                return refuse('ERR_DH_LINUX_DRIVER_MENU_REVIEW_REQUIRED');
+            const plan = checkedLinuxModelPlan({
+                ...captured.configuration,
+                ...(captured.configuration.menu
+                    ? { menu: { ...captured.configuration.menu, selected: menu } }
+                    : {}),
+                consent: true,
+                review: structuredClone(view),
+                reviewSHA256: linuxModelReviewSHA256(view),
+            });
+            return plan;
+        },
+        async run(plan: LinuxModelPlan) {
+            if (used) return refuse('ERR_DH_LINUX_DRIVER_CONSUMED');
+            used = true;
+            const captured = requirePrepared();
+            const expected = {
+                ...plan,
+                consent: undefined,
+                review: undefined,
+                reviewSHA256: undefined,
+            };
+            const wanted = {
+                ...captured.configuration,
+                ...(plan.menu ? { menu: { ...plan.menu } } : {}),
+                consent: undefined,
+                review: undefined,
+                reviewSHA256: undefined,
+            };
+            if (JSON.stringify(expected) !== JSON.stringify(wanted))
+                return refuse('ERR_DH_LINUX_DRIVER_SELECTION_CHANGED');
+            if (plan.menu) backend.selectMenu(plan.menu.selected);
+            transaction = createLinuxNativeTransaction(backend.kernel, backend.effects);
+            return transaction.run(plan);
+        },
+        diagnostics: () => ({
+            backend: backend.diagnostics(),
+            transaction: transaction?.summary() ?? null,
+        }),
+    });
+}
+
+/** Initial/no-menu current-payload uninstall; no implicit native load or generic cleanup fallback. */
+export function prepareLinuxNativeUninstallDriver(
+    input: { host: LinuxReviewHost; root: string },
+    window: LinuxNativeWindow,
+    operations: LinuxNativeOps,
+    actualOwner: LinuxModelOwner,
+) {
+    const selected = structuredClone(input),
+        ops = captureLinuxNativeHost(operations);
+    if (ops.pid !== actualOwner.pid || ops.executable !== actualOwner.executable)
+        return refuse('ERR_DH_LINUX_DRIVER_RUNTIME');
+    const configuration = checkedLinuxModelConfiguration({
+        host: selected.host,
+        root: selected.root,
+        action: 'uninstall-current',
+        transactionId: ops.uuid(),
+        installationId: ops.uuid(),
+        owner: { ...actualOwner },
+    });
+    return createLinuxNativePreparationBackend(configuration, window, ops).initialUninstall();
 }

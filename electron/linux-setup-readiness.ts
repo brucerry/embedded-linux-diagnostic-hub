@@ -204,7 +204,7 @@ function metadata(ownerInput: unknown, journalInput: unknown, c: LinuxReadinessC
         j.profile !== c.profile ||
         j.candidateSHA256 !== c.manifestSHA256 ||
         !(j.previousSHA256 === null || hash(j.previousSHA256)) ||
-        j.phase !== 'candidate-active' ||
+        (j.phase !== 'candidate-active' && j.phase !== 'candidate-confirmed') ||
         !positive(j.owner.pid) ||
         typeof j.owner.startTicks !== 'string' ||
         !/^[1-9][0-9]{0,19}$/.test(j.owner.startTicks) ||
@@ -328,7 +328,7 @@ function ready(
 export async function observeLinuxSetupReadiness(
     input: LinuxReadinessContext,
     sample: () => LinuxReadinessSample | null,
-    io: Pick<LinuxReviewIO, 'bytes'> = linuxReviewDisk,
+    io: Pick<LinuxReviewIO, 'bytes'> & Partial<Pick<LinuxReviewIO, 'node'>> = linuxReviewDisk,
 ): Promise<LinuxSetupReadiness | null> {
     try {
         const c = { ...input };
@@ -374,13 +374,64 @@ export async function observeLinuxSetupReadiness(
         };
         const handle = first.nativeHandle,
             ownerPath = path.posix.join(c.root, SETUP_OWNER),
-            journalPath = maintenancePaths(c.root).journal;
+            activeJournal = maintenancePaths(c.root).journal;
+        const probeDescriptor = Object.getOwnPropertyDescriptor(io, 'node');
+        if (
+            probeDescriptor &&
+            (!Object.hasOwn(probeDescriptor, 'value') ||
+                typeof probeDescriptor.value !== 'function')
+        )
+            return null;
+        const probe = probeDescriptor?.value as LinuxReviewIO['node'] | undefined;
+        const inspect = async (file: string) =>
+            probe ? (Reflect.apply(probe, io, [file]) as ReturnType<LinuxReviewIO['node']>) : null;
+        const identity = (value: Awaited<ReturnType<LinuxReviewIO['node']>>) => {
+            if (!value || value.kind !== 'file') throw Error('LINUX_READINESS_METADATA_KIND');
+            return JSON.stringify(
+                ['kind', 'uid', 'mode', 'dev', 'ino', 'nlink', 'size', 'mtimeMs', 'ctimeMs'].map(
+                    (key) => {
+                        const field = Object.getOwnPropertyDescriptor(value, key);
+                        if (!field || !Object.hasOwn(field, 'value'))
+                            throw Error('LINUX_READINESS_METADATA_IDENTITY');
+                        return field.value;
+                    },
+                ),
+            );
+        };
+        let journalPath = activeJournal,
+            completed = false;
+        if (probe && (await inspect(activeJournal)) === null) {
+            journalPath = path.posix.join(
+                path.posix.dirname(activeJournal),
+                'completed-journal.json',
+            );
+            completed = true;
+        }
+        const ownerIdentity = completed ? identity(await inspect(ownerPath)) : null,
+            journalIdentity = completed ? identity(await inspect(journalPath)) : null;
         const ownerBytes = await read(ownerPath),
             journalBytes = await read(journalPath);
-        const transactionId = metadata(parse(ownerBytes), parse(journalBytes), c);
+        const journal = parse(journalBytes);
+        if (
+            completed &&
+            (!journal ||
+                typeof journal !== 'object' ||
+                ((journal as Record<string, unknown>).previousSHA256 !== null &&
+                    (journal as Record<string, unknown>).phase !== 'candidate-confirmed') ||
+                Object.hasOwn(journal, 'menu'))
+        )
+            return null;
+        const transactionId = metadata(parse(ownerBytes), journal, c);
         const ownerAgain = await read(ownerPath),
             journalAgain = await read(journalPath);
         if (!ownerBytes.equals(ownerAgain) || !journalBytes.equals(journalAgain)) return null;
+        if (
+            completed &&
+            (identity(await inspect(ownerPath)) !== ownerIdentity ||
+                identity(await inspect(journalPath)) !== journalIdentity ||
+                (await inspect(activeJournal)) !== null)
+        )
+            return null;
         const last = sample();
         if (
             !ready(last, c) ||

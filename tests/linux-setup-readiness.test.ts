@@ -24,9 +24,9 @@ import type { LinuxSetupReadiness } from '../shared/types.ts';
 const pins = {
     'electron/main.ts': 'db6c3bbc4d16df23f2abb35b90684d73123217d0e9fc91a053170b41a0e208a5',
     'electron/linux-native-backend.ts':
-        '804b68c18b09b905c9c0df352dad230e1a63de4b2cac7f990473b9e42d607960',
+        '0cddc8c02368b1dea62a9bd6e5bd676df1e8e1b433f9b6c4bb3fe3847aadfcb2',
     'electron/linux-transaction-model.ts':
-        'b7edad55c552b269c8383f2b17e1ced3f3e468ca09b28835e487345566f75114',
+        '7e3e04c85b3e470567d8332e79342abbfab076142d2ad306203a84513d246860',
 };
 const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -80,7 +80,7 @@ function fixture() {
         installationId: c.installationId,
         profile: c.profile,
         candidateSHA256: c.manifestSHA256,
-        previousSHA256: null,
+        previousSHA256: null as string | null,
         owner: { pid: 777, startTicks: '9999', executable: '/home/test/source/app/diagnostic-hub' },
         phase: 'candidate-active',
     };
@@ -325,6 +325,54 @@ test('main readiness matches active local metadata and emits explicit self-obser
         ),
         false,
     );
+});
+
+test('confirmed current and completed-anchor metadata retain readiness without claiming cleanup or native authority', async () => {
+    for (const archived of [false, true]) {
+        const f = fixture();
+        f.journal.phase = 'candidate-confirmed';
+        f.journal.previousSHA256 = 'b'.repeat(64);
+        f.save();
+        let io: Parameters<typeof observeLinuxSetupReadiness>[2] = f.io;
+        if (archived) {
+            const completed =
+                f.journalPath.slice(0, -'journal.json'.length) + 'completed-journal.json';
+            f.records.set(completed, f.records.get(f.journalPath)!);
+            f.records.delete(f.journalPath);
+            io = {
+                async bytes(file, cap, uid) {
+                    assert.ok(file === f.ownerPath || file === completed);
+                    assert.equal(cap, 8192);
+                    assert.equal(uid, 1000);
+                    return Buffer.from(f.records.get(file)!);
+                },
+                async node(file) {
+                    assert.ok([f.ownerPath, f.journalPath, completed].includes(file));
+                    const raw = f.records.get(file);
+                    return raw
+                        ? {
+                              kind: 'file',
+                              uid: 1000,
+                              mode: 0o100600,
+                              dev: 1,
+                              ino: file === f.ownerPath ? 801 : 802,
+                              nlink: 1,
+                              size: raw.length,
+                              mtimeMs: 1,
+                              ctimeMs: 1,
+                          }
+                        : null;
+                },
+            };
+        }
+        const result = await observeLinuxSetupReadiness(f.c, f.sample, io);
+        assert.ok(result);
+        assert.equal(result.transactionId, f.transactionId);
+        assert.equal(result.finalizationAuthority, false);
+        assert.equal(result.payloadIntegrity, 'not-checked');
+        assert.equal(result.independentWindowObservation, false);
+        assert.equal(result.descendantRetirement, false);
+    }
 });
 test('actual current Linux writer expressions produce metadata accepted without relabelling its provenance', async () => {
     const f = fixture(),

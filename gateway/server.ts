@@ -104,8 +104,12 @@ export function createGateway(config: GatewayConfig) {
     function retireSession(ssh: SshSession) {
         const existing = retiringSessions.get(ssh);
         if (existing) return existing;
-        ssh.disconnect();
-        const task = ssh.joinAutomationCleanup();
+        // Publish the owner before disconnect can throw or reenter retirement. Its raw
+        // failure becomes a rejection for idle expiry and the independent shutdown joins.
+        const task = Promise.resolve().then(() => {
+            ssh.disconnect();
+            return ssh.joinAutomationCleanup();
+        });
         retiringSessions.set(ssh, task);
         void task
             .then(() => {

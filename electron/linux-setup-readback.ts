@@ -60,6 +60,14 @@ function matches(r: LinuxSetupReadiness, b: LinuxReadbackBinding, pid: number) {
  * Closure requires both EOFs: writable finish+end callback, readable end, and error-free close.
  * Every uncertain outcome retains the port; no destroy, timeout retry or cleanup inference. */
 function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void) {
+    let primarySet = false,
+        primary: unknown;
+    const remember = (value: unknown) => {
+        if (!primarySet) {
+            primarySet = true;
+            primary = value;
+        }
+    };
     let failed = false,
         code = 'UNSTARTED',
         buffer = Buffer.alloc(0),
@@ -116,6 +124,7 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
             if (!returned || !callback) return;
             writes--;
             if ((error !== undefined && error !== null) || !accepted) {
+                if (error !== undefined && error !== null) remember(error);
                 fail('WRITE_UNCERTAIN');
                 return;
             }
@@ -139,7 +148,8 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
             returned = true;
             if (!accepted) fail('WRITE_UNCERTAIN');
             complete();
-        } catch {
+        } catch (error) {
+            remember(error);
             fail('WRITE_UNCERTAIN');
         }
     };
@@ -154,6 +164,7 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
                         return;
                     }
                     if (error !== undefined && error !== null) {
+                        remember(error);
                         fail('END_UNCERTAIN');
                         return;
                     }
@@ -161,7 +172,8 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
                     check();
                 },
             ]);
-        } catch {
+        } catch (error) {
+            remember(error);
             fail('END_UNCERTAIN');
         }
     };
@@ -172,7 +184,13 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
             typeof callEnd !== 'function'
         )
             throw Error();
-        Reflect.apply(callOn, port, ['error', () => fail('CHANNEL_ERROR')]);
+        Reflect.apply(callOn, port, [
+            'error',
+            (error: unknown) => {
+                remember(error);
+                fail('CHANNEL_ERROR');
+            },
+        ]);
         Reflect.apply(callOn, port, [
             'data',
             (chunk: unknown) => {
@@ -207,7 +225,8 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
                         )
                             throw Error();
                         receive(value as Record<string, any>);
-                    } catch {
+                    } catch (error) {
+                        remember(error);
                         fail('FRAME_INVALID');
                     }
                     if (failed) break;
@@ -249,7 +268,8 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
                 check();
             },
         ]);
-    } catch {
+    } catch (error) {
+        remember(error);
         fail('CHANNEL_ADMISSION');
     }
     return {
@@ -263,6 +283,7 @@ function channel(port: LinuxReadbackPort, frames: number, onFailure: () => void)
             return closed;
         },
         closeTask,
+        failure: () => ({ primarySet, primary }),
         receive(fn: typeof receive) {
             receive = fn;
         },
@@ -535,6 +556,417 @@ export function createLinuxMainReadback(port: LinuxReadbackPort, now: () => numb
             ...wire.summary(),
             replyAcknowledged: replyAck,
             finalizationAuthority: false,
+        }),
+    });
+}
+
+const quitSelections = new WeakMap<object, LinuxReadbackBinding>();
+const intrinsicPromiseThen = Promise.prototype.then;
+const bindingKeys = [
+    'root',
+    'installationId',
+    'transactionId',
+    'manifestSHA256',
+    'version',
+    'profile',
+    'executable',
+    'uid',
+];
+function quitBinding(input: LinuxReadbackBinding): LinuxReadbackBinding {
+    if (!input || typeof input !== 'object' || Reflect.ownKeys(input).length !== bindingKeys.length)
+        throw Error('LINUX_QUIT_BINDING');
+    const value: Record<string, any> = {};
+    for (const key of bindingKeys) {
+        const item = Object.getOwnPropertyDescriptor(input, key);
+        if (!item || !Object.hasOwn(item, 'value') || item.get || item.set)
+            throw Error('LINUX_QUIT_BINDING');
+        value[key] = item.value;
+    }
+    if (
+        !positive(value.uid) ||
+        bindingKeys
+            .filter((key) => key !== 'uid')
+            .some(
+                (key) =>
+                    typeof value[key] !== 'string' ||
+                    !value[key].length ||
+                    value[key].length > 4096,
+            ) ||
+        !/^[a-f0-9]{64}$/.test(value.manifestSHA256) ||
+        !value.root.startsWith('/') ||
+        value.executable !== value.root + '/app/diagnostic-hub' ||
+        !value.profile.startsWith('/')
+    )
+        throw Error('LINUX_QUIT_BINDING');
+    return value as LinuxReadbackBinding;
+}
+/** Selects a one-use effect, never installed/native/release evidence. The real pipe is authority. */
+export function createLinuxOwnedQuitSelection(binding: LinuxReadbackBinding): object {
+    const selected = Object.freeze({});
+    quitSelections.set(selected, quitBinding(binding));
+    return selected;
+}
+export function consumeLinuxOwnedQuitSelection(
+    selection: object | undefined,
+    binding: LinuxReadbackBinding,
+) {
+    if (selection === undefined) return false;
+    const actual = quitSelections.get(selection);
+    quitSelections.delete(selection);
+    if (!actual || JSON.stringify(actual) !== JSON.stringify(quitBinding(binding)))
+        throw Error('LINUX_QUIT_SELECTION');
+    return true;
+}
+
+/** Independent inherited fd4. Startup fd3 remains the original one-shot protocol. */
+export function createLinuxInstallerQuit(
+    port: LinuxReadbackPort,
+    expected: LinuxReadbackBinding,
+    clock: LinuxReadbackClock = { now: Date.now, nonce: () => randomBytes(32) },
+    onFailure: () => void = () => {},
+) {
+    const binding = quitBinding(expected),
+        now = clock.now.bind(clock);
+    let process: LinuxReadbackProcess | null = null,
+        token: string | null = null,
+        sentAt = 0,
+        used = false,
+        committed = false,
+        accepted = false,
+        idleEOF = false,
+        record: LinuxSetupReadiness | null = null,
+        ready: (value: LinuxSetupReadiness | null) => void = () => {},
+        finished: (value: boolean) => void = () => {};
+    const readyTask = new Promise<LinuxSetupReadiness | null>((resolve) => {
+            ready = resolve;
+        }),
+        finishTask = new Promise<boolean>((resolve) => {
+            finished = resolve;
+        });
+    const wire = channel(port, 2, () => {
+        ready(null);
+        finished(false);
+        onFailure();
+    });
+    wire.receive((value) => {
+        if (
+            own(value, ['v', 'kind', 'nonce', 'readiness']) &&
+            value.v === 1 &&
+            value.kind === 'quit-ready' &&
+            token &&
+            value.nonce === token &&
+            process &&
+            !record &&
+            !committed
+        ) {
+            try {
+                const r = checkedLinuxSetupReadiness(value.readiness);
+                if (
+                    !matches(r, binding, process.pid) ||
+                    r.observedAtMs < sentAt ||
+                    !fresh(r.observedAtMs, now())
+                )
+                    throw Error();
+                record = r;
+                ready(clone(r));
+            } catch {
+                wire.fail('QUIT_READINESS');
+            }
+            return;
+        }
+        if (
+            own(value, ['v', 'kind', 'nonce']) &&
+            value.v === 1 &&
+            value.kind === 'quit-accepted' &&
+            token &&
+            value.nonce === token &&
+            record &&
+            committed &&
+            !accepted &&
+            fresh(record.observedAtMs, now())
+        ) {
+            accepted = true;
+            wire.end();
+            return;
+        }
+        wire.fail('QUIT_REPLY');
+    });
+    wire.eof(() => {
+        if (!used) {
+            idleEOF = true;
+            wire.end();
+        } else if (!accepted) wire.fail('QUIT_EOF');
+    });
+    wire.closedBy(() => {
+        if (accepted && record && fresh(record.observedAtMs, now())) finished(true);
+        else if (!idleEOF) wire.fail('QUIT_CLOSE');
+    });
+    return Object.freeze({
+        prepare(input: LinuxReadbackProcess) {
+            if (
+                used ||
+                wire.failed ||
+                wire.closed ||
+                !own(input, ['pid', 'uid', 'executable', 'startTicks']) ||
+                !positive(input.pid) ||
+                input.uid !== binding.uid ||
+                input.executable !== binding.executable ||
+                !tick(input.startTicks)
+            ) {
+                wire.fail('QUIT_PROCESS');
+                return readyTask;
+            }
+            used = true;
+            process = clone(input);
+            try {
+                const bytes = clock.nonce();
+                if (!Buffer.isBuffer(bytes) || bytes.length !== 32) throw Error();
+                token = bytes.toString('hex');
+                sentAt = now();
+                if (!nonce(token) || !positive(sentAt)) throw Error();
+                wire.write(
+                    {
+                        v: 1,
+                        kind: 'prepare-quit',
+                        nonce: token,
+                        sentAt,
+                        binding,
+                        pid: process.pid,
+                        startTicks: process.startTicks,
+                    },
+                    () => {},
+                );
+            } catch {
+                wire.fail('QUIT_CHALLENGE');
+            }
+            return readyTask;
+        },
+        commit() {
+            if (
+                !record ||
+                !token ||
+                committed ||
+                wire.failed ||
+                !fresh(record.observedAtMs, now())
+            ) {
+                wire.fail('QUIT_COMMIT');
+                return finishTask;
+            }
+            committed = true;
+            wire.write({ v: 1, kind: 'quit', nonce: token }, () => {});
+            return finishTask;
+        },
+        async joinClosure() {
+            if (!(await wire.closeTask)) throw Error('LINUX_QUIT_CUSTODY_RETAINED');
+        },
+        abort: () => wire.fail('QUIT_OWNER_ABORTED'),
+        summary: () => ({
+            ...wire.summary(),
+            prepared: record !== null,
+            accepted,
+            idleEOF,
+            primarySet: wire.failure().primarySet,
+            normalCloseObserved: false as const,
+            releaseAcceptance: false as const,
+        }),
+    });
+}
+
+export function createLinuxMainQuit(
+    port: LinuxReadbackPort,
+    requestQuit: () => void,
+    now: () => number = Date.now,
+    onFailure: () => void = () => {},
+) {
+    let offered: LinuxSetupReadiness | null = null,
+        refresh: (() => Promise<LinuxSetupReadiness | null>) | null = null,
+        challenge: Record<string, any> | null = null,
+        prepared: LinuxSetupReadiness | null = null,
+        committed = false,
+        acceptedSent = false,
+        acceptedAck = false,
+        submitted = false,
+        returned = false,
+        stopping = false,
+        primarySet = false,
+        primary: unknown,
+        lastReturn: unknown,
+        returnTask: Promise<unknown> | null = null,
+        returnOutcome: { settled: boolean; fulfilled?: boolean; value?: unknown } = {
+            settled: false,
+        },
+        returnJoinErrorSet = false,
+        returnJoinError: unknown;
+    const fail = (code: string, value?: unknown, actual = false) => {
+        if (actual && !primarySet) {
+            primarySet = true;
+            primary = value;
+        }
+        wire.fail(code);
+    };
+    const wire = channel(port, 2, onFailure);
+    wire.receive((value) => {
+        if (
+            own(value, ['v', 'kind', 'nonce', 'sentAt', 'binding', 'pid', 'startTicks']) &&
+            value.v === 1 &&
+            value.kind === 'prepare-quit' &&
+            !challenge &&
+            !stopping &&
+            offered &&
+            refresh &&
+            nonce(value.nonce) &&
+            tick(value.startTicks) &&
+            positive(value.pid) &&
+            fresh(value.sentAt, now())
+        ) {
+            try {
+                if (!matches(offered, quitBinding(value.binding), value.pid)) throw Error();
+            } catch (error) {
+                fail('QUIT_BINDING', error, true);
+                return;
+            }
+            challenge = clone(value);
+            void Promise.resolve()
+                .then(refresh)
+                .then(
+                    (result) => {
+                        if (wire.failed || stopping) return;
+                        try {
+                            const r = checkedLinuxSetupReadiness(result);
+                            if (
+                                !matches(r, value.binding, value.pid) ||
+                                r.observedAtMs < value.sentAt ||
+                                !fresh(r.observedAtMs, now())
+                            )
+                                throw Error();
+                            prepared = r;
+                            wire.write(
+                                { v: 1, kind: 'quit-ready', nonce: value.nonce, readiness: r },
+                                () => {},
+                            );
+                        } catch (error) {
+                            fail('QUIT_READINESS', error, true);
+                        }
+                    },
+                    (error) => fail('QUIT_READINESS', error, true),
+                );
+            return;
+        }
+        if (
+            own(value, ['v', 'kind', 'nonce']) &&
+            value.v === 1 &&
+            value.kind === 'quit' &&
+            challenge &&
+            value.nonce === challenge.nonce &&
+            prepared &&
+            refresh &&
+            !committed &&
+            !stopping &&
+            fresh(prepared.observedAtMs, now())
+        ) {
+            committed = true;
+            void Promise.resolve()
+                .then(refresh)
+                .then(
+                    (result) => {
+                        if (wire.failed || stopping) return;
+                        try {
+                            const r = checkedLinuxSetupReadiness(result);
+                            if (
+                                !matches(r, challenge!.binding, challenge!.pid) ||
+                                !fresh(r.observedAtMs, now()) ||
+                                r.process.creationTimeMs !== prepared!.process.creationTimeMs ||
+                                JSON.stringify(r.window) !== JSON.stringify(prepared!.window)
+                            )
+                                throw Error();
+                            prepared = r;
+                            acceptedSent = true;
+                            wire.write({ v: 1, kind: 'quit-accepted', nonce: value.nonce }, () => {
+                                acceptedAck = true;
+                                wire.end();
+                            });
+                        } catch (error) {
+                            fail('QUIT_READINESS', error, true);
+                        }
+                    },
+                    (error) => fail('QUIT_READINESS', error, true),
+                );
+            return;
+        }
+        fail('QUIT_REQUEST');
+    });
+    wire.eof(() => {
+        if (!challenge && !committed) {
+            stopping = true;
+            wire.end();
+        } else if (!acceptedSent) fail('QUIT_EOF');
+    });
+    wire.closedBy(() => {
+        if (stopping && !committed) return;
+        if (!acceptedAck || !prepared || !fresh(prepared.observedAtMs, now()) || submitted) {
+            fail('QUIT_CLOSE');
+            return;
+        }
+        submitted = true;
+        try {
+            lastReturn = requestQuit();
+            if (lastReturn !== undefined) {
+                // Never read a returned object's then getter. An actual Promise is retained
+                // together with its late outcome; any intrinsic join failure remains owned.
+                try {
+                    returnTask = Reflect.apply(intrinsicPromiseThen, lastReturn, [
+                        (value: unknown) => {
+                            returnOutcome = { settled: true, fulfilled: true, value };
+                        },
+                        (value: unknown) => {
+                            returnOutcome = { settled: true, fulfilled: false, value };
+                        },
+                    ]);
+                } catch (error) {
+                    returnJoinErrorSet = true;
+                    returnJoinError = error;
+                }
+                throw Error('LINUX_QUIT_ASYNC_RETURN');
+            }
+            returned = true;
+        } catch (error) {
+            fail('QUIT_CALLBACK', error, true);
+        }
+    });
+    return Object.freeze({
+        offer(value: LinuxSetupReadiness | null, read: () => Promise<LinuxSetupReadiness | null>) {
+            if (!value || wire.failed || stopping || challenge) return;
+            try {
+                offered = checkedLinuxSetupReadiness(value);
+                refresh = read;
+            } catch (error) {
+                fail('QUIT_OFFER', error, true);
+            }
+        },
+        async joinClosure() {
+            if (!challenge && !wire.failed) {
+                stopping = true;
+                wire.end();
+            }
+            if (!(await wire.closeTask) || wire.failed) throw Error('LINUX_QUIT_CUSTODY_RETAINED');
+        },
+        summary: () => ({
+            ...wire.summary(),
+            requested: submitted,
+            requestReturned: returned,
+            primarySet: primarySet || wire.failure().primarySet,
+            callbackReturnPending: returnTask !== null && !returnOutcome.settled,
+            releaseAcceptance: false as const,
+        }),
+        failure: () => ({
+            primarySet,
+            primary,
+            lastReturn,
+            returnTask,
+            returnOutcome: { ...returnOutcome },
+            returnJoinErrorSet,
+            returnJoinError,
+            transport: wire.failure(),
         }),
     });
 }

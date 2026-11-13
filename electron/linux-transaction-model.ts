@@ -57,6 +57,7 @@ export type LinuxModelPhase =
     | 'prepared'
     | 'old-retained'
     | 'candidate-active'
+    | 'candidate-confirmed'
     | 'rollback-started'
     | 'candidate-retained'
     | 'rolled-back';
@@ -73,7 +74,39 @@ export interface LinuxModelJournal {
     owner: LinuxModelOwner;
     phase: LinuxModelPhase;
 }
+/** Private retained originals, not a new installation/journal wire format. */
+export interface LinuxRetainedGeneration {
+    archived: boolean;
+    base64: string;
+    sha256: string;
+    journal: LinuxModelJournal;
+    previous: LinuxModelPayload;
+    activity: 'inactive' | 'active' | 'unknown';
+}
+export const MAX_LINUX_RETAINED_GENERATIONS = 8;
+/** Historical recovery input plus the actual externally observed removal cursor.
+ * The predecessor descriptor is not a currently present payload or a native-proof receipt. */
+export interface LinuxModelCleanup {
+    configuration: LinuxModelConfiguration;
+    initial: LinuxModelView;
+    snapshotSHA256: string;
+    entries: number;
+    progress: {
+        phase: 'prepared' | 'previous-issued' | 'previous-retained' | 'deleting' | 'complete';
+        index: number;
+        leaf: 'source' | 'move-issued' | 'staged' | 'unlink-issued';
+    };
+    seal?: { intentSHA256: string; state: 'preparing' | 'ready' | 'gap' | 'published' };
+}
 export interface LinuxModelView {
+    /** Fixed first-upgrade handoff. Original journal bytes remain part of every later guard. */
+    history?: {
+        journalOriginal: { base64: string; sha256: string } | null;
+        completed: { base64: string; sha256: string; journal: LinuxModelJournal } | null;
+        /** No-menu only. At most one final entry is the current, not-yet-archived journal. */
+        lineage?: LinuxRetainedGeneration[];
+        cleanup?: LinuxModelCleanup;
+    };
     menu?: LinuxMenuView;
     /** Fresh independent activity observations for exactly the three guarded slots; unknown refuses. */
     activity: {
@@ -92,7 +125,15 @@ export interface LinuxModelPlan {
     menu?: LinuxMenuChoice;
     host: LinuxReviewHost;
     root: string;
-    action: 'install' | 'repair' | 'update' | 'rollback' | 'resume' | 'launch';
+    action:
+        | 'install'
+        | 'repair'
+        | 'update'
+        | 'rollback'
+        | 'resume'
+        | 'launch'
+        | 'uninstall-current'
+        | 'finalize';
     transactionId: string;
     installationId: string;
     owner: LinuxModelOwner;
@@ -100,6 +141,9 @@ export interface LinuxModelPlan {
     review: LinuxModelView;
     reviewSHA256: string;
 }
+/** Fixed operation selection before original filesystem observations or consent.
+ * It contains no review snapshot and cannot be passed to transaction.run. */
+export type LinuxModelConfiguration = Omit<LinuxModelPlan, 'consent' | 'review' | 'reviewSHA256'>;
 export interface LinuxReservationIdentity {
     root: string;
     uid: number;
@@ -128,6 +172,7 @@ export interface LinuxModelKernel {
 }
 export interface LinuxMemoryEffects {
     kind: 'injected-memory-effects';
+    handoff?(scope: LinuxModelScope, guard: LinuxModelView): Promise<LinuxModelView>;
     menuStage?(
         scope: LinuxModelScope,
         guard: LinuxModelView,
@@ -190,8 +235,12 @@ function fields(value: object, allowed: readonly string[]) {
 }
 function copy<T>(value: T): T {
     const bytes = JSON.stringify(value);
-    // Four separately bounded manifest slots plus fixed identity/journal metadata. No heap guarantee.
-    if (!bytes || Buffer.byteLength(bytes) > MAX_INSTALLATION_MANIFEST_BYTES * 4 + 65536)
+    // Current slots, eight retained payloads and one bounded historical first-cleanup view.
+    if (
+        !bytes ||
+        Buffer.byteLength(bytes) >
+            MAX_INSTALLATION_MANIFEST_BYTES * (7 + MAX_LINUX_RETAINED_GENERATIONS) + 262144
+    )
         throw Error('model input bound');
     return JSON.parse(bytes) as T;
 }
@@ -265,10 +314,14 @@ function source(value: LinuxModelSource, uid: number, payload = false) {
     if (manifestDigest(value.manifest) !== value.verifiedManifestSHA256)
         throw Error('model unverified bytes');
 }
-function profile(plan: LinuxModelPlan) {
+function profile(plan: LinuxModelConfiguration) {
     return path.posix.join(plan.host.appData, 'DiagnosticHub', 'profiles', plan.installationId);
 }
-function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
+function validateView(
+    view: LinuxModelView,
+    plan: LinuxModelConfiguration,
+    historicalConfirmed = false,
+) {
     fields(view, [
         'activity',
         'parents',
@@ -277,6 +330,7 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
         'stage',
         'previous',
         'journal',
+        ...(Object.hasOwn(view, 'history') ? ['history'] : []),
         ...(Object.hasOwn(plan, 'menu') ? ['menu'] : []),
     ]);
     if (Object.hasOwn(plan, 'menu')) checkedLinuxMenuView(view.menu, plan.host.uid);
@@ -356,6 +410,250 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
                 if (inodeKeys.includes(key)) throw Error('aliased model menu file');
                 inodeKeys.push(key);
             }
+    if (Object.hasOwn(view, 'history')) {
+        if (!view.history) throw Error('model history required');
+        fields(view.history, [
+            'journalOriginal',
+            'completed',
+            ...(Object.hasOwn(view.history, 'lineage') ? ['lineage'] : []),
+            ...(Object.hasOwn(view.history, 'cleanup') ? ['cleanup'] : []),
+        ]);
+        const original = (
+            value: { base64: string; sha256: string; journal?: LinuxModelJournal },
+            journal: LinuxModelJournal,
+            completed = false,
+        ) => {
+            fields(value, ['base64', 'sha256', ...(completed ? ['journal'] : [])]);
+            if (
+                typeof value.base64 !== 'string' ||
+                value.base64.length > 10924 ||
+                !hash.test(value.sha256)
+            )
+                throw Error('journal original bound');
+            const bytes = Buffer.from(value.base64, 'base64');
+            if (
+                !bytes.length ||
+                bytes.length > 8192 ||
+                bytes.toString('base64') !== value.base64 ||
+                createHash('sha256').update(bytes).digest('hex') !== value.sha256 ||
+                !equal(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), journal)
+            )
+                throw Error('journal original differs');
+        };
+        if (
+            view.journal === null
+                ? view.history.journalOriginal !== null
+                : view.history.journalOriginal === null
+        )
+            throw Error('journal original missing');
+        if (view.history.journalOriginal) original(view.history.journalOriginal, view.journal!);
+        if (view.history.completed) {
+            const prior = view.history.completed;
+            original(prior, prior.journal, true);
+            // Validate retained journal grammar under its own old transaction, without claiming it current.
+            const { history: _history, ...withoutHistory } = copy(view);
+            validateView(
+                { ...withoutHistory, journal: prior.journal } as LinuxModelView,
+                {
+                    ...completedJournalContext(plan, prior.journal),
+                    transactionId: prior.journal.transactionId,
+                },
+                true,
+            );
+            if (
+                prior.journal.phase !== 'candidate-confirmed' &&
+                (prior.journal.phase !== 'candidate-active' ||
+                    prior.journal.previousSHA256 !== null)
+            )
+                throw Error('completed journal phase differs');
+        }
+        if (Object.hasOwn(view.history, 'cleanup')) {
+            const cleanup = view.history.cleanup!;
+            fields(cleanup, [
+                'configuration',
+                'initial',
+                'snapshotSHA256',
+                'entries',
+                'progress',
+                ...(Object.hasOwn(cleanup, 'seal') ? ['seal'] : []),
+            ]);
+            fields(cleanup.progress, ['phase', 'index', 'leaf']);
+            if (Object.hasOwn(cleanup, 'seal')) {
+                const seal = cleanup.seal!;
+                fields(seal, ['intentSHA256', 'state']);
+                if (
+                    cleanup.progress.phase !== 'complete' ||
+                    !hash.test(seal.intentSHA256) ||
+                    !['preparing', 'ready', 'gap', 'published'].includes(seal.state)
+                )
+                    throw Error('unsupported confirmed seal');
+            }
+            validateConfiguration(cleanup.configuration);
+            if (
+                cleanup.initial.history?.cleanup ||
+                cleanup.configuration.action !== 'finalize' ||
+                cleanup.configuration.root !== plan.root ||
+                cleanup.configuration.host.uid !== plan.host.uid ||
+                cleanup.configuration.host.home !== plan.host.home ||
+                cleanup.configuration.host.appData !== plan.host.appData ||
+                cleanup.configuration.installationId !== plan.installationId ||
+                !hash.test(cleanup.snapshotSHA256) ||
+                !Number.isInteger(cleanup.entries) ||
+                cleanup.entries < 1 ||
+                cleanup.entries > 20010 ||
+                !Number.isInteger(cleanup.progress.index) ||
+                cleanup.progress.index < 0 ||
+                cleanup.progress.index > cleanup.entries ||
+                ![
+                    'prepared',
+                    'previous-issued',
+                    'previous-retained',
+                    'deleting',
+                    'complete',
+                ].includes(cleanup.progress.phase) ||
+                !['source', 'move-issued', 'staged', 'unlink-issued'].includes(
+                    cleanup.progress.leaf,
+                ) ||
+                (cleanup.progress.phase !== 'deleting' &&
+                    (cleanup.progress.phase === 'complete'
+                        ? cleanup.progress.index !== cleanup.entries ||
+                          cleanup.progress.leaf !== 'source'
+                        : cleanup.progress.index !== 0 || cleanup.progress.leaf !== 'source'))
+            )
+                throw Error('unsupported predecessor cleanup');
+            validateView(cleanup.initial, cleanup.configuration);
+            assertLinuxRetainedFinalizePreimages(cleanup.initial, cleanup.configuration);
+            const original = cleanup.initial.journal!,
+                confirmed = { ...copy(original), phase: 'candidate-confirmed' };
+            if (cleanup.progress.phase !== 'complete') {
+                if (
+                    !equal(view.root, cleanup.initial.root) ||
+                    view.stage ||
+                    (view.previous !== null && !equal(view.previous, cleanup.initial.previous)) ||
+                    !equal(view.journal, original) ||
+                    !equal(view.history.completed, cleanup.initial.history!.completed) ||
+                    view.history.lineage?.length ||
+                    !equal(view.source.manifest, cleanup.initial.source.manifest)
+                )
+                    throw Error('pending predecessor cleanup differs');
+            } else {
+                const anchor =
+                    view.journal?.transactionId === original.transactionId
+                        ? view.journal
+                        : view.history.completed?.journal;
+                const gap =
+                    cleanup.seal?.state === 'gap' &&
+                    !view.journal &&
+                    !view.history.completed &&
+                    !view.previous &&
+                    !view.stage &&
+                    equal(view.root, cleanup.initial.root);
+                if (
+                    !gap &&
+                    (!anchor ||
+                        (!equal(anchor, original) && !equal(anchor, confirmed)) ||
+                        (anchor.phase === 'candidate-active' &&
+                            !equal(view.root, cleanup.initial.root)) ||
+                        (cleanup.seal?.state === 'published' && !equal(anchor, confirmed)) ||
+                        (cleanup.seal &&
+                            cleanup.seal.state !== 'published' &&
+                            !equal(anchor, original)))
+                )
+                    throw Error('completed predecessor cleanup anchor differs');
+            }
+        }
+        if (Object.hasOwn(view.history, 'lineage')) {
+            const lineage = view.history.lineage!;
+            if (
+                Object.hasOwn(plan, 'menu') ||
+                !view.history.completed ||
+                !Array.isArray(lineage) ||
+                !lineage.length ||
+                lineage.length > MAX_LINUX_RETAINED_GENERATIONS ||
+                [view.root, view.stage, view.previous].some(
+                    (slot) => slot && Object.hasOwn(slot, 'menu'),
+                )
+            )
+                throw Error('unsupported retained lineage');
+            let prior = view.history.completed.journal;
+            const transactions = new Set([prior.transactionId]);
+            for (let index = 0; index < lineage.length; index++) {
+                const entry = lineage[index];
+                fields(entry, ['archived', 'base64', 'sha256', 'journal', 'previous', 'activity']);
+                if (
+                    typeof entry.archived !== 'boolean' ||
+                    entry.activity !== 'inactive' ||
+                    (!entry.archived && index !== lineage.length - 1) ||
+                    Object.hasOwn(entry.journal, 'menu') ||
+                    Object.hasOwn(entry.previous, 'menu')
+                )
+                    throw Error('unsupported retained generation');
+                original(
+                    { base64: entry.base64, sha256: entry.sha256, journal: entry.journal },
+                    entry.journal,
+                    true,
+                );
+                const { history: _history, ...withoutHistory } = copy(view);
+                validateView({ ...withoutHistory, journal: entry.journal } as LinuxModelView, {
+                    ...plan,
+                    transactionId: entry.journal.transactionId,
+                });
+                source(entry.previous, plan.host.uid, true);
+                const previous = entry.previous;
+                if (
+                    entry.journal.phase !== 'candidate-active' ||
+                    transactions.has(entry.journal.transactionId) ||
+                    entry.journal.previousSHA256 !== prior.candidateSHA256 ||
+                    previous.transactionId !== prior.transactionId ||
+                    previous.verifiedManifestSHA256 !== prior.candidateSHA256 ||
+                    previous.installationId !== plan.installationId ||
+                    previous.root !== plan.root ||
+                    previous.profile !== profile(plan)
+                )
+                    throw Error('retained generation chain differs');
+                const key = previous.identity.dev + ':' + previous.identity.ino;
+                if (inodeKeys.includes(key)) throw Error('aliased retained generation');
+                inodeKeys.push(key);
+                transactions.add(entry.journal.transactionId);
+                prior = entry.journal;
+                if (
+                    !entry.archived &&
+                    (!equal(view.journal, entry.journal) ||
+                        !equal(view.history.journalOriginal, {
+                            base64: entry.base64,
+                            sha256: entry.sha256,
+                        }))
+                )
+                    throw Error('current retained original differs');
+            }
+            const last = lineage[lineage.length - 1];
+            if (
+                last.archived &&
+                view.journal &&
+                (transactions.has(view.journal.transactionId) ||
+                    view.journal.previousSHA256 !== last.journal.candidateSHA256)
+            )
+                throw Error('current generation does not follow retained history');
+            if (last.archived && view.journal) {
+                const predecessor = (slot: LinuxModelPayload | null) =>
+                    slot !== null &&
+                    slot.transactionId === last.journal.transactionId &&
+                    slot.verifiedManifestSHA256 === last.journal.candidateSHA256;
+                const restored = predecessor(view.root) && view.previous === null;
+                const retained = predecessor(view.previous);
+                const phase = view.journal.phase;
+                const bound =
+                    phase === 'copying' || phase === 'rolled-back'
+                        ? restored
+                        : phase === 'prepared' || phase === 'candidate-retained'
+                          ? restored || (view.root === null && retained)
+                          : ['old-retained', 'candidate-active', 'rollback-started'].includes(
+                                phase,
+                            ) && retained;
+                if (!bound) throw Error('current predecessor differs from retained journal');
+            }
+        }
+    }
     if (view.journal !== null) {
         const journal = view.journal;
         if (Buffer.byteLength(JSON.stringify(journal)) > 8192) throw Error('model journal bound');
@@ -372,13 +670,27 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
             'phase',
             ...(plan.menu ? ['menu'] : []),
         ]);
-        if (plan.menu) checkedLinuxMenuJournal(journal.menu, plan);
+        if (plan.menu)
+            checkedLinuxMenuJournal(
+                journal.menu,
+                view.history && journal.transactionId !== plan.transactionId
+                    ? completedJournalContext(plan, journal)
+                    : plan,
+            );
         owner(journal.owner);
         if (
             journal.schemaVersion !== 1 ||
             journal.root !== plan.root ||
             journal.uid !== plan.host.uid ||
-            journal.transactionId !== plan.transactionId ||
+            (journal.transactionId !== plan.transactionId &&
+                !(
+                    view.history &&
+                    (view.history.completed === null ||
+                        (view.history.lineage?.at(-1)?.archived === false &&
+                            equal(view.history.lineage.at(-1)!.journal, journal))) &&
+                    ['install', 'repair', 'update'].includes(plan.action) &&
+                    completedRoot(view, journal)
+                )) ||
             journal.installationId !== plan.installationId ||
             journal.profile !== profile(plan) ||
             !hash.test(journal.candidateSHA256) ||
@@ -388,6 +700,7 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
                 'prepared',
                 'old-retained',
                 'candidate-active',
+                'candidate-confirmed',
                 'rollback-started',
                 'candidate-retained',
                 'rolled-back',
@@ -395,6 +708,41 @@ function validateView(view: LinuxModelView, plan: LinuxModelPlan) {
         )
             throw Error('foreign model journal');
     }
+    if (
+        !historicalConfirmed &&
+        (view.journal?.phase === 'candidate-confirmed' ||
+            view.history?.completed?.journal.phase === 'candidate-confirmed') &&
+        !view.history?.cleanup
+    )
+        throw Error('confirmed generation lacks cleanup history');
+}
+/** Exact first completed installation, with no retained predecessor or uncommitted candidate. */
+function completedRoot(view: LinuxModelView, journal: LinuxModelJournal) {
+    const retained = view.history?.lineage?.at(-1);
+    return (
+        ['candidate-active', 'candidate-confirmed'].includes(journal.phase) &&
+        (journal.phase === 'candidate-confirmed' ||
+            journal.previousSHA256 === null ||
+            (retained && equal(retained.journal, journal))) &&
+        view.stage === null &&
+        view.previous === null &&
+        view.root !== null &&
+        view.root.transactionId === journal.transactionId &&
+        view.root.verifiedManifestSHA256 === journal.candidateSHA256 &&
+        (!journal.menu ||
+            (journal.menu.phase === 'applied' &&
+                view.menu?.candidate === null &&
+                view.menu?.previous === null))
+    );
+}
+/** An old journal keeps its old menu intent when a fresh upgrade selects a different menu choice. */
+function completedJournalContext(
+    plan: LinuxModelConfiguration,
+    journal: LinuxModelJournal,
+): LinuxModelConfiguration {
+    return plan.menu && journal.menu
+        ? { ...plan, menu: { ...plan.menu, selected: journal.menu.after !== null } }
+        : plan;
 }
 /** Complete app preimage admission BEFORE any menu rollback write/move. No effects. */
 function assertLinuxAppRollbackPreimages(view: LinuxModelView) {
@@ -539,7 +887,7 @@ function assertLinuxResumePreimages(view: LinuxModelView, plan: LinuxModelPlan) 
         assertLinuxMenuPhase(view.menu!, journal.menu, plan);
     }
 }
-function assertLinuxLaunchPreimages(view: LinuxModelView, plan: LinuxModelPlan) {
+function assertLinuxLaunchPreimages(view: LinuxModelView, plan: LinuxModelConfiguration) {
     if (
         !view.root ||
         view.stage ||
@@ -548,9 +896,21 @@ function assertLinuxLaunchPreimages(view: LinuxModelView, plan: LinuxModelPlan) 
         !equal(view.root.manifest, view.source.manifest)
     )
         throw Error('launch payload differs');
+    const cleanup = view.history?.cleanup;
+    if (cleanup?.seal && cleanup.seal.state !== 'published' && plan.action !== 'finalize')
+        throw Error('issued confirmed seal requires Finalize recovery');
+    if (cleanup && cleanup.progress.phase !== 'complete' && plan.action !== 'finalize')
+        throw Error('predecessor cleanup requires Finalize recovery');
     if (view.journal) {
-        if (view.journal.phase !== 'candidate-active') throw Error('launch phase differs');
-        assertLinuxAppRollbackPreimages(view);
+        if (view.journal.phase === 'candidate-confirmed') {
+            if (!cleanup || cleanup.progress.phase !== 'complete' || view.previous || plan.menu)
+                throw Error('confirmed launch lacks complete predecessor cleanup');
+        } else {
+            if (view.journal.phase !== 'candidate-active') throw Error('launch phase differs');
+            if (cleanup && cleanup.configuration.transactionId === view.journal.transactionId) {
+                if (plan.action !== 'finalize') throw Error('predecessor cleanup seal pending');
+            } else assertLinuxAppRollbackPreimages(view);
+        }
         if (plan.menu && view.journal.menu!.phase !== 'applied')
             throw Error('launch menu incomplete');
     } else {
@@ -563,6 +923,83 @@ function assertLinuxLaunchPreimages(view: LinuxModelView, plan: LinuxModelPlan) 
         )
             throw Error('launch menu differs');
     }
+}
+/** First no-menu predecessor removal; every original and inactive physical slot is required. */
+export function assertLinuxRetainedFinalizePreimages(
+    view: LinuxModelView,
+    plan: LinuxModelConfiguration,
+) {
+    assertLinuxLaunchPreimages(view, plan);
+    const journal = view.journal,
+        completed = view.history?.completed;
+    if (
+        plan.menu ||
+        view.root?.menu ||
+        view.stage ||
+        !view.previous ||
+        view.history?.lineage?.length ||
+        view.history?.cleanup ||
+        !journal ||
+        journal.phase !== 'candidate-active' ||
+        journal.previousSHA256 === null ||
+        !view.history?.journalOriginal ||
+        !completed ||
+        completed.journal.previousSHA256 !== null ||
+        completed.journal.phase !== 'candidate-active' ||
+        journal.previousSHA256 !== completed.journal.candidateSHA256 ||
+        view.previous.transactionId !== completed.journal.transactionId ||
+        view.previous.verifiedManifestSHA256 !== journal.previousSHA256 ||
+        journal.transactionId !== view.root!.transactionId ||
+        journal.installationId !== view.root!.installationId ||
+        Object.values(view.activity).some((value) => value !== 'inactive')
+    )
+        throw Error('LINUX_FINALIZE_FIRST_PREDECESSOR_NO_MENU_REQUIRED');
+}
+export function assertLinuxFinalizePreimages(view: LinuxModelView, plan: LinuxModelConfiguration) {
+    if (
+        view.history?.cleanup &&
+        (view.history.cleanup.configuration.transactionId === view.journal?.transactionId ||
+            (view.journal === null &&
+                view.history.cleanup.configuration.transactionId === view.root?.transactionId))
+    ) {
+        assertLinuxLaunchPreimages(view, plan);
+        if (
+            plan.menu ||
+            view.stage ||
+            view.history.lineage?.length ||
+            Object.values(view.activity).some((value) => value !== 'inactive')
+        )
+            throw Error('LINUX_FINALIZE_RECOVERY_SELECTION');
+    } else if (view.journal?.previousSHA256 !== null && view.journal) {
+        assertLinuxRetainedFinalizePreimages(view, plan);
+    } else assertLinuxInitialFinalizePreimages(view, plan);
+}
+/** Initial-only completion has no retained payload to discard. Originals remain intact. */
+export function assertLinuxInitialFinalizePreimages(
+    view: LinuxModelView,
+    plan: LinuxModelConfiguration,
+) {
+    assertLinuxLaunchPreimages(view, plan);
+    const journal = view.journal ?? view.history?.completed?.journal;
+    if (
+        plan.menu ||
+        view.root?.menu ||
+        view.stage ||
+        view.previous ||
+        view.history?.lineage?.length ||
+        Object.values(view.activity).some((value) => value !== 'inactive') ||
+        !view.history ||
+        !journal ||
+        journal.phase !== 'candidate-active' ||
+        journal.previousSHA256 !== null ||
+        journal.transactionId !== view.root!.transactionId ||
+        journal.installationId !== view.root!.installationId ||
+        journal.candidateSHA256 !== view.root!.verifiedManifestSHA256 ||
+        (view.journal
+            ? Boolean(view.history.completed) || !view.history.journalOriginal
+            : !view.history.completed)
+    )
+        throw Error('LINUX_FINALIZE_INITIAL_NO_MENU_REQUIRED');
 }
 function validatePlan(plan: LinuxModelPlan) {
     fields(plan, [
@@ -577,6 +1014,47 @@ function validatePlan(plan: LinuxModelPlan) {
         'reviewSHA256',
         ...(Object.hasOwn(plan, 'menu') ? ['menu'] : []),
     ]);
+    validateConfiguration(plan);
+    if (plan.consent !== true || !hash.test(plan.reviewSHA256)) throw Error('model plan admission');
+    validateView(plan.review, plan);
+    if (plan.action === 'rollback') assertLinuxAppRollbackPreimages(plan.review);
+    if (plan.action === 'resume') assertLinuxResumePreimages(plan.review, plan);
+    if (plan.action === 'launch') assertLinuxLaunchPreimages(plan.review, plan);
+    if (plan.action === 'finalize') assertLinuxFinalizePreimages(plan.review, plan);
+    const cleanup = plan.review.history?.cleanup;
+    if (cleanup) {
+        const current = cleanup.configuration.transactionId === plan.review.journal?.transactionId,
+            pending =
+                cleanup.progress.phase !== 'complete' ||
+                (current && plan.review.journal?.phase === 'candidate-active') ||
+                (cleanup.seal && cleanup.seal.state !== 'published');
+        if (
+            (plan.action === 'rollback' && current) ||
+            (!['finalize', 'launch'].includes(plan.action) && pending)
+        )
+            throw Error('pending predecessor cleanup requires Finalize');
+    }
+    if (
+        plan.menu &&
+        plan.review.journal &&
+        !(plan.action === 'resume' && plan.review.journal.phase === 'candidate-active')
+    )
+        assertLinuxMenuPhase(
+            plan.review.menu!,
+            plan.review.journal.menu!,
+            plan.review.history && plan.review.journal.transactionId !== plan.transactionId
+                ? completedJournalContext(plan, plan.review.journal)
+                : plan,
+        );
+    if (plan.menu && plan.review.journal === null && plan.action !== 'rollback') {
+        if (plan.review.menu!.candidate !== null || plan.review.menu!.previous !== null)
+            throw Error('foreign menu retention slots');
+        prepareLinuxMenuJournal(plan, plan.review.root?.menu ?? null, plan.review.menu!.current);
+    }
+    if (linuxModelReviewSHA256(plan.review) !== plan.reviewSHA256)
+        throw Error('changed model review');
+}
+function validateConfiguration(plan: LinuxModelConfiguration) {
     fields(plan.host, [
         'platform',
         'arch',
@@ -593,7 +1071,6 @@ function validatePlan(plan: LinuxModelPlan) {
         host.arch !== 'x64' ||
         !positive(host.uid) ||
         host.euid !== host.uid ||
-        plan.consent !== true ||
         ![plan.root, host.home, host.sourceRoot, host.appData].every(canonical) ||
         ![plan.root, host.sourceRoot, host.appData].every(
             (item) => item !== host.home && inside(host.home, item),
@@ -605,31 +1082,22 @@ function validatePlan(plan: LinuxModelPlan) {
         path.posix.basename(plan.root).startsWith('.DiagnosticHub-') ||
         !uuid.test(plan.transactionId) ||
         !uuid.test(plan.installationId) ||
-        !['install', 'repair', 'update', 'rollback', 'resume', 'launch'].includes(plan.action) ||
-        !hash.test(plan.reviewSHA256)
+        ![
+            'install',
+            'repair',
+            'update',
+            'rollback',
+            'resume',
+            'launch',
+            'uninstall-current',
+            'finalize',
+        ].includes(plan.action)
     )
         throw Error('model plan admission');
     owner(plan.owner);
     if (plan.owner.executable !== path.posix.join(host.sourceRoot, 'app/diagnostic-hub'))
         throw Error('model runtime binding');
     if (Object.hasOwn(plan, 'menu')) checkedLinuxMenuChoice(plan);
-    validateView(plan.review, plan);
-    if (plan.action === 'rollback') assertLinuxAppRollbackPreimages(plan.review);
-    if (plan.action === 'resume') assertLinuxResumePreimages(plan.review, plan);
-    if (plan.action === 'launch') assertLinuxLaunchPreimages(plan.review, plan);
-    if (
-        plan.menu &&
-        plan.review.journal &&
-        !(plan.action === 'resume' && plan.review.journal.phase === 'candidate-active')
-    )
-        assertLinuxMenuPhase(plan.review.menu!, plan.review.journal.menu!, plan);
-    if (plan.menu && plan.review.journal === null && plan.action !== 'rollback') {
-        if (plan.review.menu!.candidate !== null || plan.review.menu!.previous !== null)
-            throw Error('foreign menu retention slots');
-        prepareLinuxMenuJournal(plan, plan.review.root?.menu ?? null, plan.review.menu!.current);
-    }
-    if (linuxModelReviewSHA256(plan.review) !== plan.reviewSHA256)
-        throw Error('changed model review');
 }
 export type LinuxModelVerdict =
     'REFUSED' | 'RETAINED_UNKNOWN' | 'ACTIVE_PREVIOUS_RETAINED' | 'ROLLED_BACK_RETAINED';
@@ -638,6 +1106,7 @@ type Pending =
     | 'current'
     | 'observe'
     | 'journal'
+    | 'handoff'
     | 'stage'
     | 'move'
     | 'menu-stage'
@@ -713,7 +1182,12 @@ class LinuxTransactionCore {
         try {
             plan = copy(input);
             validatePlan(plan);
-            if (plan.action === 'launch') throw Error('launch requires the owned-child controller');
+            if (
+                plan.action === 'launch' ||
+                plan.action === 'uninstall-current' ||
+                plan.action === 'finalize'
+            )
+                throw Error('operation requires its separate owned controller');
             if (this.effects.kind !== this.effectKind)
                 throw Error('transaction effects kind differs');
             if (
@@ -801,6 +1275,13 @@ class LinuxTransactionCore {
         await this.guard(plan, scope);
         const before = copy(this.view!),
             expected = { ...copy(before), journal: copy(next) };
+        if (expected.history) {
+            const bytes = Buffer.from(JSON.stringify(next));
+            expected.history.journalOriginal = {
+                base64: bytes.toString('base64'),
+                sha256: createHash('sha256').update(bytes).digest('hex'),
+            };
+        }
         validateView(expected, plan); // Reject closed-grammar/size errors before submitting any write.
         const returned = await this.call(
             'journal',
@@ -973,7 +1454,52 @@ class LinuxTransactionCore {
         await this.menuPhase(plan, scope, 'restored');
     }
     private async install(plan: LinuxModelPlan, scope: LinuxModelScope) {
-        const before = copy(this.view!);
+        let before = copy(this.view!);
+        if (
+            before.stage ||
+            before.previous ||
+            !installationActions(
+                before.root?.manifest.version ?? null,
+                before.source.manifest.version,
+            ).includes(plan.action as 'install' | 'repair' | 'update')
+        )
+            throw Error('unavailable model install');
+        if (before.history && before.journal !== null) {
+            const pending = before.history.lineage?.at(-1);
+            if (
+                (before.history.completed !== null && (!pending || pending.archived)) ||
+                !completedRoot(before, before.journal) ||
+                before.journal.transactionId === plan.transactionId ||
+                !this.effects.handoff
+            )
+                throw Error('completed installation continuation unavailable');
+            await this.guard(plan, scope);
+            const expected = copy(before);
+            if (pending) expected.history!.lineage!.at(-1)!.archived = true;
+            else
+                expected.history!.completed = {
+                    ...expected.history!.journalOriginal!,
+                    journal: copy(before.journal),
+                };
+            expected.history!.journalOriginal = null;
+            expected.journal = null;
+            validateView(expected, plan);
+            const returned = copy(
+                await this.call('handoff', () => this.effects.handoff!(copy(scope), copy(before))),
+            );
+            validateView(returned, plan);
+            if (!equal(returned, expected)) throw Error('completed journal handoff differs');
+            this.view = returned;
+            before = copy(returned);
+        }
+        if (
+            before.history?.completed &&
+            !completedRoot(
+                before,
+                before.history.lineage?.at(-1)?.journal ?? before.history.completed.journal,
+            )
+        )
+            throw Error('completed installation recovery differs');
         // Never guess/remove a stale lock, foreign stage, previous slot or unconfirmed journal.
         if (
             before.journal !== null ||
@@ -1165,8 +1691,27 @@ export function checkedLinuxModelPlan(input: LinuxModelPlan): LinuxModelPlan {
     return plan;
 }
 /** Native backend callers use the same closed snapshot grammar before accepting a mutation guard. */
-export function checkedLinuxModelView(input: LinuxModelView, plan: LinuxModelPlan): LinuxModelView {
+export function checkedLinuxModelView(
+    input: LinuxModelView,
+    plan: LinuxModelConfiguration,
+): LinuxModelView {
     const view = copy(input);
     validateView(view, plan);
     return view;
+}
+export function checkedLinuxModelConfiguration(
+    input: LinuxModelConfiguration,
+): LinuxModelConfiguration {
+    const selected = copy(input);
+    fields(selected, [
+        'host',
+        'root',
+        'action',
+        'transactionId',
+        'installationId',
+        'owner',
+        ...(Object.hasOwn(selected, 'menu') ? ['menu'] : []),
+    ]);
+    validateConfiguration(selected);
+    return selected;
 }

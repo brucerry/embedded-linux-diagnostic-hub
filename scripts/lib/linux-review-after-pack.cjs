@@ -122,6 +122,26 @@ function createReviewPackager(io = disk) {
         return { status: 'read-only-entry-packaged', capability };
     };
 }
+/** Ship a separate explicit entry and actual native bytes; never upgrade review capability flags. */
+function createInstallPackager(io = disk) {
+    return async ({ appOutDir, entry, native, launcher, installedLauncher, bootstrap }) => {
+        if (!path.isAbsolute(appOutDir) || path.normalize(appOutDir) !== appOutDir)
+            throw Error('LINUX_PERMANENT_PACKAGE_PATH');
+        const members = [
+            [entry, 'linux-setup-install.cjs', 1048576, 0o644],
+            [bootstrap, 'linux-setup-bootstrap.cjs', 1048576, 0o644],
+            [native, 'diagnostic_hub_rename_noreplace.node', 33554432, 0o644],
+            [launcher, 'linux-setup-install.sh', 16384, 0o755],
+            [installedLauncher, 'linux-installed-AppRun', 16384, 0o755],
+        ];
+        for (const [input, name, cap, mode] of members) {
+            const bytes = await io.readBundle(input, cap);
+            if (!Buffer.isBuffer(bytes) || !bytes.length)
+                throw Error('LINUX_PERMANENT_PACKAGE_INPUT');
+            await io.publish(path.join(appOutDir, 'resources', name), Buffer.from(bytes), mode);
+        }
+    };
+}
 // Explicit opt-in preparation API; ordinary afterPack does not invoke it or assemble an envelope.
 async function prepareReviewEnvelope(input, io) {
     const { prepareLinuxReviewEnvelope } = await import('./linux-setup-envelope.ts');
@@ -140,6 +160,7 @@ async function observeReviewEnvelope(input, records, window) {
 }
 module.exports = {
     createReviewPackager,
+    createInstallPackager,
     prepareReviewEnvelope,
     reviewEnvelopeHandoff,
     observeReviewEnvelope,

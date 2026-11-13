@@ -72,7 +72,7 @@ async function memoryScope(
             await close.promise;
             return options.failDelete
                 ? Response.json({ code: 'network' }, { status: 503 })
-                : Response.json({});
+                : Response.json({ disconnected: true });
         };
         const values = [
             fetchMemory,
@@ -211,7 +211,16 @@ async function memoryScope(
         try {
             close.resolve();
             await Promise.all(tasks);
-            await client?.disconnect();
+            if (options.failDelete && deletes > 0) {
+                assert.equal(deletes, 1, 'teardown must not replay a failed close');
+                assert.equal(client?.automationConnection(), 'a'.repeat(32));
+                assert.equal(timers.size, 1);
+                assert.equal(listeners.size, 1);
+                // Dispose only these fake port registries. The product owner remains
+                // retained; this is not a successful disconnect or remote closure.
+                timers.clear();
+                listeners.clear();
+            } else await client?.disconnect();
             assert.equal(timers.size, 0);
             assert.equal(listeners.size, 0);
         } finally {
@@ -314,6 +323,10 @@ test('retired file read failure cannot overwrite a newer import diagnostic or cl
     }));
 test('failed disconnect retains prior evidence and original error while releasing only its UI admission', async () =>
     memoryScope({ failDelete: true }, async (f) => {
+        const active = f.ui.activeDevice,
+            previous = { capturedAt: 'retained-memory-frame', readings: {} };
+        f.ctx.previousFrame.current = previous;
+        f.ui.history = [previous];
         const work = f.start('failed');
         await until(() => f.deletes === 1);
         assert.equal(f.ui.disconnecting, true);
@@ -322,10 +335,13 @@ test('failed disconnect retains prior evidence and original error while releasin
         assert.equal(f.ui.endpoint, 'prior.invalid:22');
         assert.equal(f.ui.imports.length, 0);
         assert.match(f.ui.error, /SSH connection failed/);
-        assert.equal(f.client.automationConnection(), '');
-        assert.equal(f.ui.connected, false);
-        assert.equal(f.ui.activeDevice, null);
-        assert.equal(f.ui.live, false);
+        assert.equal(f.client.automationConnection(), 'a'.repeat(32));
+        assert.equal(f.ui.connected, true);
+        assert.equal(f.ui.activeDevice, active);
+        assert.equal(f.ui.live, true);
+        assert.equal(f.ctx.previousFrame.current, previous);
+        assert.deepEqual(f.ui.history, [previous]);
+        assert.equal(f.deletes, 1);
         assert.equal(f.ctx.disconnectingRef.current, false);
         assert.equal(f.ui.disconnecting, false);
     }));

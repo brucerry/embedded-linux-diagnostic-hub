@@ -221,17 +221,18 @@ test('unexpected native exception loses private text/cause and cannot trigger a 
     );
     assert.equal(calls, 1);
 });
-test('static C source has one flagged syscall and no rename/copy/delete/open/close fallback', () => {
+test('static C source has exactly two flagged syscalls and no libc/open/close fallback', () => {
     // Reads only the newly authored repository source; does not compile/load or call native code.
     const source = readFileSync(
         new URL('../native/linux-rename-noreplace/rename-noreplace.c', import.meta.url),
         'utf8',
     );
-    assert.equal((source.match(/\bsyscall\s*\(/g) ?? []).length, 1);
+    assert.equal((source.match(/\bsyscall\s*\(/g) ?? []).length, 2);
     assert.match(
         source,
         /syscall\(SYS_renameat2, source, source_name, target, target_name, RENAME_NOREPLACE\)/,
     );
+    assert.match(source, /syscall\(SYS_unlinkat, parent, name, kind == 1 \? AT_REMOVEDIR : 0\)/);
     assert.doesNotMatch(
         source,
         /\b(?:rename|renameat|unlink|unlinkat|remove|rmdir|open|openat|close|chmod|fchmod|chown|fork|exec|system)\s*\(/,

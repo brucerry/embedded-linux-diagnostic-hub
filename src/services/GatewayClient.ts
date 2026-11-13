@@ -34,6 +34,12 @@ export class GatewayClient implements TerminalTransport {
     readonly url: string;
     private sessionId = '';
     private connectionAttempt?: { id: string; controller: AbortController; posted: boolean };
+    private pendingDisconnect?: {
+        id: string;
+        attempt: { id: string; controller: AbortController; posted: boolean } | undefined;
+        task: Promise<void>;
+    };
+    private failedDisconnectId = '';
     private listeners = new Set<() => void>();
     private readonly token: string;
     private heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -53,10 +59,12 @@ export class GatewayClient implements TerminalTransport {
     }
 
     private releaseOnPageExit(): void {
-        const attempt = this.connectionAttempt;
+        const attempt = this.connectionAttempt,
+            id = this.sessionId,
+            pending = this.pendingDisconnect?.id === id ? this.pendingDisconnect : undefined;
         this.connectionAttempt = undefined;
         attempt?.controller.abort();
-        if (attempt?.posted)
+        if (attempt?.posted && pending?.attempt !== attempt)
             void fetch(`${this.url}/api/connection-attempts/cancel`, {
                 method: 'POST',
                 headers: {
@@ -68,18 +76,18 @@ export class GatewayClient implements TerminalTransport {
                 cache: 'no-store',
                 keepalive: true,
             }).catch(() => {});
-        const id = this.sessionId;
         this.sessionId = '';
         this.stopLifecycle();
         if (!id) return;
         // Page exit delivery is best-effort; gateway idle expiry handles crashes/offline exits.
-        void fetch(`${this.url}/api/sessions/${id}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${this.token}` },
-            credentials: 'omit',
-            cache: 'no-store',
-            keepalive: true,
-        }).catch(() => {});
+        if (!pending)
+            void fetch(`${this.url}/api/sessions/${id}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${this.token}` },
+                credentials: 'omit',
+                cache: 'no-store',
+                keepalive: true,
+            }).catch(() => {});
         for (const listener of this.listeners) listener();
     }
 
@@ -177,7 +185,15 @@ export class GatewayClient implements TerminalTransport {
     }
 
     async connect(options: ConnectOptions, requestedId?: string): Promise<void> {
-        if (this.sessionId) await this.disconnect();
+        if (this.sessionId) {
+            try {
+                await this.disconnect(true);
+            } catch {
+                throw new ConnectionFailure('cleanup', CONNECTION_FAILURE_MESSAGES.cleanup);
+            }
+            if (this.sessionId)
+                throw new ConnectionFailure('cleanup', CONNECTION_FAILURE_MESSAGES.cleanup);
+        }
         const id = connectionAttemptId(requestedId ?? crypto.randomUUID().replaceAll('-', ''));
         const attempt = { id, controller: new AbortController(), posted: false };
         this.connectionAttempt = attempt;
@@ -204,6 +220,7 @@ export class GatewayClient implements TerminalTransport {
         if (this.connectionAttempt !== attempt || attempt.controller.signal.aborted)
             throw new ConnectionFailure('cancelled', 'Connection cancelled.');
         this.sessionId = data.sessionId;
+        this.failedDisconnectId = '';
         window.addEventListener('pagehide', this.onPageHide);
         this.heartbeat = setInterval(() => {
             if (this.sessionId)
@@ -338,12 +355,47 @@ export class GatewayClient implements TerminalTransport {
         }
     }
 
-    async disconnect(): Promise<void> {
+    disconnect(forReplacement = false): Promise<void> {
         const id = this.sessionId;
-        this.sessionId = '';
-        this.stopLifecycle();
-        if (!id) return;
-        await this.request(`/api/sessions/${id}`, 'DELETE');
+        if (!id) return Promise.resolve();
+        if (this.pendingDisconnect?.id === id) return this.pendingDisconnect.task;
+        if (forReplacement && this.failedDisconnectId === id)
+            return Promise.reject(
+                new ConnectionFailure('cleanup', CONNECTION_FAILURE_MESSAGES.cleanup),
+            );
+        const closing = {
+            id,
+            attempt: this.connectionAttempt,
+            task: undefined as unknown as Promise<void>,
+        };
+        closing.task = Promise.resolve().then(async () => {
+            const acknowledgement = await this.request(`/api/sessions/${id}`, 'DELETE');
+            if (
+                acknowledgement?.disconnected !== true ||
+                this.pendingDisconnect !== closing ||
+                (this.sessionId && this.sessionId !== id)
+            )
+                throw new ConnectionFailure('cleanup', CONNECTION_FAILURE_MESSAGES.cleanup);
+            if (this.sessionId === id) {
+                this.sessionId = '';
+                this.stopLifecycle();
+                if (this.connectionAttempt === closing.attempt) this.connectionAttempt = undefined;
+            }
+            if (this.failedDisconnectId === id) this.failedDisconnectId = '';
+        });
+        this.pendingDisconnect = closing; // Before fetch can run, throw, or reenter.
+        void closing.task.then(
+            () => {
+                if (this.pendingDisconnect === closing) this.pendingDisconnect = undefined;
+            },
+            () => {
+                if (this.pendingDisconnect === closing) {
+                    if (this.sessionId === id) this.failedDisconnectId = id;
+                    this.pendingDisconnect = undefined;
+                }
+            },
+        );
+        return closing.task;
     }
 
     onDisconnected(callback: () => void): () => void {
