@@ -72,7 +72,7 @@ function backendHealth() {
         retainedTimers: 0,
     };
 }
-function memoryCaller() {
+function memoryCaller(normalFinalize = false) {
     const host = {
         platform: 'linux',
         arch: 'x64',
@@ -207,11 +207,19 @@ function memoryCaller() {
         readback: { closed: true, failed: false },
         quitControl: { closed: true, failed: false },
     };
+    const normalSummary = {
+        ...pausedSummary,
+        verdict: 'DIRECT_CHILD_CLOSED_RETAINED',
+        code: 'DIRECT_CLOSE_NO_SUCCESSOR_AUTHORITY',
+        retainedConfirmed: true,
+        sealInterrupted: false,
+    };
     const state = {
         events: [] as string[],
         current: clone(initial),
         inspected: 0,
         prompts: 0,
+        promptRequests: [] as any[],
         reply: { status: 'confirmed', menu: false } as any,
         promptGate: null as ReturnType<typeof deferred<any>> | null,
         promptEntered: deferred<void>(),
@@ -227,7 +235,7 @@ function memoryCaller() {
         sealSelections: [] as object[],
         observationReads: 0,
         original: {
-            summary: clone(pausedSummary),
+            summary: clone(normalFinalize ? normalSummary : pausedSummary),
             launch: { ...backendHealth(), launchPrimarySet: false },
             native: { failed: false, retainedFDs: 0 },
             preparation: backendHealth(),
@@ -395,7 +403,7 @@ function memoryCaller() {
                     assert.equal(args[5], true);
                     if (first) {
                         assert.equal(args[6], state.quitSelections[0]);
-                        assert.equal(args[7], state.sealSelections[0]);
+                        assert.equal(args[7], normalFinalize ? undefined : state.sealSelections[0]);
                     } else {
                         assert.equal(args[6], undefined);
                         assert.equal(args[7], undefined);
@@ -404,7 +412,7 @@ function memoryCaller() {
                         async run() {
                             state.events.push(first ? 'pause-memory-port' : 'recover-memory-port');
                             if (first) {
-                                state.current = clone(pending);
+                                if (!normalFinalize) state.current = clone(pending);
                                 return clone(state.original.summary);
                             }
                             if (state.launchFailureSet) throw state.launchFailure;
@@ -486,6 +494,7 @@ function memoryCaller() {
                 async review(request: any) {
                     state.events.push('prompt');
                     state.prompts++;
+                    state.promptRequests.push(request);
                     assert.equal(request.confirmation, 'apply');
                     assert.equal(request.menu, false);
                     state.promptEntered.resolve();
@@ -509,6 +518,8 @@ function memoryCaller() {
         pending,
         observation,
         pause: () => api.runLinuxPermanentOwnedFixture(...args(), 'seal-preparation'),
+        normalFinalize: (selected: any = choices) =>
+            api.runLinuxPermanentOwnedFixture(...args(selected), 'normal-finalize'),
         recover: (pausedOwner: unknown, selected: any = choices, actualHost: any = host) =>
             api.runLinuxPermanentSealRecoveryFixture(...args(selected, actualHost), pausedOwner),
         holdPrompt() {
@@ -546,6 +557,52 @@ function noNewSelectors(f: ReturnType<typeof memoryCaller>) {
     assert.equal(f.state.quitSelections.length, 1);
     assert.equal(f.state.sealSelections.length, 1);
 }
+
+test('memory normal-finalize obtains consent and selects ordinary quit without a seal pause', async () => {
+    const f = memoryCaller(true),
+        result = await f.normalFinalize();
+    assert.equal(result.status, 'previous-generation-finalized');
+    assert.equal(f.api.linuxPermanentSetupDiagnostics(result.owner).phase, 'finished');
+    assert.equal(f.state.inspected, 2);
+    assert.equal(f.state.quitSelections.length, 1);
+    assert.equal(f.state.sealSelections.length, 0);
+    assert.equal(f.state.observationReads, 0);
+    assert.equal(f.state.launches.length, 1);
+    assert.match(f.state.promptRequests[0].detail, /complete the described Finalize/);
+    assert.ok(f.state.events.indexOf('prompt') < f.state.events.indexOf('quit-selection'));
+});
+
+test('memory normal-finalize cancellation and thrown undefined do not mint quit or seal authority', async () => {
+    for (const throws of [false, true]) {
+        const f = memoryCaller(true);
+        f.state.reply = { status: 'cancelled' };
+        f.state.promptFailureSet = throws;
+        f.state.promptFailure = undefined;
+        const result = await f.normalFinalize();
+        assert.equal(result.status, throws ? 'retained-unknown' : 'cancelled');
+        assert.equal(f.api.linuxPermanentSetupDiagnostics(result.owner).primarySet, throws);
+        assert.equal(f.state.quitSelections.length, 0);
+        assert.equal(f.state.sealSelections.length, 0);
+        assert.equal(f.state.launches.length, 0);
+    }
+});
+
+test('memory normal-finalize refuses a changed review and invalid launch/menu/terminal choices', async () => {
+    const f = memoryCaller(true);
+    f.state.beforeInspect = (count, view) => {
+        if (count === 2) view.activity.root = 'active';
+    };
+    retained(f, await f.normalFinalize());
+    assert.equal(f.state.quitSelections.length, 0);
+    for (const changes of [{ operation: 'launch' }, { menu: true }, { terminal: false }]) {
+        const other = memoryCaller(true);
+        assert.throws(
+            () => other.normalFinalize({ ...other.choices, ...changes }),
+            /LINUX_OWNED_FIXTURE_SELECTION/,
+        );
+        assert.deepEqual(other.state.events, []);
+    }
+});
 
 test('memory recovery rejects plain foreign and consumed owners before any new source or native IO', async () => {
     const f = memoryCaller(),

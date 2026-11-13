@@ -2,7 +2,7 @@ name: v0.6.0 source-bound build-only qualification
 
 on:
     push:
-        branches: [ci/v060-linux-uninstall-build-20261113]
+        branches: [ci/v060-abc-payload-build-20261113]
 
 permissions:
     contents: read
@@ -12,90 +12,11 @@ concurrency:
     cancel-in-progress: false
 
 jobs:
-    gateway_build:
-        if: >-
-            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
-            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-linux-uninstall-build-20261113' && github.run_attempt == 1 }}
-        runs-on: ubuntu-24.04
-        timeout-minutes: 15
-        defaults:
-            run:
-                shell: bash
-        steps:
-            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-              with:
-                  ref: ${{ github.sha }}
-                  fetch-depth: 1
-                  persist-credentials: false
-                  clean: false
-                  set-safe-directory: false
-                  submodules: false
-                  lfs: false
-            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-              with:
-                  node-version: '24.22.0'
-                  cache: ''
-                  package-manager-cache: false
-            - name: Bind actual public source, job, tools and fresh build scratch
-              run: |
-                  set -euo pipefail
-                  node --input-type=module <<'NODE'
-                  import assert from 'node:assert/strict';
-                  import fs from 'node:fs';
-                  import path from 'node:path';
-                  import { execFileSync } from 'node:child_process';
-                  import { validateCurrentGatewayBuildContext } from './scripts/lib/current-gateway-build.mjs';
-                  assert.equal(process.platform, 'linux');
-                  assert.equal(process.arch, 'x64');
-                  assert.equal(process.version, 'v24.22.0');
-                  assert.ok(process.getuid() > 0 && process.getuid() === process.geteuid());
-                  for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH']) assert.equal(process.env[key], undefined);
-                  const root = fs.realpathSync(process.cwd());
-                  assert.equal(fs.realpathSync(process.env.GITHUB_WORKSPACE), root);
-                  const git = (...args) => execFileSync('/usr/bin/git', args, { encoding: 'utf8' }).trim();
-                  assert.equal(git('rev-parse', 'HEAD'), process.env.GITHUB_SHA);
-                  assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
-                  const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-                  validateCurrentGatewayBuildContext({ repository: process.env.GITHUB_REPOSITORY, private: event.repository.private,
-                    event: process.env.GITHUB_EVENT_NAME, ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA,
-                    runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, jobKey: process.env.GITHUB_JOB,
-                    workflowRef: process.env.GITHUB_WORKFLOW_REF, workflowSHA: process.env.GITHUB_WORKFLOW_SHA,
-                    runner: process.env.RUNNER_ENVIRONMENT, system: process.env.RUNNER_OS, arch: process.env.RUNNER_ARCH });
-                  assert.equal(event.repository.full_name, process.env.GITHUB_REPOSITORY);
-                  assert.equal(event.after, process.env.GITHUB_SHA);
-                  assert.equal(event.ref, 'refs/heads/ci/v060-linux-uninstall-build-20261113');
-                  const node = fs.realpathSync(process.execPath);
-                  assert.equal(node, process.execPath);
-                  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(path.dirname(node)), 'lib/node_modules/npm/package.json'))).version, '11.19.1');
-                  for (const name of ['package.json', 'package-lock.json']) {
-                    const bytes = fs.readFileSync(name);
-                    assert.ok(bytes.equals(execFileSync('/usr/bin/git', ['show', 'HEAD:' + name])));
-                    assert.equal(JSON.parse(bytes).version, '0.6.0');
-                  }
-                  for (const name of ['node_modules', 'validation', '.npmrc']) {
-                    try { fs.lstatSync(name); assert.fail('Existing dependency/output/config slot.'); }
-                    catch (error) { if (error.code !== 'ENOENT') throw error; }
-                  }
-                  const scratch = process.env.RUNNER_TEMP + '/dh-v060-build-' + process.env.GITHUB_RUN_ID + '-attempt-1-gateway';
-                  fs.mkdirSync(scratch, { mode: 0o700 });
-                  fs.appendFileSync(process.env.GITHUB_ENV, 'npm_config_cache=' + scratch + '/npm-downloads\n');
-                  NODE
-            - name: Install locked Gateway build tools without lifecycle scripts
-              run:
-                  npm ci --include=dev --include=optional --ignore-scripts --no-audit --no-fund
-                  --fetch-retries=0
-            - name: Build and reread canonical Gateway archive, checksum and original build record
-              # Existing producer validates the real current job/source/tool bindings. Its build
-              # and offline lock commands do not import SSH2 or start the Gateway. No runtime,
-              # dependency-install observer, SSH, session GC, upload or cleanup follows.
-              run: node scripts/build-gateway-archive.mjs
-
     linux_payloads:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-linux-uninstall-build-20261113' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-abc-payload-build-20261113' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 30
         env:
@@ -136,7 +57,7 @@ jobs:
                   assert.equal(process.env.RUNNER_ARCH, 'X64');
                   assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
                   assert.equal(process.env.GITHUB_EVENT_NAME, 'push');
-                  assert.equal(process.env.GITHUB_REF, 'refs/heads/ci/v060-linux-uninstall-build-20261113');
+                  assert.equal(process.env.GITHUB_REF, 'refs/heads/ci/v060-abc-payload-build-20261113');
                   assert.equal(process.env.GITHUB_WORKFLOW_SHA, process.env.GITHUB_SHA);
                   assert.match(process.env.GITHUB_SHA, /^[a-f0-9]{40}$/);
                   for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH', 'USE_HARD_LINKS', 'VITEST']) assert.equal(process.env[key], undefined);
@@ -236,8 +157,8 @@ jobs:
                   '"$HUB_PRIVATE_NODE" scripts/build-linux-native.mjs --output-dir
                   "$PWD/dist-linux-native"'
             - name: Package same-source qualification A payload without launching it
-              # The existing future current-B fixture requires A then B. This is a same-source
-              # prerelease qualification payload, never an authentic historical release.
+              # Fixed A/B versions stay unchanged; C is an additive same-source qualification
+              # payload. These are not authentic historical or published releases.
               run: |
                   set -euo pipefail
                   test ! -e "$HUB_BUILD_ROOT/build-a" && test ! -L "$HUB_BUILD_ROOT/build-a"
@@ -247,9 +168,14 @@ jobs:
                   set -euo pipefail
                   test ! -e "$HUB_BUILD_ROOT/build-b" && test ! -L "$HUB_BUILD_ROOT/build-b"
                   "$HUB_PRIVATE_NODE" node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.0 --config.directories.output="$HUB_BUILD_ROOT/build-b"
-            - name:
-                  Compare original tar censuses, AppDir inventories and packaged helper bytes as
-                  data
+            - name: Package fixed same-source qualification C payload without launching it
+              # C is additive qualification metadata; package.json and the source renderer
+              # literal remain 0.6.0. This is not a shipping-version change or native run.
+              run: |
+                  set -euo pipefail
+                  test ! -e "$HUB_BUILD_ROOT/build-c" && test ! -L "$HUB_BUILD_ROOT/build-c"
+                  "$HUB_PRIVATE_NODE" node_modules/electron-builder/out/cli/cli.js --linux tar.gz --x64 --publish never --config.electronDist="$GITHUB_WORKSPACE/node_modules/electron/dist" --config.extraMetadata.version=0.6.1-qualification.0 --config.directories.output="$HUB_BUILD_ROOT/build-c"
+            - name: Compare A/B/C originals and prepare matching permanent envelopes as data
               # Existing archive readers decode bytes only. No extraction executable, AppRun,
               # Electron executable, installer/fixture, .node import, Finalize or removal runs.
               # All outputs remain runner-local; no artifact/cache upload or cleanup is selected.
@@ -265,11 +191,18 @@ jobs:
                   import { normalizeLinuxPackagerCensus } from './scripts/lib/linux-release-observation.ts';
                   import { verifyDesktopPackageBundles } from './scripts/lib/desktop-package-bundles.mjs';
                   import { validateLinuxReviewCapability, reviewBundleHash } from './scripts/lib/linux-review-package.mjs';
+                  import { planLinuxPermanentEnvelope, prepareLinuxPermanentEnvelope } from './scripts/lib/linux-setup-envelope.ts';
+                  import { createLinuxEnvelopeDisk } from './scripts/lib/linux-setup-envelope-disk.mjs';
                   const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+                  const identity = stat => Object.fromEntries(['dev', 'ino', 'uid', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'].map(key => [key, stat[key]]));
                   const asset = 'Diagnostic-Hub-linux-x64.tar.gz';
-                  for (const [role, version] of [['a', '0.6.0-qualification.0'], ['b', '0.6.0']]) {
+                  const preparations = []; // Retain each actual disk owner/promise/result before later checks.
+                  assert.equal(fs.realpathSync(process.env.HUB_BUILD_ROOT), process.env.HUB_BUILD_ROOT);
+                  assert.ok(process.env.HUB_BUILD_ROOT.startsWith(process.env.HOME + '/'));
+                  for (const [role, version] of [['a', '0.6.0-qualification.0'], ['b', '0.6.0'], ['c', '0.6.1-qualification.0']]) {
                     const directory = process.env.HUB_BUILD_ROOT + '/build-' + role;
                     const root = directory + '/linux-unpacked';
+                    const sourceRootStat = fs.lstatSync(root);
                     const archive = directory + '/' + asset;
                     const archiveStat = fs.lstatSync(archive);
                     assert.ok(archiveStat.isFile() && !archiveStat.isSymbolicLink() && archiveStat.nlink === 1);
@@ -281,25 +214,33 @@ jobs:
                     const chunks = async function* () { for (let offset = 0; offset < archiveBytes.length; offset += 65536) yield archiveBytes.subarray(offset, offset + 65536); };
                     const census = await observeLinuxGzipTar(chunks(), expected, window);
                     const mapped = normalizeLinuxPackagerCensus(census, asset);
-                    const actual = [];
-                    function inventory(directory, prefix = '') {
+                    const actual = [], sourcePins = [], sourceDirectories = [];
+                    function inventory(directory, prefix = '', files = actual, directories = sourceDirectories, pins = sourcePins) {
+                      const before = fs.lstatSync(directory);
                       for (const name of fs.readdirSync(directory).sort()) {
                         const file = directory + '/' + name, relative = prefix + name, stat = fs.lstatSync(file);
                         assert.equal(stat.isSymbolicLink(), false);
-                        if (stat.isDirectory()) inventory(file, relative + '/');
+                        if (stat.isDirectory()) {
+                          directories.push({ path: relative, mode: stat.mode & 0o777 });
+                          inventory(file, relative + '/', files, directories, pins);
+                        }
                         else {
                           assert.ok(stat.isFile() && stat.nlink === 1);
                           const bytes = fs.readFileSync(file);
-                          actual.push({ path: relative, bytes: bytes.length, sha256: hash(bytes), mode: stat.mode & 0o777 });
+                          assert.deepEqual(identity(fs.lstatSync(file)), identity(stat));
+                          files.push({ path: relative, bytes: bytes.length, sha256: hash(bytes), mode: stat.mode & 0o777 });
                         }
+                        pins.push({ path: relative, identity: identity(stat) });
                       }
+                      assert.deepEqual(identity(fs.lstatSync(directory)), identity(before));
                     }
                     inventory(root);
                     const compare = (left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
                     const declared = mapped.payloadEntries.filter(row => row.kind === 'file').map(({ path, bytes, sha256, mode }) => ({ path, bytes, sha256, mode }));
                     assert.deepEqual(actual.sort(compare), declared.sort(compare));
                     const asar = root + '/resources/app.asar';
-                    const pkg = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
+                    const packageBytes = extractFile(asar, 'package.json');
+                    const pkg = JSON.parse(packageBytes.toString('utf8'));
                     assert.equal(pkg.name, 'embedded-linux-diagnostic-hub');
                     assert.equal(pkg.version, version);
                     await verifyDesktopPackageBundles({ readBuild: file => fs.readFileSync(file), readPackaged: file => extractFile(asar, file) });
@@ -323,7 +264,8 @@ jobs:
                     for (const [input, output] of [['dist-linux-native/diagnostic_hub_rename_noreplace.node', 'resources/diagnostic_hub_rename_noreplace.node'], ['scripts/linux-setup-install.sh', 'resources/linux-setup-install.sh'], ['scripts/linux-installed-launcher.sh', 'resources/linux-installed-AppRun'], ['scripts/linux-launcher.sh', 'AppRun']])
                       assert.ok(fs.readFileSync(input).equals(fs.readFileSync(root + '/' + output)));
                     const review = fs.readFileSync(root + '/resources/linux-setup-review.cjs');
-                    const capability = validateLinuxReviewCapability(JSON.parse(fs.readFileSync(root + '/resources/linux-setup-review.json')), version);
+                    const capabilityBytes = fs.readFileSync(root + '/resources/linux-setup-review.json');
+                    const capability = validateLinuxReviewCapability(JSON.parse(capabilityBytes), version);
                     assert.equal(capability.bytes, review.length);
                     assert.equal(capability.sha256, reviewBundleHash(review));
                     const executable = fs.readFileSync(root + '/diagnostic-hub');
@@ -332,6 +274,49 @@ jobs:
                     assert.equal(executable.readUInt16LE(18), 62);
                     assert.ok(fs.readFileSync(archive).equals(archiveBytes));
                     fs.writeFileSync(directory + '/linux-tar-census.json', JSON.stringify(census) + '\n', { flag: 'wx', mode: 0o600 });
+                    const records = process.env.HUB_BUILD_ROOT + '/records-' + role;
+                    fs.mkdirSync(records, { mode: 0o700 });
+                    const settings = { platform: process.platform, arch: process.arch, uid: process.getuid(), euid: process.geteuid(),
+                      home: process.env.HOME, sourceRoot: root, outputRoot: process.env.HUB_BUILD_ROOT + '/envelope-' + role,
+                      archivePath: archive, archive: { asset, ...expected }, layout: 'flat-linux-portable', version,
+                      sourceCommit: process.env.GITHUB_SHA, files: declared.sort(compare), inventorySHA256: hash(JSON.stringify(declared.sort(compare))) };
+                    const plan = planLinuxPermanentEnvelope(settings), disk = createLinuxEnvelopeDisk();
+                    const owner = { role, disk, plan, pending: null, result: undefined };
+                    preparations.push(owner);
+                    owner.pending = prepareLinuxPermanentEnvelope(settings, disk);
+                    const preparation = await owner.pending;
+                    owner.result = preparation;
+                    assert.equal(preparation.status, 'prepared-install-envelope');
+                    assert.equal(preparation.root, plan.outputRoot);
+                    assert.equal(preparation.descriptorSHA256, plan.descriptorSHA256);
+                    assert.equal(preparation.qualification, 'unqualified');
+                    assert.equal(preparation.nativeBinding, false);
+                    const copied = [], copiedDirectories = [];
+                    inventory(plan.outputRoot, '', copied, copiedDirectories, []);
+                    const expectedOutput = [...plan.files.map(file => ({ path: 'app/' + file.path, bytes: file.bytes, sha256: file.sha256, mode: file.mode })),
+                      { path: 'diagnostic-hub-setup-payload.json', bytes: Buffer.byteLength(plan.descriptor), sha256: plan.descriptorSHA256, mode: 0o600 }];
+                    assert.deepEqual(copied.sort(compare), expectedOutput.sort(compare));
+                    assert.deepEqual(copiedDirectories.sort(compare), ['app', ...plan.directories.map(directory => 'app/' + directory)].sort().map(path => ({ path, mode: 0o700 })));
+                    const descriptor = fs.readFileSync(plan.outputRoot + '/diagnostic-hub-setup-payload.json');
+                    assert.ok(descriptor.equals(Buffer.from(plan.descriptor)));
+                    const afterFiles = [], afterDirectories = [], afterPins = [];
+                    inventory(root, '', afterFiles, afterDirectories, afterPins);
+                    assert.deepEqual(afterFiles.sort(compare), actual.sort(compare));
+                    assert.deepEqual(afterDirectories.sort(compare), sourceDirectories.sort(compare));
+                    assert.deepEqual(afterPins.sort(compare), sourcePins.sort(compare));
+                    assert.deepEqual(identity(fs.lstatSync(root)), identity(sourceRootStat));
+                    assert.deepEqual(identity(fs.lstatSync(archive)), identity(archiveStat));
+                    assert.ok(fs.readFileSync(archive).equals(archiveBytes));
+                    for (const [name, raw] of [['census.json', Buffer.from(JSON.stringify(census) + '\n')], ['package.json', packageBytes], ['capability.json', capabilityBytes],
+                      ['descriptor.json', descriptor], ['preparation.json', Buffer.from(JSON.stringify(preparation) + '\n')],
+                      ['inputs.json', Buffer.from(JSON.stringify({ sourceCommit: process.env.GITHUB_SHA, role, version, rendererBuildLiteralVersion: '0.6.0',
+                        fixtureOnly: true, releaseAcceptance: false, archive: { path: archive, ...expected, identity: identity(archiveStat) },
+                        sourceRoot: root, sourceInventory: actual, sourceIdentities: sourcePins, envelopeRoot: plan.outputRoot,
+                        descriptorSHA256: plan.descriptorSHA256, inventorySHA256: plan.inventorySHA256 }) + '\n')]])
+                    {
+                      fs.writeFileSync(records + '/' + name, raw, { flag: 'wx', mode: 0o600 });
+                      assert.ok(fs.readFileSync(records + '/' + name).equals(raw));
+                    }
                   }
                   assert.equal(execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), process.env.GITHUB_SHA);
                   assert.equal(execFileSync('/usr/bin/git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim(), '');

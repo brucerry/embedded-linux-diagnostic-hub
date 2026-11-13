@@ -69,7 +69,7 @@ export function linuxPermanentArguments(args: string[]): LinuxPermanentChoices {
 const retained = new Set<object>();
 declare const ownedFixtureSelection: unique symbol;
 type OwnedFixtureSelection = { readonly [ownedFixtureSelection]: never };
-type OwnedFixtureMode = 'normal-quit' | 'seal-preparation' | 'seal-recovery';
+type OwnedFixtureMode = 'normal-quit' | 'normal-finalize' | 'seal-preparation' | 'seal-recovery';
 const ownedFixtures = new WeakMap<object, OwnedFixtureMode>();
 const recoveryRestrictions = new WeakMap<object, { owner: object; reviewSHA256: string }>();
 const consumedRecoveryOwners = new WeakSet<object>();
@@ -87,7 +87,7 @@ export function runLinuxPermanentOwnedFixture(
 ) {
     choices = structuredClone(choices); // Validate and execute one private data snapshot.
     if (
-        !['normal-quit', 'seal-preparation'].includes(mode) ||
+        !['normal-quit', 'normal-finalize', 'seal-preparation'].includes(mode) ||
         choices.operation !== (mode === 'normal-quit' ? 'launch' : 'finalize') ||
         choices.menu !== false ||
         choices.terminal !== true
@@ -345,9 +345,11 @@ export async function runLinuxPermanentSetup(
                 state.preparation.describe(review) +
                 (fixtureMode === 'seal-preparation'
                     ? '\nOwned fixture: pause after the durable seal intent, before confirmed-journal bytes or publication, then request ordinary app quit. This removes the previous application payload as described above, but the paused result is not completed Finalize. Original records and profile remain retained.'
-                    : fixtureMode === 'normal-quit'
-                      ? '\nOwned fixture: after verified startup, request ordinary app quit through its inherited control channel. No signal or cleanup is performed.'
-                      : ''),
+                    : fixtureMode === 'normal-finalize'
+                      ? '\nOwned fixture: complete the described Finalize, then request ordinary app quit through its inherited control channel. No signal or cleanup is performed.'
+                      : fixtureMode === 'normal-quit'
+                        ? '\nOwned fixture: after verified startup, request ordinary app quit through its inherited control channel. No signal or cleanup is performed.'
+                        : ''),
             menu:
                 choices.menuExplicit === false
                     ? state.preparation.menuSelected(review)
@@ -385,7 +387,9 @@ export async function runLinuxPermanentSetup(
         if (choices.operation === 'launch' || choices.operation === 'finalize') {
             state.phase = 'launch';
             const quitSelection =
-                fixtureMode === 'normal-quit' || fixtureMode === 'seal-preparation'
+                fixtureMode === 'normal-quit' ||
+                fixtureMode === 'normal-finalize' ||
+                fixtureMode === 'seal-preparation'
                     ? createLinuxOwnedQuitSelection({
                           root: plan.root,
                           installationId: plan.installationId,

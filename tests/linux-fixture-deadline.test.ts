@@ -9,13 +9,14 @@ import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as fixtureRecords from '../scripts/lib/linux-owned-fixture-records.ts';
 
 type Data = Record<string, any>;
 const sourceURL = new URL('../scripts/linux-owned-installation-fixture.ts', import.meta.url);
 const text = readFileSync(sourceURL, 'utf8');
 assert.equal(
     createHash('sha256').update(text).digest('hex'),
-    'f8c7b4c6f8924f104338460df4884fa40f4b1faedbfa0f6ea8121e657106212d',
+    'dd2e143fa6ef566381d268cbfccb3043227687074703435c6dedd66a1ddb417c',
 );
 const source = ts.createSourceFile(
     'actual-linux-fixture.ts',
@@ -103,9 +104,11 @@ const writePort =
     '\nreturn actorWrite(name, value);\n}';
 const header = text.slice(execute.getStart(source), execute.body!.getStart(source) + 1);
 const tail = code(outer[0].catchClause!) + ' finally ' + code(outer[0].finallyBlock!);
-const top = ['A', 'need', 'normal', 'inside', 'owners', 'linuxOwnedFixtureArguments']
-    .map((name) => code(one(source.statements, name)))
-    .join('\n');
+const top =
+    'const A = fixtureA, B = fixtureB, C = fixtureC;\n' +
+    ['need', 'normal', 'inside', 'owners', 'linuxOwnedFixtureArguments']
+        .map((name) => code(one(source.statements, name)))
+        .join('\n');
 const compile = (value: string) =>
     ts.transpileModule(value, {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
@@ -256,6 +259,7 @@ function model(mode: string, outputFailure?: { value: unknown }) {
         Buffer,
         Error,
         utilTypes: types,
+        ...fixtureRecords,
         process: processPort,
         performance: { now: () => now },
         setTimeout(callback: () => void, delay: number) {

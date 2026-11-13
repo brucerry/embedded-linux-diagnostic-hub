@@ -8,6 +8,8 @@ import { types as utilTypes } from 'node:util';
 import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as fixtureRecords from '../scripts/lib/linux-owned-fixture-records.ts';
+import { fileURLToPath } from 'node:url';
 import {
     getLinuxOwnedCurrentBFixtureContext,
     linuxOwnedFixtureArguments,
@@ -15,7 +17,7 @@ import {
 const sourceURL = new URL('../scripts/linux-owned-installation-fixture.ts', import.meta.url),
     text = readFileSync(sourceURL, 'utf8'),
     sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-assert.equal(sha(text), 'f8c7b4c6f8924f104338460df4884fa40f4b1faedbfa0f6ea8121e657106212d');
+assert.equal(sha(text), 'dd2e143fa6ef566381d268cbfccb3043227687074703435c6dedd66a1ddb417c');
 const source = ts.createSourceFile(
     'actual-owned-fixture.ts',
     text,
@@ -50,18 +52,25 @@ const body = outer[0].tryBlock.statements,
 assert.ok(first >= 0);
 const actualTail = body.slice(first).map(code).join('\n'),
     actualSnapshot = code(one(body, 'snapshot')),
-    actualRevalidate = code(one(body, 'revalidateInputs')),
-    actualTop = [
-        'A',
-        'need',
-        'normal',
-        'inside',
-        'linuxOwnedFixtureArguments',
-        'currentBContexts',
-        'getLinuxOwnedCurrentBFixtureContext',
-    ]
-        .map((name) => code(one(source.statements, name)))
-        .join('\n'),
+    actualFacts = ['facts', 'host'].map((name) => code(one(body, name))).join('\n'),
+    actualRevalidate = code(one(body, 'revalidateInputs')).replace(
+        'import.meta.url',
+        "'file:///model/home/repo/scripts/linux-owned-installation-fixture.ts'",
+    ),
+    actualTop =
+        'const A = fixtureA, B = fixtureB, C = fixtureC;\n' +
+        [
+            'need',
+            'normal',
+            'inside',
+            'linuxOwnedFixtureArguments',
+            'currentBContexts',
+            'currentBWithCContexts',
+            'currentCContexts',
+            'getLinuxOwnedCurrentBFixtureContext',
+        ]
+            .map((name) => code(one(source.statements, name)))
+            .join('\n'),
     actualOwnership = ['fail', 'unknown', 'hold', 'gate', 'nonpassing']
         .map((name) => code(one(execute.body!.statements, name)))
         .join('\n');
@@ -301,6 +310,14 @@ function model(
         return captured(role);
     };
     put(repo + '/.git/HEAD', commit + '\n');
+    const recordsHelper = repo + '/scripts/lib/linux-owned-fixture-records.ts',
+        continuation = repo + '/scripts/lib/linux-owned-current-c.ts',
+        driver = repo + '/scripts/linux-owned-installation-fixture.ts';
+    for (const file of [recordsHelper, continuation, driver])
+        put(file, 'fixed-memory-source-' + file);
+    const recordsHelperDisk = digest(recordsHelper, 65536),
+        continuationDisk = digest(continuation, 65536),
+        driverDisk = digest(driver, 65536);
     put(appData + '/profile-marker', 'settings-and-reports');
     const inputOriginals: any[] = [];
     for (const role of ['a', 'b'] as const) {
@@ -337,6 +354,8 @@ function model(
             Buffer,
             structuredClone,
             utilTypes,
+            ...fixtureRecords,
+            fileURLToPath,
             path,
             state,
             inputOriginals,
@@ -365,6 +384,12 @@ function model(
             runAttempt: '1',
             a: plans.a,
             b: plans.b,
+            c: null,
+            recordsHelper,
+            recordsHelperDisk,
+            continuation,
+            continuationDisk,
+            driverDisk,
             operation,
             payload,
             tree,
@@ -388,6 +413,8 @@ function model(
         actualOwnership +
         '\n' +
         actualRevalidate +
+        '\n' +
+        actualFacts +
         '\n' +
         actualSnapshot +
         '\n' +
@@ -426,7 +453,7 @@ function model(
     };
 }
 
-test('fixed scenario parser keeps default arguments unchanged and admits only current-b', () => {
+test('fixed scenario parser keeps default/current-b unchanged and refuses missing C inputs', () => {
     assert.equal(Object.hasOwn(linuxOwnedFixtureArguments(args()), 'scenario'), false);
     assert.equal(
         linuxOwnedFixtureArguments([...args(), '--scenario', 'current-b']).scenario,

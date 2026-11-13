@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as fixtureRecords from '../scripts/lib/linux-owned-fixture-records.ts';
 
 const root = new URL('../', import.meta.url),
     entryURL = new URL('scripts/linux-owned-seal-preparation-fixture.ts', root),
@@ -314,7 +315,32 @@ const helperTree = ts.createSourceFile(
             node.expression.expression.text === 'test',
     );
 assert.ok(firstTest > 0);
-const prefix = helperTree.statements
+let metaReplacements = 0;
+const transformed = ts.transform(helperTree, [
+    (context) => (node) => {
+        const visit: ts.Visitor = (value) => {
+            if (
+                ts.isPropertyAccessExpression(value) &&
+                value.name.text === 'url' &&
+                ts.isMetaProperty(value.expression) &&
+                value.expression.keywordToken === ts.SyntaxKind.ImportKeyword
+            ) {
+                metaReplacements++;
+                return ts.factory.createStringLiteral(helperURL.href);
+            }
+            return ts.visitEachChild(value, visit, context);
+        };
+        return ts.visitNode(node, visit) as ts.SourceFile;
+    },
+]);
+assert.equal(
+    metaReplacements,
+    1,
+    'Only the real source URL expression is rebound; quoted projection tokens stay intact.',
+);
+const projectedTree = transformed.transformed[0],
+    printer = ts.createPrinter();
+const prefix = projectedTree.statements
     .slice(0, firstTest)
     .filter((node) => {
         if (ts.isImportDeclaration(node)) return false;
@@ -328,9 +354,9 @@ const prefix = helperTree.statements
             node.expression.arguments[0].arguments[0]?.getText(helperTree) === 'text'
         );
     })
-    .map((node) => node.getText(helperTree))
-    .join('\n')
-    .replaceAll('import.meta.url', JSON.stringify(helperURL.href));
+    .map((node) => printer.printNode(ts.EmitHint.Unspecified, node, projectedTree))
+    .join('\n');
+transformed.dispose();
 const installTree = ts.createSourceFile(
         'actual-installation.ts',
         installSource,
@@ -360,6 +386,7 @@ new vm.Script(
             Object,
             Set,
             path,
+            fixtureArguments: fixtureRecords.fixtureArguments,
         },
         { codeGeneration: { strings: false, wasm: false } },
     ),
@@ -380,6 +407,8 @@ const memoryContext = vm.createContext(
         vm,
         ts,
         createHash,
+        fixtureRecords,
+        fileURLToPath,
         readFileSync(url: URL, encoding: string) {
             assert.equal(url.href, installURL.href);
             assert.equal(encoding, 'utf8');

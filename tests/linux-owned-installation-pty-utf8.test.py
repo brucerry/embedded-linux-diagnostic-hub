@@ -8,6 +8,8 @@ import codecs
 import hashlib
 import pathlib
 import re
+import posixpath
+import types
 import unittest
 
 
@@ -15,7 +17,7 @@ SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-owned-inst
 RAW_SOURCE = SOURCE.read_bytes()
 TREE = ast.parse(RAW_SOURCE, filename=str(SOURCE))
 SELECTED = []
-for name in ('A', 'B'):
+for name in ('A', 'B', 'C'):
     matches = [node for node in TREE.body if isinstance(node, ast.Assign)
                and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
                and node.targets[0].id == name]
@@ -66,6 +68,46 @@ def consume(value, chunks, eof=True):
 
 
 class PendingReviewUTF8Tests(unittest.TestCase):
+    def test_fixed_c_review_requires_installed_b_and_preserves_old_review(self):
+        value = {**request(), 'version': NAMESPACE['C'], 'step': 'update-c'}
+        text = prompt(value).replace('Installed version: ' + NAMESPACE['A'],
+                                     'Installed version: ' + NAMESPACE['B'])
+        self.assertTrue(expected_review(value, text))
+        self.assertFalse(expected_review(value, prompt(value)))
+        self.assertFalse(expected_review({**value, 'operation': 'rollback'}, text))
+        self.assertEqual(consume(value, [text.encode('utf-8')]), (text.encode('utf-8'), 1))
+
+    def test_actual_request_scope_keeps_c_operation_envelope_and_folder_fixed(self):
+        main = next(n for n in TREE.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+        start = next(i for i, n in enumerate(main.body) if isinstance(n, ast.Assign)
+                     and any(isinstance(t, ast.Name) and t.id == 'update_c' for t in n.targets))
+        stop = next(i for i, n in enumerate(main.body) if isinstance(n, ast.For))
+        selected = main.body[start:stop]
+        self.assertEqual({type(n).__name__ for n in selected}, {'Assign', 'Expr'})
+        require_node = next(n for n in TREE.body if isinstance(n, ast.FunctionDef) and n.name == 'require')
+        code = compile(ast.Module(body=[require_node, *selected], type_ignores=[]), str(SOURCE) + '.scope.memory', 'exec')
+        root = '/memory/home/fixture'
+        base = {'schema': 1, 'operation': 'update', 'version': NAMESPACE['C'], 'step': 'update-c',
+                'fixtureRoot': root, 'target': root + '/installed', 'envelope': root + '/envelope-c',
+                'appData': root + '/config', 'dataHome': root + '/data', 'sourceCommit': 'a' * 40, 'uid': 1000}
+        def check(value, folder='update-c'):
+            ns = {**NAMESPACE, 'request': value, 'uid': 1000, 'home': '/memory/home',
+                  'args': ['--request', root + '/operations/' + folder + '/request.json'],
+                  'os': types.SimpleNamespace(path=posixpath, getcwd=lambda: root + '/operations/' + folder)}
+            exec(code, ns)
+        check(base)
+        for changes in ({'operation': 'install'}, {'operation': 'rollback'}, {'version': NAMESPACE['B']},
+                        {'envelope': root + '/envelope-b'}, {'extra': True}, {'step': 'arbitrary'}, {'uid': 0}):
+            with self.subTest(changes=changes), self.assertRaises(RuntimeError):
+                check({**base, **changes})
+        with self.assertRaises(RuntimeError):
+            check(base, 'update')
+        for operation in ('install', 'update', 'rollback'):
+            value = {k: v for k, v in base.items() if k != 'step'}
+            value.update(operation=operation, version=NAMESPACE['A'] if operation == 'install' else NAMESPACE['B'],
+                         envelope=root + ('/envelope-a' if operation == 'install' else '/envelope-b'))
+            check(value, operation)
+
     def test_every_byte_split_of_a_unicode_prompt_waits_for_the_exact_full_review(self):
         value = request(True)
         text = prompt(value)

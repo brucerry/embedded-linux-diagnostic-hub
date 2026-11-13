@@ -18,6 +18,7 @@ import time
 
 A = '0.6.0-qualification.0'
 B = '0.6.0'
+C = '0.6.1-qualification.0'
 STATE = {'fds': set(), 'submitted': False, 'pid': None, 'waited': False,
          'eof': False, 'first_set': False, 'first': None, 'child': False}
 
@@ -73,7 +74,7 @@ def read_owned(file, cap, uid):
 def expected_review(request, text):
     """A literal expected current operation, not a caller-supplied consent bit."""
     operation = request['operation']
-    installed = {'install': 'none', 'update': A, 'rollback': B}[operation]
+    installed = B if request.get('step') == 'update-c' else {'install': 'none', 'update': A, 'rollback': B}[operation]
     prefix = ('\nDiagnostic Hub Linux setup\nOperation: ' + operation
               + '\nApplication: ' + request['target']
               + '\nCandidate version: ' + request['version']
@@ -117,13 +118,15 @@ def main(args):
     raw = read_owned(args[1], 65536, uid)
     require(hashlib.sha256(raw).hexdigest() == args[3], 'PTY_REQUEST_HASH')
     request = json.loads(raw)
+    update_c = request.get('step') == 'update-c'
     require(sorted(request) == sorted(['schema', 'operation', 'version',
             'fixtureRoot', 'envelope', 'target', 'appData', 'dataHome',
-            'sourceCommit', 'uid']), 'PTY_REQUEST_KEYS')
+            'sourceCommit', 'uid'] + (['step'] if update_c else [])), 'PTY_REQUEST_KEYS')
     operation = request['operation']
     require(request['schema'] == 1 and request['uid'] == uid
             and operation in ('install', 'update', 'rollback')
-            and request['version'] == (A if operation == 'install' else B)
+            and (not update_c or operation == 'update')
+            and request['version'] == (C if update_c else A if operation == 'install' else B)
             and re.fullmatch('[a-f0-9]{40}', request['sourceCommit']), 'PTY_SCOPE')
     root = request['fixtureRoot']
     require(isinstance(root, str) and root.startswith(home + '/')
@@ -131,9 +134,9 @@ def main(args):
     require(request['target'] == root + '/installed'
             and request['appData'] == root + '/config'
             and request['dataHome'] == root + '/data'
-            and request['envelope'] == root + ('/envelope-a' if operation == 'install' else '/envelope-b')
-            and args[1] == root + '/operations/' + operation + '/request.json'
-            and os.getcwd() == root + '/operations/' + operation, 'PTY_FIXED_PATHS')
+            and request['envelope'] == root + ('/envelope-c' if update_c else '/envelope-a' if operation == 'install' else '/envelope-b')
+            and args[1] == root + '/operations/' + ('update-c' if update_c else operation) + '/request.json'
+            and os.getcwd() == root + '/operations/' + ('update-c' if update_c else operation), 'PTY_FIXED_PATHS')
     for file in [root, request['envelope'] + '/app/resources', request['appData'], request['dataHome']]:
         parents(file, uid)
     executable = request['envelope'] + '/app/diagnostic-hub'
@@ -230,6 +233,8 @@ def main(args):
               'pythonVersion': '.'.join(str(x) for x in sys.version_info[:3]),
               'pythonExecutable': sys.executable,
               'physicalLoadedBytesVerified': False, 'releaseAcceptance': False}
+    if update_c:
+        result['step'] = 'update-c'
     raw_result = (json.dumps(result, sort_keys=True) + '\n').encode()
     fd = os.open('pty-result.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     STATE['fds'].add(fd)

@@ -16,12 +16,21 @@ import {
 import { createLinuxEnvelopeDisk } from './lib/linux-setup-envelope-disk.mjs';
 import { validateLinuxReviewCapability } from './lib/linux-review-package.mjs';
 import {
-    validateInstallationManifest,
-    validateInstallationRecord,
-} from '../shared/installation.ts';
+    fixturePayloadInventory,
+    fixtureArguments,
+    fixtureReview,
+    fixturePayloadMetadata,
+    fixtureEnvelopeInventory,
+    fixtureA as A,
+    fixtureB as B,
+    fixtureC as C,
+} from './lib/linux-owned-fixture-records.ts';
+import {
+    runOwnedCurrentC,
+    type LinuxOwnedCurrentCFixtureContext,
+} from './lib/linux-owned-current-c.ts';
+export type { LinuxOwnedCurrentCFixtureContext } from './lib/linux-owned-current-c.ts';
 
-const A = '0.6.0-qualification.0',
-    B = '0.6.0';
 const sha = (x: Buffer | string) => createHash('sha256').update(x).digest('hex');
 const need = (x: unknown, reason: string) => {
     if (!x) throw Error(reason);
@@ -51,29 +60,7 @@ const identity = (value: fs.Stats) => ({
 const owners = new Set<object>();
 
 export function linuxOwnedFixtureArguments(args: string[]) {
-    const value: Record<string, string> = {};
-    const keys = ['a-appdir', 'a-archive', 'b-appdir', 'b-archive', 'fixture-root'];
-    for (let at = 0; at < args.length; at += 2) {
-        const key = args[at]?.slice(2),
-            selected = args[at + 1];
-        need(
-            args[at]?.startsWith('--') &&
-                (keys.includes(key) || key === 'scenario') &&
-                !Object.hasOwn(value, key) &&
-                typeof selected === 'string' &&
-                (key === 'scenario' ? selected === 'current-b' : normal(selected)),
-            'FIXTURE_ARGUMENT',
-        );
-        value[key] = selected;
-    }
-    need(
-        keys.every((key) => Object.hasOwn(value, key)) &&
-            Object.keys(value).length ===
-                keys.length + (Object.hasOwn(value, 'scenario') ? 1 : 0) &&
-            new Set(keys.map((key) => value[key])).size === keys.length,
-        'FIXTURE_ARGUMENT',
-    );
-    return Object.freeze(value);
+    return fixtureArguments(args);
 }
 
 /** Finite fixed review matching is shared with memory controls; it does not grant consent. */
@@ -84,32 +71,7 @@ export function linuxOwnedFixtureReview(
     version: string,
     appData: string,
 ) {
-    const lines = text.replace(/\r\n/g, '\n');
-    const prefix =
-        '\nDiagnostic Hub Linux setup\nOperation: ' +
-        operation +
-        '\nApplication: ' +
-        target +
-        '\nCandidate version: ' +
-        version +
-        '\nInstalled version: ';
-    const installed =
-        operation === 'install' ? 'none' : B === version ? (operation === 'update' ? A : B) : A;
-    const tail =
-        '\nPrevious payloads are retained. No Finalize or removal is performed.\nType "apply menu" or "apply no-menu" to apply this operation; Enter/cancel leaves everything unchanged: ';
-    if (
-        !lines.startsWith(
-            prefix + installed + '\nSettings/reports: ' + appData + '/DiagnosticHub/profiles/',
-        )
-    )
-        return false;
-    const rest = lines.slice(
-        (prefix + installed + '\nSettings/reports: ' + appData + '/DiagnosticHub/profiles/').length,
-    );
-    return (
-        /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/.test(rest) &&
-        rest.slice(36) === tail
-    );
+    return fixtureReview(text, operation, target, version, appData);
 }
 
 type FixtureNonpassing = {
@@ -148,6 +110,32 @@ export interface LinuxOwnedCurrentBFixtureContext {
     writeSealRecoveryRecord(value: Buffer): { path: string; bytes: number; sha256: string };
 }
 const currentBContexts = new WeakMap<object, () => LinuxOwnedCurrentBFixtureContext>();
+export interface LinuxOwnedCurrentBWithCFixtureContext extends LinuxOwnedCurrentBFixtureContext {
+    readonly deadlineMs: number;
+    updateToCurrentC(): Promise<unknown>;
+}
+const currentBWithCContexts = new WeakMap<object, () => LinuxOwnedCurrentBWithCFixtureContext>();
+const currentCContexts = new WeakMap<object, () => LinuxOwnedCurrentCFixtureContext>();
+export function getLinuxOwnedCurrentBWithCFixtureContext(result: unknown) {
+    need(
+        result &&
+            typeof result === 'object' &&
+            !utilTypes.isProxy(result) &&
+            currentBWithCContexts.has(result),
+        'FIXTURE_CURRENT_B_WITH_C_RESULT_REQUIRED',
+    );
+    return currentBWithCContexts.get(result as object)!();
+}
+export function getLinuxOwnedCurrentCFixtureContext(result: unknown) {
+    need(
+        result &&
+            typeof result === 'object' &&
+            !utilTypes.isProxy(result) &&
+            currentCContexts.has(result),
+        'FIXTURE_CURRENT_C_RESULT_REQUIRED',
+    );
+    return currentCContexts.get(result as object)!();
+}
 /** Read-only original-byte revalidation. Serialized bindings or authored success flags cannot mint
  * this context; the real product caller must still perform fresh review, consent and native admission. */
 export function getLinuxOwnedCurrentBFixtureContext(result: unknown) {
@@ -203,9 +191,14 @@ async function executeLinuxOwnedInstallationFixture(
         'FIXTURE_HOST',
     );
     const root = selected['fixture-root'];
-    const selectedPaths = ['a-appdir', 'a-archive', 'b-appdir', 'b-archive', 'fixture-root'].map(
-        (key) => selected[key],
-    );
+    const selectedPaths = [
+        'a-appdir',
+        'a-archive',
+        'b-appdir',
+        'b-archive',
+        'fixture-root',
+        ...(selected.scenario === 'current-b-with-c' ? ['c-appdir', 'c-archive'] : []),
+    ].map((key) => selected[key]);
     need(
         selectedPaths.every((x) => inside(home, x)) &&
             selectedPaths
@@ -241,6 +234,9 @@ async function executeLinuxOwnedInstallationFixture(
         sealRecoveryRecordUnsettled: false,
         sealRecoveryRecordOriginal: null as Buffer | null,
         sealRecoveryProfile: null as string | null,
+        cUpdateIssued: false,
+        cRecordIssued: false,
+        cRecordUnsettled: false,
     };
     owners.add(state); // Before filesystem, child, native or preparation effects.
     const fail = (x: unknown) => {
@@ -259,6 +255,7 @@ async function executeLinuxOwnedInstallationFixture(
         state.child !== null ||
         state.sealRecordUnsettled ||
         state.sealRecoveryRecordUnsettled ||
+        state.cRecordUnsettled ||
         state.envelopes.some((x) => !x.complete);
     const hold = () => {
         state.keeper ??= setInterval(() => {}, 60000);
@@ -500,7 +497,11 @@ async function executeLinuxOwnedInstallationFixture(
         const python = fs.realpathSync('/usr/bin/python3');
         const nodeDisk = digest(process.execPath, 256 * 1024 ** 2, true),
             pythonDisk = digest(python, 64 * 1024 ** 2, true);
+        const recordsHelper = repo + '/scripts/lib/linux-owned-fixture-records.ts',
+            continuation = repo + '/scripts/lib/linux-owned-current-c.ts';
         const driverDisk = digest(fileURLToPath(import.meta.url), 65536),
+            recordsHelperDisk = digest(recordsHelper, 65536),
+            continuationDisk = digest(continuation, 65536),
             companionDisk = digest(repo + '/scripts/linux-owned-installation-pty.py', 65536);
         need(!fs.existsSync(root), 'FIXTURE_NOT_FRESH');
         fs.mkdirSync(root, { mode: 0o700 });
@@ -512,6 +513,9 @@ async function executeLinuxOwnedInstallationFixture(
             runAttempt,
             controlledA: A,
             currentB: B,
+            ...(selected.scenario === 'current-b-with-c'
+                ? { controlledC: C, shippingVersionChanged: false }
+                : {}),
             rendererBuildLiteralVersion: B,
             allCodeLiteralsOverriddenForA: false,
             publishedRelease: false,
@@ -527,12 +531,14 @@ async function executeLinuxOwnedInstallationFixture(
                 python: { executable: python, ...pythonDisk },
                 driver: driverDisk,
                 companion: companionDisk,
+                recordsHelper: recordsHelperDisk,
+                continuation: continuationDisk,
                 identityScope:
                     'nominal-disk-and-runtime-observations-not-physical-loaded-byte-proof',
             },
         });
         const inputOriginals: {
-            role: 'a' | 'b';
+            role: 'a' | 'b' | 'c';
             version: string;
             sourceCommit: string;
             archivePath: string;
@@ -547,6 +553,12 @@ async function executeLinuxOwnedInstallationFixture(
         }[] = [];
         function revalidateInputs(label?: string) {
             gate();
+            need(
+                digest(recordsHelper, 65536).sha256 === recordsHelperDisk.sha256 &&
+                    digest(continuation, 65536).sha256 === continuationDisk.sha256 &&
+                    digest(fileURLToPath(import.meta.url), 65536).sha256 === driverDisk.sha256,
+                'FIXTURE_SOURCE_TOOL_CHANGED',
+            );
             for (const original of inputOriginals) {
                 const freshArchive = digest(original.archivePath, 2 * 1024 ** 3, false, true),
                     freshSource = tree(original.sourceRoot, 20032, true),
@@ -567,7 +579,7 @@ async function executeLinuxOwnedInstallationFixture(
             }
             if (label) return write('records/input-readback-' + label + '.json', inputOriginals);
         }
-        async function prepare(role: 'a' | 'b', version: string) {
+        async function prepare(role: 'a' | 'b' | 'c', version: string) {
             state.phase = 'prepare-' + role;
             const sourceRoot = selected[role + '-appdir'],
                 archivePath = selected[role + '-archive'];
@@ -680,34 +692,10 @@ async function executeLinuxOwnedInstallationFixture(
             const preparationRecord = write('records/' + role + '-preparation.json', result);
             need(result.status === 'prepared-install-envelope', 'FIXTURE_PREPARATION_REFUSED');
             envelopeOwner.complete = true;
-            const envelopeInventory = tree(plan.outputRoot, 20032, true),
-                expectedEnvelope = [
-                    ...plan.files.map((file) => ({
-                        path: 'app/' + file.path,
-                        bytes: file.bytes,
-                        sha256: file.sha256,
-                        mode: file.mode,
-                    })),
-                    {
-                        path: 'diagnostic-hub-setup-payload.json',
-                        bytes: Buffer.byteLength(plan.descriptor),
-                        sha256: plan.descriptorSHA256,
-                        mode: 0o600,
-                    },
-                ].sort((left, right) =>
-                    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-                );
+            const envelopeInventory = tree(plan.outputRoot, 20032, true);
+            fixtureEnvelopeInventory(plan, envelopeInventory);
             need(
-                JSON.stringify(
-                    envelopeInventory.files.map((file) => ({
-                        path: file.path,
-                        bytes: file.bytes,
-                        sha256: file.sha256,
-                        mode: file.mode,
-                    })),
-                ) === JSON.stringify(expectedEnvelope) &&
-                    JSON.stringify(sourceInventory) ===
-                        JSON.stringify(tree(sourceRoot, 20032, true)) &&
+                JSON.stringify(sourceInventory) === JSON.stringify(tree(sourceRoot, 20032, true)) &&
                     JSON.stringify(originalArchive) ===
                         JSON.stringify(digest(archivePath, 2 * 1024 ** 3, false, true)),
                 'FIXTURE_RETAINED_COPY_CHANGED',
@@ -735,70 +723,48 @@ async function executeLinuxOwnedInstallationFixture(
             return plan;
         }
         const a = await prepare('a', A),
-            b = await prepare('b', B);
+            b = await prepare('b', B),
+            c = selected.scenario === 'current-b-with-c' ? await prepare('c', C) : null;
         const target = root + '/installed',
             appData = root + '/config',
             dataHome = root + '/data';
+        const facts = {
+            root: target,
+            appData,
+            dataHome,
+            sourceCommit: commit,
+            runId: runId!,
+            runAttempt: runAttempt!,
+        };
+        const host = (plan: typeof a) =>
+            Object.freeze({
+                platform: 'linux',
+                arch: 'x64',
+                uid: uid!,
+                euid: uid!,
+                home,
+                appData,
+                sourceRoot: plan.outputRoot,
+                version: plan.version,
+                requirePackagedReviewCapability: true as const,
+            });
         revalidateInputs('before');
         function payload(directory: string, plan: typeof a) {
             const originalManifest = bytes(
                     directory + '/.diagnostic-hub-release.json',
                     4 * 1024 * 1024,
                 ),
-                manifest = validateInstallationManifest(
-                    JSON.parse(originalManifest.toString('utf8')),
+                originalRecord = bytes(directory + '/.diagnostic-hub-installation.json', 16384),
+                originalOwner = bytes(directory + '/.diagnostic-hub-ownership.json', 16384),
+                { manifest, record } = fixturePayloadMetadata(
+                    originalManifest,
+                    originalRecord,
+                    originalOwner,
+                    plan.manifest,
+                    target,
                 );
-            need(
-                JSON.stringify(manifest) === JSON.stringify(plan.manifest),
-                'FIXTURE_INSTALLED_MANIFEST',
-            );
-            const originalRecord = bytes(directory + '/.diagnostic-hub-installation.json', 16384),
-                record = validateInstallationRecord(JSON.parse(originalRecord.toString('utf8')));
-            need(
-                record.profile === 'dedicated' && record.manifestSHA256 === sha(originalManifest),
-                'FIXTURE_INSTALLED_RECORD',
-            );
-            const originalOwner = bytes(directory + '/.diagnostic-hub-ownership.json', 16384),
-                owned = JSON.parse(originalOwner.toString('utf8'));
-            need(
-                owned.root === target &&
-                    owned.installationId === record.installationId &&
-                    Array.isArray(owned.integrations) &&
-                    owned.integrations.length === 0 &&
-                    owned.options &&
-                    Object.keys(owned.options).sort().join(',') === 'desktop,launch,startMenu' &&
-                    Object.values(owned.options).every((x) => x === false),
-                'FIXTURE_OWNED_SCOPE',
-            );
             const observed = tree(directory);
-            const expected = [
-                ...manifest.files.map((f) => f.path),
-                '.diagnostic-hub-release.json',
-                '.diagnostic-hub-installation.json',
-                '.diagnostic-hub-ownership.json',
-            ].sort();
-            need(
-                JSON.stringify(observed.files.map((x) => x.path)) === JSON.stringify(expected),
-                'FIXTURE_COMPLETE_INSTALLED_TREE',
-            );
-            need(
-                JSON.stringify(observed.directories.map((x) => x.path)) ===
-                    JSON.stringify(['app', ...plan.directories.map((x) => 'app/' + x)].sort()) &&
-                    observed.directories.every((x) => x.mode === 0o700),
-                'FIXTURE_COMPLETE_INSTALLED_DIRECTORIES',
-            );
-            for (const f of manifest.files) {
-                if (f.kind !== 'file') throw Error('FIXTURE_REGULAR_PAYLOAD');
-                const actual = observed.files.find((x) => x.path === f.path)!;
-                const source = plan.files.find((x) => 'app/' + x.path === f.path);
-                need(
-                    source &&
-                        actual.bytes === f.bytes &&
-                        actual.sha256 === f.sha256 &&
-                        actual.mode === source.mode,
-                    'FIXTURE_INSTALLED_PAYLOAD',
-                );
-            }
+            fixturePayloadInventory(manifest, plan, observed);
             return { originalManifest, originalRecord, originalOwner, record, observed };
         }
         function snapshot(label: string, plan: typeof a) {
@@ -826,12 +792,23 @@ async function executeLinuxOwnedInstallationFixture(
             });
             return { ...captured, journal: j, work };
         }
-        async function operation(op: 'install' | 'update' | 'rollback', plan: typeof a) {
+        async function operation(
+            op: 'install' | 'update' | 'rollback',
+            plan: typeof a,
+            step?: 'update-c',
+        ) {
             gate();
-            state.phase = op;
-            const folder = root + '/operations/' + op;
+            need(
+                step === 'update-c'
+                    ? op === 'update' && c !== null && plan === c
+                    : step === undefined && (op === 'install' ? plan === a : plan === b),
+                'FIXTURE_C_STEP',
+            );
+            const slot = step ?? op;
+            state.phase = slot;
+            const folder = root + '/operations/' + slot;
             fs.mkdirSync(folder, { mode: 0o700 });
-            const request = write('operations/' + op + '/request.json', {
+            const request = write('operations/' + slot + '/request.json', {
                 schema: 1,
                 operation: op,
                 version: plan.version,
@@ -842,6 +819,7 @@ async function executeLinuxOwnedInstallationFixture(
                 dataHome,
                 sourceCommit: commit,
                 uid,
+                ...(step ? { step } : {}),
             });
             const companion = repo + '/scripts/linux-owned-installation-pty.py';
             need(
@@ -866,7 +844,7 @@ async function executeLinuxOwnedInstallationFixture(
                 pythonSHA256: pythonDisk.sha256,
                 companionSHA256: companionDisk.sha256,
             };
-            write('operations/' + op + '/submission.json', submission);
+            write('operations/' + slot + '/submission.json', submission);
             state.childSubmitted = true; // Issued before spawn: a throwing submission has no authoritative noncreation acknowledgement.
             const child = spawn(submission.executable, submission.argv, {
                 cwd: folder,
@@ -937,9 +915,9 @@ async function executeLinuxOwnedInstallationFixture(
                 state.child = null;
                 state.childSubmitted = false;
             }
-            write('operations/' + op + '/child.json', result);
-            write('operations/' + op + '/stdout.bin', stdout);
-            if (stderr.length) write('operations/' + op + '/stderr.bin', stderr);
+            write('operations/' + slot + '/child.json', result);
+            write('operations/' + slot + '/stdout.bin', stdout);
+            if (stderr.length) write('operations/' + slot + '/stderr.bin', stderr);
             need(
                 !state.failed &&
                     result.spawnObserved &&
@@ -959,6 +937,7 @@ async function executeLinuxOwnedInstallationFixture(
             const response = JSON.parse(stdout.toString('utf8'));
             need(
                 response.operation === op &&
+                    (step ? response.step === step : !Object.hasOwn(response, 'step')) &&
                     response.helperExit === 0 &&
                     response.waitpidObserved === true &&
                     response.ptyEOF === true &&
@@ -989,7 +968,23 @@ async function executeLinuxOwnedInstallationFixture(
         );
         write('records/previous-a-payload.json', previous.observed);
         let currentBReadback: (() => LinuxOwnedCurrentBFixtureContext) | undefined;
-        if (selected.scenario === 'current-b') {
+        let currentBWithCReadback: (() => LinuxOwnedCurrentBWithCFixtureContext) | undefined;
+        function checked<T>(call: () => T, code = 'FIXTURE_C_READBACK_UNSETTLED') {
+            gate();
+            state.retired = false;
+            try {
+                revalidateInputs();
+                const value = call();
+                need(!unknown(), code);
+                state.retired = true;
+                return value;
+            } catch (error) {
+                fail(error);
+                if (unknown()) hold();
+                throw error;
+            }
+        }
+        if (selected.scenario === 'current-b' || selected.scenario === 'current-b-with-c') {
             need(updated.journal.phase === 'candidate-active', 'FIXTURE_CURRENT_B_PHASE');
             state.phase = 'current-b-originals';
             const currentInventory = tree(target, 20032, true),
@@ -1085,19 +1080,8 @@ async function executeLinuxOwnedInstallationFixture(
                         digest(binding.path, binding.bytes).sha256 === binding.sha256,
                         'FIXTURE_CURRENT_B_BINDING_CHANGED',
                     );
-                    const revalidateCopies = () => {
-                        gate();
-                        state.retired = false;
-                        try {
-                            revalidateInputs();
-                            need(!unknown(), 'FIXTURE_COPY_READBACK_UNSETTLED');
-                            state.retired = true;
-                        } catch (error) {
-                            fail(error);
-                            if (unknown()) hold();
-                            throw error;
-                        }
-                    };
+                    const revalidateCopies = () =>
+                        checked(() => {}, 'FIXTURE_COPY_READBACK_UNSETTLED');
                     const writeSealPreparationRecord = (value: Buffer) => {
                         gate();
                         need(
@@ -1109,10 +1093,8 @@ async function executeLinuxOwnedInstallationFixture(
                             'FIXTURE_SEAL_RECORD_INPUT',
                         );
                         state.sealRecordAttempted = true;
-                        state.retired = false;
                         state.sealRecordOriginal = Buffer.from(value);
-                        try {
-                            revalidateInputs();
+                        return checked(() => {
                             state.sealRecordUnsettled = true; // Before the fixed exclusive write can become uncertain.
                             state.sealRecord = write(
                                 'records/seal-preparation.json',
@@ -1120,14 +1102,8 @@ async function executeLinuxOwnedInstallationFixture(
                             );
                             revalidateInputs();
                             state.sealRecordUnsettled = false;
-                            need(!unknown(), 'FIXTURE_SEAL_RECORD_UNSETTLED');
-                            state.retired = true;
                             return Object.freeze({ ...state.sealRecord });
-                        } catch (error) {
-                            fail(error);
-                            if (unknown()) hold();
-                            throw error;
-                        }
+                        }, 'FIXTURE_SEAL_RECORD_UNSETTLED');
                     };
                     const revalidateSealPreparationRecord = () => {
                         gate();
@@ -1138,9 +1114,7 @@ async function executeLinuxOwnedInstallationFixture(
                                 state.sealRecordOriginal,
                             'FIXTURE_SEAL_PREPARATION_RECORD_REQUIRED',
                         );
-                        state.retired = false;
-                        try {
-                            revalidateInputs();
+                        return checked(() => {
                             const original = state.sealRecordOriginal!,
                                 record = state.sealRecord!;
                             need(
@@ -1167,14 +1141,8 @@ async function executeLinuxOwnedInstallationFixture(
                                 profile === state.sealRecoveryProfile,
                                 'FIXTURE_SEAL_RECOVERY_PROFILE_CHANGED',
                             );
-                            need(!unknown(), 'FIXTURE_SEAL_PREPARATION_READBACK_UNSETTLED');
-                            state.retired = true;
                             return Object.freeze({ ...record, profileSHA256: sha(profile) });
-                        } catch (error) {
-                            fail(error);
-                            if (unknown()) hold();
-                            throw error;
-                        }
+                        }, 'FIXTURE_SEAL_PREPARATION_READBACK_UNSETTLED');
                     };
                     const writeSealRecoveryRecord = (value: Buffer) => {
                         gate();
@@ -1187,9 +1155,8 @@ async function executeLinuxOwnedInstallationFixture(
                             'FIXTURE_SEAL_RECOVERY_RECORD_INPUT',
                         );
                         state.sealRecoveryRecordAttempted = true;
-                        state.retired = false;
                         state.sealRecoveryRecordOriginal = Buffer.from(value);
-                        try {
+                        return checked(() => {
                             revalidateSealPreparationRecord();
                             state.retired = false;
                             state.sealRecoveryRecordUnsettled = true; // Retain a possibly issued fixed write; never retry.
@@ -1199,35 +1166,14 @@ async function executeLinuxOwnedInstallationFixture(
                             );
                             state.sealRecoveryRecordUnsettled = false;
                             revalidateSealPreparationRecord();
-                            need(!unknown(), 'FIXTURE_SEAL_RECOVERY_RECORD_UNSETTLED');
-                            state.retired = true;
                             return Object.freeze({ ...record });
-                        } catch (error) {
-                            fail(error);
-                            if (unknown()) hold();
-                            throw error;
-                        }
+                        }, 'FIXTURE_SEAL_RECOVERY_RECORD_UNSETTLED');
                     };
                     need(!unknown(), 'FIXTURE_CURRENT_B_CONTEXT_UNSETTLED');
                     state.retired = true;
                     return Object.freeze({
-                        host: Object.freeze({
-                            platform: 'linux',
-                            arch: 'x64',
-                            uid: uid!,
-                            euid: uid!,
-                            home,
-                            appData,
-                            sourceRoot: b.outputRoot,
-                            version: B,
-                            requirePackagedReviewCapability: true as const,
-                        }),
-                        root: target,
-                        appData,
-                        dataHome,
-                        sourceCommit: commit,
-                        runId: runId!,
-                        runAttempt: runAttempt!,
+                        ...facts,
+                        host: host(b),
                         copies: structuredClone(inputOriginals),
                         records: structuredClone({ binding, originalRecords }),
                         revalidateCopies,
@@ -1241,6 +1187,160 @@ async function executeLinuxOwnedInstallationFixture(
                     throw error;
                 }
             };
+            if (c) {
+                const writeFinal = (value: Buffer) => {
+                    gate();
+                    need(
+                        !state.cRecordIssued &&
+                            !utilTypes.isProxy(value) &&
+                            Buffer.isBuffer(value) &&
+                            value.length > 0 &&
+                            value.length <= 16 * 1024 ** 2,
+                        'FIXTURE_C_RECORD_INPUT',
+                    );
+                    state.cRecordIssued = true;
+                    state.retired = false;
+                    const original = Buffer.from(value);
+                    state.returns.push(original);
+                    state.cRecordUnsettled = true;
+                    const record = write('records/second-seal-uninstall.json', original);
+                    need(
+                        bytes(record.path, original.length).equals(original),
+                        'FIXTURE_C_RECORD_CHANGED',
+                    );
+                    state.cRecordUnsettled = false;
+                    return Object.freeze(record);
+                };
+                const updateToCurrentC = () => {
+                    gate();
+                    need(!state.cUpdateIssued, 'FIXTURE_C_UPDATE_ONCE');
+                    state.cUpdateIssued = true;
+                    state.retired = false;
+                    let expiry!: (value: FixtureNonpassing) => void;
+                    const deadline = new Promise<FixtureNonpassing>((resolve) => {
+                        expiry = resolve;
+                    });
+                    const owner = { pending: true, outcome: null as Promise<unknown> | null };
+                    owners.add(owner);
+                    const timerC = setTimeout(
+                        () => {
+                            fail(Error('FIXTURE_DEADLINE'));
+                            hold();
+                            expiry(nonpassing());
+                        },
+                        Math.max(0, until - performance.now()),
+                    );
+                    owner.outcome = (async () => {
+                        try {
+                            let updatedC: ReturnType<typeof snapshot> | null = null;
+                            const copies = () => {
+                                revalidateInputs();
+                                need(
+                                    bytes(repo + '/.git/HEAD', 256)
+                                        .toString('utf8')
+                                        .trim() === commit,
+                                    'FIXTURE_SOURCE_CHANGED',
+                                );
+                            };
+                            const selectedC = () => {
+                                gate();
+                                need(updatedC, 'FIXTURE_C_UPDATE_REQUIRED');
+                                return updatedC!;
+                            };
+                            const pending = runOwnedCurrentC(
+                                {
+                                    fixtureRoot: root,
+                                    root: target,
+                                    work: updated.work,
+                                    appData,
+                                    uid: uid!,
+                                    installationId: updated.record.installationId,
+                                    transactionB: updated.journal.transactionId,
+                                    sourceCommit: commit,
+                                    runId: runId!,
+                                    runAttempt: runAttempt!,
+                                    gate,
+                                    checked,
+                                    copies,
+                                    bytes,
+                                    tree,
+                                    write,
+                                    ancestry,
+                                    lstat: (file) => fs.lstatSync(file),
+                                    names: (directory) => fs.readdirSync(directory),
+                                    payloadB: () => payload(target, b),
+                                    payloadC: () => payload(target, c),
+                                    previousB: () =>
+                                        payload(
+                                            updated.work +
+                                                '/previous-' +
+                                                selectedC().journal.transactionId,
+                                            b,
+                                        ),
+                                    update: async () => {
+                                        await effect(() => operation('update', c, 'update-c'));
+                                        updatedC = snapshot('updated-c', c);
+                                        return {
+                                            ...updatedC,
+                                            installationId: updatedC.record.installationId,
+                                        };
+                                    },
+                                    writeFinal,
+                                },
+                                updated,
+                            );
+                            state.returns.push(pending); // Retain the exact issued promise before awaiting it.
+                            const readback = await pending;
+                            state.returns.push(readback); // Adopt before any clone, gate or context registration can fail.
+                            const context: LinuxOwnedCurrentCFixtureContext = Object.freeze({
+                                ...facts,
+                                host: host(c),
+                                deadlineMs: until,
+                                copies: structuredClone(inputOriginals),
+                                records: structuredClone(readback.records),
+                                revalidateCopies: () => checked(copies),
+                                capturePublishedC: readback.capturePublishedC,
+                                revalidateAfterUninstall: readback.revalidateAfterUninstall,
+                                writeSecondSealUninstallRecord:
+                                    readback.writeSecondSealUninstallRecord,
+                            });
+                            revalidateInputs();
+                            gate();
+                            const result = Object.freeze({
+                                status: 'completed-controlled-update-current-c',
+                                sourceCommit: commit,
+                                runId,
+                                runAttempt,
+                                versions: [A, B, C],
+                                installedAppLaunched: false,
+                                releaseAcceptance: false,
+                            });
+                            currentCContexts.set(result, () => {
+                                context.revalidateCopies();
+                                return context;
+                            });
+                            return result;
+                        } catch (error) {
+                            fail(error);
+                            if (unknown()) hold();
+                            return nonpassing();
+                        } finally {
+                            owner.pending = false;
+                            if (!unknown()) {
+                                clearTimeout(timerC);
+                                if (state.keeper !== null) {
+                                    clearInterval(state.keeper);
+                                    state.keeper = null;
+                                }
+                                state.retired = true;
+                            }
+                        }
+                    })();
+                    return Promise.race([owner.outcome, deadline]);
+                };
+                currentBWithCReadback = () =>
+                    Object.freeze({ ...currentBReadback!(), deadlineMs: until, updateToCurrentC });
+            }
         } else {
             await operation('rollback', b);
             const rolled = snapshot('rolled-back-a', a);
@@ -1280,7 +1380,7 @@ async function executeLinuxOwnedInstallationFixture(
         state.phase = 'complete';
         const result = {
             status:
-                selected.scenario === 'current-b'
+                selected.scenario === 'current-b' || selected.scenario === 'current-b-with-c'
                     ? 'completed-controlled-install-update-current-b'
                     : 'completed-controlled-install-update-rollback',
             sourceCommit: commit,
@@ -1297,6 +1397,7 @@ async function executeLinuxOwnedInstallationFixture(
             currentBReadback(); // Verify originals before exposing an opaque current-B continuation.
             Object.freeze(result);
             currentBContexts.set(result, currentBReadback);
+            if (currentBWithCReadback) currentBWithCContexts.set(result, currentBWithCReadback);
         }
         return result;
     } catch (error) {
