@@ -9,6 +9,7 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import stat
 import sys
 
@@ -39,6 +40,17 @@ def tool_available(name, uid):
         value = os.stat(selected)
         return (stat.S_ISREG(value.st_mode) and value.st_uid in (0, uid) and
                 not value.st_mode & 0o7022)
+    except OSError:
+        return False
+
+
+def fixed_root_client_available():
+    selected = '/usr/bin/xdpyinfo'
+    try:
+        value = os.lstat(selected)
+        return (stat.S_ISREG(value.st_mode) and value.st_uid == 0 and
+                not value.st_mode & 0o7022 and os.path.realpath(selected) == selected and
+                os.access(selected, os.X_OK))
     except OSError:
         return False
 
@@ -78,6 +90,9 @@ def main():
         'xauth_environment': 'declared' if os.environ.get('XAUTHORITY') else 'unset',
         'xvfb_tool': 'present' if tool_available('Xvfb', uid) else 'not-established',
         'xauth_tool': 'present' if tool_available('xauth', uid) else 'not-established',
+        'xdpyinfo_tool': 'present' if fixed_root_client_available() else 'not-established',
+        'pidfd_api': 'present' if hasattr(os, 'pidfd_open') and hasattr(signal, 'pidfd_send_signal') else 'not-established',
+        'sigchld_handler': 'default' if signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL else 'non-default',
     }
     # These values are all fixed tokens. Never emit paths, UIDs, environment values,
     # usernames, cookies, credentials, exception strings or arbitrary tool output.

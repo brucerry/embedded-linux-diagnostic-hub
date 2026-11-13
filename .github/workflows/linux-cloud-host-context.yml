@@ -30,7 +30,7 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  printf '%s  %s\n' 'c52dd9a6cd794fba67b61bd33b3a11511daa417276f37ea10ef264c29f765937' 'scripts/linux-cloud-host-context.py' | sha256sum --check --status
+                  printf '%s  %s\n' '98ed8f0cb4607b578b972471708e5a4192a230c852399a92ec766a0e8317e136' 'scripts/linux-cloud-host-context.py' | sha256sum --check --status
                   /usr/bin/python3 -B -I scripts/linux-cloud-host-context.py
             - name: >-
                   Identity=${{ steps.context.outputs.identity }} home=${{ steps.context.outputs.home
@@ -45,6 +45,11 @@ jobs:
                   Display=${{ steps.context.outputs.display }} auth-env=${{
                   steps.context.outputs.xauth_environment }} Xvfb=${{
                   steps.context.outputs.xvfb_tool }} xauth=${{ steps.context.outputs.xauth_tool }}
+              run: ':'
+            - name: >-
+                  Native prerequisites xdpyinfo=${{ steps.context.outputs.xdpyinfo_tool }}
+                  pidfd-api=${{ steps.context.outputs.pidfd_api }} sigchld=${{
+                  steps.context.outputs.sigchld_handler }}
               run: ':'
             - name: No PTY allocated, display connected or application/lifecycle executed
               run: ':'
