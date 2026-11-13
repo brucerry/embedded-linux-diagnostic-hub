@@ -235,7 +235,7 @@ function fields(value: object, allowed: readonly string[]) {
 }
 function copy<T>(value: T): T {
     const bytes = JSON.stringify(value);
-    // Current slots, eight retained payloads and one bounded historical first-cleanup view.
+    // Current slots and bounded retained/cleanup history share this unchanged byte limit.
     if (
         !bytes ||
         Buffer.byteLength(bytes) >
@@ -490,7 +490,7 @@ function validateView(
             }
             validateConfiguration(cleanup.configuration);
             if (
-                cleanup.initial.history?.cleanup ||
+                cleanup.initial.history?.cleanup?.initial.history?.cleanup ||
                 cleanup.configuration.action !== 'finalize' ||
                 cleanup.configuration.root !== plan.root ||
                 cleanup.configuration.host.uid !== plan.host.uid ||
@@ -924,28 +924,44 @@ function assertLinuxLaunchPreimages(view: LinuxModelView, plan: LinuxModelConfig
             throw Error('launch menu differs');
     }
 }
-/** First no-menu predecessor removal; every original and inactive physical slot is required. */
+/** No-menu predecessor removal, initially or over one already published predecessor seal. */
 export function assertLinuxRetainedFinalizePreimages(
     view: LinuxModelView,
     plan: LinuxModelConfiguration,
 ) {
     assertLinuxLaunchPreimages(view, plan);
     const journal = view.journal,
-        completed = view.history?.completed;
+        completed = view.history?.completed,
+        parent = view.history?.cleanup;
+    const publishedParent = Boolean(
+        parent &&
+        completed &&
+        parent.progress.phase === 'complete' &&
+        parent.progress.index === parent.entries &&
+        parent.progress.leaf === 'source' &&
+        parent.seal?.state === 'published' &&
+        !parent.initial.history?.cleanup &&
+        !parent.initial.history?.lineage?.length &&
+        parent.configuration.transactionId === completed.journal.transactionId &&
+        parent.configuration.installationId === plan.installationId &&
+        equal(parent.initial.root, view.previous) &&
+        equal(completed.journal, { ...parent.initial.journal, phase: 'candidate-confirmed' }),
+    );
     if (
         plan.menu ||
         view.root?.menu ||
         view.stage ||
         !view.previous ||
         view.history?.lineage?.length ||
-        view.history?.cleanup ||
+        (parent && !publishedParent) ||
         !journal ||
         journal.phase !== 'candidate-active' ||
         journal.previousSHA256 === null ||
         !view.history?.journalOriginal ||
         !completed ||
-        completed.journal.previousSHA256 !== null ||
-        completed.journal.phase !== 'candidate-active' ||
+        (!publishedParent &&
+            (completed.journal.previousSHA256 !== null ||
+                completed.journal.phase !== 'candidate-active')) ||
         journal.previousSHA256 !== completed.journal.candidateSHA256 ||
         view.previous.transactionId !== completed.journal.transactionId ||
         view.previous.verifiedManifestSHA256 !== journal.previousSHA256 ||

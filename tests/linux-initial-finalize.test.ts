@@ -962,11 +962,6 @@ test('shipping first-predecessor Finalize removes only A, preserves originals an
     assert.equal((await f.run('update').operation).result.verdict, 'ACTIVE_PREVIOUS_RETAINED');
     const currentC = json(f, f.work + '/journal.json');
     assert.equal(f.node(f.work + '/previous-' + currentC.transactionId).ino, rootInode);
-    const beforeUnsupported = f.calls.length,
-        unsupported = f.run('finalize');
-    assert.equal((await unsupported.operation).status, 'retained-unknown');
-    assert.equal(unsupported.requests.length, 0);
-    assert.equal(f.calls.slice(beforeUnsupported).some(changes), false);
     const launchC = f.run('launch');
     try {
         await start(f, launchC);
@@ -1436,6 +1431,62 @@ test('valid legacy confirmed state remains readable without inventing an atomic 
         assert.equal(f.nodes.has(ledger + '/seal-intent.json'), false);
     } finally {
         await join(f, launch);
+    }
+});
+
+test('own selected legacy confirmed ledger requires each saved original for active and completed journal selection', async () => {
+    for (const selection of ['active', 'completed']) {
+        for (const name of ['original-journal.json', 'original-completed-journal.json']) {
+            for (const change of ['missing', 'bytes']) {
+                const { f, originalB } = await updated(),
+                    transaction = JSON.parse(originalB.toString()).transactionId,
+                    ledger = f.work + '-finalize-' + transaction;
+                f.afterCleanupMove = (from: string, to: string) => {
+                    if (
+                        from === f.work + '/completed-journal.json' &&
+                        to === ledger + '/original-completed-journal.json'
+                    )
+                        throw undefined;
+                };
+                await interruptedSeal(f);
+                authoredSealRestart(f);
+                // The same explicit legacy MapFS postimage as the compatibility control above.
+                // No atomic intent exists, so stored.seal cannot mask the confirmed-journal guard.
+                f.node(f.work + '/journal.json').bytes = Buffer.from(
+                    JSON.stringify({
+                        ...JSON.parse(originalB.toString()),
+                        phase: 'candidate-confirmed',
+                    }),
+                );
+                assert.equal(f.nodes.has(ledger + '/seal-intent.json'), false);
+                if (selection === 'completed') {
+                    candidate(f, '0.8.0');
+                    assert.equal(
+                        (await f.run('update').operation).result.verdict,
+                        'ACTIVE_PREVIOUS_RETAINED',
+                    );
+                    assert.equal(
+                        json(f, f.work + '/completed-journal.json').transactionId,
+                        transaction,
+                    );
+                }
+                const file = ledger + '/' + name;
+                if (change === 'missing') f.nodes.delete(file);
+                else f.node(file).bytes[0] ^= 1;
+                const rootInode = f.node(f.plan.root).ino,
+                    originalFDs = f.fds.size,
+                    at = f.calls.length,
+                    unlinks = f.unlinkCalls.length,
+                    refused = f.run('launch');
+                assert.equal((await refused.operation).status, 'retained-unknown');
+                assert.equal(refused.requests.length, 0);
+                assert.equal(f.calls.slice(at).some(changes), false);
+                assert.equal(f.unlinkCalls.length, unlinks);
+                assert.equal(f.node(f.plan.root).ino, rootInode);
+                assert.ok(f.fds.size >= originalFDs, 'Prior uncertain memory custody is retained.');
+                assert.equal(f.nodes.has(ledger + '/seal-intent.json'), false);
+            }
+        }
     }
 });
 

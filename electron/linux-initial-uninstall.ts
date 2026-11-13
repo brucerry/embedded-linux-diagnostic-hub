@@ -6,6 +6,7 @@ import {
     checkedLinuxModelConfiguration,
     linuxModelReviewSHA256,
     type LinuxModelConfiguration,
+    type LinuxModelCleanup,
     type LinuxModelKernel,
     type LinuxModelLease,
     type LinuxModelView,
@@ -32,6 +33,7 @@ type Entry = {
     bytes?: number;
     sha256?: string;
 };
+type ConfirmedLedger = { entries: Entry[]; anchor: Entry };
 type Snapshot = {
     schemaVersion: 1;
     root: string;
@@ -42,7 +44,7 @@ type Snapshot = {
     maintenance: Entry;
     originals: { path: string; base64: string; sha256: string }[];
     /** Historical published cleanup stays external and immutable; this never deletes it. */
-    confirmedCleanup?: { entries: Entry[]; anchor: Entry };
+    confirmedCleanup?: ConfirmedLedger & { parent?: ConfirmedLedger };
 };
 type Progress = {
     schemaVersion: 1;
@@ -145,7 +147,7 @@ function originalJournal(view: LinuxModelView) {
     };
 }
 
-/** Supported no-menu removal: an initial installation or the first confirmed successor
+/** Supported no-menu removal: an initial installation or either bounded confirmed successor
  * with complete published predecessor cleanup and no remaining prior payload.
  * This never promotes a pending update to an uninstallable committed installation. */
 function initial(view: LinuxModelView, configuration: LinuxModelConfiguration) {
@@ -178,7 +180,7 @@ function initial(view: LinuxModelView, configuration: LinuxModelConfiguration) {
             cleanup.progress.index !== cleanup.entries ||
             cleanup.progress.leaf !== 'source' ||
             cleanup.seal?.state !== 'published' ||
-            cleanup.initial.history?.cleanup ||
+            cleanup.initial.history?.cleanup?.initial.history?.cleanup ||
             cleanup.initial.history?.lineage?.length ||
             cleanup.initial.journal?.transactionId !== journal.transactionId ||
             cleanup.initial.journal.phase !== 'candidate-active' ||
@@ -188,6 +190,25 @@ function initial(view: LinuxModelView, configuration: LinuxModelConfiguration) {
             cleanup.initial.root.profile !== current.profile
         )
             throw Error('LINUX_UNINSTALL_CONFIRMED_CLEANUP_REQUIRED');
+        const parent = cleanup.initial.history?.cleanup;
+        if (
+            parent &&
+            (parent.configuration.menu ||
+                parent.initial.root?.menu ||
+                !parent.initial.root ||
+                parent.initial.history?.cleanup ||
+                parent.initial.history?.lineage?.length ||
+                parent.progress.phase !== 'complete' ||
+                parent.progress.index !== parent.entries ||
+                parent.progress.leaf !== 'source' ||
+                parent.seal?.state !== 'published' ||
+                parent.configuration.transactionId !==
+                    cleanup.initial.history?.completed?.journal.transactionId ||
+                parent.configuration.installationId !== current.installationId ||
+                parent.initial.root.profile !== current.profile ||
+                parent.initial.root.verifiedManifestSHA256 !== journal.previousSHA256)
+        )
+            throw Error('LINUX_UNINSTALL_CONFIRMED_PARENT_REQUIRED');
         return true;
     }
     if (
@@ -444,16 +465,18 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
         (['kind', 'dev', 'ino', 'uid', 'mode', 'bytes', 'sha256'] as const).every(
             (key) => a[key] === b[key],
         );
-    const confirmedShape = (snapshot: Snapshot) => {
-        const retained = snapshot.confirmedCleanup!;
+    const confirmedLedgerShape = (
+        retained: ConfirmedLedger,
+        cleanup: LinuxModelCleanup,
+        anchorName: string,
+        anchorOriginal: { base64: string; sha256: string },
+    ) => {
         fields(retained, ['entries', 'anchor']);
         if (!Array.isArray(retained.entries) || retained.entries.length !== ledgerFiles.length + 2)
             throw Error('LINUX_UNINSTALL_CONFIRMED_INVENTORY');
         const names = [...ledgerFiles, 'disposal', ''],
             seen = new Set<string>(),
-            cleanup = snapshot.initial.history!.cleanup!,
-            prior = cleanup.initial.history!,
-            journal = originalJournal(snapshot.initial);
+            prior = cleanup.initial.history!;
         for (const [index, item] of retained.entries.entries()) {
             const file = index < ledgerFiles.length;
             fields(item, [
@@ -479,7 +502,7 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
                 (file &&
                     (!Number.isSafeInteger(item.bytes) ||
                         item.bytes! < 1 ||
-                        item.bytes! > SNAPSHOT_CAP ||
+                        item.bytes! > (item.path === 'snapshot.json' ? SNAPSHOT_CAP : 8192) ||
                         typeof item.sha256 !== 'string' ||
                         !/^[a-f0-9]{64}$/.test(item.sha256)))
             )
@@ -499,7 +522,7 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
         const anchor = retained.anchor;
         fields(anchor, ['path', 'kind', 'dev', 'ino', 'uid', 'mode', 'bytes', 'sha256']);
         if (
-            anchor.path !== journal.name ||
+            anchor.path !== anchorName ||
             anchor.kind !== 'file' ||
             anchor.mode !== 0o100600 ||
             anchor.uid !== configuration.host.uid ||
@@ -508,17 +531,45 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             !Number.isSafeInteger(anchor.ino) ||
             anchor.ino <= 0 ||
             seen.has(anchor.dev + ':' + anchor.ino) ||
-            anchor.bytes !== Buffer.from(journal.original.base64, 'base64').length ||
-            anchor.sha256 !== journal.original.sha256
+            anchor.bytes !== Buffer.from(anchorOriginal.base64, 'base64').length ||
+            anchor.sha256 !== anchorOriginal.sha256
         )
             throw Error('LINUX_UNINSTALL_CONFIRMED_ANCHOR');
     };
-    const confirmedReadback = (snapshot: Snapshot, maintenanceDirectory: string) => {
-        if (!snapshot.confirmedCleanup) return;
-        confirmedShape(snapshot);
-        const retained = snapshot.confirmedCleanup,
+    const confirmedShape = (snapshot: Snapshot) => {
+        const retained = snapshot.confirmedCleanup!,
             cleanup = snapshot.initial.history!.cleanup!,
-            ledger = work + '-finalize-' + cleanup.configuration.transactionId,
+            parent = cleanup.initial.history?.cleanup,
+            journal = originalJournal(snapshot.initial);
+        fields(retained, ['entries', 'anchor', ...(parent ? ['parent'] : [])]);
+        confirmedLedgerShape(
+            { entries: retained.entries, anchor: retained.anchor },
+            cleanup,
+            journal.name,
+            journal.original,
+        );
+        if (parent) {
+            confirmedLedgerShape(
+                retained.parent!,
+                parent,
+                'completed-journal.json',
+                cleanup.initial.history!.completed!,
+            );
+            const kept = retained.entries.find(
+                (item) => item.path === 'original-completed-journal.json',
+            )!;
+            if (!sameRecorded(retained.parent!.anchor, kept))
+                throw Error('LINUX_UNINSTALL_CONFIRMED_PARENT_ANCHOR');
+        }
+    };
+    const confirmedLedgerReadback = (
+        retained: ConfirmedLedger,
+        cleanup: LinuxModelCleanup,
+        anchorFile: string,
+        anchorOriginal: { base64: string; sha256: string },
+        parent?: ConfirmedLedger,
+    ) => {
+        const ledger = work + '-finalize-' + cleanup.configuration.transactionId,
             allowed = [...ledgerFiles, 'disposal'].sort();
         if (
             JSON.stringify(io.names(ledger, allowed.length + 1).sort()) !==
@@ -551,6 +602,7 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             'initial',
             'entries',
             'originals',
+            ...(parent ? ['parent'] : []),
         ]);
         if (
             originalSnapshot.schemaVersion !== 1 ||
@@ -559,7 +611,8 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             linuxModelReviewSHA256(originalSnapshot.initial) !==
                 linuxModelReviewSHA256(cleanup.initial) ||
             !Array.isArray(originalSnapshot.entries) ||
-            originalSnapshot.entries.length !== cleanup.entries
+            originalSnapshot.entries.length !== cleanup.entries ||
+            (parent && JSON.stringify(originalSnapshot.parent) !== JSON.stringify(parent))
         )
             throw Error('LINUX_UNINSTALL_CONFIRMED_SNAPSHOT_CHANGED');
         fields(state, ['schemaVersion', 'snapshotSHA256', 'phase', 'index', 'leaf']);
@@ -581,13 +634,12 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             'original',
             'staged',
         ]);
-        const journal = originalJournal(snapshot.initial);
         if (
             intent.schemaVersion !== 1 ||
             intent.root !== root ||
             intent.uid !== configuration.host.uid ||
-            intent.installationId !== snapshot.initial.root!.installationId ||
-            intent.transactionId !== journal.journal.transactionId ||
+            intent.installationId !== cleanup.configuration.installationId ||
+            intent.transactionId !== cleanup.configuration.transactionId ||
             intent.snapshotSHA256 !== cleanup.snapshotSHA256
         )
             throw Error('LINUX_UNINSTALL_CONFIRMED_INTENT_CHANGED');
@@ -611,12 +663,47 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
                 before.completed!.base64
         )
             throw Error('LINUX_UNINSTALL_CONFIRMED_HISTORY_CHANGED');
-        checkItem(maintenanceDirectory + '/' + journal.name, retained.anchor);
-        if (
-            io.read(maintenanceDirectory + '/' + journal.name, 8192).toString('base64') !==
-            journal.original.base64
-        )
+        checkItem(anchorFile, retained.anchor);
+        if (io.read(anchorFile, 8192).toString('base64') !== anchorOriginal.base64)
             throw Error('LINUX_UNINSTALL_CONFIRMED_ANCHOR_CHANGED');
+        checkItem(anchorFile, retained.anchor);
+        checkItem(ledger, retained.entries.at(-1)!);
+        checkItem(ledger + '/disposal', retained.entries.at(-2)!);
+        if (
+            JSON.stringify(io.names(ledger, allowed.length + 1).sort()) !==
+                JSON.stringify(allowed) ||
+            io.names(ledger + '/disposal', 1).length
+        )
+            throw Error('LINUX_UNINSTALL_CONFIRMED_FOREIGN_CONTENT');
+    };
+    const confirmedReadback = (snapshot: Snapshot, maintenanceDirectory: string) => {
+        if (!snapshot.confirmedCleanup) return;
+        confirmedShape(snapshot);
+        const retained = snapshot.confirmedCleanup,
+            cleanup = snapshot.initial.history!.cleanup!,
+            journal = originalJournal(snapshot.initial);
+        confirmedLedgerReadback(
+            retained,
+            cleanup,
+            maintenanceDirectory + '/' + journal.name,
+            journal.original,
+            retained.parent,
+        );
+        if (retained.parent) {
+            const ledger = work + '-finalize-' + cleanup.configuration.transactionId;
+            confirmedLedgerReadback(
+                retained.parent,
+                cleanup.initial.history!.cleanup!,
+                ledger + '/original-completed-journal.json',
+                cleanup.initial.history!.completed!,
+            );
+            // The live/quarantined C anchor remains the final current-generation readback.
+            const anchorFile = maintenanceDirectory + '/' + journal.name;
+            checkItem(anchorFile, retained.anchor);
+            if (io.read(anchorFile, 8192).toString('base64') !== journal.original.base64)
+                throw Error('LINUX_UNINSTALL_CONFIRMED_ANCHOR_CHANGED');
+            checkItem(anchorFile, retained.anchor);
+        }
     };
     const captureConfirmed = (view: LinuxModelView) => {
         const cleanup = view.history!.cleanup!,
@@ -625,13 +712,43 @@ export function createLinuxInitialUninstall(io: LinuxInitialUninstallIO) {
             entries = ledgerFiles.map((name) => {
                 const file = ledger + '/' + name,
                     info = io.stat(file);
+                entry(name, info, 'file');
+                if (
+                    info.uid !== configuration.host.uid ||
+                    info.mode !== 0o100600 ||
+                    !Number.isSafeInteger(info.size) ||
+                    info.size < 1 ||
+                    info.size > (name === 'snapshot.json' ? SNAPSHOT_CAP : 8192)
+                )
+                    throw Error('LINUX_UNINSTALL_CONFIRMED_ENTRY');
                 return entry(name, info, 'file', io.hash(file, info.size));
             });
         entries.push(entry('disposal', io.stat(ledger + '/disposal'), 'directory'));
         entries.push(entry('', io.stat(ledger), 'directory'));
         const file = work + '/' + journal.name,
             info = io.stat(file);
-        return { entries, anchor: entry(journal.name, info, 'file', io.hash(file, info.size)) };
+        entry(journal.name, info, 'file');
+        if (
+            info.uid !== configuration.host.uid ||
+            info.mode !== 0o100600 ||
+            !Number.isSafeInteger(info.size) ||
+            info.size < 1 ||
+            info.size > 8192 ||
+            info.size !== Buffer.from(journal.original.base64, 'base64').length
+        )
+            throw Error('LINUX_UNINSTALL_CONFIRMED_ANCHOR');
+        const retained: ConfirmedLedger & { parent?: ConfirmedLedger } = {
+            entries,
+            anchor: entry(journal.name, info, 'file', io.hash(file, info.size)),
+        };
+        if (cleanup.initial.history?.cleanup) {
+            const raw = io.read(ledger + '/snapshot.json', SNAPSHOT_CAP);
+            if (hash(raw) !== cleanup.snapshotSHA256)
+                throw Error('LINUX_UNINSTALL_CONFIRMED_SNAPSHOT_CHANGED');
+            const persisted = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw));
+            retained.parent = clone(persisted.parent);
+        }
+        return retained;
     };
     const activity = (paths = [payload, disposal]) => {
         if (Object.values(io.activity(paths)).some((value) => value !== 'inactive'))

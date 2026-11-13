@@ -20,7 +20,7 @@ const root = new URL('../', import.meta.url),
     hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex'),
     baseURL = new URL('tests/linux-initial-finalize.test.ts', root),
     raw = readFileSync(baseURL, 'utf8');
-assert.equal(hash(raw), 'a51e22382258c6b8ed11735e3b2a0473762d6278971dbb49d6ca1188818fe2e1');
+assert.equal(hash(raw), 'a242d9290ad30d871fbc7388c1fae9496914479e40abacfc42915d69276e403c');
 const tree = ts.createSourceFile(
         'fixed-finalize-declarations.ts',
         raw,

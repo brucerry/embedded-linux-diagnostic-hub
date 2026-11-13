@@ -957,12 +957,12 @@ function createBackend(
             activity: sampledActivity['retained-' + index],
         }));
         const cleanupTransaction =
-            journal?.phase === 'candidate-confirmed'
+            journal && maybeStat(work + '-finalize-' + journal.transactionId)
                 ? journal.transactionId
-                : completed?.journal.phase === 'candidate-confirmed'
-                  ? completed.journal.transactionId
-                  : journal && maybeStat(work + '-finalize-' + journal.transactionId)
-                    ? journal.transactionId
+                : journal?.phase === 'candidate-confirmed'
+                  ? journal.transactionId
+                  : completed?.journal.phase === 'candidate-confirmed'
+                    ? completed.journal.transactionId
                     : plan.action === 'finalize' &&
                         maybeStat(work + '-finalize-' + plan.transactionId + '/seal-intent.json')
                       ? plan.transactionId
@@ -998,10 +998,13 @@ function createBackend(
                 ledger = work + '-finalize-' + cleanupTransaction;
             const savedCurrent = ledger + '/original-journal.json',
                 savedCompleted = ledger + '/original-completed-journal.json';
+            // A confirmed parent does not publish the selected current cleanup's originals.
             if (
                 stored.seal ||
-                journal?.phase === 'candidate-confirmed' ||
-                completed?.journal.phase === 'candidate-confirmed'
+                (journal?.phase === 'candidate-confirmed' &&
+                    journal.transactionId === cleanupTransaction) ||
+                (completed?.journal.phase === 'candidate-confirmed' &&
+                    completed.journal.transactionId === cleanupTransaction)
             ) {
                 if (
                     stored.progress.phase !== 'complete' ||
@@ -2504,7 +2507,7 @@ function createBackend(
                     return fail('NATIVE_FINALIZE_RETURN_CHANGED');
                 return returned;
             }),
-        /** Actual first-predecessor cleanup; all originals survive outside the live payload. */
+        /** Actual bounded no-menu predecessor cleanup; all originals survive outside the live payload. */
         finalizeRetained: (
             scope: LinuxModelScope,
             expected: LinuxModelView,

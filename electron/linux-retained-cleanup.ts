@@ -6,6 +6,7 @@ import {
     checkedLinuxModelConfiguration,
     checkedLinuxModelPlan,
     checkedLinuxModelView,
+    assertLinuxRetainedFinalizePreimages,
     linuxModelReviewSHA256,
     type LinuxModelConfiguration,
     type LinuxModelPlan,
@@ -37,6 +38,8 @@ export interface LinuxRetainedCleanupSnapshot {
     initial: LinuxModelView;
     entries: LinuxRetainedCleanupEntry[];
     originals: { path: string; base64: string; sha256: string }[];
+    /** Exact immutable first-seal ledger and its published journal, never another payload. */
+    parent?: { entries: LinuxRetainedCleanupEntry[]; anchor: LinuxRetainedCleanupEntry };
 }
 export interface LinuxRetainedCleanupProgress {
     schemaVersion: 1;
@@ -203,10 +206,11 @@ function entry(
     } satisfies LinuxRetainedCleanupEntry;
 }
 
-/** First supported retained cleanup: one update over the original completed no-menu install.
+/** Retained cleanup over the initial no-menu install or one complete published parent seal.
  * The exact current and baseline journals stay outside this component and are never removed. */
 function initial(view: LinuxModelView, configuration: LinuxModelConfiguration) {
     checkedLinuxModelView(view, configuration);
+    assertLinuxRetainedFinalizePreimages(view, configuration);
     const current = view.root,
         previous = view.previous,
         journal = view.journal,
@@ -222,7 +226,6 @@ function initial(view: LinuxModelView, configuration: LinuxModelConfiguration) {
         !completed ||
         !view.history?.journalOriginal ||
         view.history.lineage?.length ||
-        (view.history as unknown as Record<string, unknown>).cleanup ||
         view.stage ||
         Object.values(view.activity).some((state) => state !== 'inactive') ||
         journal.phase !== 'candidate-active' ||
@@ -232,8 +235,9 @@ function initial(view: LinuxModelView, configuration: LinuxModelConfiguration) {
         journal.installationId !== previous.installationId ||
         journal.candidateSHA256 !== current.verifiedManifestSHA256 ||
         journal.previousSHA256 !== previous.verifiedManifestSHA256 ||
-        completed.journal.previousSHA256 !== null ||
-        completed.journal.phase !== 'candidate-active' ||
+        (!view.history.cleanup &&
+            (completed.journal.previousSHA256 !== null ||
+                completed.journal.phase !== 'candidate-active')) ||
         completed.journal.transactionId !== previous.transactionId ||
         completed.journal.candidateSHA256 !== previous.verifiedManifestSHA256 ||
         current.profile !== previous.profile ||
@@ -621,7 +625,14 @@ export function createLinuxRetainedCleanup(io: LinuxRetainedCleanupIO) {
         return { value, raw };
     };
     const snapshotCheck = (snapshot: LinuxRetainedCleanupSnapshot) => {
-        fields(snapshot, ['schemaVersion', 'configuration', 'initial', 'entries', 'originals']);
+        fields(snapshot, [
+            'schemaVersion',
+            'configuration',
+            'initial',
+            'entries',
+            'originals',
+            ...(Object.hasOwn(snapshot, 'parent') ? ['parent'] : []),
+        ]);
         const historical = checkedLinuxModelConfiguration(snapshot.configuration);
         if (
             snapshot.schemaVersion !== 1 ||
@@ -639,6 +650,8 @@ export function createLinuxRetainedCleanup(io: LinuxRetainedCleanupIO) {
         )
             throw Error('LINUX_FINALIZE_CLEANUP_SNAPSHOT');
         initial(snapshot.initial, historical);
+        if (Boolean(snapshot.initial.history?.cleanup) !== Object.hasOwn(snapshot, 'parent'))
+            throw Error('LINUX_FINALIZE_CLEANUP_PARENT_REQUIRED');
         const originals = new Map<string, Buffer>();
         for (const original of snapshot.originals) {
             fields(original, ['path', 'base64', 'sha256']);
@@ -757,6 +770,234 @@ export function createLinuxRetainedCleanup(io: LinuxRetainedCleanupIO) {
             rootEntry.uid !== old.identity.uid
         )
             throw Error('LINUX_FINALIZE_CLEANUP_ORDER');
+        if (snapshot.parent) parentShape(snapshot);
+    };
+    const parentFiles = [
+        'original-completed-journal.json',
+        'original-journal.json',
+        'seal-intent.json',
+        'snapshot.json',
+        'state.json',
+        'unconfirmed-journal.json',
+    ];
+    const sameRecorded = (a: LinuxRetainedCleanupEntry, b: LinuxRetainedCleanupEntry) =>
+        (['kind', 'dev', 'ino', 'uid', 'mode', 'bytes', 'sha256'] as const).every(
+            (key) => a[key] === b[key],
+        );
+    const parentShape = (snapshot: LinuxRetainedCleanupSnapshot) => {
+        const saved = snapshot.parent!,
+            parent = snapshot.initial.history!.cleanup!,
+            original = snapshot.initial.history!.completed!;
+        fields(saved, ['entries', 'anchor']);
+        if (!Array.isArray(saved.entries) || saved.entries.length !== parentFiles.length + 2)
+            throw Error('LINUX_FINALIZE_PARENT_INVENTORY');
+        const paths = [...parentFiles, 'disposal', ''],
+            identities = new Set<string>();
+        for (const [index, item] of saved.entries.entries()) {
+            const file = index < parentFiles.length;
+            fields(item, [
+                'path',
+                'kind',
+                'dev',
+                'ino',
+                'uid',
+                'mode',
+                ...(file ? ['bytes', 'sha256'] : []),
+            ]);
+            const key = item.dev + ':' + item.ino;
+            if (
+                item.path !== paths[index] ||
+                item.kind !== (file ? 'file' : 'directory') ||
+                !Number.isSafeInteger(item.dev) ||
+                item.dev < 0 ||
+                !Number.isSafeInteger(item.ino) ||
+                item.ino <= 0 ||
+                identities.has(key) ||
+                item.uid !== configuration.host.uid ||
+                item.mode !== (file ? 0o100600 : 0o40700) ||
+                (file &&
+                    (!Number.isSafeInteger(item.bytes) ||
+                        item.bytes! < 1 ||
+                        item.bytes! > (item.path === 'snapshot.json' ? CAP : 8192) ||
+                        typeof item.sha256 !== 'string' ||
+                        !/^[a-f0-9]{64}$/.test(item.sha256)))
+            )
+                throw Error('LINUX_FINALIZE_PARENT_ENTRY');
+            identities.add(key);
+        }
+        const expected = new Map([
+            ['snapshot.json', parent.snapshotSHA256],
+            ['seal-intent.json', parent.seal!.intentSHA256],
+            ['original-journal.json', parent.initial.history!.journalOriginal!.sha256],
+            ['unconfirmed-journal.json', parent.initial.history!.journalOriginal!.sha256],
+            ['original-completed-journal.json', parent.initial.history!.completed!.sha256],
+        ]);
+        for (const item of saved.entries)
+            if (expected.has(item.path) && item.sha256 !== expected.get(item.path))
+                throw Error('LINUX_FINALIZE_PARENT_ORIGINAL');
+        const anchor = saved.anchor;
+        fields(anchor, ['path', 'kind', 'dev', 'ino', 'uid', 'mode', 'bytes', 'sha256']);
+        if (
+            anchor.path !== 'completed-journal.json' ||
+            anchor.kind !== 'file' ||
+            anchor.mode !== 0o100600 ||
+            anchor.uid !== configuration.host.uid ||
+            !Number.isSafeInteger(anchor.dev) ||
+            anchor.dev < 0 ||
+            !Number.isSafeInteger(anchor.ino) ||
+            anchor.ino <= 0 ||
+            identities.has(anchor.dev + ':' + anchor.ino) ||
+            !Number.isSafeInteger(anchor.bytes) ||
+            anchor.bytes! < 1 ||
+            anchor.bytes! > 8192 ||
+            anchor.bytes !== Buffer.from(original.base64, 'base64').length ||
+            anchor.sha256 !== original.sha256
+        )
+            throw Error('LINUX_FINALIZE_PARENT_ANCHOR');
+    };
+    const parentReadback = (
+        snapshot: LinuxRetainedCleanupSnapshot,
+        progress: LinuxRetainedCleanupProgress | null,
+        ownSeal?: LinuxRetainedSeal,
+    ) => {
+        if (!snapshot.parent) return;
+        parentShape(snapshot);
+        const saved = snapshot.parent,
+            parent = snapshot.initial.history!.cleanup!,
+            parentLedger = work + '-finalize-' + parent.configuration.transactionId,
+            allowed = [...parentFiles, 'disposal'].sort();
+        if (
+            JSON.stringify(names(parentLedger, allowed.length + 1).sort()) !==
+                JSON.stringify(allowed) ||
+            names(parentLedger + '/disposal', 1).length
+        )
+            throw Error('LINUX_FINALIZE_PARENT_FOREIGN_STATE');
+        for (const item of saved.entries)
+            check(parentLedger + (item.path ? '/' + item.path : ''), item);
+        const readParent = (name: string, cap = 8192) => {
+            const item = saved.entries.find((entry) => entry.path === name)!,
+                raw = io.read(parentLedger + '/' + name, cap, true);
+            if (raw.length !== item.bytes || hash(raw) !== item.sha256)
+                throw Error('LINUX_FINALIZE_PARENT_ORIGINAL_CHANGED');
+            check(parentLedger + '/' + name, item);
+            return raw;
+        };
+        const decode = (raw: Buffer) => {
+            const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw));
+            if (!Buffer.from(JSON.stringify(value)).equals(raw))
+                throw Error('LINUX_FINALIZE_PARENT_PARTIAL_STATE');
+            return value;
+        };
+        const parentSnapshot = decode(
+                readParent('snapshot.json', CAP),
+            ) as LinuxRetainedCleanupSnapshot,
+            parentState = decode(readParent('state.json')),
+            intentRaw = readParent('seal-intent.json');
+        fields(parentSnapshot, [
+            'schemaVersion',
+            'configuration',
+            'initial',
+            'entries',
+            'originals',
+        ]);
+        if (
+            parentSnapshot.schemaVersion !== 1 ||
+            JSON.stringify(parentSnapshot.configuration) !== JSON.stringify(parent.configuration) ||
+            linuxModelReviewSHA256(parentSnapshot.initial) !==
+                linuxModelReviewSHA256(parent.initial) ||
+            !Array.isArray(parentSnapshot.entries) ||
+            parentSnapshot.entries.length !== parent.entries
+        )
+            throw Error('LINUX_FINALIZE_PARENT_SNAPSHOT_CHANGED');
+        // A second seal preserves the actual first seal, never an arbitrarily recursive history.
+        initial(
+            parentSnapshot.initial,
+            checkedLinuxModelConfiguration(parentSnapshot.configuration),
+        );
+        if (parentSnapshot.initial.history?.cleanup) throw Error('LINUX_FINALIZE_PARENT_DEPTH');
+        fields(parentState, ['schemaVersion', 'snapshotSHA256', 'phase', 'index', 'leaf']);
+        if (
+            parentState.schemaVersion !== 1 ||
+            parentState.snapshotSHA256 !== parent.snapshotSHA256 ||
+            parentState.phase !== 'complete' ||
+            parentState.index !== parent.entries ||
+            parentState.leaf !== 'source'
+        )
+            throw Error('LINUX_FINALIZE_PARENT_INCOMPLETE');
+        const intent = checkedLinuxRetainedSealIntent(
+                decode(intentRaw),
+                parentSnapshot,
+                parent.snapshotSHA256,
+            ),
+            retired = saved.entries.find((item) => item.path === 'unconfirmed-journal.json')!;
+        if (!sameRecorded(intent.original, retired) || !sameRecorded(intent.staged, saved.anchor))
+            throw Error('LINUX_FINALIZE_PARENT_INTENT_ANCHOR');
+        const before = parent.initial.history!;
+        if (
+            readParent('original-journal.json').toString('base64') !==
+                before.journalOriginal!.base64 ||
+            readParent('unconfirmed-journal.json').toString('base64') !==
+                before.journalOriginal!.base64 ||
+            readParent('original-completed-journal.json').toString('base64') !==
+                before.completed!.base64
+        )
+            throw Error('LINUX_FINALIZE_PARENT_HISTORY_CHANGED');
+        const liveAnchor = work + '/completed-journal.json',
+            savedAnchor = ledger + '/original-completed-journal.json',
+            live = io.maybe(liveAnchor),
+            kept = io.maybe(savedAnchor);
+        if ((!live && !kept) || (kept && progress?.phase !== 'complete'))
+            throw Error('LINUX_FINALIZE_PARENT_ANCHOR_BOUNDARY');
+        if (live && kept) {
+            // A later update may reuse the completed slot for this seal's exact published inode.
+            // It cannot introduce a second copy of the parent's retained anchor.
+            if (ownSeal?.state !== 'published')
+                throw Error('LINUX_FINALIZE_PARENT_ANCHOR_BOUNDARY');
+            check(liveAnchor, ownSeal.intent.staged);
+        }
+        const anchorPath = kept ? savedAnchor : liveAnchor;
+        check(anchorPath, saved.anchor);
+        if (
+            io.read(anchorPath, 8192, true).toString('base64') !==
+            snapshot.initial.history!.completed!.base64
+        )
+            throw Error('LINUX_FINALIZE_PARENT_ANCHOR_CHANGED');
+        check(anchorPath, saved.anchor);
+        check(parentLedger, saved.entries.at(-1)!);
+        check(parentLedger + '/disposal', saved.entries.at(-2)!);
+        if (
+            JSON.stringify(names(parentLedger, allowed.length + 1).sort()) !==
+                JSON.stringify(allowed) ||
+            names(parentLedger + '/disposal', 1).length
+        )
+            throw Error('LINUX_FINALIZE_PARENT_FOREIGN_STATE');
+    };
+    const captureParent = (view: LinuxModelView) => {
+        const parent = view.history!.cleanup!,
+            parentLedger = work + '-finalize-' + parent.configuration.transactionId,
+            entries: LinuxRetainedCleanupEntry[] = parentFiles.map((name) => {
+                const file = parentLedger + '/' + name,
+                    info = io.stat(file);
+                entry(name, info, 'file', '');
+                if (
+                    !Number.isSafeInteger(info.size) ||
+                    info.size < 1 ||
+                    info.size > (name === 'snapshot.json' ? CAP : 8192)
+                )
+                    throw Error('LINUX_FINALIZE_PARENT_FILE_BOUND');
+                return entry(name, info, 'file', io.hash(file, info.size));
+            });
+        entries.push(entry('disposal', io.stat(parentLedger + '/disposal'), 'directory'));
+        entries.push(entry('', io.stat(parentLedger), 'directory'));
+        const file = work + '/completed-journal.json',
+            info = io.stat(file);
+        entry('completed-journal.json', info, 'file', '');
+        if (!Number.isSafeInteger(info.size) || info.size < 1 || info.size > 8192)
+            throw Error('LINUX_FINALIZE_PARENT_FILE_BOUND');
+        return {
+            entries,
+            anchor: entry('completed-journal.json', info, 'file', io.hash(file, info.size)),
+        };
     };
     const inventory = (
         base: string,
@@ -957,6 +1198,7 @@ export function createLinuxRetainedCleanup(io: LinuxRetainedCleanupIO) {
             if (!seal) throw Error('LINUX_FINALIZE_SEAL_CONFLICT');
         } else if (io.maybe(stageFile) || io.maybe(retiredFile))
             throw Error('LINUX_FINALIZE_SEAL_INTENT_REQUIRED');
+        parentReadback(saved.value, state.value, seal);
         return {
             kind: 'resume',
             snapshot: saved.value,
@@ -1001,8 +1243,10 @@ export function createLinuxRetainedCleanup(io: LinuxRetainedCleanupIO) {
             initial: clone(view),
             entries,
             originals,
+            ...(view.history?.cleanup ? { parent: captureParent(view) } : {}),
         };
         snapshotCheck(snapshot);
+        parentReadback(snapshot, null);
         inventory(previous, entries);
         const fresh = await io.initial();
         if (linuxModelReviewSHA256(fresh) !== linuxModelReviewSHA256(view))
@@ -1049,6 +1293,7 @@ export function createLinuxRetainedCleanup(io: LinuxRetainedCleanupIO) {
                         )
                             throw Error('LINUX_FINALIZE_CLEANUP_STATE_CHANGED');
                     } else {
+                        parentReadback(snapshot, null);
                         inventory(previous, snapshot.entries);
                         if (madeLedger) {
                             privateDirectory(ledger);
