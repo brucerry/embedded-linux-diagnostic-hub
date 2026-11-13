@@ -1,0 +1,50 @@
+name: Linux read-only host context
+
+on:
+    push:
+        branches: [ci/v060-linux-host-context-20261113]
+
+permissions:
+    contents: read
+
+jobs:
+    classify:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name
+            == 'push' && github.ref == 'refs/heads/ci/v060-linux-host-context-20261113' &&
+            github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind committed probe and read host classifications without native execution
+              id: context
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  printf '%s  %s\n' 'c52dd9a6cd794fba67b61bd33b3a11511daa417276f37ea10ef264c29f765937' 'scripts/linux-cloud-host-context.py' | sha256sum --check --status
+                  /usr/bin/python3 -B -I scripts/linux-cloud-host-context.py
+            - name: >-
+                  Identity=${{ steps.context.outputs.identity }} home=${{ steps.context.outputs.home
+                  }} workspace=${{ steps.context.outputs.workspace }} binding=${{
+                  steps.context.outputs.binding }}
+              run: ':'
+            - name: >-
+                  TTY stdin=${{ steps.context.outputs.stdin }} ptmx=${{ steps.context.outputs.ptmx
+                  }} devpts=${{ steps.context.outputs.devpts }}
+              run: ':'
+            - name: >-
+                  Display=${{ steps.context.outputs.display }} auth-env=${{
+                  steps.context.outputs.xauth_environment }} Xvfb=${{
+                  steps.context.outputs.xvfb_tool }} xauth=${{ steps.context.outputs.xauth_tool }}
+              run: ':'
+            - name: No PTY allocated, display connected or application/lifecycle executed
+              run: ':'
