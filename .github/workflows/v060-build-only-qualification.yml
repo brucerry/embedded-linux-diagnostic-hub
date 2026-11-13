@@ -2,7 +2,7 @@ name: v0.6.0 source-bound build-only qualification
 
 on:
     push:
-        branches: [ci/v060-abc-payload-build-20261113]
+        branches: [ci/v060-linux-second-seal-inputs-20261113]
 
 permissions:
     contents: read
@@ -16,7 +16,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-abc-payload-build-20261113' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-linux-second-seal-inputs-20261113' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 30
         env:
@@ -57,7 +57,7 @@ jobs:
                   assert.equal(process.env.RUNNER_ARCH, 'X64');
                   assert.equal(process.env.GITHUB_RUN_ATTEMPT, '1');
                   assert.equal(process.env.GITHUB_EVENT_NAME, 'push');
-                  assert.equal(process.env.GITHUB_REF, 'refs/heads/ci/v060-abc-payload-build-20261113');
+                  assert.equal(process.env.GITHUB_REF, 'refs/heads/ci/v060-linux-second-seal-inputs-20261113');
                   assert.equal(process.env.GITHUB_WORKFLOW_SHA, process.env.GITHUB_SHA);
                   assert.match(process.env.GITHUB_SHA, /^[a-f0-9]{40}$/);
                   for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH', 'USE_HARD_LINKS', 'VITEST']) assert.equal(process.env[key], undefined);
@@ -321,3 +321,57 @@ jobs:
                   assert.equal(execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), process.env.GITHUB_SHA);
                   assert.equal(execFileSync('/usr/bin/git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim(), '');
                   NODE
+            - name: Prepare and verify the fixed second-seal request as build data only
+              # Reuse only inert actor definitions and their owned data readers. The outer
+              # actor, PTY, application and all native lifecycle operations remain uncalled.
+              run: |
+                  set -euo pipefail
+                  printf '%s  %s\n' \
+                    '6395b2dfaf3eebc8b6ea2a968ebdea9855e272867508d723ecd8ebae1b29a1c7' 'scripts/linux-owned-second-seal-pty.py' \
+                    'd24f87ef9cb470bd76957c8c2ad5186df688b48894bae5019af37c7db82ad748' 'scripts/prepare-linux-second-seal-request.py' \
+                    | /usr/bin/sha256sum --check --status
+                  # The sentinel preserves every trailing newline in command substitution.
+                  request_output="$(/usr/bin/python3 -B -I scripts/prepare-linux-second-seal-request.py --build-root "$HUB_BUILD_ROOT" || exit "$?"; printf '.')"
+                  test "${#request_output}" -eq 66
+                  test "${request_output:64:2}" = $'\n.'
+                  request_sha="${request_output:0:64}"
+                  [[ "$request_sha" =~ ^[a-f0-9]{64}$ ]]
+                  export HUB_SECOND_SEAL_REQUEST_SHA256="$request_sha"
+                  /usr/bin/python3 -B -I - <<'PY'
+                  import json, os, pathlib, sys, time, types
+                  source, build, home = (os.environ[name] for name in ('GITHUB_WORKSPACE', 'HUB_BUILD_ROOT', 'HOME'))
+                  helper_file = source + '/scripts/prepare-linux-second-seal-request.py'
+                  helper = types.ModuleType('_hub_fixed_request_build_readback')
+                  helper.__file__ = helper_file
+                  exec(compile(pathlib.Path(helper_file).read_bytes(), helper_file, 'exec'), helper.__dict__)
+                  actor = helper.load_actor(source)  # Its __main__ guard remains false.
+                  try:
+                      uid, commit = os.getuid(), os.environ['GITHUB_SHA']
+                      request_file = build + '/outer-second-seal-request.json'
+                      actual = actor.observed(request_file, 65536, uid)
+                      actor.STATE['returned'].append(actual)
+                      actor.require(actual['sha256'] == os.environ['HUB_SECOND_SEAL_REQUEST_SHA256'], 'REQUEST_HASH_READBACK')
+                      request = json.loads(actual['raw'])
+                      actor.require(actor.validate_request(request, home, commit) == build, 'REQUEST_FIXED_SCHEMA')
+                      expected = helper.request_from_originals(actor, source, build, home, uid, commit)
+                      actor.STATE['returned'].append(expected)
+                      actor.require(request == expected and actual['raw'] ==
+                                    (json.dumps(expected, sort_keys=True, separators=(',', ':')) + '\n').encode(), 'REQUEST_CURRENT_ORIGINALS')
+                      originals = actor.read_inputs(request, source, uid)
+                      actor.STATE['returned'].append(originals)
+                      head = actor.observed(source + '/.git/HEAD', 256, uid)
+                      named = actor.observed(request_file, 65536, uid)
+                      actor.STATE['returned'].extend((head, named))
+                      actor.require(head['raw'].decode('ascii').strip() == commit and named == actual and
+                                    not helper.unknown_data(actor), 'REQUEST_FINAL_READBACK')
+                  except BaseException as error:
+                      actor.fail(error)
+                      while helper.unknown_data(actor):
+                          try:
+                              time.sleep(0.5)
+                          except BaseException as wait_error:
+                              actor.STATE['secondary'].append(wait_error)
+                      sys.stderr.write('Fixed second-seal request readback is nonpassing.\n')
+                      raise SystemExit(78)
+                  print('::notice title=Linux second-seal build inputs::request=prepared lifecycle=not-executed')
+                  PY
