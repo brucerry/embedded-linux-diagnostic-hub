@@ -5,6 +5,7 @@ import email.utils
 import errno
 import hashlib
 import json
+import lzma
 import pathlib
 import re
 import stat
@@ -12,12 +13,13 @@ import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = 'cea45073f428f74d7369871acb518958df9da972b60de96585e10a465b25a4cb'
+SOURCE_SHA256 = '61d7c3b7b5dac8d8262d43647d7383659e2b2e34404de1cccdd43a1625790ce3'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
 SELECTED = {'need', 'safe_stage', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
             'signature_status', 'release_metadata', 'preflight_attribute_reason', 'preflight_stat_reason',
-            'candidate_parent_reason', 'candidate_metadata', 'Probe'}
+            'candidate_parent_reason', 'candidate_metadata', 'checked_index_entry', 'index_entry',
+            'authenticate_index', 'decompress_index', 'validate_package_record', 'package_record', 'Probe'}
 NOW = datetime.datetime(2026, 11, 14, tzinfo=datetime.timezone.utc).timestamp()
 CREATED = int(datetime.datetime(2024, 4, 25, tzinfo=datetime.timezone.utc).timestamp())
 PRIMARY = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
@@ -39,6 +41,18 @@ def release(expiry=None):
     return raw
 
 
+def package_fixture():
+    return ('Package: unrelated\nArchitecture: amd64\nDescription: café\n suite\n\n'
+            'Package: x11-utils\nArchitecture: amd64\nVersion: 7.7+6build2\nSize: 12345\n'
+            'SHA256: ' + '1' * 64 + '\nFilename: pool/main/x/x11-utils/x11-utils_7.7+6build2_amd64.deb\n'
+            'Description: café\n continued description\n\n').encode('utf-8')
+
+
+def release_with_index(compressed, size=None):
+    return release() + b'SHA256:\n ' + hashlib.sha256(compressed).hexdigest().encode() + b' ' + str(
+        len(compressed) if size is None else size).encode() + b' main/binary-amd64/Packages.xz\n'
+
+
 class Pipe:
     def __init__(self, fd):
         self.fd, self.closed = fd, False
@@ -53,6 +67,7 @@ class Memory:
         self.clock, self.events, self.files, self.fds, self.positions = [0.0], [], {}, {}, {}
         self.printed = []
         self.directories = {}
+        self.index_bytes, self.index_download_bytes = None, None
         self.next_fd, self.queues, self.on_popen, self.on_poll, self.on_mode, self.on_close = 100, {}, None, None, None, None
         self.os = types.SimpleNamespace(O_CLOEXEC=1, O_RDONLY=2, O_NOFOLLOW=4, O_NONBLOCK=8,
             O_RDWR=16, O_CREAT=32, O_EXCL=64, O_WRONLY=128, O_APPEND=256, X_OK=1,
@@ -64,7 +79,8 @@ class Memory:
             environ={'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'})
         self.subprocess = types.SimpleNamespace(DEVNULL=-3, PIPE=-1, Popen=self.popen)
         namespace = {'__builtins__': __builtins__, 'datetime': datetime, 'email': email, 'errno': errno,
-            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'json': json, 'os': self.os, 'subprocess': self.subprocess,
+            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'json': json, 'lzma': lzma,
+            'os': self.os, 'subprocess': self.subprocess,
             'print': lambda text: self.printed.append(text),
             'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0], time=lambda: NOW),
             'sys': types.SimpleNamespace(platform='linux'), '__file__': str(SOURCE), 'CURRENT': []}
@@ -73,7 +89,9 @@ class Memory:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
                     {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES',
                      'PREFLIGHT_REASONS', 'CANDIDATE_PATHS', 'CANDIDATE_REASONS', 'REPOSITORY',
-                     'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH'} for target in node.targets):
+                     'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH', 'INDEX_BRANCH',
+                     'INDEX_PATH', 'INDEX_URL', 'INDEX_INRELEASE_SHA256', 'INDEX_COMPRESSED_LIMIT',
+                     'INDEX_TEXT_LIMIT', 'INDEX_DECODER_MEMORY'} for target in node.targets):
                 selected.append(node)
             elif isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in SELECTED:
                 selected.append(node)
@@ -116,10 +134,10 @@ class Memory:
         return types.SimpleNamespace(st_dev=1, st_ino=row['ino'], st_uid=row['uid'],
             st_mode=stat.S_IFREG | row['mode'], st_nlink=1, st_size=len(row['raw']), st_mtime_ns=1, st_ctime_ns=1)
 
-    def verification_environment(self):
+    def verification_environment(self, index=False):
         source = str(SOURCE.resolve().parents[1])  # Resolves only the pinned task source path.
         sha = 'a' * 40
-        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['VERIFICATION_BRANCH'],
+        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['INDEX_BRANCH'] if index else self.ns['VERIFICATION_BRANCH'],
                'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push', 'RUNNER_ENVIRONMENT': 'github-hosted',
                'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'X64', 'GITHUB_RUN_ID': '123', 'GITHUB_WORKSPACE': source,
                'GITHUB_SHA': sha, 'GITHUB_EVENT_PATH': '/tmp/managed/event.json',
@@ -141,10 +159,17 @@ class Memory:
         self.os.mkdir = mkdir
         self.os.listdir = lambda path: sorted({p[len(path) + 1:].split('/')[0] for p in
             (*self.files, *self.directories) if p.startswith(path + '/')})
-        def factory(started):
+        actual_class = self.ns['Probe']
+        def factory(started, include_index=False):
             assert started == self.probe.started
+            self.probe = actual_class(started, include_index=include_index)
             return self.probe
-        self.ns['Probe'] = factory  # Fully owned fake ports retain the already constructed actual class instance.
+        self.ns['Probe'] = factory  # Constructor port instantiates the actual class behind complete fake OS/process ports.
+        if index:
+            self.index_bytes = lzma.compress(package_fixture())
+            self.index_download_bytes = self.index_bytes
+            # Expected bytes are test-owned fixtures, not a production pin derived from a download.
+            self.ns['INDEX_INRELEASE_SHA256'] = hashlib.sha256(b'opaque-signed-bytes').hexdigest()
         return keyring
 
     def open(self, path, flags, mode):
@@ -191,6 +216,10 @@ class Memory:
         self.events.append(('popen', args, kwargs))
         child = types.SimpleNamespace(stdout=Pipe(10), stderr=Pipe(11), result=0)
         stdout, stderr = (b'opaque-signed-bytes', b'') if owner['role'] == 'download' else (release(), status())
+        if owner['role'] == 'verification' and self.probe.include_index:
+            stdout = release_with_index(self.index_bytes)
+        elif owner['role'] == 'index':
+            stdout, stderr = self.index_download_bytes, b''
         self.queues[10], self.queues[11] = [stdout, b''], [stderr, b''] if stderr else [b'']
         def poll():
             if self.on_poll:
@@ -442,7 +471,7 @@ class SignedMetadataMemory(unittest.TestCase):
         assignment = next(node for node in main.body if isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == 'expected_ref' for target in node.targets))
         self.assertEqual(ast.unparse(assignment.value),
-                         'VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
+                         'INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
 
     def test_fixed_candidate_verifier_selector_rejects_unknown_and_falsey_inputs_before_effects(self):
         m = Memory()
@@ -625,6 +654,124 @@ class SignedMetadataMemory(unittest.TestCase):
         self.assertEqual({field for field, _ in fallbacks},
                          {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'expiry', 'inrelease_sha256', 'signer'})
         self.assertTrue(all(fallback == 'not-reported' for _, fallback in fallbacks))
+
+    def test_signed_index_entry_is_fixed_unique_bounded_and_structurally_valid(self):
+        parse = Memory().ns['index_entry']
+        compressed = lzma.compress(package_fixture())
+        valid = release_with_index(compressed)
+        entry = (hashlib.sha256(compressed).hexdigest(), len(compressed))
+        self.assertEqual(parse(valid), entry)
+        row = valid.split(b'SHA256:\n', 1)[1]
+        cases = (release(), valid + row, valid + b'sha256:\n' + row,
+                 valid.replace(entry[0].encode(), b'z' * 64),
+                 release_with_index(compressed, 0), release_with_index(compressed, 8 * 1024 ** 2 + 1),
+                 valid.replace(b'main/binary-amd64/Packages.xz', b'../main/binary-amd64/Packages.xz'),
+                 valid.replace(b'SHA256:\n', b'SHA256: inline\n'), valid + b'Origin: Duplicate\n')
+        for raw in cases:
+            with self.assertRaises((RuntimeError, ValueError)):
+                parse(raw)
+
+    def test_index_hash_size_and_complete_single_xz_stream_bounds(self):
+        ns = Memory().ns
+        text = package_fixture()
+        raw = lzma.compress(text)
+        entry = (hashlib.sha256(raw).hexdigest(), len(raw))
+        ns['authenticate_index'](raw, entry)
+        self.assertEqual(ns['decompress_index'](raw, lambda: None), text)
+        for altered in (raw + b'x', raw[:-1]):
+            with self.assertRaisesRegex(RuntimeError, 'INDEX_SIZE'):
+                ns['authenticate_index'](altered, entry)
+        with self.assertRaisesRegex(RuntimeError, 'INDEX_HASH'):
+            ns['authenticate_index'](raw[:-1] + bytes([raw[-1] ^ 1]), entry)
+        for altered in (b'not-xz', raw[:-1], raw + b'trailing', raw + raw):
+            with self.assertRaises((RuntimeError, lzma.LZMAError)):
+                ns['decompress_index'](altered, lambda: None)
+        with self.assertRaisesRegex(RuntimeError, 'TEXT_BOUND'):
+            ns['decompress_index'](lzma.compress(b'x' * 4096), lambda: None, output_limit=128)
+        with self.assertRaises(lzma.LZMAError):
+            ns['decompress_index'](raw, lambda: None, memory_limit=1024 ** 2)
+
+    def test_package_record_unique_required_fields_safe_metadata_and_unrelated_utf8(self):
+        parse = Memory().ns['package_record']
+        raw = package_fixture()
+        package = parse(raw, lambda: None)
+        self.assertEqual(package['version'], '7.7+6build2')
+        self.assertEqual(package['sha256'], '1' * 64)
+        self.assertEqual(package['size'], 12345)
+        self.assertEqual(parse(raw.replace('café'.encode(), 'café\u2028text'.encode()), lambda: None), package)
+        invalid = [raw.replace(b'Package: x11-utils', b'Package: other'), raw + raw,
+                   raw.replace(b'SHA256: ', b'SHA256: ' + b'1' * 64 + b'\nsha256: ', 1),
+                   raw.replace(b'Version: 7.7+6build2\n', b''), raw.replace(b'Architecture: amd64', b'Architecture: all'),
+                   raw.replace(b'SHA256: ' + b'1' * 64, b'SHA256: invalid'),
+                   raw.replace(b'Size: 12345', b'Size: -1')]
+        for field in (b'Package: x11-utils', b'Architecture: amd64', b'Version: 7.7+6build2',
+                      b'Size: 12345', b'SHA256: ' + b'1' * 64,
+                      b'Filename: pool/main/x/x11-utils/x11-utils_7.7+6build2_amd64.deb'):
+            # Architecture also occurs in the unrelated stanza; all occurrences are intentionally malformed.
+            invalid.append(raw.replace(field + b'\n', field + b'\n continued\n'))
+        filename = package['filename'].encode()
+        for unsafe in (b'/absolute.deb', b'https://host/package.deb', b'pool/main/x/../file.deb', filename + b'?query',
+                       filename + b'#fragment', filename.replace(b'pool/', b'%2fpool/'), filename + b'\\escape'):
+            invalid.append(raw.replace(filename, unsafe))
+        for data in invalid:
+            with self.assertRaises((RuntimeError, ValueError)):
+                parse(data, lambda: None)
+
+    def test_index_mode_is_explicit_and_actual_main_refuses_hash_ambiguity_decode_and_package_failures(self):
+        initial = Memory()
+        self.assertEqual(initial.ns['INDEX_INRELEASE_SHA256'],
+                         'cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0')
+        with self.assertRaisesRegex(RuntimeError, 'ROLE_ORDER'):
+            initial.probe.run('index', '/private', {}, entry=('1' * 64, 20))
+        initial.probe.run('download', '/private', {})
+        initial.probe.run('verification', '/private', {})
+        with self.assertRaisesRegex(RuntimeError, 'ROLE_ORDER'):
+            initial.probe.run('index', '/private', {}, entry=('1' * 64, 20))
+        for invalid in (None, ('z' * 64, 20), ('1' * 64, 0), ('1' * 64, 8 * 1024 ** 2 + 1)):
+            with self.assertRaisesRegex(RuntimeError, 'INDEX_ENTRY'):
+                initial.ns['fixed_command']('index', '/private', entry=invalid)
+        for case, failure in (('success', None), ('missing-entry', 'MISSING_OR_AMBIGUOUS'),
+                              ('duplicate-entry', 'MISSING_OR_AMBIGUOUS'), ('hash-mismatch', 'INDEX_HASH'),
+                              ('size-mismatch', 'INDEX_SIZE'), ('trailing-stream', 'TRAILING_DATA'),
+                              ('duplicate-package', 'PACKAGE_MISSING_OR_AMBIGUOUS'), ('wrong-ref', 'CONTEXT')):
+            m = Memory()
+            keyring = m.verification_environment(index=True)
+            if case == 'hash-mismatch':
+                m.index_download_bytes = m.index_bytes[:-1] + bytes([m.index_bytes[-1] ^ 1])
+            elif case == 'trailing-stream':
+                m.index_bytes += b'x'
+                m.index_download_bytes = m.index_bytes
+            elif case == 'duplicate-package':
+                m.index_bytes = lzma.compress(package_fixture() + package_fixture())
+                m.index_download_bytes = m.index_bytes
+            elif case == 'wrong-ref':
+                m.os.environ['GITHUB_REF'] = m.ns['VERIFICATION_BRANCH']
+            if case in ('missing-entry', 'duplicate-entry', 'size-mismatch'):
+                original = m.subprocess.Popen
+                def changed_release(*args, **kwargs):
+                    child = original(*args, **kwargs)
+                    if m.probe.children[-1]['role'] == 'verification':
+                        body = release() if case == 'missing-entry' else release_with_index(m.index_bytes,
+                            len(m.index_bytes) + 1 if case == 'size-mismatch' else None)
+                        if case == 'duplicate-entry':
+                            body += body.split(b'SHA256:\n', 1)[1]
+                        m.queues[10] = [body, b'']
+                    return child
+                m.subprocess.Popen = changed_release
+            if failure:
+                with self.assertRaisesRegex(RuntimeError, failure):
+                    m.ns['verified_main'](['--authenticate-x11-index'])
+                self.assertNotIn(b'package_sha256=', m.files[m.os.environ['GITHUB_OUTPUT']]['raw'])
+            else:
+                m.ns['verified_main'](['--authenticate-x11-index'])
+                result = json.loads(m.printed[-1])
+                self.assertEqual(result['index_sha256'], hashlib.sha256(m.index_bytes).hexdigest())
+                self.assertEqual(result['package_sha256'], '1' * 64)  # Test-owned published-record fixture only.
+                calls = [event[1] for event in m.events if event[0] == 'popen']
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(calls[2][-1], m.ns['INDEX_URL'])
+                self.assertNotIn(result['package_filename'], ' '.join(calls[2]))
+            self.assertFalse(m.probe.unknown())
 
     def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
         m = Memory()

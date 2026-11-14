@@ -10,6 +10,7 @@ import email.utils
 import errno
 import hashlib
 import json
+import lzma
 import os
 import pathlib
 import re
@@ -24,6 +25,7 @@ BRANCH = 'refs/heads/ci/v060-ubuntu-archive-verifier-20261114'
 CLASSIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-keyring-classification-20261114'
 CANDIDATE_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-input-preflight-20261114'
 VERIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-metadata-verify-20261114'
+INDEX_BRANCH = 'refs/heads/ci/v060-ubuntu-x11-index-auth-20261114'
 CANDIDATE_PATHS = (('root', '/'), ('etc', '/etc'), ('apt', '/etc/apt'),
                    ('trusted-directory', '/etc/apt/trusted.gpg.d'),
                    ('keyring', '/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg'))
@@ -32,10 +34,16 @@ GPGV = '/usr/bin/gpgv'
 KEYRING = '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
 PRIMARY = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
 URL = 'https://snapshot.ubuntu.com/ubuntu/20261113T000000Z/dists/noble/InRelease'
+INDEX_PATH = 'main/binary-amd64/Packages.xz'
+INDEX_URL = 'https://snapshot.ubuntu.com/ubuntu/20261113T000000Z/dists/noble/main/binary-amd64/Packages.xz'
+INDEX_INRELEASE_SHA256 = 'cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0'
+INDEX_COMPRESSED_LIMIT = 8 * 1024 ** 2
+INDEX_TEXT_LIMIT = 64 * 1024 ** 2
+INDEX_DECODER_MEMORY = 128 * 1024 ** 2
 SNAPSHOT = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc).timestamp()
 TRUST_ENV = ('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy',
              'all_proxy', 'no_proxy', 'CURL_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE')
-PHASES = ('binding', 'preflight', 'download', 'verification', 'readback', 'output')
+PHASES = ('binding', 'preflight', 'download', 'verification', 'index-download', 'index-validation', 'readback', 'output')
 PREFLIGHT_REASONS = ('not-reported', 'path-absent', 'stat-denied', 'stat-error', 'symlink',
                      'nonregular', 'non-root-owner', 'link-count', 'empty', 'oversize',
                      'unsafe-mode', 'noncanonical', 'not-executable', 'attributes-ok')
@@ -118,8 +126,13 @@ def candidate_metadata(probe, uid):
     return 'input-all-attributes-ok'
 
 
-def fixed_command(role, directory, keyring=KEYRING):
+def fixed_command(role, directory, keyring=KEYRING, entry=None):
     need(keyring in (KEYRING, CANDIDATE_PATHS[-1][1]), 'SIGNED_FIXED_KEYRING')
+    if role == 'index':
+        checked_index_entry(entry)
+        return (CURL, '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
+                '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', str(entry[1]), INDEX_URL)
+    need(entry is None, 'SIGNED_UNEXPECTED_INDEX_ENTRY')
     if role == 'download':
         return (CURL, '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
                 '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', '1048576', URL)
@@ -129,12 +142,12 @@ def fixed_command(role, directory, keyring=KEYRING):
 
 
 def fixed_environment(role, directory, inherited):
-    need(role in ('download', 'verification'), 'SIGNED_FIXED_ROLE')
+    need(role in ('download', 'verification', 'index'), 'SIGNED_FIXED_ROLE')
     env = {'LC_ALL': 'C', 'LANG': 'C', 'TZ': 'UTC',
            'HOME': directory + '/gnupg', 'GNUPGHOME': directory + '/gnupg'}
     if 'PATH' in inherited:
         env['PATH'] = inherited['PATH']  # Absolute executables; never rewrite the existing search path.
-    if role == 'download':
+    if role in ('download', 'index'):
         env.update({name: inherited[name] for name in TRUST_ENV if name in inherited})
     return env
 
@@ -216,8 +229,119 @@ def release_metadata(raw, now):
     return {'expiry': expiry, 'date': date.timestamp()}
 
 
+def checked_index_entry(entry):
+    need(type(entry) is tuple and len(entry) == 2 and type(entry[0]) is str and
+         re.fullmatch('[a-f0-9]{64}', entry[0]) and type(entry[1]) is int and
+         0 < entry[1] <= INDEX_COMPRESSED_LIMIT, 'SIGNED_INDEX_ENTRY')
+    return entry
+
+
+def index_entry(verified):
+    """Select one exact index only from already verified Release plaintext."""
+    need(type(verified) is bytes and 0 < len(verified) <= 1048576, 'SIGNED_INDEX_RELEASE_BOUND')
+    raw = verified.replace(b'\r\n', b'\n')
+    need(b'\r' not in raw and b'\0' not in raw, 'SIGNED_INDEX_RELEASE_ENCODING')
+    fields, section, matches = set(), None, []
+    for line in raw.decode('ascii').splitlines():
+        if not line:
+            continue
+        if line.startswith((' ', '\t')):
+            need(section is not None, 'SIGNED_INDEX_RELEASE_FIELD')
+            if section == 'sha256':
+                values = line.split()
+                need(len(values) == 3 and re.fullmatch('[a-fA-F0-9]{64}', values[0]) and
+                     re.fullmatch('[0-9]{1,12}', values[1]), 'SIGNED_INDEX_CHECKSUM_ROW')
+                if values[2] == INDEX_PATH:
+                    matches.append((values[0].lower(), int(values[1])))
+            continue
+        name, separator, value = line.partition(':')
+        need(separator and re.fullmatch('[A-Za-z][A-Za-z0-9-]*', name) and name.lower() not in fields,
+             'SIGNED_INDEX_RELEASE_FIELD')
+        section = name.lower()
+        fields.add(section)
+        need(section != 'sha256' or not value.strip(), 'SIGNED_INDEX_CHECKSUM_HEADER')
+    need(len(matches) == 1, 'SIGNED_INDEX_MISSING_OR_AMBIGUOUS')
+    return checked_index_entry(matches[0])
+
+
+def authenticate_index(raw, entry):
+    digest, size = checked_index_entry(entry)
+    need(type(raw) is bytes and len(raw) == size, 'SIGNED_INDEX_SIZE')
+    need(hashlib.sha256(raw).hexdigest() == digest, 'SIGNED_INDEX_HASH')
+
+
+def decompress_index(raw, gate, output_limit=INDEX_TEXT_LIMIT, memory_limit=INDEX_DECODER_MEMORY):
+    need(type(raw) is bytes and 0 < len(raw) <= INDEX_COMPRESSED_LIMIT and
+         type(output_limit) is int and 0 < output_limit <= INDEX_TEXT_LIMIT and
+         type(memory_limit) is int and 0 < memory_limit <= INDEX_DECODER_MEMORY, 'SIGNED_INDEX_DECODE_BOUND')
+    decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=memory_limit)
+    parts, total, offset = [], 0, 0
+    while not decoder.eof:
+        gate()
+        if decoder.needs_input:
+            need(offset < len(raw), 'SIGNED_INDEX_TRUNCATED')
+            chunk = raw[offset:offset + 65536]
+            offset += len(chunk)
+        else:
+            chunk = b''
+        part = decoder.decompress(chunk, max_length=min(65536, output_limit - total + 1))
+        total += len(part)
+        need(total <= output_limit, 'SIGNED_INDEX_TEXT_BOUND')
+        parts.append(part)
+        gate()
+    need(not decoder.unused_data and offset == len(raw), 'SIGNED_INDEX_TRAILING_DATA')
+    need(total > 0, 'SIGNED_INDEX_EMPTY')
+    return b''.join(parts)
+
+
+def validate_package_record(fields):
+    required = ('package', 'architecture', 'version', 'size', 'sha256', 'filename')
+    need(all(type(fields.get(name)) is str and fields[name].isascii() for name in required), 'SIGNED_PACKAGE_FIELDS')
+    need(fields['package'] == 'x11-utils' and fields['architecture'] == 'amd64', 'SIGNED_PACKAGE_IDENTITY')
+    need(re.fullmatch('[0-9][0-9A-Za-z.+:~_-]{0,127}', fields['version']) and
+         re.fullmatch('[0-9]{1,12}', fields['size']) and int(fields['size']) > 0 and
+         re.fullmatch('[a-fA-F0-9]{64}', fields['sha256']), 'SIGNED_PACKAGE_VALUES')
+    filename = fields['filename']
+    need(re.fullmatch(r'pool/main/x/x11-utils/x11-utils_[A-Za-z0-9.+~_-]{1,160}_amd64[.]deb', filename) and
+         '..' not in filename.split('/'), 'SIGNED_PACKAGE_FILENAME')
+    return {'version': fields['version'], 'architecture': fields['architecture'], 'size': int(fields['size']),
+            'sha256': fields['sha256'].lower(), 'filename': filename}
+
+
+def package_record(raw, gate):
+    need(type(raw) is bytes and 0 < len(raw) <= INDEX_TEXT_LIMIT, 'SIGNED_PACKAGE_TEXT_BOUND')
+    raw = raw.replace(b'\r\n', b'\n')
+    need(b'\r' not in raw and b'\0' not in raw, 'SIGNED_PACKAGE_ENCODING')
+    matches = []
+    for paragraph in raw.decode('utf-8').split('\n\n'):
+        gate()
+        if not paragraph.strip():
+            continue
+        fields, continued, previous = {}, set(), None
+        for line in paragraph.strip('\n').split('\n'):
+            if line.startswith((' ', '\t')):
+                need(previous is not None, 'SIGNED_PACKAGE_CONTINUATION')
+                continued.add(previous)
+                continue
+            name, separator, value = line.partition(':')
+            need(separator and re.fullmatch('[A-Za-z0-9][A-Za-z0-9-]*', name) and name.lower() not in fields,
+                 'SIGNED_PACKAGE_DUPLICATE_OR_MALFORMED_FIELD')
+            previous = name.lower()
+            fields[previous] = value.strip()
+        if fields.get('package') == 'x11-utils':
+            need('package' not in continued and 'architecture' in fields and 'architecture' not in continued,
+                 'SIGNED_PACKAGE_FIELDS')
+            if fields['architecture'] == 'amd64':
+                need(not continued.intersection(('version', 'size', 'sha256', 'filename')), 'SIGNED_PACKAGE_REQUIRED_CONTINUATION')
+                matches.append(validate_package_record(fields))
+    need(len(matches) == 1, 'SIGNED_PACKAGE_MISSING_OR_AMBIGUOUS')
+    return matches[0]
+
+
 class Probe:
-    def __init__(self, started):
+    def __init__(self, started, include_index=False):
+        need(type(include_index) is bool, 'SIGNED_INDEX_MODE')
+        self.include_index = include_index
         self.started, self.until = started, started + 70
         self.fds, self.children, self.returned, self.secondary = [], [], [], []
         self.first_set, self.first, self.frozen = False, None, False
@@ -317,8 +441,8 @@ class Probe:
         self.returned.append(value)
         return value
 
-    def write_private(self, file, raw):
-        need(type(raw) is bytes and 0 < len(raw) <= 1048576, 'SIGNED_PRIVATE_BOUND')
+    def write_private(self, file, raw, cap=1048576):
+        need(type(cap) is int and cap in (1048576, INDEX_COMPRESSED_LIMIT) and type(raw) is bytes and 0 < len(raw) <= cap, 'SIGNED_PRIVATE_BOUND')
         owner = self.opened(file, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW)
         at = 0
         while at < len(raw):
@@ -328,13 +452,15 @@ class Probe:
         self.capture(os.fsync(owner['fd']))
         need(self.capture(os.pread(owner['fd'], len(raw) + 1, 0)) == raw, 'SIGNED_PRIVATE_READBACK')
         self.closed(owner)
-        actual = self.read(file, 1048576, os.getuid())
+        actual = self.read(file, cap, os.getuid())
         need(actual == raw, 'SIGNED_PRIVATE_CHANGED')
 
-    def run(self, role, directory, inherited, keyring=KEYRING):
+    def run(self, role, directory, inherited, keyring=KEYRING, entry=None):
         self.gate()
-        need(len(self.children) < 2 and role == ('download', 'verification')[len(self.children)], 'SIGNED_ROLE_ORDER')
-        argv = fixed_command(role, directory, keyring)
+        roles = ('download', 'verification', 'index') if self.include_index else ('download', 'verification')
+        need(len(self.children) < len(roles) and role == roles[len(self.children)], 'SIGNED_ROLE_ORDER')
+        argv = fixed_command(role, directory, keyring, entry)
+        stdout_cap = entry[1] if role == 'index' else 1048576
         child = {'role': role, 'issued': False, 'returned': False, 'object': None, 'exit': None,
                  'pipes': {}, 'stdout': bytearray(), 'stderr': bytearray(), 'soft_expired': False}
         self.children.append(child)
@@ -375,7 +501,7 @@ class Probe:
                 self.gate()
                 if not part:
                     continue
-                need(len(child[name]) + len(part) <= (1048576 if name == 'stdout' else 65536), 'SIGNED_STREAM_BOUND')
+                need(len(child[name]) + len(part) <= (stdout_cap if name == 'stdout' else 65536), 'SIGNED_STREAM_BOUND')
                 child[name].extend(part)
                 at = 0
                 while at < len(part):
@@ -387,7 +513,7 @@ class Probe:
             value = pipe['object'].close()
             pipe['closed'] = True
             self.capture(value)
-            need(self.capture(os.pread(logs[name]['fd'], 1048577, 0)) == bytes(child[name]), 'SIGNED_LOG_READBACK')
+            need(self.capture(os.pread(logs[name]['fd'], (stdout_cap if name == 'stdout' else 65536) + 1, 0)) == bytes(child[name]), 'SIGNED_LOG_READBACK')
             self.capture(os.fsync(logs[name]['fd']))
             self.closed(logs[name])
         child['soft_expired'] |= time.monotonic() - started >= 20
@@ -395,12 +521,22 @@ class Probe:
         return bytes(child['stdout']), bytes(child['stderr'])
 
     def publish(self, file, temporary, uid, values):
-        need(set(values) == {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'signer', 'inrelease_sha256', 'expiry'} and
+        base = {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'signer', 'inrelease_sha256', 'expiry'}
+        index_fields = {'index_sha256', 'index_size', 'package_version', 'package_architecture',
+                        'package_size', 'package_sha256', 'package_filename'}
+        need(set(values) in (base, base | index_fields) and
              values['verifier'] in ('established', 'unavailable') and values['anchor'] in ('established', 'unavailable') and
              values['anchor_reason'] in PREFLIGHT_REASONS + CANDIDATE_REASONS and
              values['signature'] in ('verified', 'not-verified') and values['metadata'] in ('verified', 'not-verified') and
              values['signer'] in (PRIMARY, 'unavailable') and values['expiry'] in ('present-valid', 'not-declared', 'unavailable') and
              (values['inrelease_sha256'] == 'unavailable' or re.fullmatch('[a-f0-9]{64}', values['inrelease_sha256'])), 'SIGNED_PUBLIC_ENUMS')
+        if index_fields.issubset(values):
+            need(values['signature'] == values['metadata'] == 'verified' and values['signer'] == PRIMARY and
+                 re.fullmatch('[0-9]{1,8}', values['index_size']), 'SIGNED_INDEX_PUBLIC_VALUES')
+            checked_index_entry((values['index_sha256'], int(values['index_size'])))
+            validate_package_record({'package': 'x11-utils', 'architecture': values['package_architecture'],
+                'version': values['package_version'], 'size': values['package_size'], 'sha256': values['package_sha256'],
+                'filename': values['package_filename']})
         need(temporary.startswith('/') and file.startswith(temporary + '/') and os.path.realpath(file) == file, 'SIGNED_MANAGED_PATH')
         self.parents(str(pathlib.Path(file).parent), uid)
         before = self.capture(os.lstat(file))
@@ -428,13 +564,14 @@ class Probe:
 
 
 def main(args):
-    probe = Probe(time.monotonic())
+    index_authentication = args == ['--authenticate-x11-index']
+    probe = Probe(time.monotonic(), include_index=index_authentication)
     CURRENT.append(probe)
     classification = args == ['--classify-keyring']
     candidate = args == ['--preflight-ubuntu-archive-input']
-    candidate_verification = args == ['--verify-ubuntu-archive-input']
+    candidate_verification = args == ['--verify-ubuntu-archive-input'] or index_authentication
     need((not args or classification or candidate or candidate_verification) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
-    expected_ref = (VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
+    expected_ref = (INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
                     else CLASSIFICATION_BRANCH if classification else BRANCH)
     uid = os.getuid()
     need(uid > 0 and uid == os.geteuid() and os.environ.get('GITHUB_REPOSITORY') == REPOSITORY and
@@ -521,6 +658,23 @@ def main(args):
         metadata = release_metadata(verified, now)  # Never parse unsigned body directly.
         probe.returned.append(metadata)
         probe.gate()
+        index_values = None
+        if index_authentication:
+            need(hashlib.sha256(signed_before['raw']).hexdigest() == INDEX_INRELEASE_SHA256, 'SIGNED_INDEX_INRELEASE_PIN')
+            entry = index_entry(verified)
+            probe.phase = 'index-download'
+            compressed, _ = probe.run('index', directory, os.environ, selected_keyring, entry)
+            authenticate_index(compressed, entry)
+            probe.write_private(directory + '/Packages.xz', compressed, INDEX_COMPRESSED_LIMIT)
+            index_before = probe.pin(directory + '/Packages.xz', INDEX_COMPRESSED_LIMIT, uid)
+            need(index_before['raw'] == compressed, 'SIGNED_INDEX_CHANGED')
+            probe.phase = 'index-validation'
+            decoded = decompress_index(compressed, probe.gate)
+            package = package_record(decoded, probe.gate)
+            need(probe.pin(directory + '/Packages.xz', INDEX_COMPRESSED_LIMIT, uid) == index_before, 'SIGNED_INDEX_CHANGED')
+            index_values = {'index_sha256': entry[0], 'index_size': str(entry[1]), 'package_version': package['version'],
+                'package_architecture': package['architecture'], 'package_size': str(package['size']),
+                'package_sha256': package['sha256'], 'package_filename': package['filename']}
         probe.phase = 'readback'
         need(probe.pin(directory + '/InRelease', 1048576, uid) == signed_before, 'SIGNED_DOWNLOAD_CHANGED')
         for file, original in originals.items():
@@ -529,6 +683,8 @@ def main(args):
             need(candidate_metadata(probe, uid) == 'input-all-attributes-ok', 'SIGNED_CANDIDATE_CHANGED')
         values.update(signature='verified', metadata='verified', signer=PRIMARY,
                       inrelease_sha256=hashlib.sha256(signed_before['raw']).hexdigest(), expiry=metadata['expiry'])
+        if index_values is not None:
+            values.update(index_values)
     probe.phase = 'readback'
     need(probe.pin(source + '/.git/HEAD', 256, uid) == head and probe.pin(own_file, 1024 * 1024, uid) == own,
          'SIGNED_SOURCE_CHANGED')
