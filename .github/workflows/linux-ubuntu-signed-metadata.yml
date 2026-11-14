@@ -38,19 +38,20 @@ jobs:
                   /usr/bin/git show "$GITHUB_SHA:scripts/linux-ubuntu-signed-metadata.py" | /usr/bin/cmp --silent - scripts/linux-ubuntu-signed-metadata.py
                   /usr/bin/python3 -B -I scripts/linux-ubuntu-signed-metadata.py
             - name: >-
-                  Verifier=${{ steps.probe.outputs.verifier || 'unavailable' }} anchor=${{
-                  steps.probe.outputs.anchor || 'unavailable' }}
+                  Verifier=${{ steps.probe.outputs.verifier || 'not-reported' }} anchor=${{
+                  steps.probe.outputs.anchor || 'not-reported' }} reason=${{
+                  steps.probe.outputs.anchor_reason || 'not-reported' }}
               if: ${{ !cancelled() }}
               run: ':'
             - name: >-
-                  Signature=${{ steps.probe.outputs.signature || 'not-verified' }} metadata=${{
-                  steps.probe.outputs.metadata || 'not-verified' }} expiry=${{
-                  steps.probe.outputs.expiry || 'unavailable' }}
+                  Signature=${{ steps.probe.outputs.signature || 'not-reported' }} metadata=${{
+                  steps.probe.outputs.metadata || 'not-reported' }} expiry=${{
+                  steps.probe.outputs.expiry || 'not-reported' }}
               if: ${{ !cancelled() }}
               run: ':'
             - name: >-
-                  InReleaseSHA256=${{ steps.probe.outputs.inrelease_sha256 || 'unavailable' }}
-                  signer=${{ steps.probe.outputs.signer || 'unavailable' }}
+                  InReleaseSHA256=${{ steps.probe.outputs.inrelease_sha256 || 'not-reported' }}
+                  signer=${{ steps.probe.outputs.signer || 'not-reported' }}
               if: ${{ !cancelled() }}
               run: ':'
             - name: Metadata only no index package extraction client or native qualification

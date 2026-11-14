@@ -12,11 +12,11 @@ import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = 'a986cc1fa536d05534d8d71428008cdc49f7cdb8e7df71a78de9a56da1c39ac3'
+SOURCE_SHA256 = 'd67f210a36bd001a533422b970c3e0930a495bf1a720c5857b476f2cf8c5747b'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
 SELECTED = {'need', 'safe_stage', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
-            'signature_status', 'release_metadata', 'Probe'}
+            'signature_status', 'release_metadata', 'preflight_attribute_reason', 'preflight_stat_reason', 'Probe'}
 NOW = datetime.datetime(2026, 11, 14, tzinfo=datetime.timezone.utc).timestamp()
 CREATED = int(datetime.datetime(2024, 4, 25, tzinfo=datetime.timezone.utc).timestamp())
 PRIMARY = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
@@ -50,6 +50,7 @@ class Pipe:
 class Memory:
     def __init__(self):
         self.clock, self.events, self.files, self.fds, self.positions = [0.0], [], {}, {}, {}
+        self.printed = []
         self.next_fd, self.queues, self.on_popen, self.on_poll, self.on_mode, self.on_close = 100, {}, None, None, None, None
         self.os = types.SimpleNamespace(O_CLOEXEC=1, O_RDONLY=2, O_NOFOLLOW=4, O_NONBLOCK=8,
             O_RDWR=16, O_CREAT=32, O_EXCL=64, O_WRONLY=128, O_APPEND=256, X_OK=1,
@@ -61,12 +62,13 @@ class Memory:
             environ={'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'})
         self.subprocess = types.SimpleNamespace(DEVNULL=-3, PIPE=-1, Popen=self.popen)
         namespace = {'__builtins__': __builtins__, 'datetime': datetime, 'email': email, 'errno': errno,
-            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'os': self.os, 'subprocess': self.subprocess,
+            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'json': json, 'os': self.os, 'subprocess': self.subprocess,
+            'print': lambda text: self.printed.append(text),
             'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0])}
         selected = []
         for node in TREE.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
-                    {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES'} for target in node.targets):
+                    {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES', 'PREFLIGHT_REASONS'} for target in node.targets):
                 selected.append(node)
             elif isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in SELECTED:
                 selected.append(node)
@@ -79,6 +81,12 @@ class Memory:
         missing = ast.FunctionDef(name='missing', args=ast.arguments(posonlyargs=[], args=[ast.arg(arg=name) for name in
             ('probe', 'originals', 'values', 'uid')], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[branches[0]], decorator_list=[])
         exec(compile(ast.fix_missing_locations(ast.Module(body=[missing], type_ignores=[])), str(SOURCE), 'exec'), namespace)
+        classify = next(node for node in main.body if isinstance(node, ast.If) and
+                        isinstance(node.test, ast.Name) and node.test.id == 'classification')
+        classify_function = ast.FunctionDef(name='classify', args=ast.arguments(posonlyargs=[], args=[ast.arg(arg=name) for name in
+            ('probe', 'values', 'uid', 'source', 'head', 'own_file', 'own')], kwonlyargs=[], kw_defaults=[], defaults=[]),
+            body=classify.body, decorator_list=[])
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[classify_function], type_ignores=[])), str(SOURCE), 'exec'), namespace)
         self.ns, self.probe = namespace, namespace['Probe'](0)
 
     def add(self, path, raw, uid=1000, mode=0o600):
@@ -285,7 +293,7 @@ class SignedMetadataMemory(unittest.TestCase):
     def test_actual_missing_prerequisite_branch_is_finite_and_nonpassing(self):
         m = Memory()
         m.add('/tmp/managed/output', b'')
-        values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'signature': 'not-verified',
+        values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'anchor_reason': 'not-reported', 'signature': 'not-verified',
                   'metadata': 'not-verified', 'signer': 'unavailable', 'inrelease_sha256': 'unavailable', 'expiry': 'unavailable'}
         with self.assertRaisesRegex(RuntimeError, 'PREREQUISITE_UNAVAILABLE'):
             m.ns['missing'](m.probe, {'curl': None}, values, 1000)
@@ -294,6 +302,107 @@ class SignedMetadataMemory(unittest.TestCase):
         self.assertFalse(m.probe.unknown())
         with self.assertRaisesRegex(RuntimeError, 'PUBLIC_ENUMS'):
             m.probe.publish('/tmp/managed/output', '/tmp/managed', 1000, {**values, 'signer': 'private-untrusted'})
+        with self.assertRaisesRegex(RuntimeError, 'PUBLIC_ENUMS'):
+            m.probe.publish('/tmp/managed/output', '/tmp/managed', 1000, {**values, 'anchor_reason': 'private-untrusted'})
+
+    def test_attribute_reasons_preserve_every_original_preflight_predicate(self):
+        classify = Memory().ns['preflight_attribute_reason']
+        expected = {'symlink': {'st_mode': stat.S_IFLNK | 0o777},
+                    'nonregular': {'st_mode': stat.S_IFDIR | 0o755},
+                    'non-root-owner': {'st_uid': 1000}, 'link-count': {'st_nlink': 2},
+                    'empty': {'st_size': 0}, 'oversize': {'st_size': 16 * 1024 ** 2 + 1},
+                    'unsafe-mode': {'st_mode': stat.S_IFREG | 0o664}, 'attributes-ok': {}}
+        for reason, changes in expected.items():
+            info = types.SimpleNamespace(**{'st_mode': stat.S_IFREG | 0o644, 'st_uid': 0,
+                'st_nlink': 1, 'st_size': 32, **changes})
+            self.assertEqual(classify(info), reason)
+        for kind in (stat.S_IFREG, stat.S_IFLNK, stat.S_IFDIR):
+            for mode in (0o400, 0o644, 0o600, 0o664, 0o646, 0o1644, 0o2644, 0o4644):
+                for uid in (0, 1000):
+                    for links in (0, 1, 2):
+                        for size in (0, 1, 16 * 1024 ** 2, 16 * 1024 ** 2 + 1):
+                            info = types.SimpleNamespace(st_mode=kind | mode, st_uid=uid, st_nlink=links, st_size=size)
+                            original = stat.S_ISREG(info.st_mode) and uid == 0 and links == 1 and 0 < size <= 16 * 1024 ** 2 and not info.st_mode & 0o7022
+                            self.assertEqual(classify(info) == 'attributes-ok', bool(original))
+
+    def test_stat_canonical_and_executable_reasons_are_finite_without_fallback(self):
+        for error_number, reason in ((errno.ENOENT, 'path-absent'), (errno.EACCES, 'stat-denied'),
+                                     (errno.EPERM, 'stat-denied'), (errno.ENOTDIR, 'stat-error'), (errno.EIO, 'stat-error')):
+            m = Memory()
+            def failed_stat(path):
+                raise OSError(error_number, 'private diagnostic and path')
+            m.os.lstat = failed_stat
+            self.assertEqual(m.probe.preflight_metadata(m.ns['KEYRING'], False), (None, reason))
+            self.assertEqual(m.probe.preflight_reasons[m.ns['KEYRING']], reason)
+            self.assertFalse(m.events)
+            self.assertFalse(m.probe.children)
+        m = Memory()
+        m.add(m.ns['KEYRING'], b'not-a-key', 0, 0o644)
+        m.os.path.realpath = lambda path: 'unpublished-target'
+        self.assertEqual(m.probe.preflight_metadata(m.ns['KEYRING'], False)[1], 'noncanonical')
+        m.os.path.realpath = lambda path: path
+        m.os.access = lambda *args: False
+        self.assertEqual(m.probe.preflight_metadata(m.ns['KEYRING'], False)[1], 'attributes-ok')
+        self.assertEqual(m.probe.preflight_metadata(m.ns['KEYRING'], True)[1], 'not-executable')
+        self.assertFalse(m.events)
+
+    def test_actual_classification_branch_reads_no_key_content_or_children_and_never_admits_anchor(self):
+        m = Memory()
+        m.add(m.ns['KEYRING'], b'not-a-real-key', 0, 0o644)
+        source, own_file = '/memory/source', '/memory/source/scripts/linux-ubuntu-signed-metadata.py'
+        m.add(source + '/.git/HEAD', b'A' * 40)
+        m.add(own_file, b'memory source bytes')
+        m.add('/tmp/managed/output', b'')
+        head = m.probe.pin(source + '/.git/HEAD', 256, 1000)
+        own = m.probe.pin(own_file, 1048576, 1000)
+        def forbidden(*args, **kwargs):
+            raise AssertionError('classification must not enter content preflight or child execution')
+        m.probe.preflight = forbidden
+        m.probe.run = forbidden
+        values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'anchor_reason': 'not-reported', 'signature': 'not-verified',
+                  'metadata': 'not-verified', 'signer': 'unavailable', 'inrelease_sha256': 'unavailable', 'expiry': 'unavailable'}
+        m.ns['classify'](m.probe, values, 1000, source, head, own_file, own)
+        self.assertEqual(values['anchor_reason'], 'attributes-ok')
+        self.assertEqual(values['anchor'], 'unavailable')
+        self.assertEqual(values['signature'], 'not-verified')
+        self.assertEqual(values['metadata'], 'not-verified')
+        self.assertFalse(any(event[0] == 'open' and event[1] == m.ns['KEYRING'] for event in m.events))
+        self.assertEqual(m.probe.children, [])
+        self.assertFalse(m.probe.unknown())
+        for expected, change in (('path-absent', None), ('unsafe-mode', 0o664)):
+            if change is None:
+                original_stat = m.os.lstat
+                def missing_keyring(path):
+                    if path == m.ns['KEYRING']:
+                        raise FileNotFoundError(errno.ENOENT, 'private missing path')
+                    return original_stat(path)
+                m.os.lstat = missing_keyring
+            else:
+                m.os.lstat = original_stat
+                m.files[m.ns['KEYRING']]['mode'] = change
+            m.ns['classify'](m.probe, values, 1000, source, head, own_file, own)
+            self.assertEqual(values['anchor_reason'], expected)
+            self.assertEqual(values['anchor'], 'unavailable')
+            self.assertEqual(values['signature'], 'not-verified')
+            self.assertFalse(m.probe.unknown())
+        self.assertFalse(any(event[0] == 'open' and event[1] == m.ns['KEYRING'] for event in m.events))
+        self.assertEqual(m.probe.children, [])
+        self.assertEqual([json.loads(raw) for raw in m.printed], [
+            {'anchor_reason': reason, 'scope': 'attributes-only'} for reason in
+            ('attributes-ok', 'path-absent', 'unsafe-mode')])
+        # The exact new flag and ref are bound before any classification operation.
+        main = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        assignment = next(node for node in main.body if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == 'expected_ref' for target in node.targets))
+        self.assertEqual(ast.unparse(assignment.value), 'CLASSIFICATION_BRANCH if classification else BRANCH')
+
+    def test_workflow_unset_outputs_are_not_fabricated_prerequisite_reports(self):
+        workflow = SOURCE.parents[1] / '.github/workflows/linux-ubuntu-signed-metadata.yml'
+        raw = workflow.read_text()
+        fallbacks = re.findall(r"steps\.probe\.outputs\.([a-z_0-9]+)\s*\|\|\s*'([^']+)'", raw)
+        self.assertEqual({field for field, _ in fallbacks},
+                         {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'expiry', 'inrelease_sha256', 'signer'})
+        self.assertTrue(all(fallback == 'not-reported' for _, fallback in fallbacks))
 
     def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
         m = Memory()

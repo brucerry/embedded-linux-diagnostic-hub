@@ -21,6 +21,7 @@ import time
 
 REPOSITORY = 'brucerry/embedded-linux-diagnostic-hub'
 BRANCH = 'refs/heads/ci/v060-ubuntu-archive-verifier-20261114'
+CLASSIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-keyring-classification-20261114'
 CURL = '/usr/bin/curl'
 GPGV = '/usr/bin/gpgv'
 KEYRING = '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
@@ -30,6 +31,9 @@ SNAPSHOT = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc).timesta
 TRUST_ENV = ('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy',
              'all_proxy', 'no_proxy', 'CURL_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE')
 PHASES = ('binding', 'preflight', 'download', 'verification', 'readback', 'output')
+PREFLIGHT_REASONS = ('not-reported', 'path-absent', 'stat-denied', 'stat-error', 'symlink',
+                     'nonregular', 'non-root-owner', 'link-count', 'empty', 'oversize',
+                     'unsafe-mode', 'noncanonical', 'not-executable', 'attributes-ok')
 CURRENT = []
 
 
@@ -45,6 +49,33 @@ def safe_stage(value):
 def identity(value):
     return tuple(getattr(value, name) for name in ('st_dev', 'st_ino', 'st_uid', 'st_mode',
                  'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+
+
+def preflight_attribute_reason(info):
+    """Classify exactly the preliminary attribute guard; never admit key bytes."""
+    if stat.S_ISLNK(info.st_mode):
+        return 'symlink'
+    if not stat.S_ISREG(info.st_mode):
+        return 'nonregular'
+    if info.st_uid != 0:
+        return 'non-root-owner'
+    if info.st_nlink != 1:
+        return 'link-count'
+    if info.st_size <= 0:
+        return 'empty'
+    if info.st_size > 16 * 1024 ** 2:
+        return 'oversize'
+    if info.st_mode & 0o7022:
+        return 'unsafe-mode'
+    return 'attributes-ok'
+
+
+def preflight_stat_reason(error):
+    if error.errno == errno.ENOENT:
+        return 'path-absent'
+    if error.errno in (errno.EACCES, errno.EPERM):
+        return 'stat-denied'
+    return 'stat-error'
 
 
 def fixed_command(role, directory):
@@ -150,6 +181,7 @@ class Probe:
         self.fds, self.children, self.returned, self.secondary = [], [], [], []
         self.first_set, self.first, self.frozen = False, None, False
         self.phase = 'binding'
+        self.preflight_reasons = {}
 
     def fail(self, error):
         self.frozen = True
@@ -210,16 +242,26 @@ class Probe:
         self.closed(owner)
         return b''.join(parts)
 
-    def preflight(self, file, executable):
+    def preflight_metadata(self, file, executable):
         need(file in (CURL, GPGV, KEYRING), 'SIGNED_FIXED_INPUT')
         try:
             before = self.capture(os.lstat(file))
         except OSError as error:
             self.returned.append(error)
-            return None
-        if not (stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1 and
-                0 < before.st_size <= 16 * 1024 ** 2 and not before.st_mode & 0o7022 and
-                os.path.realpath(file) == file and (not executable or os.access(file, os.X_OK))):
+            reason = preflight_stat_reason(error)
+            self.preflight_reasons[file] = reason
+            return None, reason
+        reason = preflight_attribute_reason(before)
+        if reason == 'attributes-ok' and os.path.realpath(file) != file:
+            reason = 'noncanonical'
+        if reason == 'attributes-ok' and executable and not os.access(file, os.X_OK):
+            reason = 'not-executable'
+        self.preflight_reasons[file] = reason
+        return before, reason
+
+    def preflight(self, file, executable):
+        before, reason = self.preflight_metadata(file, executable)
+        if reason != 'attributes-ok':
             return None
         raw = self.read(file, 16 * 1024 ** 2, 0)  # Any issued-FD/read/close failure propagates, never becomes absence.
         need(identity(os.lstat(file)) == identity(before), 'SIGNED_PREFLIGHT_CHANGED')
@@ -311,8 +353,9 @@ class Probe:
         return bytes(child['stdout']), bytes(child['stderr'])
 
     def publish(self, file, temporary, uid, values):
-        need(set(values) == {'verifier', 'anchor', 'signature', 'metadata', 'signer', 'inrelease_sha256', 'expiry'} and
+        need(set(values) == {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'signer', 'inrelease_sha256', 'expiry'} and
              values['verifier'] in ('established', 'unavailable') and values['anchor'] in ('established', 'unavailable') and
+             values['anchor_reason'] in PREFLIGHT_REASONS and
              values['signature'] in ('verified', 'not-verified') and values['metadata'] in ('verified', 'not-verified') and
              values['signer'] in (PRIMARY, 'unavailable') and values['expiry'] in ('present-valid', 'not-declared', 'unavailable') and
              (values['inrelease_sha256'] == 'unavailable' or re.fullmatch('[a-f0-9]{64}', values['inrelease_sha256'])), 'SIGNED_PUBLIC_ENUMS')
@@ -345,10 +388,12 @@ class Probe:
 def main(args):
     probe = Probe(time.monotonic())
     CURRENT.append(probe)
-    need(not args and sys.platform == 'linux', 'SIGNED_ARGUMENT')
+    classification = args == ['--classify-keyring']
+    need((not args or classification) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
+    expected_ref = CLASSIFICATION_BRANCH if classification else BRANCH
     uid = os.getuid()
     need(uid > 0 and uid == os.geteuid() and os.environ.get('GITHUB_REPOSITORY') == REPOSITORY and
-         os.environ.get('GITHUB_REF') == BRANCH and os.environ.get('GITHUB_RUN_ATTEMPT') == '1' and
+         os.environ.get('GITHUB_REF') == expected_ref and os.environ.get('GITHUB_RUN_ATTEMPT') == '1' and
          os.environ.get('GITHUB_EVENT_NAME') == 'push' and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
          os.environ.get('RUNNER_OS') == 'Linux' and os.environ.get('RUNNER_ARCH') == 'X64' and
          re.fullmatch('[1-9][0-9]{0,31}', os.environ.get('GITHUB_RUN_ID', '')), 'SIGNED_CONTEXT')
@@ -361,13 +406,26 @@ def main(args):
     own = probe.pin(own_file, 1024 * 1024, uid)
     event = json.loads(probe.read(os.environ.get('GITHUB_EVENT_PATH', ''), 2 * 1024 ** 2, uid))
     need(event['repository']['full_name'] == REPOSITORY and event['repository']['private'] is False and
-         event['after'] == commit and event['ref'] == BRANCH, 'SIGNED_PUBLIC_SOURCE')
-    values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'signature': 'not-verified',
+         event['after'] == commit and event['ref'] == expected_ref, 'SIGNED_PUBLIC_SOURCE')
+    values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'anchor_reason': 'not-reported', 'signature': 'not-verified',
               'metadata': 'not-verified', 'signer': 'unavailable', 'inrelease_sha256': 'unavailable', 'expiry': 'unavailable'}
     probe.phase = 'preflight'
+    if classification:
+        _, values['anchor_reason'] = probe.preflight_metadata(KEYRING, False)
+        # Attribute eligibility is not a stable-read/content/signature trust result.
+        probe.phase = 'readback'
+        need(probe.pin(source + '/.git/HEAD', 256, uid) == head and probe.pin(own_file, 1024 * 1024, uid) == own,
+             'SIGNED_SOURCE_CHANGED')
+        probe.phase = 'output'
+        probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
+        probe.gate()
+        need(not probe.unknown(), 'SIGNED_RETAINED')
+        print(json.dumps({'anchor_reason': values['anchor_reason'], 'scope': 'attributes-only'}, sort_keys=True))
+        return
     originals = {file: probe.preflight(file, file != KEYRING) for file in (CURL, GPGV, KEYRING)}
     values['verifier'] = 'established' if originals[CURL] is not None and originals[GPGV] is not None else 'unavailable'
     values['anchor'] = 'established' if originals[KEYRING] is not None else 'unavailable'
+    values['anchor_reason'] = probe.preflight_reasons[KEYRING]
     if any(value is None for value in originals.values()):
         probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
         raise RuntimeError('SIGNED_PREREQUISITE_UNAVAILABLE')

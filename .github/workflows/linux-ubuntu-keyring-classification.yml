@@ -1,0 +1,47 @@
+name: Ubuntu archive keyring attributes only
+
+on:
+    push:
+        branches: [ci/v060-ubuntu-keyring-classification-20261114]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ubuntu-keyring-attributes-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    classify_keyring:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-ubuntu-keyring-classification-20261114' && github.run_attempt == 1
+            }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind committed source and classify only fixed keyring attributes
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  /usr/bin/git show "$GITHUB_SHA:scripts/linux-ubuntu-signed-metadata.py" | /usr/bin/cmp --silent - scripts/linux-ubuntu-signed-metadata.py
+                  /usr/bin/python3 -B -I scripts/linux-ubuntu-signed-metadata.py --classify-keyring
+            - name: >-
+                  KeyringAttributes=${{ steps.probe.outputs.anchor_reason || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: Attributes only no key-content signature download or native qualification
+              if: ${{ !cancelled() }}
+              run: ':'
