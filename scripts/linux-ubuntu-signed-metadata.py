@@ -22,6 +22,10 @@ import time
 REPOSITORY = 'brucerry/embedded-linux-diagnostic-hub'
 BRANCH = 'refs/heads/ci/v060-ubuntu-archive-verifier-20261114'
 CLASSIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-keyring-classification-20261114'
+CANDIDATE_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-input-preflight-20261114'
+CANDIDATE_PATHS = (('root', '/'), ('etc', '/etc'), ('apt', '/etc/apt'),
+                   ('trusted-directory', '/etc/apt/trusted.gpg.d'),
+                   ('keyring', '/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg'))
 CURL = '/usr/bin/curl'
 GPGV = '/usr/bin/gpgv'
 KEYRING = '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
@@ -34,6 +38,10 @@ PHASES = ('binding', 'preflight', 'download', 'verification', 'readback', 'outpu
 PREFLIGHT_REASONS = ('not-reported', 'path-absent', 'stat-denied', 'stat-error', 'symlink',
                      'nonregular', 'non-root-owner', 'link-count', 'empty', 'oversize',
                      'unsafe-mode', 'noncanonical', 'not-executable', 'attributes-ok')
+CANDIDATE_REASONS = ('input-all-attributes-ok',) + tuple(
+    'input-' + label + '-' + reason for label, _ in CANDIDATE_PATHS for reason in
+    ('path-absent', 'stat-denied', 'stat-error', 'symlink', 'non-directory', 'parent-owner',
+     'nonregular', 'non-root-owner', 'link-count', 'empty', 'oversize', 'unsafe-mode', 'noncanonical'))
 CURRENT = []
 
 
@@ -76,6 +84,37 @@ def preflight_stat_reason(error):
     if error.errno in (errno.EACCES, errno.EPERM):
         return 'stat-denied'
     return 'stat-error'
+
+
+def candidate_parent_reason(info, uid):
+    """Same directory predicate as Probe.parents, including the root itself."""
+    if stat.S_ISLNK(info.st_mode):
+        return 'symlink'
+    if not stat.S_ISDIR(info.st_mode):
+        return 'non-directory'
+    if info.st_uid not in (0, uid):
+        return 'parent-owner'
+    if info.st_mode & 0o7022:
+        return 'unsafe-mode'
+    return 'attributes-ok'
+
+
+def candidate_metadata(probe, uid):
+    """Only fixed-path metadata; no key bytes, file opens or trust admission."""
+    for index, (label, path) in enumerate(CANDIDATE_PATHS):
+        probe.gate()
+        try:
+            info = probe.capture(os.lstat(path))
+        except OSError as error:
+            probe.returned.append(error)
+            return 'input-' + label + '-' + preflight_stat_reason(error)
+        reason = (preflight_attribute_reason(info) if index == len(CANDIDATE_PATHS) - 1
+                  else candidate_parent_reason(info, uid))
+        if reason == 'attributes-ok' and probe.capture(os.path.realpath(path)) != path:
+            reason = 'noncanonical'
+        if reason != 'attributes-ok':
+            return 'input-' + label + '-' + reason
+    return 'input-all-attributes-ok'
 
 
 def fixed_command(role, directory):
@@ -355,7 +394,7 @@ class Probe:
     def publish(self, file, temporary, uid, values):
         need(set(values) == {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'signer', 'inrelease_sha256', 'expiry'} and
              values['verifier'] in ('established', 'unavailable') and values['anchor'] in ('established', 'unavailable') and
-             values['anchor_reason'] in PREFLIGHT_REASONS and
+             values['anchor_reason'] in PREFLIGHT_REASONS + CANDIDATE_REASONS and
              values['signature'] in ('verified', 'not-verified') and values['metadata'] in ('verified', 'not-verified') and
              values['signer'] in (PRIMARY, 'unavailable') and values['expiry'] in ('present-valid', 'not-declared', 'unavailable') and
              (values['inrelease_sha256'] == 'unavailable' or re.fullmatch('[a-f0-9]{64}', values['inrelease_sha256'])), 'SIGNED_PUBLIC_ENUMS')
@@ -389,8 +428,9 @@ def main(args):
     probe = Probe(time.monotonic())
     CURRENT.append(probe)
     classification = args == ['--classify-keyring']
-    need((not args or classification) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
-    expected_ref = CLASSIFICATION_BRANCH if classification else BRANCH
+    candidate = args == ['--preflight-ubuntu-archive-input']
+    need((not args or classification or candidate) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
+    expected_ref = CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH
     uid = os.getuid()
     need(uid > 0 and uid == os.geteuid() and os.environ.get('GITHUB_REPOSITORY') == REPOSITORY and
          os.environ.get('GITHUB_REF') == expected_ref and os.environ.get('GITHUB_RUN_ATTEMPT') == '1' and
@@ -410,6 +450,18 @@ def main(args):
     values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'anchor_reason': 'not-reported', 'signature': 'not-verified',
               'metadata': 'not-verified', 'signer': 'unavailable', 'inrelease_sha256': 'unavailable', 'expiry': 'unavailable'}
     probe.phase = 'preflight'
+    if candidate:
+        values['anchor_reason'] = candidate_metadata(probe, uid)
+        probe.phase = 'readback'
+        need(probe.pin(source + '/.git/HEAD', 256, uid) == head and probe.pin(own_file, 1024 * 1024, uid) == own,
+             'SIGNED_SOURCE_CHANGED')
+        probe.phase = 'output'
+        probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
+        probe.gate()
+        need(not probe.unknown(), 'SIGNED_RETAINED')
+        print(json.dumps({'anchor_reason': values['anchor_reason'], 'scope': 'candidate-attributes-only'}, sort_keys=True))
+        need(values['anchor_reason'] == 'input-all-attributes-ok', 'SIGNED_CANDIDATE_REFUSED')
+        return
     if classification:
         _, values['anchor_reason'] = probe.preflight_metadata(KEYRING, False)
         # Attribute eligibility is not a stable-read/content/signature trust result.
