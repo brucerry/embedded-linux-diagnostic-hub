@@ -45,7 +45,8 @@ jobs:
             - name: >-
                   SourceBinding=${{ steps.binding.outcome }} authentication=${{ steps.probe.outcome
                   }} failureStage=${{ steps.binding.outcome == 'failure' && 'binding' ||
-                  steps.probe.outputs.failure_stage || 'unavailable' }}
+                  steps.probe.outputs.failure_stage || 'unavailable' }} failureCode=${{
+                  steps.probe.outputs.failure_code || 'unavailable' }}
               if: ${{ always() }}
               run: ':'
             - name: >-

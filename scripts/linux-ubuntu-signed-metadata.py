@@ -46,6 +46,22 @@ SNAPSHOT = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc).timesta
 TRUST_ENV = ('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy',
              'all_proxy', 'no_proxy', 'CURL_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE')
 PHASES = ('binding', 'preflight', 'download', 'verification', 'index-download', 'index-validation', 'readback', 'output')
+INDEX_FAILURES = {
+    'xz': {'SIGNED_INDEX_DECODE_BOUND': 'xz-input-bound', 'SIGNED_INDEX_TRUNCATED': 'xz-truncated',
+           'SIGNED_INDEX_TEXT_BOUND': 'xz-text-bound', 'SIGNED_INDEX_TRAILING_DATA': 'xz-trailing-data',
+           'SIGNED_INDEX_EMPTY': 'xz-empty', 'SIGNED_DEADLINE': 'xz-deadline'},
+    'record': {'SIGNED_PACKAGE_TEXT_BOUND': 'record-text-bound', 'SIGNED_PACKAGE_ENCODING': 'record-encoding',
+               'SIGNED_PACKAGE_CONTINUATION': 'record-orphan-continuation',
+               'SIGNED_PACKAGE_DUPLICATE_OR_MALFORMED_FIELD': 'record-field-syntax',
+               'SIGNED_PACKAGE_FIELDS': 'record-required-fields', 'SIGNED_PACKAGE_IDENTITY': 'record-identity',
+               'SIGNED_PACKAGE_VALUES': 'record-required-values', 'SIGNED_PACKAGE_FILENAME': 'record-filename',
+               'SIGNED_PACKAGE_REQUIRED_CONTINUATION': 'record-required-continuation',
+               'SIGNED_PACKAGE_MISSING_OR_AMBIGUOUS': 'record-target-count', 'SIGNED_DEADLINE': 'record-deadline'},
+    'readback': {'SIGNED_INDEX_CHANGED': 'readback-mismatch', 'SIGNED_PIN_CHANGED': 'readback-pin-race',
+                 'SIGNED_PARENT': 'readback-parent', 'SIGNED_INPUT': 'readback-input',
+                 'SIGNED_INPUT_CHANGED': 'readback-input-race', 'SIGNED_INPUT_BOUND': 'readback-input-bound',
+                 'SIGNED_CLOSE_ONCE': 'readback-close-once', 'SIGNED_DEADLINE': 'readback-deadline'}
+}
 PREFLIGHT_REASONS = ('not-reported', 'path-absent', 'stat-denied', 'stat-error', 'symlink',
                      'nonregular', 'non-root-owner', 'link-count', 'empty', 'oversize',
                      'unsafe-mode', 'noncanonical', 'not-executable', 'attributes-ok')
@@ -63,6 +79,28 @@ def need(value, code):
 
 def safe_stage(value):
     return value if type(value) is str and value in PHASES else 'unavailable'
+
+
+def safe_index_failure(error, step):
+    """Never inspect arbitrary exception attributes, text, paths or input bytes."""
+    if type(step) is not str or step not in INDEX_FAILURES:
+        return 'unavailable'
+    if type(error) is RuntimeError:
+        args = error.args  # Exact built-in type, no subclass getter or coercion.
+        if len(args) == 1 and type(args[0]) is str and args[0] in INDEX_FAILURES[step]:
+            return INDEX_FAILURES[step][args[0]]
+    if step == 'xz' and type(error) is lzma.LZMAError:
+        return 'xz-format-or-memory'  # liblzma's untrusted text is deliberately not parsed.
+    if step == 'record' and type(error) is UnicodeDecodeError:
+        return 'record-utf8'
+    if step == 'readback':
+        if type(error) is FileNotFoundError:
+            return 'readback-missing'
+        if type(error) is PermissionError:
+            return 'readback-denied'
+        if any(type(error) is kind for kind in (OSError, InterruptedError, BlockingIOError, IsADirectoryError, NotADirectoryError)):
+            return 'readback-os-error'
+    return step + '-unavailable'
 
 
 def identity(value):
@@ -350,6 +388,7 @@ class Probe:
         self.phase = 'binding'
         self.preflight_reasons = {}
         self.diagnostic = None
+        self.index_step = None
 
     def fail(self, error):
         self.frozen = True
@@ -571,7 +610,9 @@ class Probe:
         need(self.first_set and self.frozen and self.diagnostic is None, 'SIGNED_DIAGNOSTIC_CONTEXT')
         self.diagnostic = type(self)(self.started)
         try:
-            raw = ('failure_stage=' + safe_stage(self.phase) + '\n').encode('ascii')
+            stage = safe_stage(self.phase)
+            code = safe_index_failure(self.first, self.index_step) if stage == 'index-validation' else 'unavailable'
+            raw = ('failure_stage=' + stage + '\nfailure_code=' + code + '\n').encode('ascii')
             self.diagnostic._append_managed(file, temporary, uid, raw)
             self.diagnostic.gate()
             need(not self.diagnostic.unknown(), 'SIGNED_DIAGNOSTIC_RETAINED')
@@ -693,8 +734,11 @@ def main(args):
             index_before = probe.pin(directory + '/Packages.xz', INDEX_COMPRESSED_LIMIT, uid)
             need(index_before['raw'] == compressed, 'SIGNED_INDEX_CHANGED')
             probe.phase = 'index-validation'
+            probe.index_step = 'xz'
             decoded = decompress_index(compressed, probe.gate)
+            probe.index_step = 'record'
             package = package_record(decoded, probe.gate)
+            probe.index_step = 'readback'
             need(probe.pin(directory + '/Packages.xz', INDEX_COMPRESSED_LIMIT, uid) == index_before, 'SIGNED_INDEX_CHANGED')
             index_values = {'index_sha256': entry[0], 'index_size': str(entry[1]), 'package_version': package['version'],
                 'package_architecture': package['architecture'], 'package_size': str(package['size']),

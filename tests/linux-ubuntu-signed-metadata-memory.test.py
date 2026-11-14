@@ -13,10 +13,10 @@ import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = '91a465d1765ebfd67896464eef03f0fa18686fd71740079628634cc86619ee90'
+SOURCE_SHA256 = '5cedef6aacf503aa1d66c5d59779140d591cb3bf9da3e1b2eaecc73a9653bf87'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
-SELECTED = {'need', 'safe_stage', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
+SELECTED = {'need', 'safe_stage', 'safe_index_failure', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
             'signature_status', 'release_metadata', 'preflight_attribute_reason', 'preflight_stat_reason',
             'candidate_parent_reason', 'candidate_metadata', 'checked_index_entry', 'index_entry',
             'authenticate_index', 'decompress_index', 'validate_package_record', 'package_record', 'Probe'}
@@ -92,7 +92,7 @@ class Memory:
         selected = []
         for node in TREE.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
-                    {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES',
+                    {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES', 'INDEX_FAILURES',
                      'PREFLIGHT_REASONS', 'CANDIDATE_PATHS', 'CANDIDATE_REASONS', 'REPOSITORY',
                      'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH', 'INDEX_BRANCH', 'INDEX_REPORT_BRANCH',
                      'INDEX_PATH', 'INDEX_URL', 'INDEX_INRELEASE_SHA256', 'INDEX_COMPRESSED_LIMIT',
@@ -824,7 +824,7 @@ class SignedMetadataMemory(unittest.TestCase):
             self.assertTrue(m.probe.frozen)
             self.assertFalse(m.probe.unknown())
             output = m.files[m.os.environ['GITHUB_OUTPUT']]['raw']
-            self.assertEqual(output, ('failure_stage=' + stage + '\n').encode() if stage else b'')
+            self.assertEqual(output, ('failure_stage=' + stage + '\nfailure_code=unavailable\n').encode() if stage else b'')
             self.assertNotIn(b'signature=verified', output)
             self.assertNotIn(b'package_sha256=', output)
             self.assertNotIn('ignored-private-text', ''.join(m.printed))
@@ -857,7 +857,7 @@ class SignedMetadataMemory(unittest.TestCase):
             m.probe.fail(error)
             m.probe.publish_failure_stage('/tmp/managed/output', '/tmp/managed', 1000)
             expected = stage if type(stage) is str and stage in m.ns['PHASES'] else 'unavailable'
-            self.assertEqual(m.files['/tmp/managed/output']['raw'], ('failure_stage=' + expected + '\n').encode())
+            self.assertEqual(m.files['/tmp/managed/output']['raw'], ('failure_stage=' + expected + '\nfailure_code=unavailable\n').encode())
             self.assertIs(m.probe.first, error)
             self.assertTrue(m.probe.frozen)
             self.assertEqual((m.probe.started, m.probe.until), (m.probe.diagnostic.started, m.probe.diagnostic.until))
@@ -917,6 +917,7 @@ class SignedMetadataMemory(unittest.TestCase):
         self.assertIn('--authenticate-x11-index-report', authentication)
         self.assertIn("steps.binding.outcome == 'failure' && 'binding'", authentication)
         self.assertIn("steps.probe.outputs.failure_stage || 'unavailable'", authentication)
+        self.assertIn("steps.probe.outputs.failure_code || 'unavailable'", authentication)
         self.assertRegex(authentication, r'authentication=\$\{\{\s*steps\.probe\.outcome\s*\}\}')
         self.assertIn("              if: ${{ always() }}\n              run: ':'", authentication)
         self.assertNotIn('continue-on-error', raw)
@@ -929,6 +930,156 @@ class SignedMetadataMemory(unittest.TestCase):
             stage = 'binding' if binding_outcome == 'failure' else output or 'unavailable'
             self.assertEqual(stage, expected)
             self.assertFalse(binding_outcome == probe_outcome == 'success')
+
+    def test_xz_audit_multiple_chunks_ratio_bounds_and_no_format_fallback(self):
+        ns = Memory().ns
+        self.assertEqual((ns['INDEX_COMPRESSED_LIMIT'], ns['INDEX_TEXT_LIMIT'], ns['INDEX_DECODER_MEMORY']),
+                         (8 * 1024 ** 2, 64 * 1024 ** 2, 128 * 1024 ** 2))
+        # Deterministic test-owned bytes, not downloaded index data or OS randomness.
+        incompressible = b''.join(hashlib.sha256(str(n).encode()).digest() for n in range(4096))
+        compressed = lzma.compress(incompressible)
+        self.assertGreater(len(compressed), 65536)
+        self.assertEqual(ns['decompress_index'](compressed, lambda: None), incompressible)
+        expanded = b'x' * (1024 * 1024)
+        self.assertEqual(ns['decompress_index'](lzma.compress(expanded), lambda: None), expanded)
+        with self.assertRaisesRegex(RuntimeError, 'DECODE_BOUND'):
+            ns['decompress_index'](b'x' * (ns['INDEX_COMPRESSED_LIMIT'] + 1), lambda: None)
+        with self.assertRaisesRegex(RuntimeError, 'TEXT_BOUND'):
+            ns['decompress_index'](lzma.compress(expanded), lambda: None, output_limit=65536)
+        for invalid in (compressed[:-1], compressed + b'\0\0\0\0', compressed + compressed):
+            with self.assertRaises((RuntimeError, lzma.LZMAError)):
+                ns['decompress_index'](invalid, lambda: None)
+        with self.assertRaises(lzma.LZMAError):
+            ns['decompress_index'](lzma.compress(b'owned', format=lzma.FORMAT_ALONE), lambda: None)
+        with self.assertRaises(lzma.LZMAError):
+            ns['decompress_index'](compressed, lambda: None, memory_limit=1024 ** 2)
+        def expired():
+            raise RuntimeError('SIGNED_DEADLINE')
+        with self.assertRaisesRegex(RuntimeError, 'DEADLINE'):
+            ns['decompress_index'](compressed, expired)
+
+    def test_control_record_audit_continuations_order_and_repeated_architectures(self):
+        parse = Memory().ns['package_record']
+        raw = package_fixture()
+        other, target = raw.split(b'\n\n', 1)
+        arm = target.replace(b'Architecture: amd64', b'Architecture: arm64').replace(b'_amd64.deb', b'_arm64.deb')
+        all_arch = target.replace(b'Architecture: amd64', b'Architecture: all').replace(b'_amd64.deb', b'_all.deb')
+        combined = other + b'\n\n' + arm + all_arch + target + arm
+        expected = parse(raw, lambda: None)
+        self.assertEqual(parse(combined, lambda: None), expected)
+        self.assertEqual(parse(combined.replace(b'\n', b'\r\n'), lambda: None), expected)
+        continued = target.replace(b' continued description\n', b' continued description\n\tPackage: ignored\n SHA256: ignored\n .\n')
+        self.assertEqual(parse(other + b'\n\n' + continued, lambda: None), expected)
+        # Required fields need not occur in a particular order.
+        reordered = b'\n'.join(reversed(target.split(b'Description:', 1)[0].rstrip(b'\n').split(b'\n'))) + b'\n\n'
+        self.assertEqual(parse(reordered, lambda: None), expected)
+        for ambiguous in (raw + target, combined + target, combined + target.replace(b'7.7+6build2', b'7.7+7')):
+            with self.assertRaisesRegex(RuntimeError, 'MISSING_OR_AMBIGUOUS'):
+                parse(ambiguous, lambda: None)
+        for malformed in (b' orphan\n' + target, target.replace(b'Package:', b'package: duplicate\nPackage:', 1),
+                          target.replace(b'Filename: ', b'Filename: \n ', 1)):
+            with self.assertRaises(RuntimeError):
+                parse(malformed, lambda: None)
+        with self.assertRaises(UnicodeDecodeError):
+            parse(b'Package: unrelated\nDescription: \xff\n\n' + target, lambda: None)
+
+    def test_index_failure_codes_are_finite_without_text_attributes_or_type_coercion(self):
+        m = Memory()
+        classify = m.ns['safe_index_failure']
+        for step, mapping in m.ns['INDEX_FAILURES'].items():
+            for code, expected in mapping.items():
+                self.assertEqual(classify(RuntimeError(code), step), expected)
+        class HostileMeta(type):
+            def __eq__(self, other):
+                raise AssertionError('no metaclass equality')
+        class Hostile(Exception, metaclass=HostileMeta):
+            @property
+            def args(self):
+                raise AssertionError('no arbitrary args getter')
+            def __str__(self):
+                raise AssertionError('no exception string')
+        class Private:
+            def __str__(self):
+                raise AssertionError('no value coercion')
+            def __hash__(self):
+                raise AssertionError('no value hashing')
+        for step in m.ns['INDEX_FAILURES']:
+            for error in (Hostile(), RuntimeError('private-secret-or-path'), RuntimeError(Private()), RuntimeError('a', 'b'), Private()):
+                self.assertEqual(classify(error, step), step + '-unavailable')
+        self.assertEqual(classify(RuntimeError('SIGNED_INDEX_TEXT_BOUND'), Private()), 'unavailable')
+        self.assertEqual(classify(lzma.LZMAError('private-stream-detail'), 'xz'), 'xz-format-or-memory')
+        self.assertEqual(classify(UnicodeDecodeError('utf-8', b'private\xff', 7, 8, 'private-detail'), 'record'), 'record-utf8')
+        for error, expected in ((PermissionError('private-path'), 'readback-denied'),
+                                (FileNotFoundError('private-path'), 'readback-missing'),
+                                (OSError('private-detail'), 'readback-os-error')):
+            self.assertEqual(classify(error, 'readback'), expected)
+        self.assertEqual(m.events, [])
+
+    def test_actual_index_decode_and_record_failures_publish_only_known_codes(self):
+        cases = [('xz-format', b'not-an-xz-stream', 'xz-format-or-memory'),
+                 ('record-utf8', lzma.compress(b'Package: unrelated\nDescription: \xff\n\n' + package_fixture()), 'record-utf8'),
+                 ('target-count', lzma.compress(package_fixture() + package_fixture()), 'record-target-count')]
+        for case, compressed, code in cases:
+            m = Memory()
+            m.verification_environment(index=True, reporting=True)
+            m.index_bytes = m.index_download_bytes = compressed  # Authored fixture matches its own synthetic signed entry.
+            with self.assertRaises(SystemExit) as caught:
+                m.ns['entry']()
+            self.assertEqual(caught.exception.code, 1)
+            self.assertTrue(m.probe.frozen)
+            self.assertFalse(m.probe.unknown())
+            self.assertEqual(m.files[m.os.environ['GITHUB_OUTPUT']]['raw'],
+                             ('failure_stage=index-validation\nfailure_code=' + code + '\n').encode())
+            self.assertNotIn('private', ''.join(m.printed))
+
+    def test_actual_index_readback_stable_mismatch_race_and_os_error_custody(self):
+        for mode, code, held in (('stable', None, False), ('bytes', 'readback-mismatch', False),
+                                 ('identity', 'readback-mismatch', False), ('race', 'readback-input-race', True),
+                                 ('denied', 'readback-denied', True)):
+            m = Memory()
+            m.verification_environment(index=True, reporting=True)
+            original_parse = m.ns['package_record']
+            def after_parse(*args):
+                result = original_parse(*args)
+                path = '/tmp/managed/hub-ubuntu-signed-123-attempt-1/Packages.xz'
+                if mode == 'bytes':
+                    value = m.files[path]['raw']
+                    m.files[path]['raw'] = value[:-1] + bytes([value[-1] ^ 1])
+                elif mode == 'identity':
+                    m.files[path]['ino'] += 1
+                elif mode == 'race':
+                    previous = m.os.lstat
+                    calls = [0]
+                    def race(file):
+                        if str(file) == path:
+                            calls[0] += 1
+                            if calls[0] == 3:
+                                m.files[path]['ino'] += 1
+                        return previous(file)
+                    m.os.lstat = race
+                elif mode == 'denied':
+                    previous = m.os.open
+                    def denied(file, flags, permission):
+                        if file == path:
+                            raise PermissionError('private-readback-path')
+                        return previous(file, flags, permission)
+                    m.os.open = denied
+                return result
+            m.ns['package_record'] = after_parse
+            if mode == 'stable':
+                m.ns['entry']()
+                self.assertFalse(m.probe.frozen)
+                self.assertNotIn(b'failure_code=', m.files[m.os.environ['GITHUB_OUTPUT']]['raw'])
+            else:
+                with self.assertRaises(MemoryRetained if held else SystemExit) as caught:
+                    m.ns['entry']()
+                if not held:
+                    self.assertEqual(caught.exception.code, 1)
+                self.assertTrue(m.probe.frozen)
+                self.assertEqual(m.files[m.os.environ['GITHUB_OUTPUT']]['raw'],
+                                 ('failure_stage=index-validation\nfailure_code=' + code + '\n').encode())
+                self.assertNotIn('private-readback-path', ''.join(m.printed))
+            self.assertEqual(m.probe.unknown(), held)
 
     def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
         m = Memory()
