@@ -1,0 +1,47 @@
+name: Linux read-only X11 client and package metadata
+
+on:
+    push:
+        branches: [ci/v060-x11-client-plan-20261114]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: linux-x11-client-plan-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    classify:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-x11-client-plan-20261114' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind committed metadata source and observe without client execution
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  /usr/bin/git show "$GITHUB_SHA:scripts/linux-x11-client-plan.py" | /usr/bin/cmp --silent - scripts/linux-x11-client-plan.py
+                  /usr/bin/python3 -B -I scripts/linux-x11-client-plan.py
+            - name: >-
+                  Client=${{ steps.probe.outputs.client || 'unavailable' }} package=${{
+                  steps.probe.outputs.package || 'unavailable' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: Dependency-plan=not-run no-APT-install-client-display-or-lifecycle
+              if: ${{ !cancelled() }}
+              run: ':'
