@@ -1,0 +1,89 @@
+name: Ubuntu Noble x11-utils index stage diagnostic
+
+on:
+    push:
+        branches: [ci/v060-ubuntu-x11-index-report-20261114]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ubuntu-x11-index-report-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    authenticate_x11_index:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-ubuntu-x11-index-report-20261114' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind exact committed source
+              id: binding
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  /usr/bin/git show "$GITHUB_SHA:scripts/linux-ubuntu-signed-metadata.py" | /usr/bin/cmp --silent - scripts/linux-ubuntu-signed-metadata.py
+            - name: Authenticate only the fixed signed index metadata
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  /usr/bin/python3 -B -I scripts/linux-ubuntu-signed-metadata.py --authenticate-x11-index-report
+            - name: >-
+                  SourceBinding=${{ steps.binding.outcome }} authentication=${{ steps.probe.outcome
+                  }} failureStage=${{ steps.binding.outcome == 'failure' && 'binding' ||
+                  steps.probe.outputs.failure_stage || 'unavailable' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  Verifier=${{ steps.probe.outputs.verifier || 'not-reported' }} anchor=${{
+                  steps.probe.outputs.anchor || 'not-reported' }} reason=${{
+                  steps.probe.outputs.anchor_reason || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: >-
+                  Signature=${{ steps.probe.outputs.signature || 'not-reported' }} metadata=${{
+                  steps.probe.outputs.metadata || 'not-reported' }} expiry=${{
+                  steps.probe.outputs.expiry || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: >-
+                  InReleaseSHA256=${{ steps.probe.outputs.inrelease_sha256 || 'not-reported' }}
+                  signer=${{ steps.probe.outputs.signer || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: >-
+                  IndexSHA256=${{ steps.probe.outputs.index_sha256 || 'not-reported' }} bytes=${{
+                  steps.probe.outputs.index_size || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: >-
+                  Package=x11-utils version=${{ steps.probe.outputs.package_version ||
+                  'not-reported' }} architecture=${{ steps.probe.outputs.package_architecture ||
+                  'not-reported' }} size=${{ steps.probe.outputs.package_size || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: >-
+                  PackageSHA256=${{ steps.probe.outputs.package_sha256 || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: >-
+                  PackageFilename=${{ steps.probe.outputs.package_filename || 'not-reported' }}
+              if: ${{ !cancelled() }}
+              run: ':'
+            - name: Index metadata only no package download member client or native execution
+              if: ${{ !cancelled() }}
+              run: ':'

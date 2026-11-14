@@ -1,7 +1,8 @@
 """One fixed signed Ubuntu Release observation, never provisioning or runtime.
 
-Import is inert. Only the fixed HTTPS metadata download and existing gpgv run.
-No index/package/key download, install, import, client or Hub code is selected.
+Import is inert. Fixed HTTPS metadata and existing gpgv are the only children.
+The explicit index modes may fetch one signed, bounded package index, never
+package/key bytes, installation, a client or Hub code.
 Raw output remains private. Unknown children/descriptors are never killed,
 retried or cleaned up to manufacture completion.
 """
@@ -26,6 +27,7 @@ CLASSIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-keyring-classification-202611
 CANDIDATE_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-input-preflight-20261114'
 VERIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-metadata-verify-20261114'
 INDEX_BRANCH = 'refs/heads/ci/v060-ubuntu-x11-index-auth-20261114'
+INDEX_REPORT_BRANCH = 'refs/heads/ci/v060-ubuntu-x11-index-report-20261114'
 CANDIDATE_PATHS = (('root', '/'), ('etc', '/etc'), ('apt', '/etc/apt'),
                    ('trusted-directory', '/etc/apt/trusted.gpg.d'),
                    ('keyring', '/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg'))
@@ -347,6 +349,7 @@ class Probe:
         self.first_set, self.first, self.frozen = False, None, False
         self.phase = 'binding'
         self.preflight_reasons = {}
+        self.diagnostic = None
 
     def fail(self, error):
         self.frozen = True
@@ -537,12 +540,17 @@ class Probe:
             validate_package_record({'package': 'x11-utils', 'architecture': values['package_architecture'],
                 'version': values['package_version'], 'size': values['package_size'], 'sha256': values['package_sha256'],
                 'filename': values['package_filename']})
+        raw = ''.join(key + '=' + value + '\n' for key, value in values.items()).encode('ascii')
+        self._append_managed(file, temporary, uid, raw)
+
+    def _append_managed(self, file, temporary, uid, raw):
+        self.gate()
+        need(type(raw) is bytes and 0 < len(raw) <= 4096, 'SIGNED_MANAGED_BOUND')
         need(temporary.startswith('/') and file.startswith(temporary + '/') and os.path.realpath(file) == file, 'SIGNED_MANAGED_PATH')
         self.parents(str(pathlib.Path(file).parent), uid)
         before = self.capture(os.lstat(file))
         need(stat.S_ISREG(before.st_mode) and before.st_uid == uid and before.st_nlink == 1 and
              before.st_size <= 1048576 and not before.st_mode & 0o7022, 'SIGNED_MANAGED_FILE')
-        raw = ''.join(key + '=' + value + '\n' for key, value in values.items()).encode('ascii')
         owner = self.opened(file, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
         need(identity(os.fstat(owner['fd'])) == identity(before), 'SIGNED_MANAGED_CHANGED')
         at = 0
@@ -557,21 +565,37 @@ class Probe:
              after.st_size == before.st_size + len(raw) and identity(os.lstat(file)) == identity(after), 'SIGNED_MANAGED_CHANGED')
         self.closed(owner)
 
+    def publish_failure_stage(self, file, temporary, uid):
+        # Independent, single-use diagnostic custody shares the original deadline.
+        # The failed owner stays frozen; this channel can publish no trust result.
+        need(self.first_set and self.frozen and self.diagnostic is None, 'SIGNED_DIAGNOSTIC_CONTEXT')
+        self.diagnostic = type(self)(self.started)
+        try:
+            raw = ('failure_stage=' + safe_stage(self.phase) + '\n').encode('ascii')
+            self.diagnostic._append_managed(file, temporary, uid, raw)
+            self.diagnostic.gate()
+            need(not self.diagnostic.unknown(), 'SIGNED_DIAGNOSTIC_RETAINED')
+        except BaseException as error:
+            self.diagnostic.fail(error)
+            raise
+
     def unknown(self):
         return (any(not owner['returned'] or not owner['closed'] for owner in self.fds) or
                 any(child['issued'] and (not child['returned'] or child['exit'] is None or len(child['pipes']) != 2 or
-                    any(not pipe['closed'] for pipe in child['pipes'].values())) for child in self.children))
+                    any(not pipe['closed'] for pipe in child['pipes'].values())) for child in self.children) or
+                (self.diagnostic is not None and self.diagnostic.unknown()))
 
 
 def main(args):
-    index_authentication = args == ['--authenticate-x11-index']
+    index_reporting = args == ['--authenticate-x11-index-report']
+    index_authentication = args == ['--authenticate-x11-index'] or index_reporting
     probe = Probe(time.monotonic(), include_index=index_authentication)
     CURRENT.append(probe)
     classification = args == ['--classify-keyring']
     candidate = args == ['--preflight-ubuntu-archive-input']
     candidate_verification = args == ['--verify-ubuntu-archive-input'] or index_authentication
     need((not args or classification or candidate or candidate_verification) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
-    expected_ref = (INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
+    expected_ref = (INDEX_REPORT_BRANCH if index_reporting else INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
                     else CLASSIFICATION_BRANCH if classification else BRANCH)
     uid = os.getuid()
     need(uid > 0 and uid == os.geteuid() and os.environ.get('GITHUB_REPOSITORY') == REPOSITORY and
@@ -702,6 +726,11 @@ if __name__ == '__main__':
         probe = CURRENT[0] if CURRENT else None
         if probe is not None:
             probe.fail(error)
+        if probe is not None and sys.argv[1:] == ['--authenticate-x11-index-report']:
+            try:
+                probe.publish_failure_stage(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), os.getuid())
+            except BaseException as report_error:
+                probe.secondary.append(report_error)
         try:
             print('::error title=Ubuntu signed metadata::Fixed observation unavailable at ' +
                   safe_stage(probe.phase if probe is not None else None) + '; uncertain custody retained.')

@@ -13,7 +13,7 @@ import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = '61d7c3b7b5dac8d8262d43647d7383659e2b2e34404de1cccdd43a1625790ce3'
+SOURCE_SHA256 = '91a465d1765ebfd67896464eef03f0fa18686fd71740079628634cc86619ee90'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
 SELECTED = {'need', 'safe_stage', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
@@ -62,6 +62,10 @@ class Pipe:
         self.closed = True
 
 
+class MemoryRetained(BaseException):
+    """Test-only sentinel replaces sleeping, never clears retained custody."""
+
+
 class Memory:
     def __init__(self):
         self.clock, self.events, self.files, self.fds, self.positions = [0.0], [], {}, {}, {}
@@ -83,13 +87,14 @@ class Memory:
             'os': self.os, 'subprocess': self.subprocess,
             'print': lambda text: self.printed.append(text),
             'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0], time=lambda: NOW),
-            'sys': types.SimpleNamespace(platform='linux'), '__file__': str(SOURCE), 'CURRENT': []}
+            'sys': types.SimpleNamespace(platform='linux'), '__file__': str(SOURCE), 'CURRENT': [],
+            'MemoryRetained': MemoryRetained}
         selected = []
         for node in TREE.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
                     {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES',
                      'PREFLIGHT_REASONS', 'CANDIDATE_PATHS', 'CANDIDATE_REASONS', 'REPOSITORY',
-                     'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH', 'INDEX_BRANCH',
+                     'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH', 'INDEX_BRANCH', 'INDEX_REPORT_BRANCH',
                      'INDEX_PATH', 'INDEX_URL', 'INDEX_INRELEASE_SHA256', 'INDEX_COMPRESSED_LIMIT',
                      'INDEX_TEXT_LIMIT', 'INDEX_DECODER_MEMORY'} for target in node.targets):
                 selected.append(node)
@@ -118,6 +123,17 @@ class Memory:
         exec(compile(ast.fix_missing_locations(ast.Module(body=[candidate_function], type_ignores=[])), str(SOURCE), 'exec'), namespace)
         full_function = ast.FunctionDef(name='verified_main', args=main.args, body=main.body, decorator_list=[])
         exec(compile(ast.fix_missing_locations(ast.Module(body=[full_function], type_ignores=[])), str(SOURCE), 'exec'), namespace)
+        namespace['main'] = namespace['verified_main']
+        original_entry = next(node for node in TREE.body if isinstance(node, ast.If) and
+            isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__')
+        entry = ast.parse(ast.unparse(original_entry)).body[0]  # Independent test AST, no mutation of source TREE.
+        loops = [node for node in ast.walk(entry) if isinstance(node, ast.While)]
+        assert len(loops) == 1
+        # Preserve the actual custody condition; a held fake resource stops this in-process control instead of sleeping.
+        loops[0].body = [ast.Raise(exc=ast.Call(func=ast.Name(id='MemoryRetained', ctx=ast.Load()), args=[], keywords=[]), cause=None)]
+        entry_function = ast.FunctionDef(name='entry', args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+            body=entry.body, decorator_list=[])
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[entry_function], type_ignores=[])), str(SOURCE), 'exec'), namespace)
         self.ns, self.probe = namespace, namespace['Probe'](0)
 
     def add(self, path, raw, uid=1000, mode=0o600):
@@ -134,15 +150,16 @@ class Memory:
         return types.SimpleNamespace(st_dev=1, st_ino=row['ino'], st_uid=row['uid'],
             st_mode=stat.S_IFREG | row['mode'], st_nlink=1, st_size=len(row['raw']), st_mtime_ns=1, st_ctime_ns=1)
 
-    def verification_environment(self, index=False):
+    def verification_environment(self, index=False, reporting=False):
         source = str(SOURCE.resolve().parents[1])  # Resolves only the pinned task source path.
         sha = 'a' * 40
-        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['INDEX_BRANCH'] if index else self.ns['VERIFICATION_BRANCH'],
+        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['INDEX_REPORT_BRANCH'] if reporting else self.ns['INDEX_BRANCH'] if index else self.ns['VERIFICATION_BRANCH'],
                'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push', 'RUNNER_ENVIRONMENT': 'github-hosted',
                'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'X64', 'GITHUB_RUN_ID': '123', 'GITHUB_WORKSPACE': source,
                'GITHUB_SHA': sha, 'GITHUB_EVENT_PATH': '/tmp/managed/event.json',
                'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'}
         self.os.environ, self.os.geteuid = env, lambda: 1000
+        self.ns['sys'].argv = [str(SOURCE), '--authenticate-x11-index-report' if reporting else '--authenticate-x11-index' if index else '--verify-ubuntu-archive-input']
         self.add(source + '/.git/HEAD', sha.encode())
         self.add(str(SOURCE), RAW)
         self.add(env['GITHUB_EVENT_PATH'], json.dumps({'repository': {'full_name': self.ns['REPOSITORY'],
@@ -173,7 +190,7 @@ class Memory:
         return keyring
 
     def open(self, path, flags, mode):
-        assert self.probe.fds[-1]['issued'] and not self.probe.fds[-1]['returned']
+        assert any(owner['path'] == path and owner['issued'] and not owner['returned'] for owner in self.owned_files())
         if flags & self.os.O_CREAT:
             assert path not in self.files
             self.add(path, b'', mode=mode)
@@ -185,10 +202,16 @@ class Memory:
         return fd
 
     def close(self, fd):
-        assert any(owner['fd'] == fd and owner['close_issued'] for owner in self.probe.fds)
+        assert any(owner['fd'] == fd and owner['close_issued'] for owner in self.owned_files())
         self.events.append(('close', fd))
         if self.on_close:
             self.on_close()
+
+    def owned_files(self):
+        probe = self.probe
+        while probe is not None:
+            yield from probe.fds
+            probe = probe.diagnostic
 
     def read(self, fd, cap):
         if fd in self.queues:
@@ -471,7 +494,7 @@ class SignedMetadataMemory(unittest.TestCase):
         assignment = next(node for node in main.body if isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == 'expected_ref' for target in node.targets))
         self.assertEqual(ast.unparse(assignment.value),
-                         'INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
+                         'INDEX_REPORT_BRANCH if index_reporting else INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
 
     def test_fixed_candidate_verifier_selector_rejects_unknown_and_falsey_inputs_before_effects(self):
         m = Memory()
@@ -772,6 +795,140 @@ class SignedMetadataMemory(unittest.TestCase):
                 self.assertEqual(calls[2][-1], m.ns['INDEX_URL'])
                 self.assertNotIn(result['package_filename'], ' '.join(calls[2]))
             self.assertFalse(m.probe.unknown())
+
+    def test_reporting_actual_entry_keeps_binding_signature_index_and_output_failures_nonpassing(self):
+        for case, stage, error_code in (('binding', 'binding', 'SIGNED_HEAD'),
+                                       ('signature', 'verification', 'SIGNED_REJECTED_STATUS'),
+                                       ('index', 'index-download', 'SIGNED_INDEX_HASH'),
+                                       ('stage-output', None, 'SIGNED_REJECTED_STATUS')):
+            m = Memory()
+            m.verification_environment(index=True, reporting=True)
+            if case == 'binding':
+                m.os.environ['GITHUB_SHA'] = 'b' * 40
+            elif case in ('signature', 'stage-output'):
+                original = m.subprocess.Popen
+                def bad_signature(*args, **kwargs):
+                    child = original(*args, **kwargs)
+                    if m.probe.children[-1]['role'] == 'verification':
+                        m.queues[11] = [b'[GNUPG:] BADSIG ignored-private-text\n', b'']
+                    return child
+                m.subprocess.Popen = bad_signature
+            elif case == 'index':
+                m.index_download_bytes = m.index_bytes[:-1] + bytes([m.index_bytes[-1] ^ 1])
+            if case == 'stage-output':
+                m.files[m.os.environ['GITHUB_OUTPUT']]['mode'] = 0o664  # Rejected before any reporting open.
+            with self.assertRaises(SystemExit) as caught:
+                m.ns['entry']()
+            self.assertEqual(caught.exception.code, 1)
+            self.assertEqual(m.probe.first.args, (error_code,))
+            self.assertTrue(m.probe.frozen)
+            self.assertFalse(m.probe.unknown())
+            output = m.files[m.os.environ['GITHUB_OUTPUT']]['raw']
+            self.assertEqual(output, ('failure_stage=' + stage + '\n').encode() if stage else b'')
+            self.assertNotIn(b'signature=verified', output)
+            self.assertNotIn(b'package_sha256=', output)
+            self.assertNotIn('ignored-private-text', ''.join(m.printed))
+            if case == 'stage-output':
+                self.assertEqual(len(m.probe.secondary), 1)
+                self.assertIs(m.probe.secondary[0], m.probe.diagnostic.first)
+                self.assertEqual(m.probe.diagnostic.first.args, ('SIGNED_MANAGED_FILE',))
+                self.assertEqual(m.probe.diagnostic.fds, [])
+            else:
+                self.assertEqual(m.probe.secondary, [])
+                self.assertEqual(len(m.probe.diagnostic.fds), 1)
+                self.assertTrue(m.probe.diagnostic.fds[0]['closed'])
+        successful = Memory()
+        successful.verification_environment(index=True, reporting=True)
+        successful.ns['entry']()
+        self.assertFalse(successful.probe.frozen)
+        self.assertIsNone(successful.probe.diagnostic)
+        self.assertFalse(successful.probe.unknown())
+        self.assertNotIn(b'failure_stage=', successful.files[successful.os.environ['GITHUB_OUTPUT']]['raw'])
+
+    def test_failure_stage_is_single_use_private_and_keeps_the_original_deadline(self):
+        class Private:
+            def __str__(self):
+                raise AssertionError('never coerce private values')
+        for stage in (*Memory().ns['PHASES'], None, 'private-path-or-error', Private()):
+            m = Memory()
+            m.add('/tmp/managed/output', b'')
+            error = RuntimeError('private-primary-error')
+            m.probe.phase = stage
+            m.probe.fail(error)
+            m.probe.publish_failure_stage('/tmp/managed/output', '/tmp/managed', 1000)
+            expected = stage if type(stage) is str and stage in m.ns['PHASES'] else 'unavailable'
+            self.assertEqual(m.files['/tmp/managed/output']['raw'], ('failure_stage=' + expected + '\n').encode())
+            self.assertIs(m.probe.first, error)
+            self.assertTrue(m.probe.frozen)
+            self.assertEqual((m.probe.started, m.probe.until), (m.probe.diagnostic.started, m.probe.diagnostic.until))
+            with self.assertRaisesRegex(RuntimeError, 'DIAGNOSTIC_CONTEXT'):
+                m.probe.publish_failure_stage('/tmp/managed/output', '/tmp/managed', 1000)
+            self.assertFalse(m.probe.unknown())
+            self.assertEqual(m.probe.children, [])
+            self.assertEqual(m.probe.diagnostic.children, [])
+        m = Memory()
+        m.add('/tmp/managed/output', b'')
+        with self.assertRaisesRegex(RuntimeError, 'DIAGNOSTIC_CONTEXT'):
+            m.probe.publish_failure_stage('/tmp/managed/output', '/tmp/managed', 1000)
+        self.assertEqual(m.events, [])
+        self.assertIsNone(m.probe.diagnostic)
+        m.probe.fail(RuntimeError('primary'))
+        m.clock[0] = m.probe.until
+        with self.assertRaisesRegex(RuntimeError, 'DEADLINE'):
+            m.probe.publish_failure_stage('/tmp/managed/output', '/tmp/managed', 1000)
+        self.assertEqual(m.events, [])
+        self.assertFalse(m.probe.unknown())
+
+    def test_failed_stage_close_retains_custody_without_replacing_error_or_retrying(self):
+        m = Memory()
+        m.verification_environment(index=True, reporting=True)
+        m.index_download_bytes = m.index_bytes[:-1] + bytes([m.index_bytes[-1] ^ 1])
+        original = m.os.close
+        close_error = OSError('private-diagnostic-close-error')
+        def fail_only_diagnostic_close(fd):
+            if m.probe.diagnostic is not None:
+                raise close_error
+            return original(fd)
+        m.os.close = fail_only_diagnostic_close
+        with self.assertRaises(MemoryRetained):
+            m.ns['entry']()  # Actual handler's unknown-custody condition selects the memory-only stop sentinel.
+        self.assertEqual(m.probe.first.args, ('SIGNED_INDEX_HASH',))
+        self.assertEqual(m.probe.secondary, [close_error])
+        self.assertIs(m.probe.diagnostic.first, close_error)
+        owner = m.probe.diagnostic.fds[0]
+        self.assertTrue(owner['close_issued'])
+        self.assertFalse(owner['closed'])
+        self.assertTrue(m.probe.unknown())
+        events = list(m.events)
+        with self.assertRaisesRegex(RuntimeError, 'DIAGNOSTIC_CONTEXT'):
+            m.probe.publish_failure_stage(m.os.environ['GITHUB_OUTPUT'], m.os.environ['RUNNER_TEMP'], 1000)
+        self.assertEqual(m.events, events)
+        self.assertNotIn(b'signature=verified', m.files[m.os.environ['GITHUB_OUTPUT']]['raw'])
+        self.assertNotIn('private-diagnostic-close-error', ''.join(m.printed))
+
+    def test_reporting_workflow_separates_binding_and_keeps_failed_missing_stages_visible(self):
+        raw = (SOURCE.parents[1] / '.github/workflows/linux-ubuntu-x11-index-report.yml').read_text()
+        binding, rest = raw.split('              id: binding\n', 1)
+        bind_run, authentication = rest.split('            - name: Authenticate only the fixed signed index metadata\n', 1)
+        self.assertNotIn('python3', bind_run)
+        self.assertIn('git rev-parse HEAD', bind_run)
+        self.assertIn('cmp --silent', bind_run)
+        self.assertIn('              id: probe\n', authentication)
+        self.assertIn('--authenticate-x11-index-report', authentication)
+        self.assertIn("steps.binding.outcome == 'failure' && 'binding'", authentication)
+        self.assertIn("steps.probe.outputs.failure_stage || 'unavailable'", authentication)
+        self.assertRegex(authentication, r'authentication=\$\{\{\s*steps\.probe\.outcome\s*\}\}')
+        self.assertIn("              if: ${{ always() }}\n              run: ':'", authentication)
+        self.assertNotIn('continue-on-error', raw)
+        self.assertNotIn('|| true', raw)
+        # The source binding step's actual outcome covers shell failures before Python can report a stage.
+        # Output failure has no invented phase; unavailable remains distinct from verification/index phases.
+        for binding_outcome, probe_outcome, output, expected in (
+                ('failure', 'skipped', '', 'binding'), ('success', 'failure', 'verification', 'verification'),
+                ('success', 'failure', 'index-download', 'index-download'), ('success', 'failure', '', 'unavailable')):
+            stage = 'binding' if binding_outcome == 'failure' else output or 'unavailable'
+            self.assertEqual(stage, expected)
+            self.assertFalse(binding_outcome == probe_outcome == 'success')
 
     def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
         m = Memory()
