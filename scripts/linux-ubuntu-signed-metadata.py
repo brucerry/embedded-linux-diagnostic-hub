@@ -23,6 +23,7 @@ REPOSITORY = 'brucerry/embedded-linux-diagnostic-hub'
 BRANCH = 'refs/heads/ci/v060-ubuntu-archive-verifier-20261114'
 CLASSIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-keyring-classification-20261114'
 CANDIDATE_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-input-preflight-20261114'
+VERIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-metadata-verify-20261114'
 CANDIDATE_PATHS = (('root', '/'), ('etc', '/etc'), ('apt', '/etc/apt'),
                    ('trusted-directory', '/etc/apt/trusted.gpg.d'),
                    ('keyring', '/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg'))
@@ -117,12 +118,13 @@ def candidate_metadata(probe, uid):
     return 'input-all-attributes-ok'
 
 
-def fixed_command(role, directory):
+def fixed_command(role, directory, keyring=KEYRING):
+    need(keyring in (KEYRING, CANDIDATE_PATHS[-1][1]), 'SIGNED_FIXED_KEYRING')
     if role == 'download':
         return (CURL, '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
                 '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', '1048576', URL)
     need(role == 'verification', 'SIGNED_FIXED_ROLE')
-    return (GPGV, '--homedir', directory + '/gnupg', '--keyring', KEYRING,
+    return (GPGV, '--homedir', directory + '/gnupg', '--keyring', keyring,
             '--status-fd', '2', '--output', '-', directory + '/InRelease')
 
 
@@ -282,7 +284,7 @@ class Probe:
         return b''.join(parts)
 
     def preflight_metadata(self, file, executable):
-        need(file in (CURL, GPGV, KEYRING), 'SIGNED_FIXED_INPUT')
+        need(file in (CURL, GPGV, KEYRING, CANDIDATE_PATHS[-1][1]), 'SIGNED_FIXED_INPUT')
         try:
             before = self.capture(os.lstat(file))
         except OSError as error:
@@ -329,9 +331,10 @@ class Probe:
         actual = self.read(file, 1048576, os.getuid())
         need(actual == raw, 'SIGNED_PRIVATE_CHANGED')
 
-    def run(self, role, directory, inherited):
+    def run(self, role, directory, inherited, keyring=KEYRING):
         self.gate()
         need(len(self.children) < 2 and role == ('download', 'verification')[len(self.children)], 'SIGNED_ROLE_ORDER')
+        argv = fixed_command(role, directory, keyring)
         child = {'role': role, 'issued': False, 'returned': False, 'object': None, 'exit': None,
                  'pipes': {}, 'stdout': bytearray(), 'stderr': bytearray(), 'soft_expired': False}
         self.children.append(child)
@@ -339,7 +342,7 @@ class Probe:
                 for name in ('stdout', 'stderr')}
         started = time.monotonic()
         child['issued'] = True
-        actual = subprocess.Popen(fixed_command(role, directory), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        actual = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, env=fixed_environment(role, directory, inherited), close_fds=True)
         child['object'], child['returned'] = actual, True
         self.returned.append(actual)
@@ -429,8 +432,10 @@ def main(args):
     CURRENT.append(probe)
     classification = args == ['--classify-keyring']
     candidate = args == ['--preflight-ubuntu-archive-input']
-    need((not args or classification or candidate) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
-    expected_ref = CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH
+    candidate_verification = args == ['--verify-ubuntu-archive-input']
+    need((not args or classification or candidate or candidate_verification) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
+    expected_ref = (VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
+                    else CLASSIFICATION_BRANCH if classification else BRANCH)
     uid = os.getuid()
     need(uid > 0 and uid == os.geteuid() and os.environ.get('GITHUB_REPOSITORY') == REPOSITORY and
          os.environ.get('GITHUB_REF') == expected_ref and os.environ.get('GITHUB_RUN_ATTEMPT') == '1' and
@@ -474,10 +479,23 @@ def main(args):
         need(not probe.unknown(), 'SIGNED_RETAINED')
         print(json.dumps({'anchor_reason': values['anchor_reason'], 'scope': 'attributes-only'}, sort_keys=True))
         return
-    originals = {file: probe.preflight(file, file != KEYRING) for file in (CURL, GPGV, KEYRING)}
+    selected_keyring = CANDIDATE_PATHS[-1][1] if candidate_verification else KEYRING
+    if candidate_verification:
+        values['anchor_reason'] = candidate_metadata(probe, uid)
+        if values['anchor_reason'] != 'input-all-attributes-ok':
+            probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
+            raise RuntimeError('SIGNED_CANDIDATE_REFUSED')
+    originals = {}
+    for file in (CURL, GPGV, selected_keyring):
+        originals[file] = probe.preflight(file, file != selected_keyring)
+        if candidate_verification and originals[file] is None:
+            values['verifier'] = 'established' if originals.get(CURL) is not None and originals.get(GPGV) is not None else 'unavailable'
+            values['anchor_reason'] = probe.preflight_reasons.get(selected_keyring, 'not-reported')
+            probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
+            raise RuntimeError('SIGNED_PREREQUISITE_UNAVAILABLE')
     values['verifier'] = 'established' if originals[CURL] is not None and originals[GPGV] is not None else 'unavailable'
-    values['anchor'] = 'established' if originals[KEYRING] is not None else 'unavailable'
-    values['anchor_reason'] = probe.preflight_reasons[KEYRING]
+    values['anchor'] = 'established' if originals[selected_keyring] is not None else 'unavailable'
+    values['anchor_reason'] = probe.preflight_reasons[selected_keyring]
     if any(value is None for value in originals.values()):
         probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
         raise RuntimeError('SIGNED_PREREQUISITE_UNAVAILABLE')
@@ -496,7 +514,7 @@ def main(args):
         need(signed_before['raw'] == signed, 'SIGNED_DOWNLOAD_CHANGED')
         need(probe.capture(os.listdir(directory + '/gnupg')) == [], 'SIGNED_EMPTY_HOME')
         probe.phase = 'verification'
-        verified, status = probe.run('verification', directory, os.environ)
+        verified, status = probe.run('verification', directory, os.environ, selected_keyring)
         now = time.time()
         signatures = signature_status(probe.children[-1]['exit'], status, now)
         probe.returned.append(signatures)
@@ -506,7 +524,9 @@ def main(args):
         probe.phase = 'readback'
         need(probe.pin(directory + '/InRelease', 1048576, uid) == signed_before, 'SIGNED_DOWNLOAD_CHANGED')
         for file, original in originals.items():
-            need(probe.preflight(file, file != KEYRING) == original, 'SIGNED_ANCHOR_OR_TOOL_CHANGED')
+            need(probe.preflight(file, file != selected_keyring) == original, 'SIGNED_ANCHOR_OR_TOOL_CHANGED')
+        if candidate_verification:
+            need(candidate_metadata(probe, uid) == 'input-all-attributes-ok', 'SIGNED_CANDIDATE_CHANGED')
         values.update(signature='verified', metadata='verified', signer=PRIMARY,
                       inrelease_sha256=hashlib.sha256(signed_before['raw']).hexdigest(), expiry=metadata['expiry'])
     probe.phase = 'readback'

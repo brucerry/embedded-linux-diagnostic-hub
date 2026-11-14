@@ -12,7 +12,7 @@ import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = '54f1fa47f8ef97352ca0cd7258d633ef964dc41693ac9cb3cbac591ec969ac25'
+SOURCE_SHA256 = 'cea45073f428f74d7369871acb518958df9da972b60de96585e10a465b25a4cb'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
 SELECTED = {'need', 'safe_stage', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
@@ -52,6 +52,7 @@ class Memory:
     def __init__(self):
         self.clock, self.events, self.files, self.fds, self.positions = [0.0], [], {}, {}, {}
         self.printed = []
+        self.directories = {}
         self.next_fd, self.queues, self.on_popen, self.on_poll, self.on_mode, self.on_close = 100, {}, None, None, None, None
         self.os = types.SimpleNamespace(O_CLOEXEC=1, O_RDONLY=2, O_NOFOLLOW=4, O_NONBLOCK=8,
             O_RDWR=16, O_CREAT=32, O_EXCL=64, O_WRONLY=128, O_APPEND=256, X_OK=1,
@@ -65,20 +66,23 @@ class Memory:
         namespace = {'__builtins__': __builtins__, 'datetime': datetime, 'email': email, 'errno': errno,
             'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'json': json, 'os': self.os, 'subprocess': self.subprocess,
             'print': lambda text: self.printed.append(text),
-            'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0])}
+            'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0], time=lambda: NOW),
+            'sys': types.SimpleNamespace(platform='linux'), '__file__': str(SOURCE), 'CURRENT': []}
         selected = []
         for node in TREE.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
                     {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES',
-                     'PREFLIGHT_REASONS', 'CANDIDATE_PATHS', 'CANDIDATE_REASONS'} for target in node.targets):
+                     'PREFLIGHT_REASONS', 'CANDIDATE_PATHS', 'CANDIDATE_REASONS', 'REPOSITORY',
+                     'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH'} for target in node.targets):
                 selected.append(node)
             elif isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in SELECTED:
                 selected.append(node)
         self.selected = {node.name for node in selected if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), 'exec'), namespace)
         main = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
-        branches = [node for node in main.body if isinstance(node, ast.If) and any(
-            isinstance(child, ast.Constant) and child.value == 'SIGNED_PREREQUISITE_UNAVAILABLE' for child in ast.walk(node))]
+        branches = [node for node in main.body if isinstance(node, ast.If) and isinstance(node.test, ast.Call) and
+            isinstance(node.test.func, ast.Name) and node.test.func.id == 'any' and any(
+                isinstance(child, ast.Constant) and child.value == 'SIGNED_PREREQUISITE_UNAVAILABLE' for child in ast.walk(node))]
         assert len(branches) == 1
         missing = ast.FunctionDef(name='missing', args=ast.arguments(posonlyargs=[], args=[ast.arg(arg=name) for name in
             ('probe', 'originals', 'values', 'uid')], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[branches[0]], decorator_list=[])
@@ -94,18 +98,54 @@ class Memory:
         candidate_function = ast.FunctionDef(name='candidate', args=classify_function.args,
             body=candidate.body, decorator_list=[])
         exec(compile(ast.fix_missing_locations(ast.Module(body=[candidate_function], type_ignores=[])), str(SOURCE), 'exec'), namespace)
+        full_function = ast.FunctionDef(name='verified_main', args=main.args, body=main.body, decorator_list=[])
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[full_function], type_ignores=[])), str(SOURCE), 'exec'), namespace)
         self.ns, self.probe = namespace, namespace['Probe'](0)
 
     def add(self, path, raw, uid=1000, mode=0o600):
         self.files[path] = {'raw': raw, 'uid': uid, 'mode': mode, 'ino': len(self.files) + 10}
 
     def info(self, path):
+        if path in self.directories:
+            return types.SimpleNamespace(st_dev=1, st_ino=2000, st_uid=1000,
+                st_mode=stat.S_IFDIR | self.directories[path], st_nlink=2, st_size=0, st_mtime_ns=1, st_ctime_ns=1)
         if path not in self.files:
             return types.SimpleNamespace(st_dev=1, st_ino=2, st_uid=0, st_mode=stat.S_IFDIR | 0o755,
                 st_nlink=2, st_size=0, st_mtime_ns=1, st_ctime_ns=1)
         row = self.files[path]
         return types.SimpleNamespace(st_dev=1, st_ino=row['ino'], st_uid=row['uid'],
             st_mode=stat.S_IFREG | row['mode'], st_nlink=1, st_size=len(row['raw']), st_mtime_ns=1, st_ctime_ns=1)
+
+    def verification_environment(self):
+        source = str(SOURCE.resolve().parents[1])  # Resolves only the pinned task source path.
+        sha = 'a' * 40
+        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['VERIFICATION_BRANCH'],
+               'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push', 'RUNNER_ENVIRONMENT': 'github-hosted',
+               'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'X64', 'GITHUB_RUN_ID': '123', 'GITHUB_WORKSPACE': source,
+               'GITHUB_SHA': sha, 'GITHUB_EVENT_PATH': '/tmp/managed/event.json',
+               'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'}
+        self.os.environ, self.os.geteuid = env, lambda: 1000
+        self.add(source + '/.git/HEAD', sha.encode())
+        self.add(str(SOURCE), RAW)
+        self.add(env['GITHUB_EVENT_PATH'], json.dumps({'repository': {'full_name': self.ns['REPOSITORY'],
+            'private': False}, 'after': sha, 'ref': env['GITHUB_REF']}).encode())
+        self.add(env['GITHUB_OUTPUT'], b'')
+        self.add(self.ns['CURL'], b'fake-curl-not-executable-code', 0, 0o755)
+        self.add(self.ns['GPGV'], b'fake-gpgv-not-executable-code', 0, 0o755)
+        keyring = self.ns['CANDIDATE_PATHS'][-1][1]
+        self.add(keyring, b'fake-public-keyring-not-cryptographic-evidence', 0, 0o644)
+        def mkdir(path, mode):
+            assert path not in self.directories and path not in self.files
+            self.directories[path] = mode
+            self.events.append(('mkdir', path, mode))
+        self.os.mkdir = mkdir
+        self.os.listdir = lambda path: sorted({p[len(path) + 1:].split('/')[0] for p in
+            (*self.files, *self.directories) if p.startswith(path + '/')})
+        def factory(started):
+            assert started == self.probe.started
+            return self.probe
+        self.ns['Probe'] = factory  # Fully owned fake ports retain the already constructed actual class instance.
+        return keyring
 
     def open(self, path, flags, mode):
         assert self.probe.fds[-1]['issued'] and not self.probe.fds[-1]['returned']
@@ -402,7 +442,75 @@ class SignedMetadataMemory(unittest.TestCase):
         assignment = next(node for node in main.body if isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == 'expected_ref' for target in node.targets))
         self.assertEqual(ast.unparse(assignment.value),
-                         'CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
+                         'VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
+
+    def test_fixed_candidate_verifier_selector_rejects_unknown_and_falsey_inputs_before_effects(self):
+        m = Memory()
+        keyring = m.ns['CANDIDATE_PATHS'][-1][1]
+        expected = ('/usr/bin/gpgv', '--homedir', '/private/gnupg', '--keyring', keyring,
+                    '--status-fd', '2', '--output', '-', '/private/InRelease')
+        self.assertEqual(m.ns['fixed_command']('verification', '/private', keyring), expected)
+        for invalid in (None, False, '', '/tmp/untrusted-keyring.gpg'):
+            with self.assertRaisesRegex(RuntimeError, 'FIXED_KEYRING'):
+                m.ns['fixed_command']('verification', '/private', invalid)
+            with self.assertRaisesRegex(RuntimeError, 'FIXED_KEYRING'):
+                m.probe.run('download', '/private', {}, invalid)
+        self.assertEqual(m.events, [])
+        self.assertEqual(m.probe.children, [])
+        self.assertFalse(m.probe.unknown())
+
+    def test_full_verification_mode_uses_exact_candidate_and_refuses_mismatch_mutation_or_invalid_data(self):
+        for case, failure in (('success', None), ('key-mutation', 'ANCHOR_OR_TOOL_CHANGED'),
+                              ('wrong-ref', 'CONTEXT'), ('unsafe-parent', 'CANDIDATE_REFUSED'),
+                              ('unsafe-tool', 'PREREQUISITE_UNAVAILABLE'), ('wrong-signer', 'AUTHORIZED_PRIMARY'),
+                              ('bad-metadata', 'RELEASE_IDENTITY')):
+            m = Memory()
+            keyring = m.verification_environment()
+            if case == 'key-mutation':
+                def mutate():
+                    if m.probe.children[-1]['role'] == 'verification':
+                        m.files[keyring]['raw'] = b'changed-fake-keyring'
+                m.on_poll = mutate
+            elif case == 'wrong-ref':
+                m.os.environ['GITHUB_REF'] = m.ns['BRANCH']
+            elif case == 'unsafe-parent':
+                original = m.os.lstat
+                m.os.lstat = lambda path: types.SimpleNamespace(**{**vars(original(path)),
+                    'st_mode': stat.S_IFDIR | 0o775}) if path == '/etc/apt' else original(path)
+            elif case == 'unsafe-tool':
+                m.files[m.ns['GPGV']]['mode'] = 0o775
+            elif case in ('wrong-signer', 'bad-metadata'):
+                original = m.subprocess.Popen
+                def altered(*args, **kwargs):
+                    child = original(*args, **kwargs)
+                    if m.probe.children[-1]['role'] == 'verification':
+                        if case == 'wrong-signer':
+                            m.queues[11] = [status(primary='A' * 40), b'']
+                        else:
+                            m.queues[10] = [release().replace(b'Origin: Ubuntu', b'Origin: Other'), b'']
+                    return child
+                m.subprocess.Popen = altered
+            if failure:
+                with self.assertRaisesRegex(RuntimeError, failure):
+                    m.ns['verified_main'](['--verify-ubuntu-archive-input'])
+            else:
+                m.ns['verified_main'](['--verify-ubuntu-archive-input'])
+                result = json.loads(m.printed[-1])
+                self.assertEqual(result['signature'], 'verified')  # Mock status only, not actual crypto proof.
+                self.assertEqual(result['metadata'], 'verified')
+                self.assertEqual(result['signer'], PRIMARY)
+                self.assertEqual(result['inrelease_sha256'], hashlib.sha256(b'opaque-signed-bytes').hexdigest())
+                calls = [event[1] for event in m.events if event[0] == 'popen']
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[1][calls[1].index('--keyring') + 1], keyring)
+                self.assertEqual(calls[0][-1], m.ns['URL'])
+                self.assertGreaterEqual(len([e for e in m.events if e[0] == 'open' and e[1] == keyring]), 2)
+            if case in ('wrong-ref', 'unsafe-parent', 'unsafe-tool'):
+                self.assertEqual(m.probe.children, [])
+                self.assertFalse(any(e[0] == 'open' and e[1] == keyring for e in m.events))
+            elif failure:
+                self.assertNotIn(b'signature=verified\n', m.files[m.os.environ['GITHUB_OUTPUT']]['raw'])
+            self.assertFalse(m.probe.unknown())
 
     def test_candidate_parent_predicate_matches_existing_directory_guard(self):
         classify = Memory().ns['candidate_parent_reason']
