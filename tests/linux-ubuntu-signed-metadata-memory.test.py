@@ -1,0 +1,318 @@
+"""Fixed-source AST/data/owned-port tests, not actual network or crypto proof."""
+import ast
+import datetime
+import email.utils
+import errno
+import hashlib
+import json
+import pathlib
+import re
+import stat
+import types
+import unittest
+
+SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
+SOURCE_SHA256 = 'a986cc1fa536d05534d8d71428008cdc49f7cdb8e7df71a78de9a56da1c39ac3'
+RAW = SOURCE.read_bytes()
+TREE = ast.parse(RAW, filename=str(SOURCE))
+SELECTED = {'need', 'safe_stage', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
+            'signature_status', 'release_metadata', 'Probe'}
+NOW = datetime.datetime(2026, 11, 14, tzinfo=datetime.timezone.utc).timestamp()
+CREATED = int(datetime.datetime(2024, 4, 25, tzinfo=datetime.timezone.utc).timestamp())
+PRIMARY = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
+
+
+def status(signer=PRIMARY, primary=PRIMARY, created=None, expires=b'0'):
+    stamp = str(CREATED).encode() if created is None else created
+    fields = [signer.encode(), b'2024-04-25', stamp, expires, b'4', b'0', b'1', b'8', b'01']
+    if primary is not None:
+        fields.append(primary.encode())
+    return b'[GNUPG:] NEWSIG\n[GNUPG:] GOODSIG 871920D1991BC93C ignored-uid\n[GNUPG:] VALIDSIG ' + b' '.join(fields) + b'\n'
+
+
+def release(expiry=None):
+    # Release Date need not be ordered against signature creation by this unit.
+    raw = b'Origin: Ubuntu\nLabel: Ubuntu\nSuite: noble\nCodename: noble\nArchitectures: amd64 arm64\nComponents: main universe\nDate: Fri, 26 Apr 2024 00:00:00 UTC\n'
+    if expiry is not None:
+        raw += b'Valid-Until: ' + expiry + b'\n'
+    return raw
+
+
+class Pipe:
+    def __init__(self, fd):
+        self.fd, self.closed = fd, False
+    def fileno(self):
+        return self.fd
+    def close(self):
+        self.closed = True
+
+
+class Memory:
+    def __init__(self):
+        self.clock, self.events, self.files, self.fds, self.positions = [0.0], [], {}, {}, {}
+        self.next_fd, self.queues, self.on_popen, self.on_poll, self.on_mode, self.on_close = 100, {}, None, None, None, None
+        self.os = types.SimpleNamespace(O_CLOEXEC=1, O_RDONLY=2, O_NOFOLLOW=4, O_NONBLOCK=8,
+            O_RDWR=16, O_CREAT=32, O_EXCL=64, O_WRONLY=128, O_APPEND=256, X_OK=1,
+            open=self.open, close=self.close, read=self.read, write=self.write,
+            fstat=lambda fd: self.info(self.fds[fd]), lstat=lambda p: self.info(str(p)),
+            path=types.SimpleNamespace(realpath=lambda p: str(p)), getuid=lambda: 1000,
+            access=lambda p, mode: str(p) in self.files, set_blocking=self.mode,
+            pread=lambda fd, count, offset: self.files[self.fds[fd]]['raw'][offset:offset + count], fsync=lambda fd: None,
+            environ={'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'})
+        self.subprocess = types.SimpleNamespace(DEVNULL=-3, PIPE=-1, Popen=self.popen)
+        namespace = {'__builtins__': __builtins__, 'datetime': datetime, 'email': email, 'errno': errno,
+            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'os': self.os, 'subprocess': self.subprocess,
+            'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0])}
+        selected = []
+        for node in TREE.body:
+            if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
+                    {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES'} for target in node.targets):
+                selected.append(node)
+            elif isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in SELECTED:
+                selected.append(node)
+        self.selected = {node.name for node in selected if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), 'exec'), namespace)
+        main = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        branches = [node for node in main.body if isinstance(node, ast.If) and any(
+            isinstance(child, ast.Constant) and child.value == 'SIGNED_PREREQUISITE_UNAVAILABLE' for child in ast.walk(node))]
+        assert len(branches) == 1
+        missing = ast.FunctionDef(name='missing', args=ast.arguments(posonlyargs=[], args=[ast.arg(arg=name) for name in
+            ('probe', 'originals', 'values', 'uid')], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[branches[0]], decorator_list=[])
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[missing], type_ignores=[])), str(SOURCE), 'exec'), namespace)
+        self.ns, self.probe = namespace, namespace['Probe'](0)
+
+    def add(self, path, raw, uid=1000, mode=0o600):
+        self.files[path] = {'raw': raw, 'uid': uid, 'mode': mode, 'ino': len(self.files) + 10}
+
+    def info(self, path):
+        if path not in self.files:
+            return types.SimpleNamespace(st_dev=1, st_ino=2, st_uid=0, st_mode=stat.S_IFDIR | 0o755,
+                st_nlink=2, st_size=0, st_mtime_ns=1, st_ctime_ns=1)
+        row = self.files[path]
+        return types.SimpleNamespace(st_dev=1, st_ino=row['ino'], st_uid=row['uid'],
+            st_mode=stat.S_IFREG | row['mode'], st_nlink=1, st_size=len(row['raw']), st_mtime_ns=1, st_ctime_ns=1)
+
+    def open(self, path, flags, mode):
+        assert self.probe.fds[-1]['issued'] and not self.probe.fds[-1]['returned']
+        if flags & self.os.O_CREAT:
+            assert path not in self.files
+            self.add(path, b'', mode=mode)
+        assert path in self.files
+        fd = self.next_fd
+        self.next_fd += 1
+        self.fds[fd], self.positions[fd] = path, 0
+        self.events.append(('open', path, fd))
+        return fd
+
+    def close(self, fd):
+        assert any(owner['fd'] == fd and owner['close_issued'] for owner in self.probe.fds)
+        self.events.append(('close', fd))
+        if self.on_close:
+            self.on_close()
+
+    def read(self, fd, cap):
+        if fd in self.queues:
+            value = self.queues[fd].pop(0)
+            assert len(value) <= cap
+            return value
+        raw = self.files[self.fds[fd]]['raw']
+        at = self.positions[fd]
+        self.positions[fd] += min(cap, len(raw) - at)
+        return raw[at:at + cap]
+
+    def write(self, fd, raw):
+        self.files[self.fds[fd]]['raw'] += raw
+        self.events.append(('write', fd, raw))
+        return len(raw)
+
+    def mode(self, fd, blocking):
+        self.events.append(('mode', fd, blocking))
+        if self.on_mode:
+            self.on_mode()
+
+    def popen(self, args, **kwargs):
+        owner = self.probe.children[-1]
+        assert owner['issued'] and not owner['returned']
+        self.events.append(('popen', args, kwargs))
+        child = types.SimpleNamespace(stdout=Pipe(10), stderr=Pipe(11), result=0)
+        stdout, stderr = (b'opaque-signed-bytes', b'') if owner['role'] == 'download' else (release(), status())
+        self.queues[10], self.queues[11] = [stdout, b''], [stderr, b''] if stderr else [b'']
+        def poll():
+            if self.on_poll:
+                self.on_poll()
+            return child.result
+        child.poll = poll
+        if self.on_popen:
+            self.on_popen(child)
+        return child
+
+    def select(self, readable, writeable, exceptional, delay):
+        return [fd for fd in readable if self.queues.get(fd)], [], []
+
+
+class SignedMetadataMemory(unittest.TestCase):
+    def test_exact_two_commands_and_only_approved_transport_environment(self):
+        m = Memory()
+        curl = m.ns['fixed_command']('download', '/private')
+        self.assertEqual(curl, ('/usr/bin/curl', '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
+            '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', '1048576',
+            'https://snapshot.ubuntu.com/ubuntu/20261113T000000Z/dists/noble/InRelease'))
+        self.assertEqual(m.ns['fixed_command']('verification', '/private'), ('/usr/bin/gpgv', '--homedir', '/private/gnupg',
+            '--keyring', '/usr/share/keyrings/ubuntu-archive-keyring.gpg', '--status-fd', '2', '--output', '-', '/private/InRelease'))
+        inherited = {'PATH': '/existing/toolpath', 'HTTPS_PROXY': 'private-proxy', 'CURL_CA_BUNDLE': '/private/ca', 'LD_PRELOAD': 'bad',
+                     'GITHUB_TOKEN': 'private-token', 'CURL_HOME': 'bad', 'GNUPGHOME': 'bad'}
+        env = m.ns['fixed_environment']('download', '/private', inherited)
+        self.assertEqual(env['HTTPS_PROXY'], inherited['HTTPS_PROXY'])
+        self.assertEqual(env['CURL_CA_BUNDLE'], inherited['CURL_CA_BUNDLE'])
+        self.assertEqual(env['PATH'], inherited['PATH'])
+        self.assertFalse(set(env) & {'LD_PRELOAD', 'GITHUB_TOKEN', 'CURL_HOME'})
+        verifier = m.ns['fixed_environment']('verification', '/private', inherited)
+        self.assertFalse(set(verifier) & {'HTTPS_PROXY', 'CURL_CA_BUNDLE', 'LD_PRELOAD', 'GITHUB_TOKEN', 'CURL_HOME'})
+        self.assertEqual(verifier['PATH'], inherited['PATH'])
+        self.assertEqual(verifier['GNUPGHOME'], '/private/gnupg')
+        with self.assertRaisesRegex(RuntimeError, 'FIXED_ROLE'):
+            m.ns['fixed_command']('arbitrary', '/private')
+
+    def test_full_primary_status_not_short_id_uid_or_diagnostic_text(self):
+        parse = Memory().ns['signature_status']
+        self.assertEqual(parse(0, status(), NOW)[0]['primary'], PRIMARY)
+        self.assertEqual(parse(0, status(primary=None), NOW)[0]['primary'], PRIMARY)
+        self.assertEqual(parse(0, status(signer='A' * 40), NOW)[0]['primary'], PRIMARY)
+        for raw in (b'gpgv: Good signature from Ubuntu\n', b'[GNUPG:] GOODSIG 871920D1991BC93C Ubuntu\n',
+                    status(primary='A' * 40), status(signer='A' * 40, primary=None), status(signer='871920D1991BC93C')):
+            with self.assertRaises(RuntimeError):
+                parse(0, raw, NOW)
+        with self.assertRaises(RuntimeError):
+            parse(1, status(), NOW)
+
+    def test_rejected_statuses_override_validsig_and_epoch_iso_expiry_policy(self):
+        parse = Memory().ns['signature_status']
+        for rejected in ('BADSIG', 'ERRSIG', 'EXPSIG', 'EXPKEYSIG', 'REVKEYSIG', 'NO_PUBKEY', 'NODATA', 'FAILURE', 'ERROR', 'KEYEXPIRED', 'SIGEXPIRED', 'UNKNOWN'):
+            with self.assertRaisesRegex(RuntimeError, 'REJECTED_STATUS'):
+                parse(0, status() + ('[GNUPG:] ' + rejected + ' private\n').encode(), NOW)
+        self.assertEqual(parse(0, status(created=b'20240425T000000'), NOW)[0]['created'], CREATED)
+        self.assertEqual(parse(0, status(created=b'2024-04-25T00:00:00Z'), NOW)[0]['created'], CREATED)
+        future = str(int(NOW + 1)).encode()
+        with self.assertRaises(RuntimeError):
+            parse(0, status(created=future), NOW)
+        with self.assertRaises(RuntimeError):
+            parse(0, status(expires=str(int(NOW - 1)).encode()), NOW)
+
+    def test_verified_cleartext_historical_date_optional_expiry_not_future_index_gate(self):
+        parse = Memory().ns['release_metadata']
+        self.assertEqual(parse(release(), NOW)['expiry'], 'not-declared')
+        self.assertEqual(parse(release(b'Sun, 15 Nov 2026 00:00:00 UTC'), NOW)['expiry'], 'present-valid')
+        for raw in (release(b'Thu, 12 Nov 2026 00:00:00 UTC'), release().replace(b'noble', b'jammy'),
+                    release().replace(b'Origin: Ubuntu', b'Origin: Other'), release().replace(b'amd64 arm64', b'arm64'),
+                    release().replace(b'main universe', b'universe'), release() + b'Origin: Ubuntu\n',
+                    release().replace(b'Fri, 26 Apr 2024', b'Sun, 15 Nov 2026')):
+            with self.assertRaises((RuntimeError, ValueError)):
+                parse(raw, NOW)
+        # No fabricated Packages.xz/checksum or recent-Date requirement is needed.
+        self.assertNotIn(b'Packages.xz', release())
+
+    def test_actual_owned_capture_role_order_join_and_private_signed_bytes(self):
+        m = Memory()
+        signed, _ = m.probe.run('download', '/private', {'HTTPS_PROXY': 'private'})
+        self.assertEqual(signed, b'opaque-signed-bytes')
+        m.probe.write_private('/private/InRelease', signed)
+        before = m.probe.pin('/private/InRelease', 1048576, 1000)
+        verified, sig = m.probe.run('verification', '/private', {})
+        self.assertEqual(verified, release())
+        self.assertEqual(sig, status())
+        self.assertFalse(m.probe.unknown())
+        self.assertEqual(len([event for event in m.events if event[0] == 'popen']), 2)
+        self.assertTrue(all(child['exit'] == 0 and all(pipe['eof'] and pipe['closed'] for pipe in child['pipes'].values()) for child in m.probe.children))
+        m.files['/private/InRelease']['ino'] += 1
+        self.assertNotEqual(m.probe.pin('/private/InRelease', 1048576, 1000), before)
+        with self.assertRaisesRegex(RuntimeError, 'ROLE_ORDER'):
+            m.probe.run('download', '/another', {})
+
+    def test_late_failed_factory_modes_and_soft_deadline_keep_issued_owner(self):
+        for kind in ('late', 'factory', 'mode', 'soft'):
+            m, primary = Memory(), RuntimeError('private-primary')
+            def throwing(*args):
+                raise primary
+            if kind == 'late':
+                m.on_popen = lambda child: m.clock.__setitem__(0, 71)
+            elif kind == 'factory':
+                m.on_popen = throwing
+            elif kind == 'mode':
+                m.on_mode = throwing
+            else:
+                m.on_poll = lambda: m.clock.__setitem__(0, 21)
+            with self.assertRaises(RuntimeError) as caught:
+                m.probe.run('download', '/private', {})
+            m.probe.fail(caught.exception)
+            m.probe.fail(None)
+            self.assertIs(m.probe.first, caught.exception)
+            self.assertEqual(m.probe.secondary, [None])
+            self.assertEqual(len([event for event in m.events if event[0] == 'popen']), 1)
+            if kind == 'late':
+                self.assertTrue(m.probe.children[0]['returned'])
+                self.assertEqual(len(m.probe.children[0]['pipes']), 2)
+                self.assertIn(m.probe.children[0]['object'], m.probe.returned)
+                self.assertFalse(any(event[0] == 'mode' for event in m.events))
+            self.assertEqual(m.probe.unknown(), kind != 'soft')
+            with self.assertRaises(RuntimeError):
+                m.probe.run('verification', '/private', {})
+
+    def test_bounded_status_stream_and_preflight_close_uncertainty_do_not_fallback(self):
+        m = Memory()
+        original = m.popen
+        def factory(*args, **kwargs):
+            child = original(*args, **kwargs)
+            m.queues[11] = [b'x' * 4096] * 17
+            return child
+        m.subprocess.Popen = factory
+        with self.assertRaisesRegex(RuntimeError, 'STREAM_BOUND'):
+            m.probe.run('download', '/private', {})
+        self.assertEqual(len(m.probe.children[0]['stderr']), 65536)
+        self.assertEqual(m.probe.returned[-1], b'x' * 4096)
+        self.assertTrue(m.probe.unknown())
+        m = Memory()
+        m.add('/usr/share/keyrings/ubuntu-archive-keyring.gpg', b'only-read-guard-test-not-a-real-key', 0, 0o644)
+        error = OSError('private-close')
+        def close_failure():
+            raise error
+        m.on_close = close_failure
+        with self.assertRaises(OSError) as caught:
+            m.probe.preflight('/usr/share/keyrings/ubuntu-archive-keyring.gpg', False)
+        self.assertIs(caught.exception, error)
+        self.assertTrue(m.probe.unknown())
+        self.assertEqual(m.probe.children, [])
+
+    def test_actual_missing_prerequisite_branch_is_finite_and_nonpassing(self):
+        m = Memory()
+        m.add('/tmp/managed/output', b'')
+        values = {'verifier': 'unavailable', 'anchor': 'unavailable', 'signature': 'not-verified',
+                  'metadata': 'not-verified', 'signer': 'unavailable', 'inrelease_sha256': 'unavailable', 'expiry': 'unavailable'}
+        with self.assertRaisesRegex(RuntimeError, 'PREREQUISITE_UNAVAILABLE'):
+            m.ns['missing'](m.probe, {'curl': None}, values, 1000)
+        self.assertIn(b'signature=not-verified\n', m.files['/tmp/managed/output']['raw'])
+        self.assertEqual(m.probe.children, [])
+        self.assertFalse(m.probe.unknown())
+        with self.assertRaisesRegex(RuntimeError, 'PUBLIC_ENUMS'):
+            m.probe.publish('/tmp/managed/output', '/tmp/managed', 1000, {**values, 'signer': 'private-untrusted'})
+
+    def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
+        m = Memory()
+        class Private:
+            def __str__(self):
+                raise AssertionError('no coercion')
+        for value in ('private-secret', Private(), None, 1):
+            self.assertEqual(m.ns['safe_stage'](value), 'unavailable')
+        for value in ('binding', 'preflight', 'download', 'verification', 'readback', 'output'):
+            self.assertEqual(m.ns['safe_stage'](value), value)
+        self.assertEqual(m.selected, SELECTED)
+        self.assertEqual(hashlib.sha256(RAW).hexdigest(), SOURCE_SHA256)
+        selected = [node for node in TREE.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in SELECTED]
+        self.assertFalse(any(isinstance(child, (ast.Import, ast.ImportFrom)) for node in selected for child in ast.walk(node)))
+        self.assertNotIn('main', SELECTED)
+        calls = {(node.func.value.id, node.func.attr) for node in ast.walk(TREE) if isinstance(node, ast.Call) and
+                 isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)}
+        self.assertFalse(calls & {('os', 'kill'), ('os', 'unlink'), ('os', 'remove'), ('subprocess', 'run')})
+
+
+if __name__ == '__main__':
+    unittest.main()
