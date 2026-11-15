@@ -11,8 +11,7 @@ import { createOwnedWebFiles } from './lib/owned-web-files.mjs';
 import { localSourceProvider } from './lib/committed-source-provider.mjs';
 import { observeSourceBridge } from './lib/committed-source-bridge.mjs';
 import { produceGatewayArchive } from './lib/gateway-archive-producer.mjs';
-import { parseGatewayArchiveBuildRecord } from './lib/gateway-build-record.mjs';
-import { openGatewayArchiveBytes } from './lib/inner-archive-inspection.mjs';
+import { verifyGatewayArchiveReadback } from './lib/gateway-archive-readback.mjs';
 import { startInstrumentedChildOutput } from './lib/instrumented-gateway-output.mjs';
 import {
     CURRENT_GATEWAY_BUILD_LEAF,
@@ -210,34 +209,50 @@ export async function buildGatewayArchiveFromCurrentJob() {
     );
     assert.equal(result.owner.failed, false);
     assert.equal(result.owner.sealed, true);
+    const producedRecordBytes = Buffer.from(JSON.stringify(result.record) + '\n');
     const directory = root + '/validation/' + CURRENT_GATEWAY_BUILD_LEAF + '/artifacts';
     const recordBytes = await read(
         directory + '/gateway-build.json',
         16 * 1024 ** 2,
         execution.filesystem,
     );
-    const record = parseGatewayArchiveBuildRecord(recordBytes, expected);
+    const archiveName = `Diagnostic-Hub-Gateway-${expected.version}.tar.gz`;
     const archive = await read(
-        directory + '/' + record.archive.name,
+        directory + '/' + archiveName,
         128 * 1024 ** 2,
         execution.filesystem,
     );
-    const checksum = await read(directory + '/' + record.checksum.name, 1024, execution.filesystem);
-    assert.equal(archive.length, record.archive.bytes);
-    assert.equal(digest(archive), record.archive.sha256);
-    assert.ok(
-        checksum.equals(Buffer.from(record.archive.sha256 + '  ' + record.archive.name + '\n')),
+    const checksum = await read(
+        directory + '/' + archiveName + '.sha256',
+        1024,
+        execution.filesystem,
     );
-    const contents = openGatewayArchiveBytes(archive, record);
-    try {
-        for (const row of record.payload) {
-            const bytes = contents.read(row.path);
-            assert.equal(bytes.length, row.bytes);
-            assert.equal(digest(bytes), row.sha256);
-        }
-    } finally {
-        contents.releaseBytes();
-    }
+    const record = verifyGatewayArchiveReadback(
+        {
+            recordBytes,
+            archiveBytes: archive,
+            checksumBytes: checksum,
+            sourcePackageBytes: (await provider.file('package.json')).bytes,
+            sourceLockBytes: (await provider.file('package-lock.json')).bytes,
+            compiledBytes: await read(
+                root + '/validation/' + CURRENT_GATEWAY_BUILD_LEAF + '/build/main.cjs',
+                64 * 1024 ** 2,
+                execution.filesystem,
+            ),
+        },
+        {
+            context: expected,
+            buildRecord: {
+                name: 'gateway-build.json',
+                bytes: producedRecordBytes.length,
+                sha256: digest(producedRecordBytes),
+            },
+            artifacts: [
+                { name: archiveName, bytes: archive.length, sha256: digest(archive) },
+                { name: archiveName + '.sha256', bytes: checksum.length, sha256: digest(checksum) },
+            ],
+        },
+    );
     execution.assertSettled();
     bootstrap.owner.assertSettled();
     return { record, owner: result.owner };

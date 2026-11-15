@@ -6,7 +6,7 @@ const start = source.indexOf('function main() {'),
     end = source.indexOf('\ntry {\n    main();', start);
 assert.ok(start >= 0 && end > start);
 const body = source.slice(start, end);
-function fixture() {
+function fixture({ port, expectedPort = 8787 }: { port?: string; expectedPort?: number } = {}) {
     let resolve!: () => void, reject!: (error: Error) => void;
     const promise = new Promise<void>((yes, no) => {
         resolve = yes;
@@ -17,7 +17,9 @@ function fixture() {
     const callbacks = new Map<string, () => void>(),
         errors: unknown[][] = [],
         logs: unknown[][] = [];
-    let closes = 0;
+    let closes = 0,
+        constructions = 0,
+        listens = 0;
     const owner: {
         env: Record<string, string>;
         exitCode?: number;
@@ -27,6 +29,7 @@ function fixture() {
             HUB_GATEWAY_TOKEN: 'synthetic-placeholder-not-a-credential',
             HUB_TARGETS_JSON: '[]',
             HUB_ALLOWED_ORIGINS: 'https://synthetic.invalid',
+            ...(port === undefined ? {} : { HUB_GATEWAY_PORT: port }),
         },
         on(name, fn) {
             assert.ok(['SIGINT', 'SIGTERM'].includes(name));
@@ -37,7 +40,8 @@ function fixture() {
     const gateway = {
         server: {
             listen(port: number, host: string, ready: () => void) {
-                assert.equal(port, 8787);
+                listens++;
+                assert.equal(port, expectedPort);
                 assert.equal(host, '127.0.0.1');
                 ready();
             },
@@ -55,6 +59,7 @@ function fixture() {
     };
     new Function('createGateway', 'process', 'console', body + ';main();')(
         (config: { token: string }) => {
+            constructions++;
             assert.equal(config.token, owner.env.HUB_GATEWAY_TOKEN);
             return gateway;
         },
@@ -77,10 +82,62 @@ function fixture() {
         get closes() {
             return closes;
         },
+        get constructions() {
+            return constructions;
+        },
+        get listens() {
+            return listens;
+        },
     };
 }
 async function turns() {
     for (let n = 0; n < 16; n++) await Promise.resolve();
+}
+for (const port of ['0', '-1', '65536', '8787.5', 'invalid', 'Infinity']) {
+    test(`invalid port ${port} fails before Gateway construction`, () => {
+        let constructions = 0;
+        assert.throws(
+            () =>
+                new Function('createGateway', 'process', body + ';main();')(
+                    () => {
+                        constructions++;
+                        throw new Error('Gateway construction must not occur.');
+                    },
+                    { env: { HUB_TARGETS_JSON: '[]', HUB_GATEWAY_PORT: port } },
+                ),
+            { name: 'Error', message: 'Invalid HUB_GATEWAY_PORT.' },
+        );
+        assert.equal(constructions, 0);
+    });
+}
+for (const [port, expectedPort] of [
+    [undefined, 8787],
+    ['', 8787],
+    ['8787', 8787],
+    ['1', 1],
+    ['65535', 65535],
+    ['12345', 12345],
+] as const) {
+    test(`port ${port === undefined ? 'unset' : JSON.stringify(port)} preserves startup and normal close`, async () => {
+        const f = fixture({ port, expectedPort });
+        try {
+            assert.equal(f.constructions, 1);
+            assert.equal(f.listens, 1);
+            assert.equal(f.logs.length, 1);
+            f.fire('SIGTERM');
+            await turns();
+            assert.equal(f.closes, 1);
+            f.resolve();
+            await f.promise;
+            await turns();
+            assert.equal(f.closes, 1);
+            assert.equal(f.errors.length, 0);
+            assert.equal(f.owner.exitCode, undefined);
+        } finally {
+            f.resolve();
+            await f.promise.catch(() => {});
+        }
+    });
 }
 test('signal cleanup failure is reported with its original object and a failing exit outcome', async () => {
     for (const signal of ['SIGINT', 'SIGTERM']) {
