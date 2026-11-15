@@ -1,0 +1,77 @@
+name: Ubuntu native prerequisites metadata only
+
+on:
+    push:
+        branches: [ci/v060-ubuntu-native-metadata-20261115]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ubuntu-native-metadata-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    host_metadata:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-ubuntu-native-metadata-20261115' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind exact committed metadata source
+              id: binding
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  /usr/bin/git show "$GITHUB_SHA:scripts/linux-ubuntu-native-metadata.py" | /usr/bin/cmp --silent - scripts/linux-ubuntu-native-metadata.py
+            - name: Inspect fixed current-job prerequisites without invoking them
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  /usr/bin/python3 -B -I scripts/linux-ubuntu-native-metadata.py
+            - name: >-
+                  Binding=${{ steps.binding.outcome }} probe=${{ steps.probe.outcome }} result=${{
+                  steps.probe.outputs.result || 'not-reported' }} stage=${{ steps.binding.outcome ==
+                  'failure' && 'binding' || steps.probe.outputs.stage || 'not-reported' }}
+                  reason=${{ steps.probe.outputs.reason || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  Identity=${{ steps.probe.outputs.identity || 'not-reported' }} filesystem=${{
+                  steps.probe.outputs.filesystem || 'not-reported' }} slots=${{
+                  steps.probe.outputs.slots || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  Xvfb=${{ steps.probe.outputs.xvfb || 'not-reported' }} xauth=${{
+                  steps.probe.outputs.xauth || 'not-reported' }} xdpyinfo=${{
+                  steps.probe.outputs.xdpyinfo || 'not-reported' }} python=${{
+                  steps.probe.outputs.python || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  Ptmx=${{ steps.probe.outputs.ptmx || 'not-reported' }} devpts=${{
+                  steps.probe.outputs.devpts || 'not-reported' }} tty=${{ steps.probe.outputs.tty ||
+                  'not-reported' }} display=${{ steps.probe.outputs.display || 'not-reported' }}
+                  auth=${{ steps.probe.outputs.auth || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  Pidfd=${{ steps.probe.outputs.pidfd || 'not-reported' }} sigchld=${{
+                  steps.probe.outputs.sigchld || 'not-reported' }} Metadata only no display
+                  connection PTY allocation tool invocation or lifecycle
+              if: ${{ always() }}
+              run: ':'
