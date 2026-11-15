@@ -13,7 +13,7 @@ import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = '5cedef6aacf503aa1d66c5d59779140d591cb3bf9da3e1b2eaecc73a9653bf87'
+SOURCE_SHA256 = '1ee64e63d112e11849de8a82c6d41fe83cec8e37db68960bbf16c51740cc1c3e'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
 SELECTED = {'need', 'safe_stage', 'safe_index_failure', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
@@ -694,7 +694,7 @@ class SignedMetadataMemory(unittest.TestCase):
             with self.assertRaises((RuntimeError, ValueError)):
                 parse(raw)
 
-    def test_index_hash_size_and_complete_single_xz_stream_bounds(self):
+    def test_index_hash_size_and_complete_xz_file_bounds(self):
         ns = Memory().ns
         text = package_fixture()
         raw = lzma.compress(text)
@@ -706,9 +706,10 @@ class SignedMetadataMemory(unittest.TestCase):
                 ns['authenticate_index'](altered, entry)
         with self.assertRaisesRegex(RuntimeError, 'INDEX_HASH'):
             ns['authenticate_index'](raw[:-1] + bytes([raw[-1] ^ 1]), entry)
-        for altered in (b'not-xz', raw[:-1], raw + b'trailing', raw + raw):
+        for altered in (b'not-xz', raw[:-1], raw + b'trailing'):
             with self.assertRaises((RuntimeError, lzma.LZMAError)):
                 ns['decompress_index'](altered, lambda: None)
+        self.assertEqual(ns['decompress_index'](raw + raw, lambda: None), text + text)
         with self.assertRaisesRegex(RuntimeError, 'TEXT_BOUND'):
             ns['decompress_index'](lzma.compress(b'x' * 4096), lambda: None, output_limit=128)
         with self.assertRaises(lzma.LZMAError):
@@ -946,9 +947,11 @@ class SignedMetadataMemory(unittest.TestCase):
             ns['decompress_index'](b'x' * (ns['INDEX_COMPRESSED_LIMIT'] + 1), lambda: None)
         with self.assertRaisesRegex(RuntimeError, 'TEXT_BOUND'):
             ns['decompress_index'](lzma.compress(expanded), lambda: None, output_limit=65536)
-        for invalid in (compressed[:-1], compressed + b'\0\0\0\0', compressed + compressed):
+        for invalid in (compressed[:-1], compressed + b'\0\0\0', compressed + b'not-an-xz-stream'):
             with self.assertRaises((RuntimeError, lzma.LZMAError)):
                 ns['decompress_index'](invalid, lambda: None)
+        self.assertEqual(ns['decompress_index'](compressed + b'\0' * 4, lambda: None), incompressible)
+        self.assertEqual(ns['decompress_index'](compressed + compressed, lambda: None), incompressible * 2)
         with self.assertRaises(lzma.LZMAError):
             ns['decompress_index'](lzma.compress(b'owned', format=lzma.FORMAT_ALONE), lambda: None)
         with self.assertRaises(lzma.LZMAError):
@@ -1080,6 +1083,104 @@ class SignedMetadataMemory(unittest.TestCase):
                                  ('failure_stage=index-validation\nfailure_code=' + code + '\n').encode())
                 self.assertNotIn('private-readback-path', ''.join(m.printed))
             self.assertEqual(m.probe.unknown(), held)
+
+    def test_complete_xz_streams_padding_chunk_edges_and_split_utf8(self):
+        ns = Memory().ns
+        first_text, second_text = b'owned-first', b'owned-second'
+        first, second, empty = lzma.compress(first_text), lzma.compress(second_text), lzma.compress(b'')
+        # XZ format sections 2/2.2: padding is null bytes in multiples of four.
+        # Include a stream header straddling the old decoder's 64KiB input edge.
+        pads = (0, 4, 8, 65536, 65536 - len(first), 65536 - len(first) - 4)
+        for size in pads:
+            self.assertEqual(size % 4, 0)
+            self.assertEqual(ns['decompress_index'](first + b'\0' * size, lambda: None), first_text)
+            self.assertEqual(ns['decompress_index'](first + b'\0' * size + second + b'\0' * 8, lambda: None),
+                             first_text + second_text)
+        self.assertEqual(ns['decompress_index'](empty + first + empty, lambda: None), first_text)
+        with self.assertRaisesRegex(RuntimeError, 'INDEX_EMPTY'):
+            ns['decompress_index'](empty + b'\0' * 4 + empty, lambda: None)
+        raw = package_fixture()
+        cut = raw.index('é'.encode()) + 1
+        encoded = lzma.compress(raw[:cut]) + b'\0' * 4 + lzma.compress(raw[cut:])
+        decoded = ns['decompress_index'](encoded, lambda: None)
+        self.assertEqual(decoded, raw)
+        self.assertEqual(ns['package_record'](decoded, lambda: None), ns['package_record'](raw, lambda: None))
+
+    def test_complete_xz_rejects_bad_tails_and_shares_output_memory_deadline_limits(self):
+        m = Memory()
+        ns = m.ns
+        first, second = lzma.compress(b'A' * 40), lzma.compress(b'B' * 40)
+        bad = [first + b'\0' * n for n in (1, 2, 3, 5, 7)]
+        bad += [first + b'junk', first + b'\0' * 4 + b'junk', first + b'\0' * 4 + second[:-1],
+                first + lzma.compress(b'old-format', format=lzma.FORMAT_ALONE), b'\0' * 4 + first]
+        damaged = bytearray(second)
+        damaged[-12] ^= 1  # Second stream footer CRC must be checked too.
+        bad.append(first + bytes(damaged))
+        for raw in bad:
+            with self.assertRaises((RuntimeError, lzma.LZMAError)):
+                ns['decompress_index'](raw, lambda: None)
+        with self.assertRaisesRegex(RuntimeError, 'TEXT_BOUND'):
+            ns['decompress_index'](first + second, lambda: None, output_limit=64)
+        small_dictionary = lzma.compress(b'first', filters=[{'id': lzma.FILTER_LZMA2, 'dict_size': 65536}])
+        self.assertEqual(ns['decompress_index'](small_dictionary, lambda: None, memory_limit=1024 ** 2), b'first')
+        with self.assertRaises(lzma.LZMAError):
+            ns['decompress_index'](small_dictionary + second, lambda: None, memory_limit=1024 ** 2)
+        created = []
+        def late_second(*args, **kwargs):
+            decoder = lzma.LZMADecompressor(*args, **kwargs)
+            created.append(decoder)
+            if len(created) == 2:
+                m.clock[0] = 71
+            return decoder
+        ns['lzma'] = types.SimpleNamespace(LZMADecompressor=late_second, FORMAT_XZ=lzma.FORMAT_XZ, LZMAError=lzma.LZMAError)
+        with self.assertRaisesRegex(RuntimeError, 'DEADLINE'):
+            ns['decompress_index'](first + second, m.probe.gate)
+        self.assertEqual(len(created), 2)
+        # Padding scanning must gate as well, without skipping an arbitrarily long tail.
+        calls = [0]
+        def padding_deadline():
+            calls[0] += 1
+            if calls[0] == 5:
+                raise RuntimeError('SIGNED_DEADLINE')
+        with self.assertRaisesRegex(RuntimeError, 'DEADLINE'):
+            Memory().ns['decompress_index'](first + b'\0' * 131072, padding_deadline)
+
+    def test_actual_index_pipeline_accepts_complete_files_but_refuses_ambiguity_and_bad_padding(self):
+        fixture = package_fixture()
+        split = fixture.index('é'.encode()) + 1
+        for case in ('padded', 'concatenated', 'padded-concatenated', 'duplicate-target', 'invalid-padding'):
+            m = Memory()
+            m.verification_environment(index=True, reporting=True)
+            if case == 'padded':
+                encoded = lzma.compress(fixture) + b'\0' * 8
+            elif case == 'concatenated':
+                encoded = lzma.compress(fixture[:split]) + lzma.compress(fixture[split:])
+            elif case == 'padded-concatenated':
+                encoded = lzma.compress(fixture[:split]) + b'\0' * 4 + lzma.compress(fixture[split:]) + b'\0' * 4
+            elif case == 'duplicate-target':
+                encoded = lzma.compress(fixture) + lzma.compress(fixture)
+            else:
+                encoded = lzma.compress(fixture) + b'\0' * 3
+            m.index_bytes = m.index_download_bytes = encoded  # Same authored fake signature/index ports as the prior controls.
+            if case in ('duplicate-target', 'invalid-padding'):
+                with self.assertRaises(SystemExit) as caught:
+                    m.ns['entry']()
+                self.assertEqual(caught.exception.code, 1)
+                code = b'record-target-count' if case == 'duplicate-target' else b'xz-trailing-data'
+                self.assertEqual(m.files[m.os.environ['GITHUB_OUTPUT']]['raw'],
+                                 b'failure_stage=index-validation\nfailure_code=' + code + b'\n')
+                self.assertNotIn(b'package_sha256=', m.files[m.os.environ['GITHUB_OUTPUT']]['raw'])
+                self.assertTrue(m.probe.frozen)
+            else:
+                m.ns['entry']()
+                values = json.loads(m.printed[-1])
+                self.assertEqual(values['index_sha256'], hashlib.sha256(encoded).hexdigest())
+                self.assertEqual(values['index_size'], str(len(encoded)))
+                self.assertEqual(values['package_sha256'], '1' * 64)
+                self.assertIsNone(m.probe.diagnostic)
+                self.assertFalse(m.probe.frozen)
+            self.assertEqual(len(m.probe.children), 3)
+            self.assertFalse(m.probe.unknown())
 
     def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
         m = Memory()

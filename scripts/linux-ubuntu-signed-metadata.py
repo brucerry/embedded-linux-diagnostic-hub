@@ -314,22 +314,39 @@ def decompress_index(raw, gate, output_limit=INDEX_TEXT_LIMIT, memory_limit=INDE
     need(type(raw) is bytes and 0 < len(raw) <= INDEX_COMPRESSED_LIMIT and
          type(output_limit) is int and 0 < output_limit <= INDEX_TEXT_LIMIT and
          type(memory_limit) is int and 0 < memory_limit <= INDEX_DECODER_MEMORY, 'SIGNED_INDEX_DECODE_BOUND')
-    decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=memory_limit)
     parts, total, offset = [], 0, 0
-    while not decoder.eof:
+    # Standalone .xz files may contain concatenated Streams and four-byte
+    # null padding (XZ format sections 2/2.2). Validate the complete file.
+    while offset < len(raw):
         gate()
-        if decoder.needs_input:
-            need(offset < len(raw), 'SIGNED_INDEX_TRUNCATED')
-            chunk = raw[offset:offset + 65536]
-            offset += len(chunk)
-        else:
-            chunk = b''
-        part = decoder.decompress(chunk, max_length=min(65536, output_limit - total + 1))
-        total += len(part)
-        need(total <= output_limit, 'SIGNED_INDEX_TEXT_BOUND')
-        parts.append(part)
-        gate()
-    need(not decoder.unused_data and offset == len(raw), 'SIGNED_INDEX_TRAILING_DATA')
+        start = offset
+        decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=memory_limit)
+        while not decoder.eof:
+            gate()
+            if decoder.needs_input:
+                need(offset < len(raw), 'SIGNED_INDEX_TRUNCATED')
+                chunk = raw[offset:offset + 65536]
+                offset += len(chunk)
+            else:
+                chunk = b''
+            part = decoder.decompress(chunk, max_length=min(65536, output_limit - total + 1))
+            total += len(part)
+            need(total <= output_limit, 'SIGNED_INDEX_TEXT_BOUND')
+            parts.append(part)
+            gate()
+        offset -= len(decoder.unused_data)
+        need(start < offset <= len(raw), 'SIGNED_INDEX_TRAILING_DATA')
+        decoder = None  # Retire this completed codec before creating another.
+        padding = offset
+        while offset < len(raw) and raw[offset] == 0:
+            gate()
+            block = raw[offset:offset + 65536]
+            offset += len(block) - len(block.lstrip(b'\0'))
+            gate()
+        need((offset - padding) % 4 == 0, 'SIGNED_INDEX_TRAILING_DATA')
+        if offset < len(raw):
+            need(raw[offset:offset + 6] == b'\xfd7zXZ\0', 'SIGNED_INDEX_TRAILING_DATA')
+    need(offset == len(raw), 'SIGNED_INDEX_TRAILING_DATA')
     need(total > 0, 'SIGNED_INDEX_EMPTY')
     return b''.join(parts)
 
