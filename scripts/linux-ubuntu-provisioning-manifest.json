@@ -1,0 +1,472 @@
+{
+    "purpose": "Static already-authenticated input, not installation/runtime evidence. No package bytes or scripts included.",
+    "x11UtilsPackage": {
+        "name": "x11-utils",
+        "version": "7.7+6build2",
+        "architecture": "amd64",
+        "bytes": 188800,
+        "sha256": "ffcc681f98ad4bd1857456f09c5464b5bdcb95a1162582899b2d93abaf361c74"
+    },
+    "dependencyPackages": [
+        {
+            "package": "libxcb-shape0",
+            "version": "1.15-1ubuntu2",
+            "architecture": "amd64",
+            "bytes": 6100,
+            "sha256": "ad57fed687ec9c2a4808b8e30ab1753d57daeddc9ad7fb883bfa0701f6da57c8",
+            "filename": "pool/main/libx/libxcb/libxcb-shape0_1.15-1ubuntu2_amd64.deb"
+        },
+        {
+            "package": "libxv1",
+            "version": "2:1.0.11-1.1build1",
+            "architecture": "amd64",
+            "bytes": 10672,
+            "sha256": "ddf5c60268d58fe0c57e80f241d6fa5e73ae2096a137c4d2de42f97cb379ece6",
+            "filename": "pool/main/libx/libxv/libxv1_1.0.11-1.1build1_amd64.deb"
+        },
+        {
+            "package": "libxxf86dga1",
+            "version": "2:1.1.5-1build1",
+            "architecture": "amd64",
+            "bytes": 11626,
+            "sha256": "bc029b3f329fa95ee46f8b8b826d703971ab74c1c688f8bc74d222db257f9f20",
+            "filename": "pool/main/libx/libxxf86dga/libxxf86dga1_1.1.5-1build1_amd64.deb"
+        }
+    ],
+    "observedPackages": [
+        "libc6",
+        "libfontconfig1",
+        "libgl1",
+        "libx11-6",
+        "libx11-xcb1",
+        "libxaw7",
+        "libxcb-shape0",
+        "libxcb1",
+        "libxcomposite1",
+        "libxext6",
+        "libxft2",
+        "libxi6",
+        "libxinerama1",
+        "libxkbfile1",
+        "libxmu6",
+        "libxmuu1",
+        "libxrandr2",
+        "libxrender1",
+        "libxt6t64",
+        "libxtst6",
+        "libxv1",
+        "libxxf86dga1",
+        "libxxf86vm1",
+        "x11-utils",
+        "libc-bin",
+        "man-db",
+        "dpkg"
+    ],
+    "files": [
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Editres",
+            "bytes": 9870,
+            "sha256": "91bd4020ebe1a2bf8d14bf9be23d53457dded01d82138663720ea70a2fa4ce04",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Editres-color",
+            "bytes": 2751,
+            "sha256": "56f7cd1e0f7b8c9ae970bae85221d5e1d2f0d591cb028af7fafa7e87b90f75df",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Viewres",
+            "bytes": 3184,
+            "sha256": "ecf3b051492615fe39760b49f0b171f7f2d180eabb6223e93c5ae86b5a3e598c",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Viewres-color",
+            "bytes": 973,
+            "sha256": "09a741d36d688dd955372f97e8d8cd0b715e777c741bfc05323716c93b39b984",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/XFontSel",
+            "bytes": 4928,
+            "sha256": "518b1a1d95b0c9a4d2507846bc3390c34ee0df1b13401bc6ee9ead94f4d4e726",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Xfd",
+            "bytes": 754,
+            "sha256": "545c65ddf067f0c5a6dadf1aa7668793ee6723b9f72af5dcec184f92cdb6550d",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Xmessage",
+            "bytes": 248,
+            "sha256": "ada42bb1ad31d89d4201c134d0600a8f5270c32cc62e0e96de423a8ac61c2406",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "etc/X11/app-defaults/Xmessage-color",
+            "bytes": 920,
+            "sha256": "d6ed5dca2b6f8608cc205bdf0f4b2584b6645a0099f09320265f013e992d652e",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/appres",
+            "bytes": 14648,
+            "sha256": "ea594cb6c0122fc717e189c1a9c40fccefcfdc96c739413e0fe6731cac50d298",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/editres",
+            "bytes": 74432,
+            "sha256": "b1a9d2e6fffb4486293caddfb8cfa9b62c642fc94b9f7ac509692aea58edcdac",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/listres",
+            "bytes": 15080,
+            "sha256": "89c7c69338b7ebc12487dcb0145424081badf79249cb16febfa5aa42d6f71dcb",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/viewres",
+            "bytes": 31976,
+            "sha256": "268533ec41b0d9756e928fd6e82d0a43ce814c2c9c3c28c4dde2f7273ad5394e",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xdpyinfo",
+            "bytes": 39992,
+            "sha256": "0d6934a0a06afe4dce863fc5f5990c4455ba8cfcb7f84359ce1c34777884a3b1",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xdriinfo",
+            "bytes": 14648,
+            "sha256": "21242deb3a03be65b6a5e2ea1ea894cb6a867414afe1932bea77592294e57e95",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xev",
+            "bytes": 35456,
+            "sha256": "f83919911e5b4fbd6f4046af76f60cbebe6785c33e1ca2c98e0da7d8cd6c996b",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xfd",
+            "bytes": 40968,
+            "sha256": "1a7f95ec14ef9a553768ad7fd6d605b6f190e45d3f002e6f4c5348cc8bb528a0",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xfontsel",
+            "bytes": 44904,
+            "sha256": "21d502438aedef1c121bf77c365898be770373e3368825e64d781e4743d3be8b",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xkill",
+            "bytes": 14648,
+            "sha256": "75fa0b264224768d005ba126df24c6421566d148d46d90aed9ca011d1b9d25a8",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xlsatoms",
+            "bytes": 14648,
+            "sha256": "d0f5f09c7d4c49caa7b065cf3c81086c99a768387a80cf2f8b937eb916c123a5",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xlsclients",
+            "bytes": 18752,
+            "sha256": "3d7e24d35d6092bb55cd4ca9790d0c2d414029381457674d234d37507670b236",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xlsfonts",
+            "bytes": 27032,
+            "sha256": "19f247c983f90c4b42f415219e29566753b00bb1c62631103f609579a93765d8",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xmessage",
+            "bytes": 23744,
+            "sha256": "ca83b8076654a9022a76a598bdbb23d30f6a02963b62cddf051aefe5d4a11bc4",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xprop",
+            "bytes": 49776,
+            "sha256": "f48d1acc43444538a8a43ec3b76babf3371ac3220cc4a373a702faf2ceeee260",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xvinfo",
+            "bytes": 18744,
+            "sha256": "cd89987322d97e3dde8f040e9b92c7a3f9f92a969048a8557ef5d49fb1f06e62",
+            "mode": "0o755"
+        },
+        {
+            "kind": "file",
+            "path": "usr/bin/xwininfo",
+            "bytes": 51592,
+            "sha256": "4b3a8b4c4f95942d579f667f52d192372303312265346fbde604b51b673404d2",
+            "mode": "0o755"
+        },
+        {
+            "kind": "symlink",
+            "path": "usr/lib/x86_64-linux-gnu/libXv.so.1",
+            "bytes": 0,
+            "mode": "0o777",
+            "linkTarget": "libXv.so.1.0.0"
+        },
+        {
+            "kind": "file",
+            "path": "usr/lib/x86_64-linux-gnu/libXv.so.1.0.0",
+            "bytes": 22984,
+            "mode": "0o644",
+            "sha256": "0f5136caf15ccd0eea5faf5ec429bf1d406b8a2bdbd283965110511825485f02"
+        },
+        {
+            "kind": "symlink",
+            "path": "usr/lib/x86_64-linux-gnu/libXxf86dga.so.1",
+            "bytes": 0,
+            "mode": "0o777",
+            "linkTarget": "libXxf86dga.so.1.0.0"
+        },
+        {
+            "kind": "file",
+            "path": "usr/lib/x86_64-linux-gnu/libXxf86dga.so.1.0.0",
+            "bytes": 27104,
+            "mode": "0o644",
+            "sha256": "afa0441608b47d4dc9314ff1532e8affab5ab4405b2998b5078c38493298181a"
+        },
+        {
+            "kind": "symlink",
+            "path": "usr/lib/x86_64-linux-gnu/libxcb-shape.so.0",
+            "bytes": 0,
+            "mode": "0o777",
+            "linkTarget": "libxcb-shape.so.0.0.0"
+        },
+        {
+            "kind": "file",
+            "path": "usr/lib/x86_64-linux-gnu/libxcb-shape.so.0.0.0",
+            "bytes": 14536,
+            "mode": "0o644",
+            "sha256": "370c60dd84cfe5f8517866b573ccbaf2b3fd97bd980f427f3bbb3dbc9288369e"
+        },
+        {
+            "kind": "symlink",
+            "path": "usr/share/doc/libxcb-shape0/changelog.Debian.gz",
+            "bytes": 0,
+            "mode": "0o777",
+            "linkTarget": "../libxcb1/changelog.Debian.gz"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/libxcb-shape0/copyright",
+            "bytes": 1781,
+            "mode": "0o644",
+            "sha256": "4f7cb9db6bf6542f5417e3d674c780d3a5fd12291a54d63054fb576ee0cfae80"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/libxv1/changelog.Debian.gz",
+            "bytes": 790,
+            "mode": "0o644",
+            "sha256": "bdf5e4840b2fd035c4e24532200ff2ba0a98e5af370c4564b11346866c5ce7ec"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/libxv1/copyright",
+            "bytes": 2668,
+            "mode": "0o644",
+            "sha256": "2fe7ac649db26ec17460897402d2d54b25c6bb5dd8be7c2f58a80ae4658385ad"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/libxxf86dga1/changelog.Debian.gz",
+            "bytes": 727,
+            "mode": "0o644",
+            "sha256": "836d1888cd2340155ebabba76548f8b94c1e1ef84934a7e73f2ea1fb7df98f56"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/libxxf86dga1/copyright",
+            "bytes": 1448,
+            "mode": "0o644",
+            "sha256": "e7b0d587d76faa7e1f8827334421457cad9d8616813c35e97a4dd97616bcc95a"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/x11-utils/changelog.gz",
+            "bytes": 1134,
+            "sha256": "9cde4783bb333e720a9029dd1fb355e98320f4c9da1d6d195a6643c6b995637b",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/doc/x11-utils/copyright",
+            "bytes": 28759,
+            "sha256": "24250c1504fb6cc9e46e8ce3be8b4660d0d74efe1b3ae8d770109224b3e2952a",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/appres.1.gz",
+            "bytes": 1363,
+            "sha256": "4cd33ca6141e762c62f50649c819be12d935d00b917bf952f00ac44e24bd8490",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/editres.1.gz",
+            "bytes": 6607,
+            "sha256": "e1500878696171bc123f94edb3b213617bce29144d83e98df8ae5f37a947b6e4",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/listres.1.gz",
+            "bytes": 1731,
+            "sha256": "77633e893d6df4060322d068795f9d024ce974cf53ad29bedc2b4a5a49d18f4f",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/viewres.1.gz",
+            "bytes": 3016,
+            "sha256": "9130570c0e31e88d7d24689adf21960e2231cc88737a7de43d6d589407a94b3c",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xdpyinfo.1.gz",
+            "bytes": 1448,
+            "sha256": "b1914c7b794519d897c85246580d892b98b42352fb50f0584d2283f7019a1c27",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xdriinfo.1.gz",
+            "bytes": 564,
+            "sha256": "8f2c35551d854ec9168cc65c295224a6b6ccfd3dbb1a67f7c8bba4fd073dd9aa",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xev.1.gz",
+            "bytes": 1187,
+            "sha256": "7d46ea3e8a5b22660e141bf7acd646a0433482f0fe2f018f2da1b6081ed706a2",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xfd.1.gz",
+            "bytes": 3284,
+            "sha256": "0e62814ab891b22fc45921ce3b67db87360ae8b1e3de357610b92baa4e00586b",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xfontsel.1.gz",
+            "bytes": 3792,
+            "sha256": "e7616f5bdb385934f4fa5c988cec0ee9dbe83686696ad2924e44be093855f1d3",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xkill.1.gz",
+            "bytes": 1805,
+            "sha256": "7507d7a85cedd62053821da3d9a64b118b14015730860ad3a3bf084dcf2626be",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xlsatoms.1.gz",
+            "bytes": 1395,
+            "sha256": "3907f8578becea156ec43d4a49af7e2581f0c698ab8b88dc159d508f2913f3bb",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xlsclients.1.gz",
+            "bytes": 1250,
+            "sha256": "c4969310468b972d253de7734c002738ec65b2376ab4afc7ec46b12562ea0fed",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xlsfonts.1.gz",
+            "bytes": 1189,
+            "sha256": "7062d1f80c64b67584b83251dfffa81841b4d45aea29dd28a8bd996889892fbb",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xmessage.1.gz",
+            "bytes": 2191,
+            "sha256": "83b4848b7192f18ca5d51bf7a103ccd800128a3c243a2f92abb49331055f78ed",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xprop.1.gz",
+            "bytes": 5738,
+            "sha256": "5d7c075388e62ba1362befc7de24d7f57e14074722095495b6307cc88b64d891",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xvinfo.1.gz",
+            "bytes": 457,
+            "sha256": "c7a754238544831621ffbd11f8866c674d0d7ab27a8e52e3dca65c280580f0a6",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/man/man1/xwininfo.1.gz",
+            "bytes": 2945,
+            "sha256": "bcccacd64bbea96dd4ef50a93e42f544f92e404525913d9fc2fef575dd94103e",
+            "mode": "0o644"
+        },
+        {
+            "kind": "file",
+            "path": "usr/share/menu/x11-utils",
+            "bytes": 731,
+            "sha256": "b4d8d8ad348811593a305bda932471ff6e57e98936533a90325460b00d3ab226",
+            "mode": "0o644"
+        }
+    ],
+    "provenance": {
+        "ubuntuSigner": "F6ECB3762474EDA9D21B7022871920D1991BC93C",
+        "signedIndexSHA256": "2a6a199e1031a5c279cb346646d594993f35b1c03dd4a82aaa0323980dd92451",
+        "originalSignatureProofRun": 43688318316,
+        "originalSignatureProofCommit": "d13fddf0c7f54ea35b09f664184f0c256d0c1574"
+    }
+}

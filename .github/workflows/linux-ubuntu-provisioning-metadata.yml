@@ -1,0 +1,174 @@
+name: Ubuntu provisioning metadata only
+
+on:
+    push:
+        branches: [ci/v060-ubuntu-provisioning-metadata-20261115]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ubuntu-provisioning-metadata-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    host_metadata:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-ubuntu-provisioning-metadata-20261115' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind exact committed metadata reader and authenticated manifest
+              id: binding
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  for file in scripts/linux-ubuntu-provisioning-metadata.py scripts/linux-ubuntu-provisioning-manifest.json scripts/linux-ubuntu-provisioning-assessment.py; do
+                    /usr/bin/git show "$GITHUB_SHA:$file" | /usr/bin/cmp --silent - "$file"
+                  done
+            - name: Read fixed package file hook pending and handler metadata without execution
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  /usr/bin/python3 -B -I scripts/linux-ubuntu-provisioning-metadata.py
+            - name: >-
+                  Summary binding=${{ steps.binding.outcome }} probe=${{ steps.probe.outcome }}
+                  result=${{ steps.probe.outputs.result || 'not-reported' }} stage=${{
+                  steps.probe.outputs.stage || 'not-reported' }} reason=${{
+                  steps.probe.outputs.reason || 'not-reported' }} custody=${{
+                  steps.probe.outputs.custody || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Packages ${{ steps.probe.outputs.packages || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions0 ${{ steps.probe.outputs.versions0 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions1 ${{ steps.probe.outputs.versions1 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions2 ${{ steps.probe.outputs.versions2 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions3 ${{ steps.probe.outputs.versions3 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions4 ${{ steps.probe.outputs.versions4 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions5 ${{ steps.probe.outputs.versions5 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Versions6 ${{ steps.probe.outputs.versions6 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Parents ${{ steps.probe.outputs.parents || 'not-reported' }} map=${{
+                  steps.probe.outputs.parentmap || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Files ${{ steps.probe.outputs.files || 'not-reported' }} map=${{
+                  steps.probe.outputs.filemap || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  DpkgConfig ${{ steps.probe.outputs.configuration || 'not-reported' }} sha256=${{
+                  steps.probe.outputs.confighash || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Pending ${{ steps.probe.outputs.pending || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Diversions ${{ steps.probe.outputs.diversions || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Overrides ${{ steps.probe.outputs.overrides || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Registrations ${{ steps.probe.outputs.registrations || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler libcpostinst ${{ steps.probe.outputs.libcpostinst || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler libctriggers ${{ steps.probe.outputs.libctriggers || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler manpostinst ${{ steps.probe.outputs.manpostinst || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler mantriggers ${{ steps.probe.outputs.mantriggers || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler ldconfig ${{ steps.probe.outputs.ldconfig || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler ldconfigreal ${{ steps.probe.outputs.ldconfigreal || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Handler mandb ${{ steps.probe.outputs.mandb || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  UpdateMenus ${{ steps.probe.outputs.menu || 'not-reported' }} Root-user
+                  configuration unobserved no provisioning or native qualification
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
