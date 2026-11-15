@@ -1,0 +1,77 @@
+name: Five parent policy comparison metadata only
+
+on:
+    push:
+        branches: [ci/v060-linux-parent-comparison-20261115]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: linux-parent-comparison-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    parent_comparison:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-linux-parent-comparison-20261115' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind exact committed parent reader and unchanged classifier
+              id: binding
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  for file in scripts/linux-parent-comparison.py scripts/linux-parent-classifier.py; do
+                    /usr/bin/git show "$GITHUB_SHA:$file" | /usr/bin/cmp --silent - "$file"
+                  done
+            - name: Compare fixed parent attributes without traversing refused directories
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  /usr/bin/python3 -B -I scripts/linux-parent-comparison.py
+            - name: >-
+                  Comparison binding=${{ steps.binding.outcome }} probe=${{ steps.probe.outcome }}
+                  ${{ steps.probe.outputs.summary || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Parent share ${{ steps.probe.outputs.share || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Parent doc ${{ steps.probe.outputs.doc || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Parent man ${{ steps.probe.outputs.man || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Parent man1 ${{ steps.probe.outputs.man1 || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
+            - name: >-
+                  Parent menu ${{ steps.probe.outputs.menu || 'not-reported' }}
+              if: ${{ always() }}
+              shell: bash
+              run: ':'
