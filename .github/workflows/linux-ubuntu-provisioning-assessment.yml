@@ -1,0 +1,122 @@
+name: Ubuntu non-privileged provisioning assessment
+
+on:
+    push:
+        branches: [ci/v060-ubuntu-provisioning-assessment-20261115]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ubuntu-provisioning-assessment-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    host_assessment:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-ubuntu-provisioning-assessment-20261115' && github.run_attempt == 1
+            }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 2
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Bind exact committed assessment and audited metadata
+              id: binding
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test "$(/usr/bin/git rev-parse HEAD)" = "$GITHUB_SHA"
+                  for file in scripts/linux-ubuntu-provisioning-assessment.py scripts/linux-ubuntu-x11-audited-metadata.json; do
+                    /usr/bin/git show "$GITHUB_SHA:$file" | /usr/bin/cmp --silent - "$file"
+                  done
+            - name:
+                  Query selected dependency conflict hook and trigger metadata without installation
+              id: probe
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  /usr/bin/python3 -B -I scripts/linux-ubuntu-provisioning-assessment.py
+            - name: >-
+                  Binding=${{ steps.binding.outcome }} assessment=${{ steps.probe.outcome }}
+                  result=${{ steps.probe.outputs.result || 'not-reported' }} stage=${{
+                  steps.binding.outcome == 'failure' && 'binding' || steps.probe.outputs.stage ||
+                  'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  Dependencies=${{ steps.probe.outputs.dependencies || 'not-reported' }} package=${{
+                  steps.probe.outputs.package || 'not-reported' }} pendingpackages=${{
+                  steps.probe.outputs.pendingpackages || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  DependencyVersions0=${{ steps.probe.outputs.versions0 || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  DependencyVersions1=${{ steps.probe.outputs.versions1 || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  DependencyVersions2=${{ steps.probe.outputs.versions2 || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  DependencyVersions3=${{ steps.probe.outputs.versions3 || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  DependencyVersions4=${{ steps.probe.outputs.versions4 || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  DependencyVersions5=${{ steps.probe.outputs.versions5 || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  ToolVersions apt=${{ steps.probe.outputs.aptversion || 'not-reported' }} dpkg=${{
+                  steps.probe.outputs.dpkgversion || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  FileConflicts=${{ steps.probe.outputs.files || 'not-reported' }} map=${{
+                  steps.probe.outputs.filemap || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  SelectedHookCounts=${{ steps.probe.outputs.hooks || 'not-reported' }}
+                  references=${{ steps.probe.outputs.hookrefs || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  SelectedHookSHA256=${{ steps.probe.outputs.hookhash || 'not-reported' }}
+                  DpkgConfigurationCounts=${{ steps.probe.outputs.dpkgconfig || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  SelectedDpkgConfigurationSHA256=${{ steps.probe.outputs.dpkgconfighash ||
+                  'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  MatchedTriggerInterests=${{ steps.probe.outputs.triggers || 'not-reported' }}
+                  unincorporated=${{ steps.probe.outputs.unincorporated || 'not-reported' }}
+                  updates=${{ steps.probe.outputs.updates || 'not-reported' }}
+              if: ${{ always() }}
+              run: ':'
+            - name: >-
+                  UpdateMenus=${{ steps.probe.outputs.menu || 'not-reported' }} simulation=${{
+                  steps.probe.outputs.simulation || 'not-reported' }} Non-root selected inventory
+                  only no installation or native acceptance
+              if: ${{ always() }}
+              run: ':'
