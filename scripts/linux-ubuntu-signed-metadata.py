@@ -1,8 +1,9 @@
 """One fixed signed Ubuntu Release observation, never provisioning or runtime.
 
-Import is inert. Fixed HTTPS metadata and existing gpgv are the only children.
-The explicit index modes may fetch one signed, bounded package index, never
-package/key bytes, installation, a client or Hub code.
+Import is inert. Every mode uses fixed commands and bounded private data.
+Index modes fetch one signed, bounded package index. The explicit data-only
+mode may also authenticate the one pinned publisher package and inspect its
+xdpyinfo member using existing archive/ELF readers, never install or run it.
 Raw output remains private. Unknown children/descriptors are never killed,
 retried or cleaned up to manufacture completion.
 """
@@ -10,6 +11,7 @@ import datetime
 import email.utils
 import errno
 import hashlib
+import io
 import json
 import lzma
 import os
@@ -19,6 +21,7 @@ import select
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 
 REPOSITORY = 'brucerry/embedded-linux-diagnostic-hub'
@@ -28,11 +31,14 @@ CANDIDATE_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-input-preflight-20261114'
 VERIFICATION_BRANCH = 'refs/heads/ci/v060-ubuntu-archive-metadata-verify-20261114'
 INDEX_BRANCH = 'refs/heads/ci/v060-ubuntu-x11-index-auth-20261114'
 INDEX_REPORT_BRANCH = 'refs/heads/ci/v060-ubuntu-x11-index-report-20261114'
+PACKAGE_DATA_BRANCH = 'refs/heads/ci/v060-ubuntu-x11-package-data-20261115'
 CANDIDATE_PATHS = (('root', '/'), ('etc', '/etc'), ('apt', '/etc/apt'),
                    ('trusted-directory', '/etc/apt/trusted.gpg.d'),
                    ('keyring', '/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg'))
 CURL = '/usr/bin/curl'
 GPGV = '/usr/bin/gpgv'
+DPKG_DEB = '/usr/bin/dpkg-deb'
+READELF = '/usr/bin/x86_64-linux-gnu-readelf'
 KEYRING = '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
 PRIMARY = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
 URL = 'https://snapshot.ubuntu.com/ubuntu/20261113T000000Z/dists/noble/InRelease'
@@ -42,10 +48,27 @@ INDEX_INRELEASE_SHA256 = 'cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa
 INDEX_COMPRESSED_LIMIT = 8 * 1024 ** 2
 INDEX_TEXT_LIMIT = 64 * 1024 ** 2
 INDEX_DECODER_MEMORY = 128 * 1024 ** 2
+PACKAGE_PIN = {'version': '7.7+6build2', 'architecture': 'amd64', 'size': 188800,
+               'sha256': 'ffcc681f98ad4bd1857456f09c5464b5bdcb95a1162582899b2d93abaf361c74',
+               'filename': 'pool/main/x/x11-utils/x11-utils_7.7+6build2_amd64.deb'}
+PACKAGE_URL = 'https://snapshot.ubuntu.com/ubuntu/20261113T000000Z/' + PACKAGE_PIN['filename']
+PACKAGE_TAR_LIMIT = 8 * 1024 ** 2
+MEMBER_LIMIT = 1024 ** 2
+INTERPRETERS = ('/lib64/ld-linux-x86-64.so.2', '/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2')
 SNAPSHOT = datetime.datetime(2026, 11, 13, tzinfo=datetime.timezone.utc).timestamp()
 TRUST_ENV = ('HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy',
              'all_proxy', 'no_proxy', 'CURL_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE')
-PHASES = ('binding', 'preflight', 'download', 'verification', 'index-download', 'index-validation', 'readback', 'output')
+PHASES = ('binding', 'preflight', 'download', 'verification', 'index-download', 'index-validation',
+          'package-download', 'package-validation', 'member-selection', 'member-inspection', 'readback', 'output')
+PACKAGE_FAILURES = {'SIGNED_PACKAGE_PIN': 'package-record-pin', 'SIGNED_PACKAGE_BYTES': 'package-byte-mismatch',
+                    'SIGNED_MEMBER_TAR': 'member-tar-bound-or-trailer', 'SIGNED_MEMBER_PATH': 'member-path',
+                    'SIGNED_MEMBER_COUNT': 'member-missing-or-ambiguous', 'SIGNED_MEMBER_KIND': 'member-not-regular',
+                    'SIGNED_MEMBER_BOUND': 'member-size', 'SIGNED_MEMBER_ELF': 'member-elf-header',
+                    'SIGNED_MEMBER_CHANGED': 'member-readback', 'SIGNED_PACKAGE_CHANGED': 'package-readback',
+                    'SIGNED_ELF_REPORT': 'elf-report', 'SIGNED_ELF_INTERPRETER': 'elf-interpreter',
+                    'SIGNED_ELF_NEEDED': 'elf-needed', 'SIGNED_DPKG_UNAVAILABLE': 'archiver-unavailable',
+                    'SIGNED_READELF_UNAVAILABLE': 'elf-reader-unavailable', 'SIGNED_DEADLINE': 'data-deadline',
+                    'SIGNED_CHILD_NONPASS': 'data-child-nonpass', 'SIGNED_STREAM_BOUND': 'data-stream-bound'}
 INDEX_FAILURES = {
     'xz': {'SIGNED_INDEX_DECODE_BOUND': 'xz-input-bound', 'SIGNED_INDEX_TRUNCATED': 'xz-truncated',
            'SIGNED_INDEX_TEXT_BOUND': 'xz-text-bound', 'SIGNED_INDEX_TRAILING_DATA': 'xz-trailing-data',
@@ -101,6 +124,17 @@ def safe_index_failure(error, step):
         if any(type(error) is kind for kind in (OSError, InterruptedError, BlockingIOError, IsADirectoryError, NotADirectoryError)):
             return 'readback-os-error'
     return step + '-unavailable'
+
+
+def safe_package_failure(error):
+    if type(error) is RuntimeError and len(error.args) == 1 and type(error.args[0]) is str:
+        return PACKAGE_FAILURES.get(error.args[0], 'unavailable')
+    if any(type(error) is kind for kind in (tarfile.ReadError, tarfile.HeaderError, tarfile.InvalidHeaderError,
+                                            tarfile.SubsequentHeaderError, tarfile.CompressionError, tarfile.StreamError)):
+        return 'member-tar-error'
+    if any(type(error) is kind for kind in (OSError, PermissionError, FileNotFoundError, BlockingIOError, InterruptedError)):
+        return 'data-io-error'
+    return 'unavailable'
 
 
 def identity(value):
@@ -173,6 +207,13 @@ def fixed_command(role, directory, keyring=KEYRING, entry=None):
         return (CURL, '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
                 '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', str(entry[1]), INDEX_URL)
     need(entry is None, 'SIGNED_UNEXPECTED_INDEX_ENTRY')
+    if role == 'package':
+        return (CURL, '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
+                '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', str(PACKAGE_PIN['size']), PACKAGE_URL)
+    if role == 'deb-data':
+        return (DPKG_DEB, '--fsys-tarfile', directory + '/x11-utils.deb')
+    if role == 'elf-data':
+        return (READELF, '--wide', '--file-header', '--program-headers', '--dynamic', '--', directory + '/xdpyinfo.data')
     if role == 'download':
         return (CURL, '--disable', '--proto', '=https', '--fail', '--silent', '--show-error',
                 '--max-time', '20', '--connect-timeout', '10', '--retry', '0', '--max-filesize', '1048576', URL)
@@ -182,12 +223,12 @@ def fixed_command(role, directory, keyring=KEYRING, entry=None):
 
 
 def fixed_environment(role, directory, inherited):
-    need(role in ('download', 'verification', 'index'), 'SIGNED_FIXED_ROLE')
+    need(role in ('download', 'verification', 'index', 'package', 'deb-data', 'elf-data'), 'SIGNED_FIXED_ROLE')
     env = {'LC_ALL': 'C', 'LANG': 'C', 'TZ': 'UTC',
            'HOME': directory + '/gnupg', 'GNUPGHOME': directory + '/gnupg'}
     if 'PATH' in inherited:
         env['PATH'] = inherited['PATH']  # Absolute executables; never rewrite the existing search path.
-    if role in ('download', 'index'):
+    if role in ('download', 'index', 'package'):
         env.update({name: inherited[name] for name in TRUST_ENV if name in inherited})
     return env
 
@@ -395,10 +436,81 @@ def package_record(raw, gate):
     return matches[0]
 
 
+def pinned_package(record):
+    need(type(record) is dict and all(type(k) is str for k in record) and set(record) == set(PACKAGE_PIN), 'SIGNED_PACKAGE_PIN')
+    need(all(type(record[k]) is type(v) and record[k] == v for k, v in PACKAGE_PIN.items()), 'SIGNED_PACKAGE_PIN')
+
+
+def authenticate_package(raw):
+    need(type(raw) is bytes and len(raw) == PACKAGE_PIN['size'] and
+         hashlib.sha256(raw).hexdigest() == PACKAGE_PIN['sha256'], 'SIGNED_PACKAGE_BYTES')
+
+
+def member_from_tar(raw, gate):
+    need(type(raw) is bytes and 0 < len(raw) <= PACKAGE_TAR_LIMIT and len(raw) % 512 == 0, 'SIGNED_MEMBER_TAR')
+    found = []
+    with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+        for info in archive:
+            gate()
+            name = info.name
+            need(type(name) is str and '\0' not in name and not name.startswith('/') and '\\' not in name, 'SIGNED_MEMBER_PATH')
+            if name in ('.', './') and info.isdir():
+                continue
+            # Exact raw-name selection below; no filesystem normalization or link resolution.
+            parts = name.split('/')
+            if parts[0] == '.':
+                parts = parts[1:]
+            if info.isdir() and parts and parts[-1] == '':
+                parts = parts[:-1]
+            need(parts and all(p not in ('', '.', '..') for p in parts), 'SIGNED_MEMBER_PATH')
+            need(type(info.size) is int and 0 <= info.size <= PACKAGE_TAR_LIMIT and
+                 0 <= info.offset_data <= len(raw) and info.offset_data + info.size <= len(raw), 'SIGNED_MEMBER_BOUND')
+            if name in ('./usr/bin/xdpyinfo', 'usr/bin/xdpyinfo'):
+                need(info.isreg() and not info.issparse() and not info.linkname, 'SIGNED_MEMBER_KIND')
+                need(0 < info.size <= MEMBER_LIMIT, 'SIGNED_MEMBER_BOUND')
+                with archive.extractfile(info) as member:
+                    value = member.read(MEMBER_LIMIT + 1)
+                need(len(value) == info.size, 'SIGNED_MEMBER_BOUND')
+                found.append(value)
+        gate()
+        need(type(archive.offset) is int and 0 <= archive.offset <= len(raw) - 1024 and
+             not raw[archive.offset:].strip(b'\0'), 'SIGNED_MEMBER_TAR')
+    need(len(found) == 1, 'SIGNED_MEMBER_COUNT')
+    member = found[0]
+    need(len(member) >= 64 and member[:7] == b'\x7fELF\x02\x01\x01' and
+         int.from_bytes(member[16:18], 'little') in (2, 3) and int.from_bytes(member[18:20], 'little') == 62,
+         'SIGNED_MEMBER_ELF')
+    return member
+
+
+def elf_report(raw):
+    need(type(raw) is bytes and 0 < len(raw) <= 1048576, 'SIGNED_ELF_REPORT')
+    text = raw.decode('utf-8')
+    lines = text.splitlines()
+    classes = [line for line in lines if line.lstrip().startswith('Class:')]
+    machines = [line for line in lines if line.lstrip().startswith('Machine:')]
+    need(len(classes) == len(machines) == 1 and re.fullmatch(r'\s*Class:\s*ELF64\s*', classes[0]) and
+         re.fullmatch(r'\s*Machine:\s*Advanced Micro Devices X86-64\s*', machines[0]), 'SIGNED_ELF_REPORT')
+    interpreter = [line for line in lines if 'Requesting program interpreter' in line]
+    need(len(interpreter) == 1, 'SIGNED_ELF_INTERPRETER')
+    match = re.fullmatch(r'\s*\[Requesting program interpreter: ([^\]\r\n]+)\]\s*', interpreter[0])
+    need(match is not None and match[1] in INTERPRETERS, 'SIGNED_ELF_INTERPRETER')
+    needed_lines = [line for line in lines if '(NEEDED)' in line]
+    matches = [re.fullmatch(r'\s*0x[0-9A-Fa-f]+\s+\(NEEDED\)\s+Shared library: \[([^\]\r\n]+)\]\s*', line)
+               for line in needed_lines]
+    need(matches and all(value is not None for value in matches), 'SIGNED_ELF_NEEDED')
+    needed = [value[1] for value in matches]
+    need(0 < len(needed) <= 64 and len(needed) == len(set(needed)) and
+         all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}', n) for n in needed) and
+         len(','.join(needed)) <= 1024, 'SIGNED_ELF_NEEDED')
+    return match[1], ','.join(sorted(needed))
+
+
 class Probe:
-    def __init__(self, started, include_index=False):
-        need(type(include_index) is bool, 'SIGNED_INDEX_MODE')
+    def __init__(self, started, include_index=False, include_package=False):
+        need(type(include_index) is bool and type(include_package) is bool and (not include_package or include_index), 'SIGNED_INDEX_MODE')
         self.include_index = include_index
+        self.include_package = include_package
         self.started, self.until = started, started + 70
         self.fds, self.children, self.returned, self.secondary = [], [], [], []
         self.first_set, self.first, self.frozen = False, None, False
@@ -467,7 +579,8 @@ class Probe:
         return b''.join(parts)
 
     def preflight_metadata(self, file, executable):
-        need(file in (CURL, GPGV, KEYRING, CANDIDATE_PATHS[-1][1]), 'SIGNED_FIXED_INPUT')
+        need(file in (CURL, GPGV, KEYRING, CANDIDATE_PATHS[-1][1]) or
+             self.include_package and file in (DPKG_DEB, READELF), 'SIGNED_FIXED_INPUT')
         try:
             before = self.capture(os.lstat(file))
         except OSError as error:
@@ -516,10 +629,11 @@ class Probe:
 
     def run(self, role, directory, inherited, keyring=KEYRING, entry=None):
         self.gate()
-        roles = ('download', 'verification', 'index') if self.include_index else ('download', 'verification')
+        roles = (('download', 'verification', 'index', 'package', 'deb-data', 'elf-data') if self.include_package else
+                 ('download', 'verification', 'index') if self.include_index else ('download', 'verification'))
         need(len(self.children) < len(roles) and role == roles[len(self.children)], 'SIGNED_ROLE_ORDER')
         argv = fixed_command(role, directory, keyring, entry)
-        stdout_cap = entry[1] if role == 'index' else 1048576
+        stdout_cap = entry[1] if role == 'index' else PACKAGE_PIN['size'] if role == 'package' else PACKAGE_TAR_LIMIT if role == 'deb-data' else 1048576
         child = {'role': role, 'issued': False, 'returned': False, 'object': None, 'exit': None,
                  'pipes': {}, 'stdout': bytearray(), 'stderr': bytearray(), 'soft_expired': False}
         self.children.append(child)
@@ -583,7 +697,8 @@ class Probe:
         base = {'verifier', 'anchor', 'anchor_reason', 'signature', 'metadata', 'signer', 'inrelease_sha256', 'expiry'}
         index_fields = {'index_sha256', 'index_size', 'package_version', 'package_architecture',
                         'package_size', 'package_sha256', 'package_filename'}
-        need(set(values) in (base, base | index_fields) and
+        data_fields = {'package_bytes', 'member_sha256', 'member_size', 'member_format', 'member_interpreter', 'member_needed'}
+        need(set(values) in (base, base | index_fields, base | index_fields | data_fields) and
              values['verifier'] in ('established', 'unavailable') and values['anchor'] in ('established', 'unavailable') and
              values['anchor_reason'] in PREFLIGHT_REASONS + CANDIDATE_REASONS and
              values['signature'] in ('verified', 'not-verified') and values['metadata'] in ('verified', 'not-verified') and
@@ -596,6 +711,16 @@ class Probe:
             validate_package_record({'package': 'x11-utils', 'architecture': values['package_architecture'],
                 'version': values['package_version'], 'size': values['package_size'], 'sha256': values['package_sha256'],
                 'filename': values['package_filename']})
+        if data_fields.issubset(values):
+            need(self.include_package and values['signature'] == values['metadata'] == 'verified' and
+                 values['package_bytes'] == 'verified' and re.fullmatch('[a-f0-9]{64}', values['member_sha256']) and
+                 re.fullmatch('[0-9]{1,7}', values['member_size']) and 0 < int(values['member_size']) <= MEMBER_LIMIT and
+                 values['member_format'] == 'ELF64-amd64' and values['member_interpreter'] in INTERPRETERS and
+                 0 < len(values['member_needed']) <= 1024 and
+                 all(re.fullmatch('[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}', n) for n in values['member_needed'].split(',')),
+                 'SIGNED_ELF_REPORT')
+            pinned_package({'version': values['package_version'], 'architecture': values['package_architecture'],
+                'size': int(values['package_size']), 'sha256': values['package_sha256'], 'filename': values['package_filename']})
         raw = ''.join(key + '=' + value + '\n' for key, value in values.items()).encode('ascii')
         self._append_managed(file, temporary, uid, raw)
 
@@ -629,6 +754,8 @@ class Probe:
         try:
             stage = safe_stage(self.phase)
             code = safe_index_failure(self.first, self.index_step) if stage == 'index-validation' else 'unavailable'
+            if self.include_package and code == 'unavailable':
+                code = safe_package_failure(self.first)
             raw = ('failure_stage=' + stage + '\nfailure_code=' + code + '\n').encode('ascii')
             self.diagnostic._append_managed(file, temporary, uid, raw)
             self.diagnostic.gate()
@@ -645,15 +772,16 @@ class Probe:
 
 
 def main(args):
+    package_data = args == ['--authenticate-x11-package-data']
     index_reporting = args == ['--authenticate-x11-index-report']
-    index_authentication = args == ['--authenticate-x11-index'] or index_reporting
-    probe = Probe(time.monotonic(), include_index=index_authentication)
+    index_authentication = args == ['--authenticate-x11-index'] or index_reporting or package_data
+    probe = Probe(time.monotonic(), include_index=index_authentication, include_package=package_data)
     CURRENT.append(probe)
     classification = args == ['--classify-keyring']
     candidate = args == ['--preflight-ubuntu-archive-input']
     candidate_verification = args == ['--verify-ubuntu-archive-input'] or index_authentication
     need((not args or classification or candidate or candidate_verification) and sys.platform == 'linux', 'SIGNED_ARGUMENT')
-    expected_ref = (INDEX_REPORT_BRANCH if index_reporting else INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
+    expected_ref = (PACKAGE_DATA_BRANCH if package_data else INDEX_REPORT_BRANCH if index_reporting else INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate
                     else CLASSIFICATION_BRANCH if classification else BRANCH)
     uid = os.getuid()
     need(uid > 0 and uid == os.geteuid() and os.environ.get('GITHUB_REPOSITORY') == REPOSITORY and
@@ -705,8 +833,10 @@ def main(args):
             probe.publish(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), uid, values)
             raise RuntimeError('SIGNED_CANDIDATE_REFUSED')
     originals = {}
-    for file in (CURL, GPGV, selected_keyring):
+    for file in (CURL, GPGV, selected_keyring) + ((DPKG_DEB, READELF) if package_data else ()):
         originals[file] = probe.preflight(file, file != selected_keyring)
+        if package_data and originals[file] is None and file in (DPKG_DEB, READELF):
+            raise RuntimeError('SIGNED_DPKG_UNAVAILABLE' if file == DPKG_DEB else 'SIGNED_READELF_UNAVAILABLE')
         if candidate_verification and originals[file] is None:
             values['verifier'] = 'established' if originals.get(CURL) is not None and originals.get(GPGV) is not None else 'unavailable'
             values['anchor_reason'] = probe.preflight_reasons.get(selected_keyring, 'not-reported')
@@ -741,6 +871,7 @@ def main(args):
         probe.returned.append(metadata)
         probe.gate()
         index_values = None
+        data_values = None
         if index_authentication:
             need(hashlib.sha256(signed_before['raw']).hexdigest() == INDEX_INRELEASE_SHA256, 'SIGNED_INDEX_INRELEASE_PIN')
             entry = index_entry(verified)
@@ -760,6 +891,32 @@ def main(args):
             index_values = {'index_sha256': entry[0], 'index_size': str(entry[1]), 'package_version': package['version'],
                 'package_architecture': package['architecture'], 'package_size': str(package['size']),
                 'package_sha256': package['sha256'], 'package_filename': package['filename']}
+            if package_data:
+                probe.phase = 'package-validation'
+                pinned_package(package)  # Fresh authenticated record AND the previously reviewed exact operation.
+                probe.phase = 'package-download'
+                package_raw, _ = probe.run('package', directory, os.environ, selected_keyring)
+                probe.phase = 'package-validation'
+                authenticate_package(package_raw)
+                probe.write_private(directory + '/x11-utils.deb', package_raw)
+                package_before = probe.pin(directory + '/x11-utils.deb', 1048576, uid)
+                need(package_before['raw'] == package_raw, 'SIGNED_PACKAGE_CHANGED')
+                probe.phase = 'member-selection'
+                # Archive decoding only; this command does not install or invoke maintainer scripts.
+                tar_raw, _ = probe.run('deb-data', directory, os.environ, selected_keyring)
+                need(probe.pin(directory + '/x11-utils.deb', 1048576, uid) == package_before, 'SIGNED_PACKAGE_CHANGED')
+                member = member_from_tar(tar_raw, probe.gate)
+                probe.write_private(directory + '/xdpyinfo.data', member)  # New private0600 data, never executable.
+                member_before = probe.pin(directory + '/xdpyinfo.data', MEMBER_LIMIT, uid)
+                need(member_before['raw'] == member, 'SIGNED_MEMBER_CHANGED')
+                probe.phase = 'member-inspection'
+                report, _ = probe.run('elf-data', directory, os.environ, selected_keyring)
+                interpreter, needed = elf_report(report)
+                need(probe.pin(directory + '/xdpyinfo.data', MEMBER_LIMIT, uid) == member_before, 'SIGNED_MEMBER_CHANGED')
+                need(probe.pin(directory + '/x11-utils.deb', 1048576, uid) == package_before, 'SIGNED_PACKAGE_CHANGED')
+                data_values = {'package_bytes': 'verified', 'member_sha256': hashlib.sha256(member).hexdigest(),
+                    'member_size': str(len(member)), 'member_format': 'ELF64-amd64',
+                    'member_interpreter': interpreter, 'member_needed': needed}
         probe.phase = 'readback'
         need(probe.pin(directory + '/InRelease', 1048576, uid) == signed_before, 'SIGNED_DOWNLOAD_CHANGED')
         for file, original in originals.items():
@@ -770,6 +927,8 @@ def main(args):
                       inrelease_sha256=hashlib.sha256(signed_before['raw']).hexdigest(), expiry=metadata['expiry'])
         if index_values is not None:
             values.update(index_values)
+        if data_values is not None:
+            values.update(data_values)
     probe.phase = 'readback'
     need(probe.pin(source + '/.git/HEAD', 256, uid) == head and probe.pin(own_file, 1024 * 1024, uid) == own,
          'SIGNED_SOURCE_CHANGED')
@@ -787,7 +946,7 @@ if __name__ == '__main__':
         probe = CURRENT[0] if CURRENT else None
         if probe is not None:
             probe.fail(error)
-        if probe is not None and sys.argv[1:] == ['--authenticate-x11-index-report']:
+        if probe is not None and sys.argv[1:] in (['--authenticate-x11-index-report'], ['--authenticate-x11-package-data']):
             try:
                 probe.publish_failure_stage(os.environ.get('GITHUB_OUTPUT', ''), os.environ.get('RUNNER_TEMP', ''), os.getuid())
             except BaseException as report_error:

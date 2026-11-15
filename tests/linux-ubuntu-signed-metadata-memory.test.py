@@ -4,22 +4,25 @@ import datetime
 import email.utils
 import errno
 import hashlib
+import io
 import json
 import lzma
 import pathlib
 import re
 import stat
+import tarfile
 import types
 import unittest
 
 SOURCE = pathlib.Path(__file__).resolve().parents[1] / 'scripts/linux-ubuntu-signed-metadata.py'
-SOURCE_SHA256 = '1ee64e63d112e11849de8a82c6d41fe83cec8e37db68960bbf16c51740cc1c3e'
+SOURCE_SHA256 = '13ec94d820871bc6a40d94d541baae3a8f03b4018ef5876b73fd1d19bfa9c336'
 RAW = SOURCE.read_bytes()
 TREE = ast.parse(RAW, filename=str(SOURCE))
-SELECTED = {'need', 'safe_stage', 'safe_index_failure', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
+SELECTED = {'need', 'safe_stage', 'safe_index_failure', 'safe_package_failure', 'identity', 'fixed_command', 'fixed_environment', 'status_time',
             'signature_status', 'release_metadata', 'preflight_attribute_reason', 'preflight_stat_reason',
             'candidate_parent_reason', 'candidate_metadata', 'checked_index_entry', 'index_entry',
-            'authenticate_index', 'decompress_index', 'validate_package_record', 'package_record', 'Probe'}
+            'authenticate_index', 'decompress_index', 'validate_package_record', 'package_record',
+            'pinned_package', 'authenticate_package', 'member_from_tar', 'elf_report', 'Probe'}
 NOW = datetime.datetime(2026, 11, 14, tzinfo=datetime.timezone.utc).timestamp()
 CREATED = int(datetime.datetime(2024, 4, 25, tzinfo=datetime.timezone.utc).timestamp())
 PRIMARY = 'F6ECB3762474EDA9D21B7022871920D1991BC93C'
@@ -53,6 +56,32 @@ def release_with_index(compressed, size=None):
         len(compressed) if size is None else size).encode() + b' main/binary-amd64/Packages.xz\n'
 
 
+def member_fixture():
+    raw = bytearray(b'\x7fELF\x02\x01\x01' + b'\0' * 121)
+    raw[16:18], raw[18:20] = (3).to_bytes(2, 'little'), (62).to_bytes(2, 'little')
+    return bytes(raw)  # Owned header fixture, not an executable or native evidence.
+
+
+def tar_fixture(items=None):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+        for name, kind, raw in items or [('./usr/bin/xdpyinfo', tarfile.REGTYPE, member_fixture())]:
+            info = tarfile.TarInfo(name)
+            info.type, info.mode = kind, 0o755
+            if kind in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                info.size = len(raw)
+                archive.addfile(info, io.BytesIO(raw))
+            else:
+                info.linkname = 'unrelated'
+                archive.addfile(info)
+    return output.getvalue()
+
+
+ELF_REPORT_FIXTURE = (b'ELF Header:\n  Class: ELF64\n  Machine: Advanced Micro Devices X86-64\n'
+    b' [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]\n'
+    b' 0x1 (NEEDED) Shared library: [libX11.so.6]\n 0x1 (NEEDED) Shared library: [libc.so.6]\n')
+
+
 class Pipe:
     def __init__(self, fd):
         self.fd, self.closed = fd, False
@@ -72,6 +101,7 @@ class Memory:
         self.printed = []
         self.directories = {}
         self.index_bytes, self.index_download_bytes = None, None
+        self.package_bytes, self.tar_bytes, self.elf_bytes = None, None, None
         self.next_fd, self.queues, self.on_popen, self.on_poll, self.on_mode, self.on_close = 100, {}, None, None, None, None
         self.os = types.SimpleNamespace(O_CLOEXEC=1, O_RDONLY=2, O_NOFOLLOW=4, O_NONBLOCK=8,
             O_RDWR=16, O_CREAT=32, O_EXCL=64, O_WRONLY=128, O_APPEND=256, X_OK=1,
@@ -83,7 +113,7 @@ class Memory:
             environ={'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'})
         self.subprocess = types.SimpleNamespace(DEVNULL=-3, PIPE=-1, Popen=self.popen)
         namespace = {'__builtins__': __builtins__, 'datetime': datetime, 'email': email, 'errno': errno,
-            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'json': json, 'lzma': lzma,
+            'hashlib': hashlib, 'pathlib': pathlib, 're': re, 'stat': stat, 'json': json, 'lzma': lzma, 'io': io, 'tarfile': tarfile,
             'os': self.os, 'subprocess': self.subprocess,
             'print': lambda text: self.printed.append(text),
             'select': types.SimpleNamespace(select=self.select), 'time': types.SimpleNamespace(monotonic=lambda: self.clock[0], time=lambda: NOW),
@@ -92,7 +122,8 @@ class Memory:
         selected = []
         for node in TREE.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in
-                    {'CURL', 'GPGV', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES', 'INDEX_FAILURES',
+                    {'CURL', 'GPGV', 'DPKG_DEB', 'READELF', 'KEYRING', 'PRIMARY', 'URL', 'SNAPSHOT', 'TRUST_ENV', 'PHASES', 'INDEX_FAILURES',
+                     'PACKAGE_FAILURES', 'PACKAGE_PIN', 'PACKAGE_URL', 'PACKAGE_TAR_LIMIT', 'MEMBER_LIMIT', 'INTERPRETERS', 'PACKAGE_DATA_BRANCH',
                      'PREFLIGHT_REASONS', 'CANDIDATE_PATHS', 'CANDIDATE_REASONS', 'REPOSITORY',
                      'BRANCH', 'CLASSIFICATION_BRANCH', 'CANDIDATE_BRANCH', 'VERIFICATION_BRANCH', 'INDEX_BRANCH', 'INDEX_REPORT_BRANCH',
                      'INDEX_PATH', 'INDEX_URL', 'INDEX_INRELEASE_SHA256', 'INDEX_COMPRESSED_LIMIT',
@@ -150,16 +181,16 @@ class Memory:
         return types.SimpleNamespace(st_dev=1, st_ino=row['ino'], st_uid=row['uid'],
             st_mode=stat.S_IFREG | row['mode'], st_nlink=1, st_size=len(row['raw']), st_mtime_ns=1, st_ctime_ns=1)
 
-    def verification_environment(self, index=False, reporting=False):
+    def verification_environment(self, index=False, reporting=False, package=False):
         source = str(SOURCE.resolve().parents[1])  # Resolves only the pinned task source path.
         sha = 'a' * 40
-        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['INDEX_REPORT_BRANCH'] if reporting else self.ns['INDEX_BRANCH'] if index else self.ns['VERIFICATION_BRANCH'],
+        env = {'GITHUB_REPOSITORY': self.ns['REPOSITORY'], 'GITHUB_REF': self.ns['PACKAGE_DATA_BRANCH'] if package else self.ns['INDEX_REPORT_BRANCH'] if reporting else self.ns['INDEX_BRANCH'] if index else self.ns['VERIFICATION_BRANCH'],
                'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_EVENT_NAME': 'push', 'RUNNER_ENVIRONMENT': 'github-hosted',
                'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'X64', 'GITHUB_RUN_ID': '123', 'GITHUB_WORKSPACE': source,
                'GITHUB_SHA': sha, 'GITHUB_EVENT_PATH': '/tmp/managed/event.json',
                'GITHUB_OUTPUT': '/tmp/managed/output', 'RUNNER_TEMP': '/tmp/managed'}
         self.os.environ, self.os.geteuid = env, lambda: 1000
-        self.ns['sys'].argv = [str(SOURCE), '--authenticate-x11-index-report' if reporting else '--authenticate-x11-index' if index else '--verify-ubuntu-archive-input']
+        self.ns['sys'].argv = [str(SOURCE), '--authenticate-x11-package-data' if package else '--authenticate-x11-index-report' if reporting else '--authenticate-x11-index' if index else '--verify-ubuntu-archive-input']
         self.add(source + '/.git/HEAD', sha.encode())
         self.add(str(SOURCE), RAW)
         self.add(env['GITHUB_EVENT_PATH'], json.dumps({'repository': {'full_name': self.ns['REPOSITORY'],
@@ -177,9 +208,9 @@ class Memory:
         self.os.listdir = lambda path: sorted({p[len(path) + 1:].split('/')[0] for p in
             (*self.files, *self.directories) if p.startswith(path + '/')})
         actual_class = self.ns['Probe']
-        def factory(started, include_index=False):
+        def factory(started, include_index=False, include_package=False):
             assert started == self.probe.started
-            self.probe = actual_class(started, include_index=include_index)
+            self.probe = actual_class(started, include_index=include_index, include_package=include_package)
             return self.probe
         self.ns['Probe'] = factory  # Constructor port instantiates the actual class behind complete fake OS/process ports.
         if index:
@@ -187,6 +218,17 @@ class Memory:
             self.index_download_bytes = self.index_bytes
             # Expected bytes are test-owned fixtures, not a production pin derived from a download.
             self.ns['INDEX_INRELEASE_SHA256'] = hashlib.sha256(b'opaque-signed-bytes').hexdigest()
+        if package:
+            self.package_bytes = b'!<arch>\nowned-test-package-not-a-real-deb'
+            self.tar_bytes, self.elf_bytes = tar_fixture(), ELF_REPORT_FIXTURE
+            self.ns['PACKAGE_PIN'] = {**self.ns['PACKAGE_PIN'], 'size': len(self.package_bytes),
+                                      'sha256': hashlib.sha256(self.package_bytes).hexdigest()}
+            text = package_fixture().replace(b'Size: 12345', b'Size: ' + str(len(self.package_bytes)).encode()).replace(
+                b'SHA256: ' + b'1' * 64, b'SHA256: ' + hashlib.sha256(self.package_bytes).hexdigest().encode())
+            self.index_bytes = self.index_download_bytes = lzma.compress(text)
+            self.ns['INDEX_INRELEASE_SHA256'] = hashlib.sha256(b'opaque-signed-bytes').hexdigest()
+            self.add(self.ns['DPKG_DEB'], b'fake-host-archiver-never-executed', 0, 0o755)
+            self.add(self.ns['READELF'], b'fake-host-elf-reader-never-executed', 0, 0o755)
         return keyring
 
     def open(self, path, flags, mode):
@@ -243,7 +285,14 @@ class Memory:
             stdout = release_with_index(self.index_bytes)
         elif owner['role'] == 'index':
             stdout, stderr = self.index_download_bytes, b''
-        self.queues[10], self.queues[11] = [stdout, b''], [stderr, b''] if stderr else [b'']
+        elif owner['role'] == 'package':
+            stdout, stderr = self.package_bytes, b''
+        elif owner['role'] == 'deb-data':
+            stdout, stderr = self.tar_bytes, b''
+        elif owner['role'] == 'elf-data':
+            stdout, stderr = self.elf_bytes, b''
+        self.queues[10] = [stdout[n:n + 4096] for n in range(0, len(stdout), 4096)] + [b'']
+        self.queues[11] = [stderr[n:n + 4096] for n in range(0, len(stderr), 4096)] + [b'']
         def poll():
             if self.on_poll:
                 self.on_poll()
@@ -494,7 +543,7 @@ class SignedMetadataMemory(unittest.TestCase):
         assignment = next(node for node in main.body if isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == 'expected_ref' for target in node.targets))
         self.assertEqual(ast.unparse(assignment.value),
-                         'INDEX_REPORT_BRANCH if index_reporting else INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
+                         'PACKAGE_DATA_BRANCH if package_data else INDEX_REPORT_BRANCH if index_reporting else INDEX_BRANCH if index_authentication else VERIFICATION_BRANCH if candidate_verification else CANDIDATE_BRANCH if candidate else CLASSIFICATION_BRANCH if classification else BRANCH')
 
     def test_fixed_candidate_verifier_selector_rejects_unknown_and_falsey_inputs_before_effects(self):
         m = Memory()
@@ -1181,6 +1230,151 @@ class SignedMetadataMemory(unittest.TestCase):
                 self.assertFalse(m.probe.frozen)
             self.assertEqual(len(m.probe.children), 3)
             self.assertFalse(m.probe.unknown())
+
+    def test_package_data_exact_publisher_pin_and_fixed_nonexecuting_roles(self):
+        m = Memory()
+        expected = {'version': '7.7+6build2', 'architecture': 'amd64', 'size': 188800,
+                    'sha256': 'ffcc681f98ad4bd1857456f09c5464b5bdcb95a1162582899b2d93abaf361c74',
+                    'filename': 'pool/main/x/x11-utils/x11-utils_7.7+6build2_amd64.deb'}
+        self.assertEqual(m.ns['PACKAGE_PIN'], expected)
+        m.ns['pinned_package'](expected)
+        for key, value in (('version', 'other'), ('architecture', 'arm64'), ('size', True), ('size', 188801),
+                           ('sha256', '1' * 64), ('filename', '../escape')):
+            with self.assertRaisesRegex(RuntimeError, 'PACKAGE_PIN'):
+                m.ns['pinned_package']({**expected, key: value})
+        self.assertEqual(m.ns['fixed_command']('package', '/private')[-1],
+            'https://snapshot.ubuntu.com/ubuntu/20261113T000000Z/' + expected['filename'])
+        self.assertEqual(m.ns['fixed_command']('deb-data', '/private'), ('/usr/bin/dpkg-deb', '--fsys-tarfile', '/private/x11-utils.deb'))
+        self.assertEqual(m.ns['fixed_command']('elf-data', '/private'),
+            ('/usr/bin/x86_64-linux-gnu-readelf', '--wide', '--file-header', '--program-headers', '--dynamic', '--', '/private/xdpyinfo.data'))
+        for role in ('package', 'deb-data', 'elf-data'):
+            with self.assertRaisesRegex(RuntimeError, 'ROLE_ORDER'):
+                m.probe.run(role, '/private', {})
+        with self.assertRaisesRegex(RuntimeError, 'FIXED_INPUT'):
+            m.probe.preflight(m.ns['DPKG_DEB'], True)
+        for role in ('deb-data', 'elf-data'):
+            env = m.ns['fixed_environment'](role, '/private', {'LD_PRELOAD': 'bad', 'DPKG_ROOT': '/bad', 'DEBUGINFOD_URLS': 'bad', 'PATH': '/existing'})
+            self.assertFalse(set(env) & {'LD_PRELOAD', 'DPKG_ROOT', 'DEBUGINFOD_URLS'})
+            self.assertEqual(env['PATH'], '/existing')
+        self.assertEqual(m.events, [])
+
+    def test_package_bytes_length_and_hash_are_required_before_archive_inspection(self):
+        m = Memory()
+        m.verification_environment(index=True, package=True)
+        m.ns['authenticate_package'](m.package_bytes)
+        for raw in (m.package_bytes[:-1], m.package_bytes + b'x', b'x' * len(m.package_bytes)):
+            with self.assertRaisesRegex(RuntimeError, 'PACKAGE_BYTES'):
+                m.ns['authenticate_package'](raw)
+        self.assertEqual(m.events, [])
+
+    def test_tar_selection_is_exact_regular_unique_bounded_and_does_not_extract_paths(self):
+        select = Memory().ns['member_from_tar']
+        self.assertEqual(select(tar_fixture(), lambda: None), member_fixture())
+        for items, code in (
+                ([('./usr/bin/other', tarfile.REGTYPE, member_fixture())], 'MEMBER_COUNT'),
+                ([('./usr/bin/xdpyinfo', tarfile.REGTYPE, member_fixture())] * 2, 'MEMBER_COUNT'),
+                ([('./usr/bin/xdpyinfo', tarfile.REGTYPE, member_fixture()), ('usr/bin/xdpyinfo', tarfile.REGTYPE, member_fixture())], 'MEMBER_COUNT'),
+                ([('./usr/bin/xdpyinfo', tarfile.SYMTYPE, b'')], 'MEMBER_KIND'),
+                ([('./usr/bin/xdpyinfo', tarfile.LNKTYPE, b'')], 'MEMBER_KIND'),
+                ([('../escape', tarfile.REGTYPE, member_fixture())], 'MEMBER_PATH'),
+                ([('/usr/bin/xdpyinfo', tarfile.REGTYPE, member_fixture())], 'MEMBER_PATH'),
+                ([('./usr/bin/xdpyinfo', tarfile.REGTYPE, b'not-elf')], 'MEMBER_ELF'),
+                ([('./usr/bin/xdpyinfo', tarfile.REGTYPE, b'x' * (1024 ** 2 + 1))], 'MEMBER_BOUND')):
+            raw = tar_fixture(items)
+            with self.assertRaisesRegex(RuntimeError, code):
+                select(raw, lambda: None)
+        for raw in (tar_fixture()[:1000], tar_fixture() + b'x' * 512, b'x' * (8 * 1024 ** 2 + 1)):
+            with self.assertRaisesRegex(RuntimeError, 'MEMBER_TAR'):
+                select(raw, lambda: None)
+        sparse = io.BytesIO()
+        with tarfile.open(fileobj=sparse, mode='w', format=tarfile.PAX_FORMAT) as archive:
+            info = tarfile.TarInfo('./usr/bin/xdpyinfo')
+            info.size = len(member_fixture())
+            info.pax_headers = {'GNU.sparse.map': '0,128', 'GNU.sparse.size': '128'}
+            archive.addfile(info, io.BytesIO(member_fixture()))
+        with self.assertRaisesRegex(RuntimeError, 'MEMBER_KIND'):
+            select(sparse.getvalue(), lambda: None)
+
+    def test_elf_data_summary_is_bounded_declared_information_without_runtime_resolution(self):
+        parse = Memory().ns['elf_report']
+        self.assertEqual(parse(ELF_REPORT_FIXTURE), ('/lib64/ld-linux-x86-64.so.2', 'libX11.so.6,libc.so.6'))
+        for raw in (ELF_REPORT_FIXTURE.replace(b'ELF64', b'ELF32'),
+                    ELF_REPORT_FIXTURE.replace(b'X86-64', b'AArch64'),
+                    ELF_REPORT_FIXTURE.replace(b'/lib64/ld-linux-x86-64.so.2', b'/private/path'),
+                    ELF_REPORT_FIXTURE + b' [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]\n',
+                    ELF_REPORT_FIXTURE.replace(b'libc.so.6', b'../libc.so.6'),
+                    ELF_REPORT_FIXTURE.replace(b'libc.so.6', b'private$(command)'),
+                    ELF_REPORT_FIXTURE + b' 0x1 (NEEDED) Shared library: [libc.so.6]\n',
+                    ELF_REPORT_FIXTURE.replace(b'[libc.so.6]', b'[libc.so.6]extra]'),
+                    ELF_REPORT_FIXTURE + b' 0x1 (NEEDED) malformed-declaration\n',
+                    ELF_REPORT_FIXTURE + b' malformed Requesting program interpreter: /private/path\n',
+                    ELF_REPORT_FIXTURE + b' Class: ELF32\n'):
+            with self.assertRaises(RuntimeError):
+                parse(raw)
+
+    def test_actual_package_data_pipeline_uses_six_fixed_tools_and_retains_nonexecutable_data(self):
+        m = Memory()
+        m.verification_environment(index=True, package=True)
+        m.ns['entry']()
+        values = json.loads(m.printed[-1])
+        self.assertEqual(values['package_bytes'], 'verified')
+        self.assertEqual(values['member_sha256'], hashlib.sha256(member_fixture()).hexdigest())
+        self.assertEqual(values['member_size'], str(len(member_fixture())))
+        self.assertEqual(values['member_format'], 'ELF64-amd64')
+        self.assertEqual(values['member_needed'], 'libX11.so.6,libc.so.6')
+        calls = [e[1] for e in m.events if e[0] == 'popen']
+        self.assertEqual([args[0] for args in calls], [m.ns['CURL'], m.ns['GPGV'], m.ns['CURL'], m.ns['CURL'], m.ns['DPKG_DEB'], m.ns['READELF']])
+        self.assertEqual(m.files['/tmp/managed/hub-ubuntu-signed-123-attempt-1/xdpyinfo.data']['mode'], 0o600)
+        self.assertFalse(m.probe.unknown())
+        self.assertFalse(m.probe.frozen)
+        self.assertEqual(len(m.probe.children), 6)
+
+    def test_actual_package_data_failures_do_not_publish_verified_bytes_or_retry_uncertain_handles(self):
+        for case, stage, code in (('hash', 'package-validation', 'package-byte-mismatch'),
+                                  ('duplicate', 'member-selection', 'member-missing-or-ambiguous'),
+                                  ('elf', 'member-inspection', 'elf-interpreter'),
+                                  ('tool', 'preflight', 'archiver-unavailable'),
+                                  ('close', 'package-validation', 'data-io-error'),
+                                  ('tar-cap', 'member-selection', 'data-stream-bound')):
+            m = Memory()
+            m.verification_environment(index=True, package=True)
+            primary = OSError('private-package-close')
+            if case == 'hash':
+                m.package_bytes = b'x' * len(m.package_bytes)
+            elif case == 'duplicate':
+                m.tar_bytes = tar_fixture([('./usr/bin/xdpyinfo', tarfile.REGTYPE, member_fixture())] * 2)
+            elif case == 'elf':
+                m.elf_bytes = ELF_REPORT_FIXTURE.replace(b'/lib64/ld-linux-x86-64.so.2', b'/private/path')
+            elif case == 'tool':
+                m.files[m.ns['DPKG_DEB']]['mode'] = 0o777
+            elif case == 'tar-cap':
+                m.ns['PACKAGE_TAR_LIMIT'] = 8192  # Lower fake-port budget only, production constant remains8MiB.
+            else:
+                original = m.os.close
+                def close(fd):
+                    if m.fds[fd].endswith('/x11-utils.deb') and m.probe.diagnostic is None:
+                        raise primary
+                    return original(fd)
+                m.os.close = close
+            held = case in ('close', 'tar-cap')
+            with self.assertRaises(MemoryRetained if held else SystemExit) as caught:
+                m.ns['entry']()
+            if not held:
+                self.assertEqual(caught.exception.code, 1)
+            self.assertTrue(m.probe.frozen)
+            self.assertEqual(m.probe.unknown(), held)
+            output = m.files[m.os.environ['GITHUB_OUTPUT']]['raw']
+            self.assertEqual(output, ('failure_stage=' + stage + '\nfailure_code=' + code + '\n').encode())
+            self.assertNotIn(b'package_bytes=verified', output)
+            if case == 'tool':
+                self.assertEqual(m.probe.children, [])
+            if case == 'close':
+                self.assertIs(m.probe.first, primary)
+                owners = [o for o in m.probe.fds if o['path'].endswith('/x11-utils.deb')]
+                self.assertEqual(len(owners), 1)
+                self.assertTrue(owners[0]['close_issued'])
+                self.assertFalse(owners[0]['closed'])
+            self.assertNotIn('private-package-close', ''.join(m.printed))
 
     def test_phase_privacy_fixed_import_graph_and_original_source_pin(self):
         m = Memory()
