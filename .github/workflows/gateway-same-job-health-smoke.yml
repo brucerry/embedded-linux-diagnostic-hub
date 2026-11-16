@@ -1,0 +1,99 @@
+name: Gateway same-job canonical package health smoke
+
+on:
+    push:
+        branches: [ci/v060-gateway-health-smoke-20261116]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: gateway-same-job-health-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    NODE_OPTIONS: ''
+    NODE_PATH: ''
+    ESBUILD_BINARY_PATH: ''
+    NODE_DISABLE_COMPILE_CACHE: '1'
+    NODE_COMPILE_CACHE: ''
+
+jobs:
+    gateway_build:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-gateway-health-smoke-20261116' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        defaults:
+            run:
+                shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        steps:
+            - name: Admit only the intended original public hosted branch job
+              run: |
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-health-smoke-20261116
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$RUNNER_ENVIRONMENT" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(/usr/bin/id -u)" -gt 0
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Collect unchanged publisher Node and four-input preparation outcome
+              id: preparation
+              run: /usr/bin/python3 -I -B scripts/ci/prepare-gateway-health-job.py
+            - name: >-
+                  Preparation diagnostic / ${{ steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result || 'report-unavailable' }} / ${{
+                  steps.preparation.outcome == 'success' && steps.preparation.outputs.stage ||
+                  'report-unavailable' }} / ${{ steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.reason || 'report-unavailable' }} / input-${{
+                  steps.preparation.outcome == 'success' && steps.preparation.outputs.input ||
+                  'none' }}
+              if: ${{ always() }}
+              env:
+                  PREPARATION_RESULT:
+                      ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result
+                      || 'unavailable' }}
+              run: test "$PREPARATION_RESULT" = prepared
+            - name: Produce once and exercise the same-job verified package health
+              id: smoke
+              if:
+                  ${{ success() && steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result == 'prepared' }}
+              run: |
+                  # One original canonical producer, five locked runtime archives and
+                  # loopback health/auth/direct-close only. No SSH, upload or cleanup.
+                  /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH \
+                    "$RUNNER_TEMP/gateway-publisher-node-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/node" \
+                    scripts/observe-gateway-health-job.mjs --qualify-branch
+            - name: Collect bounded original worker report without changing its outcome
+              id: health_report
+              if: ${{ always() }}
+              env:
+                  SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+              run: /usr/bin/python3 -I -B scripts/ci/report-gateway-health-job.py
+            - name: >-
+                  Health diagnostic / ${{ steps.health_report.outcome == 'success' &&
+                  steps.health_report.outputs.result || 'unavailable' }} / ${{
+                  steps.health_report.outcome == 'success' && steps.health_report.outputs.stage ||
+                  'unavailable' }} / ${{ steps.health_report.outcome == 'success' &&
+                  steps.health_report.outputs.reason || 'report-unavailable' }}
+              if: ${{ always() }}
+              env:
+                  HEALTH_RESULT:
+                      ${{ steps.health_report.outcome == 'success' &&
+                      steps.health_report.outputs.result || 'unavailable' }}
+              run: test "$HEALTH_RESULT" = passed

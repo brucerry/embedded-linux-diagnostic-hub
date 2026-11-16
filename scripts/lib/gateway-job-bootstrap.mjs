@@ -42,7 +42,12 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
         phase = 'ready',
         coverage = null,
         selector = null,
-        execution = null;
+        execution = null,
+        files = null,
+        callbackActive = false;
+    const noActiveFiles = (value) =>
+        value &&
+        ['pending', 'handles'].every((key) => Number.isSafeInteger(value[key]) && value[key] === 0);
     const bootstrap = Object.freeze({
         snapshot: () =>
             Object.freeze({
@@ -54,10 +59,34 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
                 coverage,
                 selector: selector?.snapshot() ?? null,
                 execution: execution?.snapshot() ?? null,
+                files: files?.owner.snapshot() ?? null,
+                callbackActive,
                 jobAuthentication: null,
                 uploadAttribution: null,
                 releaseAcceptance: false,
             }),
+        quiescent() {
+            // Known-zero owned IO permits a failed worker to exit. Publication tombstones remain
+            // retained data uncertainty, not an open handle. These counters are not success,
+            // authentication, whole-group retirement or permission to erase retained data.
+            try {
+                if (callbackActive || (files && !noActiveFiles(files.owner.snapshot())))
+                    return false;
+                if (selector && selector.snapshot().pending !== 0) return false;
+                if (execution) {
+                    const value = execution.snapshot();
+                    if (
+                        value.commandOwners !== 0 ||
+                        value.files?.gitOwners !== 0 ||
+                        !noActiveFiles(value.files?.files)
+                    )
+                        return false;
+                }
+                return true;
+            } catch {
+                return false;
+            }
+        },
         async run() {
             assert.ok(!used, 'Gateway job bootstrap is one-shot.');
             used = true;
@@ -80,8 +109,8 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
                 }
                 for (const name of ['NODE_OPTIONS', 'NODE_PATH', 'ESBUILD_BINARY_PATH'])
                     assert.equal(env[name], undefined);
-                const files = createOwnedWebFiles(ports.filesystem),
-                    io = files.filesystem;
+                files = createOwnedWebFiles(ports.filesystem);
+                const io = files.filesystem;
                 const read = (file, maximum, filesystem = io) =>
                     readCurrentGatewayBuildFile(file, maximum, runtime.uid, filesystem);
                 const root = await io.realpath(path.resolve(path.dirname(runtime.entryFile), '..'));
@@ -296,6 +325,44 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
                 assert.ok(
                     (await read(bindingPath, 1024 ** 2, execution.filesystem)).equals(bindingBytes),
                 );
+                let healthSmoke;
+                if (ports.afterReadback !== undefined) {
+                    assert.equal(coverage, 'branch-qualification');
+                    assert.equal(typeof ports.afterReadback, 'function');
+                    callbackActive = true;
+                    try {
+                        healthSmoke = await ports.afterReadback(
+                            Object.freeze({
+                                context: structuredClone(expected),
+                                sourceSelection: structuredClone(pin),
+                                sourceRoot: root,
+                                record: structuredClone(result.record),
+                                originalBuildRecord: { ...result.originalBuildRecord },
+                                readFile: (file, maximum) =>
+                                    read(file, maximum, execution.filesystem),
+                                realpath: (file) => execution.filesystem.realpath(file),
+                                lstat: (file) => execution.filesystem.lstat(file),
+                                async sourceFile(name) {
+                                    const rows = result.record.sourceBridge.inventory.filter(
+                                        (row) => row.path === name,
+                                    );
+                                    assert.equal(rows.length, 1);
+                                    const file = await provider.file(name);
+                                    assert.ok(
+                                        Buffer.isBuffer(file.bytes) &&
+                                            file.bytes.length <= 4 * 1024 ** 2,
+                                    );
+                                    assert.equal(file.mode, rows[0].mode);
+                                    assert.equal(file.bytes.length, rows[0].bytes);
+                                    assert.equal(digest(file.bytes), rows[0].sha256);
+                                    return Buffer.from(file.bytes);
+                                },
+                            }),
+                        );
+                    } finally {
+                        callbackActive = false;
+                    }
+                }
                 execution.assertSettled();
                 files.owner.assertSettled();
                 selector.assertSettled();
@@ -315,6 +382,7 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
                     uploadAttribution: null,
                     nativeQualification: false,
                     releaseAcceptance: false,
+                    ...(ports.afterReadback === undefined ? {} : { healthSmoke }),
                 });
             } catch (cause) {
                 failed = true;
@@ -330,6 +398,22 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
  * It performs bounded public metadata GETs and build/readback only, never installation/upload.
  */
 export async function buildGatewayArchiveFromSelectedJob() {
+    return runNativeEntry(
+        fileURLToPath(new URL('../build-gateway-tag-archive.mjs', import.meta.url)),
+    );
+}
+/** Fixed branch-only sibling for the current-job health driver; old build/tag callers have no hook. */
+export async function buildGatewayArchiveForHealthJob(afterReadback, onOwner) {
+    assert.equal(typeof afterReadback, 'function');
+    assert.equal(typeof onOwner, 'function');
+    assert.equal(process.argv[2], '--qualify-branch');
+    return runNativeEntry(
+        fileURLToPath(new URL('../observe-gateway-health-job.mjs', import.meta.url)),
+        afterReadback,
+        onOwner,
+    );
+}
+async function runNativeEntry(entryFile, afterReadback, onOwner) {
     assert.equal(nativeUsed, false);
     nativeUsed = true;
     const names = [
@@ -355,7 +439,7 @@ export async function buildGatewayArchiveFromSelectedJob() {
     const environment = Object.fromEntries(names.map((name) => [name, process.env[name]]));
     const runtime = {
         environment,
-        entryFile: fileURLToPath(new URL('../build-gateway-tag-archive.mjs', import.meta.url)),
+        entryFile,
         argv: [...process.argv],
         execArgv: [...process.execArgv],
         execPath: process.execPath,
@@ -365,7 +449,7 @@ export async function buildGatewayArchiveFromSelectedJob() {
         arch: process.arch,
         uid: process.getuid(),
     };
-    return makeBootstrap(
+    const bootstrap = makeBootstrap(
         runtime,
         {
             filesystem: fs,
@@ -373,10 +457,13 @@ export async function buildGatewayArchiveFromSelectedJob() {
             now: () => performance.now(),
             setTimer: (fn, ms) => setTimeout(fn, ms),
             clearTimer: (timer) => clearTimeout(timer),
+            ...(afterReadback === undefined ? {} : { afterReadback }),
         },
         createGitHubSourceSelector,
         'native-unqualified',
-    ).run();
+    );
+    onOwner?.(bootstrap);
+    return bootstrap.run();
 }
 /** Same orchestration and selector algorithms with explicit inert host boundaries only. */
 export function createGatewayJobBootstrapModel(runtime, ports, httpsHost, httpClock) {

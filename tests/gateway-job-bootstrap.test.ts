@@ -198,3 +198,136 @@ test('the retained source-binding record is reread under the native file policy'
         f.f.records.has('/project/validation/gateway-current-build/artifacts/gateway-build.json'),
     );
 });
+
+test('afterReadback receives original same-job binding only after its source record was reread', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    let bindingReads = 0,
+        calls = 0;
+    f.f.hooks.read = (file: string) => {
+        if (file === '/project/validation/gateway-source-binding.json') bindingReads++;
+    };
+    const bootstrap = f.make();
+    f.ports.afterReadback = async (handoff: any) => {
+        calls++;
+        assert.ok(bindingReads > 0);
+        assert.equal(bootstrap.snapshot().callbackActive, true);
+        assert.equal(bootstrap.snapshot().complete, false);
+        assert.equal(bootstrap.quiescent(), false);
+        const original = f.f.bytes(
+            '/project/validation/gateway-current-build/artifacts/gateway-build.json',
+        );
+        assert.equal(handoff.originalBuildRecord.sha256, sourceDigest(original));
+        assert.equal(handoff.sourceRoot, '/project');
+        assert.equal(handoff.context.sourceCommit, f.p.context.sourceCommit);
+        assert.equal(handoff.record.context.jobKey, 'gateway_build');
+        const binding = JSON.parse(
+            f.f.bytes('/project/validation/gateway-source-binding.json').toString(),
+        );
+        assert.deepEqual(binding.originalBuildRecord, handoff.originalBuildRecord);
+        assert.ok(
+            (
+                await handoff.readFile(
+                    '/project/validation/gateway-current-build/artifacts/gateway-build.json',
+                    16 * 1024 ** 2,
+                )
+            ).equals(original),
+        );
+        return { status: 'authored-memory-callback-only', releaseAcceptance: false };
+    };
+    const result = await bootstrap.run();
+    assert.equal(calls, 1);
+    assert.equal(result.healthSmoke.status, 'authored-memory-callback-only');
+    assert.equal(result.nativeQualification, false);
+    assert.equal(bootstrap.quiescent(), true);
+});
+
+test('producer readback failure cannot invoke a health callback', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    let calls = 0;
+    f.ports.afterReadback = () => {
+        calls++;
+        assert.fail('No callback after refused producer readback');
+    };
+    f.controls.stat = (file: string) =>
+        file.endsWith('/artifacts/gateway-build.json') ? { mode: 0o100666 } : {};
+    const bootstrap = f.make();
+    await assert.rejects(bootstrap.run());
+    assert.equal(calls, 0);
+    assert.equal(bootstrap.snapshot().failed, true);
+    assert.equal(bootstrap.snapshot().callbackActive, false);
+});
+
+test('a deferred afterReadback remains nonquiescent until the actual callback returns', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    let entered!: () => void, release!: () => void;
+    const callbackEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+    });
+    const callbackRelease = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    f.ports.afterReadback = async () => {
+        entered();
+        await callbackRelease;
+        return { status: 'authored-delayed-memory-only' };
+    };
+    const bootstrap = f.make(),
+        work = bootstrap.run();
+    await Promise.race([
+        callbackEntered,
+        work.then(() => {
+            throw Error('Callback milestone was not reached.');
+        }),
+    ]);
+    assert.equal(bootstrap.snapshot().callbackActive, true);
+    assert.equal(bootstrap.quiescent(), false);
+    assert.equal(f.f.handles.size, 0);
+    assert.ok(f.children.every((child) => child.closed));
+    release();
+    await work;
+    assert.equal(bootstrap.snapshot().callbackActive, false);
+    assert.equal(bootstrap.quiescent(), true);
+});
+
+test('failed callback with known closed producer owners can be quiescent without becoming success', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    f.ports.afterReadback = () => {
+        throw undefined;
+    };
+    const bootstrap = f.make();
+    const error: any = await bootstrap.run().catch((value: unknown) => value);
+    assert.equal(error.cause, undefined);
+    assert.equal(error.owner, bootstrap);
+    assert.equal(bootstrap.snapshot().failed, true);
+    assert.equal(bootstrap.snapshot().complete, false);
+    assert.equal(bootstrap.snapshot().callbackActive, false);
+    assert.equal(f.f.handles.size, 0);
+    assert.equal(f.dirs.size, 0);
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.http.active.size, 0);
+    assert.ok(f.children.every((child) => child.closed));
+    assert.equal(bootstrap.quiescent(), true);
+});
+
+test('callback source reread refuses bytes that drifted from the canonical producer inventory', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    let reads = 0;
+    f.ports.afterReadback = async (handoff: any) => {
+        const original = await handoff.sourceFile('package.json');
+        reads++;
+        assert.ok(original.equals(f.f.bytes('/project/package.json')));
+        f.f.write(
+            '/project/package.json',
+            Buffer.from('changed authored memory source; never executed'),
+        );
+        return handoff.sourceFile('package.json');
+    };
+    const bootstrap = f.make();
+    await assert.rejects(bootstrap.run());
+    assert.equal(reads, 1);
+    assert.equal(bootstrap.snapshot().failed, true);
+    assert.equal(bootstrap.snapshot().complete, false);
+    assert.equal(bootstrap.snapshot().callbackActive, false);
+    assert.equal(f.f.handles.size, 0);
+    assert.equal(bootstrap.quiescent(), true);
+});
