@@ -21,7 +21,7 @@ import urllib.request
 import zlib
 
 
-BRANCH = "ci/v060-gateway-four-tool-buildonly-20261116"
+BRANCH = "ci/v060-gateway-preparation-diagnostics-20261116"
 NAMES = ("semver", "fflate", "esbuild", "@esbuild/linux-x64")
 VERSIONS = ("7.8.5", "0.8.3", "0.28.2", "0.28.2")
 UID = os.getuid()
