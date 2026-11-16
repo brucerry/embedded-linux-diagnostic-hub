@@ -12,7 +12,7 @@
     "reference": {
         "distribution": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.gz",
         "distributionSHA256": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
-        "trust": "Official Node release checksum PGP-verified using nodejs/release-keys@481637f813e912c4aa3622d7964ab426c97b8e8d and signer 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356; archive/member hashes verified as data. Not a runner attestation. No distribution is downloaded by this draft."
+        "trust": "Official Node release checksum PGP-verified using nodejs/release-keys@481637f813e912c4aa3622d7964ab426c97b8e8d and signer 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356; archive/member hashes verified as data. Not a runner attestation. The separate publisher draft may acquire only this pinned distribution; the cache route does not acquire Node."
     },
     "sourceLockSHA256": "19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3",
     "packages": [

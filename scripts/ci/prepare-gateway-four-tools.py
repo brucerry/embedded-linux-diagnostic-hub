@@ -31,6 +31,7 @@ STAGES = frozenset((
     "admission", "workspace", "source-integrity", "cache-selection",
     "node-integrity", "npm-integrity", "node-version", "tool-fetch",
     "safe-extraction", "build-preparation", "complete",
+    "publisher-node", "publisher-archive", "publisher-materialization",
 ))
 REASONS = frozenset((
     "none", "guard-refused", "type", "owner", "mode", "inode", "link-count",
@@ -222,13 +223,13 @@ def inspect_package(data, package):
     return members
 
 
-def main():
+def main(node_provider=None, expected_branch=BRANCH):
     global PHASE, INPUT
     require(UID > 0 and os.uname().sysname == "Linux" and os.uname().machine == "x86_64")
     expected_environment = {
         "GITHUB_REPOSITORY": "brucerry/embedded-linux-diagnostic-hub",
         "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push",
-        "GITHUB_REF": "refs/heads/" + BRANCH, "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_REF": "refs/heads/" + expected_branch, "GITHUB_RUN_ATTEMPT": "1",
         "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
     }
     require(all(os.environ.get(key) == value for key, value in expected_environment.items()))
@@ -275,9 +276,14 @@ def main():
     PHASE = "cache-selection"
     # The provider locator is not authority: exact Node and complete npm contents must match
     # the retained trusted distribution reference before any package request or Node execution.
-    cache = Path(os.environ["RUNNER_TOOL_CACHE"])
-    directory(cache)
-    prefix = cache / "node" / profile["node"]["version"] / "x64"
+    if node_provider is None:
+        cache = Path(os.environ["RUNNER_TOOL_CACHE"])
+        directory(cache)
+        prefix = cache / "node" / profile["node"]["version"] / "x64"
+    else:
+        # Only the separately reviewed first-party publisher entrypoint supplies this.
+        # The same physical Node/npm checks below remain mandatory before execution.
+        prefix = node_provider(profile)
     node = prefix / "bin/node"
     PHASE = "node-integrity"
     b = read(node, 128 * 1024**2)
@@ -368,7 +374,7 @@ def publish_diagnostic(result, stage, reason, ordinal):
         os.close(fd)
 
 
-def collect_diagnostic():
+def collect_diagnostic(node_provider=None, expected_branch=BRANCH):
     """Exit 0 means the finite report closed, not that preparation succeeded.
 
     The workflow fails a reported refusal and requires both a closed report and
@@ -379,7 +385,10 @@ def collect_diagnostic():
     PHASE, INPUT = "admission", "none"
     result, reason = "refused", "unexpected"
     try:
-        main()
+        if node_provider is None and expected_branch == BRANCH:
+            main()
+        else:
+            main(node_provider=node_provider, expected_branch=expected_branch)
         result, reason = "prepared", "none"
     except Exception as error:
         reason = reason_for(error)
