@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { GITHUB_SERVICE_PROFILE } from '../../scripts/lib/github-service-metadata.mjs';
 import { readbackFixture } from './archive-readback-memory';
 
-export async function metadataFixture() {
+export async function metadataFixture(options: { bodyFor?: (path: string) => any } = {}) {
     const base = await readbackFixture(),
         normalized = base.observation(),
         scope = base.selection;
@@ -68,6 +68,7 @@ export async function metadataFixture() {
         },
     };
     function bodyFor(path: string) {
+        if (options.bodyFor) return options.bodyFor(path);
         const url = new URL('https://api.github.com' + path);
         if (url.pathname.endsWith('/artifacts/' + scope.service.artifactId))
             return structuredClone(rawArtifact);

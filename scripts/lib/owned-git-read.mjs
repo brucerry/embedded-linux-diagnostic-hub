@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { valid } from 'semver';
 
 const retained = new Set();
 export const GIT_READ_BOUNDS = Object.freeze({
@@ -57,6 +58,31 @@ export function validateOwnedGitRequest(args, input) {
     if (batch) assert.ok(typeof input === 'string' && /^(?:[a-f0-9]{40}\n){1,64}$/.test(input));
     else assert.equal(input, undefined);
 }
+/** Canonical version tag accepted by both the reader and its separate command guard. */
+export function validateExpectedGatewayTagRef(expectedRef) {
+    assert.ok(typeof expectedRef === 'string' && expectedRef.length <= 255);
+    assert.match(expectedRef, /^refs\/tags\/v\d+\.\d+\.\d+(?:-[\w.-]+)?$/);
+    const version = expectedRef.slice('refs/tags/v'.length);
+    assert.equal(valid(version), version);
+    assert.ok(!expectedRef.endsWith('.lock'), 'Unsupported Git tag ref suffix.');
+}
+/** Separate exact-ref authority; the existing branch/source command policy is unchanged. */
+export function validateExpectedTagGitRequest(args, input, expectedRef) {
+    validateExpectedGatewayTagRef(expectedRef);
+    assert.deepEqual(args.slice(0, prefix.length), prefix);
+    const tail = args.slice(prefix.length);
+    if (JSON.stringify(tail) === JSON.stringify(['show-ref', '--verify', '--hash', expectedRef])) {
+        assert.equal(input, undefined);
+        return;
+    }
+    validateOwnedGitRequest(args, input);
+    assert.ok(!['ls-files', '--show-prefix'].some((arg) => tail.includes(arg)));
+    if (tail[0] === 'cat-file') assert.match(input, /^[a-f0-9]{40}\n$/);
+}
+export function startOwnedExpectedTagGitRead(plan, expectedRef, ports) {
+    validateExpectedTagGitRequest(plan.args, plan.input, expectedRef);
+    return startRead(plan, ports);
+}
 export class GitReadCustodyFailure extends Error {
     constructor(cause, owner) {
         super('Owned Git read failed; uncertain custody retained.', { cause });
@@ -65,6 +91,10 @@ export class GitReadCustodyFailure extends Error {
 }
 /** Direct Git child/pipe observation. No default launcher, timeout signal or process-group claim. */
 export function startOwnedGitRead(plan, ports) {
+    validateOwnedGitRequest(plan.args, plan.input);
+    return startRead(plan, ports);
+}
+function startRead(plan, ports) {
     assert.ok(
         plan.executable?.startsWith('/') &&
             Array.isArray(plan.args) &&
@@ -81,7 +111,6 @@ export function startOwnedGitRead(plan, ports) {
             (typeof plan.input === 'string' &&
                 Buffer.byteLength(plan.input) <= GIT_READ_BOUNDS.input),
     );
-    validateOwnedGitRequest(plan.args, plan.input);
     for (const k of ['launch', 'setTimer', 'clearTimer', 'now'])
         assert.equal(typeof ports[k], 'function');
     const selected = structuredClone(plan),
@@ -95,6 +124,7 @@ export function startOwnedGitRead(plan, ports) {
     let child,
         timer,
         primary,
+        failed = false,
         unknown = 0,
         spawned = false,
         exited = false,
@@ -125,7 +155,7 @@ export function startOwnedGitRead(plan, ports) {
             stderrClosed: outputs.stderr.closed,
             listeners: listeners.length,
             unknownOperations: unknown,
-            primaryFailure: Boolean(primary),
+            primaryFailure: failed,
             diagnostics: diagnostics.length,
             directRetired: retired,
             processGroupRetirement: null,
@@ -138,9 +168,10 @@ export function startOwnedGitRead(plan, ports) {
     });
     retained.add(owner);
     const fail = (error) => {
-        if (primary && error !== primary && !diagnostics.includes(error) && diagnostics.length < 16)
+        if (failed && error !== primary && !diagnostics.includes(error) && diagnostics.length < 16)
             diagnostics.push(error);
-        primary ??= error;
+        if (!failed) primary = error;
+        failed = true;
         result.reject(new GitReadCustodyFailure(primary, owner));
     };
     function unexpected(value) {
@@ -183,7 +214,7 @@ export function startOwnedGitRead(plan, ports) {
                 ![0, 1].includes(code)
             )
                 fail(Error('Unsuccessful or inconsistent Git close.'));
-            if (!primary && !inputFinish) fail(Error('Git input did not finish.'));
+            if (!failed && !inputFinish) fail(Error('Git input did not finish.'));
             const elapsed = ports.now() - started;
             if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > GIT_READ_BOUNDS.deadlineMs)
                 fail(Error('Git elapsed observation budget exceeded.'));
@@ -198,7 +229,7 @@ export function startOwnedGitRead(plan, ports) {
             retired = true;
             retained.delete(owner);
             closure.resolve(snapshot());
-            if (primary) return;
+            if (failed) return;
             result.resolve({
                 stdout: Buffer.concat(outputs.stdout.chunks),
                 stderr: Buffer.concat(outputs.stderr.chunks),
@@ -217,7 +248,7 @@ export function startOwnedGitRead(plan, ports) {
             GIT_READ_BOUNDS.deadlineMs,
         );
         if (timer === undefined || typeof timer?.then === 'function') unexpected(timer);
-        assert.ok(!primary);
+        assert.ok(!failed);
         child = ports.launch(selected.executable, selected.args, {
             cwd: selected.cwd,
             env: selected.env,

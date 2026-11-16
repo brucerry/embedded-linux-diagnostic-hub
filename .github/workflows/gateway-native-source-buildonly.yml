@@ -1,0 +1,62 @@
+name: Gateway four-input canonical build and readback draft
+
+on:
+    push:
+        branches: [ci/v060-gateway-four-tool-buildonly-20261116]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: gateway-four-tool-buildonly-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    NODE_OPTIONS: ''
+    NODE_PATH: ''
+    ESBUILD_BINARY_PATH: ''
+    NODE_DISABLE_COMPILE_CACHE: '1'
+    NODE_COMPILE_CACHE: ''
+
+jobs:
+    gateway_build:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-gateway-four-tool-buildonly-20261116' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        defaults:
+            run:
+                shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        steps:
+            - name: Admit only the intended original public hosted branch job
+              run: |
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-four-tool-buildonly-20261116
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$RUNNER_ENVIRONMENT" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(/usr/bin/id -u)" -gt 0
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Require preinstalled verified Node and npm before four bounded registry reads
+              run: /usr/bin/python3 -I scripts/ci/prepare-gateway-four-tools.py
+            - name: Run the unchanged native branch source selector and canonical producer readback
+              run: |
+                  # No setup-node, broad npm ci, package scripts, runtime, upload or cleanup.
+                  # Missing or mismatched Node/npm stops the preceding step before any provisioning.
+                  env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH \
+                    "$RUNNER_TOOL_CACHE/node/24.22.2/x64/bin/node" \
+                    scripts/build-gateway-tag-archive.mjs --qualify-branch

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { validateExpectedGatewayTagRef } from './owned-git-read.mjs';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { sourceDigest } from './committed-source-bridge.mjs';
@@ -689,4 +690,201 @@ export function createGitHubServiceMetadataModel(selection, credential, host, cl
             typeof clock.clear === 'function',
     );
     return makeTransport(selection, credential, host, clock, 'injected-model-unqualified');
+}
+
+const sourceRetained = new Map();
+export const GITHUB_SOURCE_PROFILE = Object.freeze({
+    annotations: 8,
+    tagRequests: 11,
+    branchRequests: 3,
+});
+export class GitHubSourceSelectionError extends Error {
+    constructor(cause, selector) {
+        super('Expected GitHub source selection failed; custody retained.', { cause });
+        this.selector = selector;
+    }
+}
+function makeSourceSelector(selection, host, clock, mode) {
+    assert.deepEqual(Object.keys(selection).sort(), ['kind', 'ref', 'repository', 'sourceCommit']);
+    const selected = structuredClone(selection),
+        sha = /^[a-f0-9]{40}$/;
+    assert.equal(selected.repository, 'brucerry/embedded-linux-diagnostic-hub');
+    assert.ok(['tag', 'branch'].includes(selected.kind));
+    assert.match(selected.sourceCommit, sha);
+    if (selected.kind === 'tag') validateExpectedGatewayTagRef(selected.ref);
+    else {
+        assert.match(selected.ref, /^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/);
+        assert.ok(
+            !selected.ref.includes('..') &&
+                !selected.ref.includes('//') &&
+                !selected.ref.endsWith('/') &&
+                !selected.ref.endsWith('.lock'),
+        );
+    }
+    assert.equal(typeof host?.request, 'function');
+    for (const key of ['now', 'set', 'clear']) assert.equal(typeof clock?.[key], 'function');
+    const context = { next: 0, pending: new Map(), observed: [] };
+    let used = false,
+        failed = false,
+        complete = false;
+    const root = `/repos/${selected.repository}/git`;
+    const refPath =
+        root +
+        '/ref/' +
+        selected.ref.slice('refs/'.length).split('/').map(encodeURIComponent).join('/');
+    const summary = (row) => ({
+        id: row.id,
+        role: row.role,
+        status: row.status,
+        bytes: row.bytes,
+        sha256: row.sha256,
+        retired: row.retired,
+        tlsAuthorized: row.tlsAuthorized,
+        requestClose: row.requestClose,
+        responseClose: row.responseClose,
+        socketsClosed: row.sockets.every((s) => s.closed && !s.hadError),
+        primary: row.primary,
+    });
+    const selector = Object.freeze({
+        snapshot: () =>
+            Object.freeze({
+                mode,
+                used,
+                failed,
+                complete,
+                requests: context.next,
+                pending: context.pending.size,
+                closedRequests: context.observed.length,
+                jobAuthentication: null,
+                uploadAttribution: null,
+                releaseAcceptance: false,
+            }),
+        diagnostics: () => context.observed.map(summary),
+        assertSettled() {
+            assert.ok(complete && !failed && context.pending.size === 0);
+        },
+        async select() {
+            assert.ok(!used, 'Source selector is one-shot.');
+            used = true;
+            sourceRetained.set(selector, null);
+            const fetch = async (path, role) => {
+                assert.ok(
+                    !failed &&
+                        context.next <
+                            (selected.kind === 'tag'
+                                ? GITHUB_SOURCE_PROFILE.tagRequests
+                                : GITHUB_SOURCE_PROFILE.branchRequests),
+                );
+                const operation = requestOperation(context, host, path, role, null, clock);
+                const bytes = await operation.completed;
+                await operation.retired;
+                if (operation.row.primary) throw operation.error();
+                return parseGitHubMetadataJSON(bytes);
+            };
+            const object = (value) => {
+                assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+                assert.match(value.sha, sha);
+                assert.ok(['commit', 'tag'].includes(value.type));
+                return { oid: value.sha, type: value.type };
+            };
+            try {
+                const first = await fetch(refPath, 'source-ref-before');
+                assert.equal(first.ref, selected.ref);
+                const original = object(first.object),
+                    chain = [],
+                    seen = new Set();
+                let target = original;
+                for (;;) {
+                    assert.ok(!seen.has(target.oid));
+                    seen.add(target.oid);
+                    chain.push({ ...target });
+                    if (target.type === 'commit') break;
+                    assert.equal(selected.kind, 'tag');
+                    assert.ok(chain.length <= GITHUB_SOURCE_PROFILE.annotations);
+                    const tag = await fetch(root + '/tags/' + target.oid, 'source-tag');
+                    assert.equal(tag.sha, target.oid);
+                    target = object(tag.object);
+                }
+                assert.equal(
+                    target.oid,
+                    selected.sourceCommit,
+                    'Advertised ref selects another source commit.',
+                );
+                if (selected.kind === 'branch') assert.equal(original.type, 'commit');
+                const commit = await fetch(
+                    root + '/commits/' + selected.sourceCommit,
+                    'source-commit',
+                );
+                assert.equal(commit.sha, selected.sourceCommit);
+                assert.match(commit.tree?.sha, sha);
+                const last = await fetch(refPath, 'source-ref-after');
+                assert.equal(last.ref, selected.ref);
+                assert.deepEqual(object(last.object), original, 'Advertised source ref changed.');
+                assert.equal(context.pending.size, 0);
+                const result = Object.freeze({
+                    repository: selected.repository,
+                    ref: selected.ref,
+                    objectID: original.oid,
+                    objectType: original.type,
+                    sourceCommit: selected.sourceCommit,
+                    sourceTree: commit.tree.sha,
+                    chain: Object.freeze(chain.map(Object.freeze)),
+                    observation: mode,
+                    jobAuthentication: null,
+                    originalEventObjectAuthentication: null,
+                    uploadAttribution: null,
+                    releaseAcceptance: false,
+                });
+                complete = true;
+                sourceRetained.delete(selector);
+                return result;
+            } catch (cause) {
+                failed = true;
+                sourceRetained.set(selector, cause);
+                throw new GitHubSourceSelectionError(cause, selector);
+            }
+        },
+    });
+    return selector;
+}
+/** Public fixed-repository GETs only. No credential discovery, writes, redirect or retry.
+ * Unsupported proxy/custom-CA configuration is refused, never bypassed or changed.
+ * TLS/source consistency is not authentication of the triggering job or an earlier tag event.
+ */
+export function createGitHubSourceSelector(selection) {
+    validateGitHubMetadataEnvironment({
+        tls: process.env.NODE_TLS_REJECT_UNAUTHORIZED,
+        nodeOptions: process.env.NODE_OPTIONS,
+        nodePath: process.env.NODE_PATH,
+    });
+    assert.ok(
+        !process.env.NODE_EXTRA_CA_CERTS,
+        'Unsupported source-selector custom CA configuration.',
+    );
+    for (const key of [
+        'HTTP_PROXY',
+        'HTTPS_PROXY',
+        'ALL_PROXY',
+        'http_proxy',
+        'https_proxy',
+        'all_proxy',
+    ])
+        assert.ok(
+            !process.env[key],
+            'Source-selector proxy configuration requires a supported owned transport.',
+        );
+    return makeSourceSelector(
+        selection,
+        { request: httpsRequest },
+        {
+            now: () => performance.now(),
+            set: (fn, ms) => setTimeout(fn, ms),
+            clear: (timer) => clearTimeout(timer),
+        },
+        'node-https-source-unqualified',
+    );
+}
+/** Actual selector/HTTP-owner algorithms through an explicitly nonqualifying fake-host boundary. */
+export function createGitHubSourceSelectorModel(selection, host, clock) {
+    return makeSourceSelector(selection, host, clock, 'injected-source-model-unqualified');
 }

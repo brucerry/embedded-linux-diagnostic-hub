@@ -15,16 +15,19 @@ flowchart LR
 ## Package installation
 
 The source build command `npm run package:gateway` creates
-`release/Diagnostic-Hub-Gateway-0.2.0-rc.1.tar.gz`. The Pages workflow also uploads this package as
-a build artifact. It contains compiled gateway code, a minimal npm manifest/lock, license,
+`release/Diagnostic-Hub-Gateway-0.6.0.tar.gz`. The Pages workflow also uploads this package as a
+build artifact. It contains compiled gateway code, a minimal npm manifest/lock, license,
 configuration example and this guide. Node.js 24 is required on the **lab server**, not on desktop
 users' PCs.
+
+These v0.6.0 filenames illustrate development build output. They do not confirm that the archive is
+currently available or qualified. Obtain a verified package before following the installation steps.
 
 On the server:
 
 ```sh
 mkdir diagnostic-hub-gateway
-tar -xzf Diagnostic-Hub-Gateway-0.2.0-rc.1.tar.gz -C diagnostic-hub-gateway
+tar -xzf Diagnostic-Hub-Gateway-0.6.0.tar.gz -C diagnostic-hub-gateway
 cd diagnostic-hub-gateway
 npm ci --omit=optional --ignore-scripts
 cp .env.gateway.example .env.gateway

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createOwnedWebCapabilities, webChildEnvironments } from './owned-web-capabilities.mjs';
-import { ownedGitRequestKind } from './owned-git-read.mjs';
+import { ownedGitRequestKind, validateExpectedGatewayTagRef } from './owned-git-read.mjs';
 import { startDiagnosticGatewayCommand } from './diagnostic-gateway-command.mjs';
 import { readStableArtifactFile } from './stable-artifact-file.mjs';
 
@@ -115,6 +115,43 @@ export function validateCurrentGatewayBuildContext(value) {
     return Object.freeze({ ...value });
 }
 
+/** Tag-specific sibling; the original branch policy remains unchanged. */
+export function validateTagGatewayBuildContext(value) {
+    assert.deepEqual(Object.keys(value).sort(), [
+        'arch',
+        'event',
+        'jobKey',
+        'private',
+        'ref',
+        'repository',
+        'runAttempt',
+        'runId',
+        'runner',
+        'sha',
+        'system',
+        'workflowRef',
+        'workflowSHA',
+    ]);
+    assert.equal(value.repository, 'brucerry/embedded-linux-diagnostic-hub');
+    assert.equal(value.private, false);
+    assert.equal(value.event, 'push');
+    assert.equal(value.runAttempt, '1');
+    assert.match(value.runId, /^[1-9][0-9]{0,31}$/);
+    assert.match(value.jobKey, /^[A-Za-z_][A-Za-z0-9_-]{0,99}$/);
+    assert.equal(value.runner, 'github-hosted');
+    assert.equal(value.system, 'Linux');
+    assert.equal(value.arch, 'X64');
+    assert.match(value.sha, /^[a-f0-9]{40}$/);
+    assert.equal(value.workflowSHA, value.sha);
+    validateExpectedGatewayTagRef(value.ref);
+    assert.equal(value.jobKey, 'build');
+    assert.equal(
+        value.workflowRef,
+        `${value.repository}/.github/workflows/release.yml@${value.ref}`,
+    );
+    return Object.freeze({ ...value });
+}
+
 /** Same producer-issued build/lock commands, with an actual selected toolchain and fresh stage. */
 export function currentGatewayBuildCommand(selection, role) {
     assert.deepEqual(Object.keys(selection).sort(), ['esbuildPath', 'nodePath', 'npmPath', 'root']);
@@ -161,6 +198,19 @@ export function currentGatewayBuildCommand(selection, role) {
 /** Existing native/fake ports only. No default launch, new process framework, cleanup, retry,
  * signal or service-lifetime grant. External service scope must own this caller before activation. */
 export function createCurrentGatewayBuildExecution(selection, ports) {
+    const selected = selectBuild(selection);
+    return createBuildExecution(
+        selected,
+        ports,
+        validateCurrentGatewayBuildContext(selected.context),
+    );
+}
+/** Separate native tag metadata policy. This is not service/job/upload authentication. */
+export function createTagGatewayBuildExecution(selection, ports) {
+    const selected = selectBuild(selection);
+    return createBuildExecution(selected, ports, validateTagGatewayBuildContext(selected.context));
+}
+function selectBuild(selection) {
     const selected = structuredClone(selection);
     assert.deepEqual(Object.keys(selected).sort(), [
         'context',
@@ -172,7 +222,9 @@ export function createCurrentGatewayBuildExecution(selection, ports) {
         'npmPath',
         'root',
     ]);
-    const context = validateCurrentGatewayBuildContext(selected.context);
+    return selected;
+}
+function createBuildExecution(selected, ports, context) {
     const commandSelection = Object.freeze({
         root: selected.root,
         nodePath: selected.nodePath,
