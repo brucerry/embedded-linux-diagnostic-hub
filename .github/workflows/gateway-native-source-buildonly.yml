@@ -51,9 +51,21 @@ jobs:
                   set-safe-directory: false
                   submodules: false
                   lfs: false
-            - name: Require preinstalled verified Node and npm before four bounded registry reads
+            - name: Collect guarded Node npm and four-input preparation outcome
+              id: preparation
               run: /usr/bin/python3 -I scripts/ci/prepare-gateway-four-tools.py
+            - name: >-
+                  Preparation diagnostic /
+                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'report-unavailable' }} /
+                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.stage || 'report-unavailable' }} /
+                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.reason || 'report-unavailable' }} /
+                  input-${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.input || 'none' }}
+              if: ${{ always() }}
+              env:
+                  PREPARATION_RESULT: ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'unavailable' }}
+              run: test "$PREPARATION_RESULT" = prepared
             - name: Run the unchanged native branch source selector and canonical producer readback
+              if: ${{ success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared' }}
               run: |
                   # No setup-node, broad npm ci, package scripts, runtime, upload or cleanup.
                   # Missing or mismatched Node/npm stops the preceding step before any provisioning.
