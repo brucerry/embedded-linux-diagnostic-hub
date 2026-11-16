@@ -60,6 +60,28 @@ export function gatewayInstallPlan(nodePath, npmPath, directory, owner) {
  * @param {null | {attemptId:string, target:{host:string,port:number,fingerprint:string,username:string,password:string}, expectedProbes:Array<{id:string,status:string,exitCode:number,stdoutSHA256:string,stderrSHA256:string}>}} [session]
  */
 export function startDiagnosticGatewayRuntime(input, ports, session = null) {
+    return startRuntime(input, ports, session, false);
+}
+
+/** Separate smoke-only contract. The unused target satisfies shipping configuration syntax;
+ * it is not a device, an owned listener or a verified fingerprint. No session workload is exposed.
+ * Explicit ports only: importing this module cannot launch a child, bind a socket or install code.
+ */
+export function startGatewayHealthOnlySmoke(input, ports) {
+    assert.deepEqual(Object.keys(input).sort(), ['nodePath', 'root', 'token', 'version']);
+    return startRuntime(
+        {
+            ...input,
+            port: 58731,
+            target: { host: '127.0.0.1', port: 58732, fingerprint: 'SHA256:' + 'A'.repeat(43) },
+        },
+        ports,
+        null,
+        true,
+    );
+}
+
+function startRuntime(input, ports, session, healthOnly) {
     assert.deepEqual(
         Object.keys(input).sort(),
         session === null
@@ -67,7 +89,14 @@ export function startDiagnosticGatewayRuntime(input, ports, session = null) {
             : ['nodePath', 'port', 'root', 'token', 'version'],
     );
     if (session === null) {
-        // A physical caller must supply its actual owned fixture. Never invent a trusted key/port.
+        // The original physical caller supplies its actual owned fixture. The distinct health-only
+        // caller supplies fixed syntax-only configuration and never claims target ownership.
+        if (healthOnly)
+            assert.deepEqual(input.target, {
+                host: '127.0.0.1',
+                port: 58732,
+                fingerprint: 'SHA256:' + 'A'.repeat(43),
+            });
         assert.deepEqual(Object.keys(input.target).sort(), ['fingerprint', 'host', 'port']);
         assert.equal(input.target.host, '127.0.0.1');
         assert.ok(
@@ -275,6 +304,13 @@ export function startDiagnosticGatewayRuntime(input, ports, session = null) {
                     endpointProvenance:
                         'trusted-disposable-runner-and-owned-child-readiness-not-kernel-attestation',
                     releaseAcceptance: false,
+                    ...(healthOnly
+                        ? {
+                              workload: 'health-only-no-ssh-fixture',
+                              configuredTargetAuthenticated: false,
+                              sshBehaviorObserved: false,
+                          }
+                        : {}),
                     ...(sessionReceipt ? { publicSession: sessionReceipt } : {}),
                 };
                 retired = true;

@@ -1,0 +1,36 @@
+{
+    "schemaVersion": 1,
+    "sourceLockSHA256": "19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3",
+    "packages": [
+        {
+            "name": "asn1",
+            "version": "0.2.6",
+            "url": "https://registry.npmjs.org/asn1/-/asn1-0.2.6.tgz",
+            "integrity": "sha512-ix/FxPn0MDjeyJ7i/yoHGFt/EX6LyNbxSEhPPXODPL+KB0VPk86UYfL0lMdy+KCnv+fmvIzySwaK5COwqVbWTQ=="
+        },
+        {
+            "name": "bcrypt-pbkdf",
+            "version": "1.0.2",
+            "url": "https://registry.npmjs.org/bcrypt-pbkdf/-/bcrypt-pbkdf-1.0.2.tgz",
+            "integrity": "sha512-qeFIXtP4MSoi6NLqO12WfqARWWuCKi2Rn/9hJLEmtB5yTNr9DqFWkJRCf2qShWzPeAMRnOgCrq0sg/KLv5ES9w=="
+        },
+        {
+            "name": "safer-buffer",
+            "version": "2.1.2",
+            "url": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+            "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg=="
+        },
+        {
+            "name": "ssh2",
+            "version": "1.17.0",
+            "url": "https://registry.npmjs.org/ssh2/-/ssh2-1.17.0.tgz",
+            "integrity": "sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ=="
+        },
+        {
+            "name": "tweetnacl",
+            "version": "0.14.5",
+            "url": "https://registry.npmjs.org/tweetnacl/-/tweetnacl-0.14.5.tgz",
+            "integrity": "sha512-KXXFFdAbFXY4geFIwoyNK+f5Z1b7swfXABfL7HXCmoIWMKU3dmS26672A4EeQtDzLKy7SXmfBu51JolvEKwtGA=="
+        }
+    ]
+}
