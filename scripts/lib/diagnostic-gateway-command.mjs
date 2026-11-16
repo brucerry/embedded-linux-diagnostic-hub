@@ -6,6 +6,7 @@ export const GATEWAY_COMMAND_BOUNDS = Object.freeze({
     build: Object.freeze({ deadlineMs: 480000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
     install: Object.freeze({ deadlineMs: 180000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
     lock: Object.freeze({ deadlineMs: 120000, stdout: 16777216, stderr: 1048576, chunks: 4096 }),
+    runtimeInputs: Object.freeze({ deadlineMs: 300000, stdout: 8192, stderr: 1024, chunks: 1024 }),
 });
 export class DiagnosticGatewayCustodyFailure extends Error {
     constructor(cause, owner) {
@@ -29,7 +30,11 @@ const deferred = () => {
 export function startDiagnosticGatewayCommand(plan, environment, ports) {
     ports = Object.freeze({ ...ports });
     assert.ok(ports.requireSpawnIdentity === undefined || ports.requireSpawnIdentity === true);
-    assert.ok(['build', 'lock', 'install', 'ownership'].includes(plan.role));
+    assert.ok(['build', 'lock', 'install', 'ownership', 'runtimeInputs'].includes(plan.role));
+    if (plan.role === 'runtimeInputs')
+        assert.ok(
+            Buffer.isBuffer(plan.input) && plan.input.length > 0 && plan.input.length <= 1024 ** 2,
+        );
     assert.ok(Array.isArray(plan.command) && plan.command.length > 1);
     assert.ok(plan.command.every((s) => typeof s === 'string' && s && !s.includes('\0')));
     assert.ok(plan.cwd?.startsWith('/'));
@@ -64,8 +69,8 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
         inputClosed = inputAck,
         retired = false;
     const outputs = {
-        stdout: { chunks: [], bytes: 0, closed: false, overflow: false },
-        stderr: { chunks: [], bytes: 0, closed: false, overflow: false },
+        stdout: { chunks: [], bytes: 0, closed: false, ended: false, overflow: false },
+        stderr: { chunks: [], bytes: 0, closed: false, ended: false, overflow: false },
     };
     const snapshot = () =>
         Object.freeze({
@@ -78,6 +83,12 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             inputClosed,
             stdoutClosed: outputs.stdout.closed,
             stderrClosed: outputs.stderr.closed,
+            ...(selected.role === 'runtimeInputs'
+                ? {
+                      stdoutEnded: outputs.stdout.ended,
+                      stderrEnded: outputs.stderr.ended,
+                  }
+                : {}),
             listeners: listeners.length,
             unknownOperations: unknown,
             primaryFailure: failed,
@@ -256,7 +267,12 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
             on(child[name], 'error', fail);
             on(child[name], 'data', (bytes) => {
                 if (retired) return;
-                if (!Buffer.isBuffer(bytes) || !bytes.length || stream.closed) {
+                if (
+                    !Buffer.isBuffer(bytes) ||
+                    !bytes.length ||
+                    stream.closed ||
+                    (selected.role === 'runtimeInputs' && stream.ended)
+                ) {
                     fail(Error('Invalid Gateway output.'));
                     return;
                 }
@@ -273,7 +289,15 @@ export function startDiagnosticGatewayCommand(plan, environment, ports) {
                 stream.bytes += bytes.length;
                 stream.chunks.push(Buffer.from(bytes));
             });
+            if (selected.role === 'runtimeInputs')
+                on(child[name], 'end', () => {
+                    if (stream.ended || stream.closed)
+                        fail(Error('Invalid Gateway input-worker EOF.'));
+                    stream.ended = true;
+                });
             on(child[name], 'close', () => {
+                if (selected.role === 'runtimeInputs' && !stream.ended)
+                    fail(Error('Gateway input-worker pipe closed before EOF.'));
                 if (stream.closed) fail(Error('Duplicate Gateway pipe close.'));
                 stream.closed = true;
                 finish();
