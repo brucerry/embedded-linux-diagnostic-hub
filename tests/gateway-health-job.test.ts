@@ -6,6 +6,7 @@ import { produceGatewayArchive } from '../scripts/lib/gateway-archive-producer.m
 import { createGatewayHealthJob, HEALTH_JOB_BRANCH } from '../scripts/lib/gateway-health-job.mjs';
 import { GATEWAY_RUNTIME_CHILD_FILES } from '../scripts/lib/gateway-runtime-input-bridge.mjs';
 import { pipelineFixture } from './fixtures/gateway-producer-memory';
+import { createOwnedWebFiles } from '../scripts/lib/owned-web-files.mjs';
 
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 function deferred() {
@@ -80,6 +81,55 @@ async function fixture() {
             ([name, bytes]) => [sourceRoot + '/' + name, bytes] as [string, Buffer],
         ),
     ]);
+    const metadataCalls: string[] = [];
+    const metadataRecords = new Map<string, any>([
+        ['/', { kind: 'directory', uid: 0, mode: 0o40755, size: 0 }],
+        ['/usr', { kind: 'directory', uid: 0, mode: 0o40755, size: 0 }],
+        ['/usr/bin', { kind: 'directory', uid: 0, mode: 0o40755, size: 0 }],
+        ['/usr/bin/python3', { kind: 'link', uid: 0, mode: 0o120777, size: 0 }],
+        ['/usr/bin/python3.12', { kind: 'file', uid: 0, mode: 0o100755, size: pythonBytes.length }],
+        [nodePath, { kind: 'file', uid: 1000, mode: 0o100755, size: nodeBytes.length }],
+    ]);
+    const metadataFiles = createOwnedWebFiles({
+        async lstat(file: string) {
+            metadataCalls.push('lstat:' + file);
+            events.push('stat:' + file);
+            if (file === '/') {
+                controls.rootEntered?.resolve();
+                if (controls.rootWait) await controls.rootWait.promise;
+                if (controls.rootFailure) throw undefined;
+            }
+            const row = metadataRecords.get(file);
+            assert.ok(row, 'Metadata stays within the fixed authored map.');
+            return {
+                ...row,
+                dev: 1,
+                ino: [...metadataRecords.keys()].indexOf(file) + 1,
+                gid: 0,
+                nlink: 1,
+                mtimeMs: 1,
+                ctimeMs: 1,
+                isDirectory: () => row.kind === 'directory',
+                isFile: () => row.kind === 'file',
+                isSymbolicLink: () => row.kind === 'link',
+                ...(controls.metadata?.[file] ?? {}),
+            };
+        },
+        async realpath(file: string) {
+            metadataCalls.push('realpath:' + file);
+            assert.ok(metadataRecords.has(file));
+            return file === '/usr/bin/python3' ? '/usr/bin/python3.12' : file;
+        },
+        async open() {
+            assert.fail('No native file acquisition belongs to this metadata fixture.');
+        },
+        async opendir() {
+            assert.fail('No native Dir acquisition belongs to this metadata fixture.');
+        },
+        async mkdir() {
+            assert.fail('No directory creation belongs to this metadata fixture.');
+        },
+    });
     const frame: any = {
         sourceRoot,
         context,
@@ -97,24 +147,9 @@ async function fixture() {
             assert.ok(f.files.has(name));
             return Buffer.from(f.files.get(name)!);
         },
-        async realpath(file: string) {
-            return file === '/usr/bin/python3' ? '/usr/bin/python3.12' : file;
-        },
-        async lstat(file: string) {
-            events.push('stat:' + file);
-            const directory = ['/', '/usr', '/usr/bin'].includes(file),
-                link = file === '/usr/bin/python3';
-            assert.ok(directory || link || file === nodePath || file === '/usr/bin/python3.12');
-            return {
-                uid: file === nodePath ? 1000 : 0,
-                nlink: 1,
-                mode: directory ? 0o40755 : link ? 0o120777 : 0o100755,
-                size: file === nodePath ? nodeBytes.length : pythonBytes.length,
-                isDirectory: () => directory,
-                isFile: () => !directory && !link,
-                isSymbolicLink: () => link,
-            };
-        },
+        realpath: metadataFiles.filesystem.realpath,
+        lstat: metadataFiles.filesystem.lstat,
+        systemRoot: metadataFiles.systemRoot,
     };
     const bootstrap = {
         snapshot: () => ({ authoredMemoryOwner: true }),
@@ -215,8 +250,81 @@ async function fixture() {
         profile,
         pythonBytes,
         files,
+        metadataFiles,
+        metadataCalls,
     };
 }
+
+test('actual general owned metadata facade still refuses the root pathname before any native call', async () => {
+    const f = await fixture();
+    await assert.rejects(async () => f.frame.lstat('/'));
+    await assert.rejects(async () => f.frame.realpath('/'));
+    await assert.rejects(async () => f.frame.systemRoot.lstat('/usr'));
+    await assert.rejects(async () => f.frame.systemRoot.realpath('/usr'));
+    assert.deepEqual(f.metadataCalls, []);
+    assert.equal(f.metadataFiles.owner.snapshot().pending, 0);
+    f.metadataFiles.owner.assertSettled();
+});
+
+test('driver uses only pathless root metadata while preserving normal usr-parent checks', async () => {
+    const f = await fixture(),
+        job = createGatewayHealthJob(f.runtime, f.ports);
+    await job.run();
+    assert.equal(f.metadataCalls.filter((call) => call === 'lstat:/').length, 1);
+    assert.equal(f.metadataCalls.filter((call) => call === 'realpath:/').length, 1);
+    for (const file of ['/usr', '/usr/bin']) {
+        assert.ok(f.metadataCalls.includes('lstat:' + file));
+        assert.ok(f.metadataCalls.includes('realpath:' + file));
+    }
+    f.metadataFiles.owner.assertSettled();
+});
+
+test('a deferred pathless root read remains in the actual owned counter until it settles', async () => {
+    const f = await fixture();
+    f.controls.rootEntered = deferred();
+    f.controls.rootWait = deferred();
+    const job = createGatewayHealthJob(f.runtime, f.ports),
+        work = job.run();
+    await Promise.race([
+        f.controls.rootEntered.promise,
+        work.then(() => {
+            throw Error('Root metadata milestone missing.');
+        }),
+    ]);
+    assert.equal(f.metadataFiles.owner.snapshot().pending, 1);
+    assert.equal(job.quiescent(), false);
+    assert.equal(f.selectedAdapters.length, 0);
+    f.controls.rootWait.resolve();
+    await work;
+    assert.equal(f.metadataFiles.owner.snapshot().pending, 0);
+    f.metadataFiles.owner.assertSettled();
+});
+
+test('undefined pathless root metadata failure is retained and prevents adapter submission', async () => {
+    const f = await fixture();
+    f.controls.rootFailure = true;
+    const job = createGatewayHealthJob(f.runtime, f.ports);
+    const error: any = await job.run().catch((value: unknown) => value);
+    assert.ok(error instanceof Error);
+    assert.ok(error.cause instanceof Error);
+    assert.equal(error.cause.cause, undefined);
+    assert.equal(f.metadataFiles.owner.snapshot().primaryFailure, true);
+    assert.equal(f.metadataFiles.owner.snapshot().pending, 0);
+    assert.equal(f.selectedAdapters.length, 0);
+    assert.equal(f.reports.length, 0);
+    assert.throws(() => f.metadataFiles.owner.assertSettled());
+});
+
+test('unsafe root or usr metadata remains refused before Python or adapter selection', async () => {
+    for (const file of ['/', '/usr']) {
+        const f = await fixture();
+        f.controls.metadata = { [file]: { mode: 0o40777 } };
+        const job = createGatewayHealthJob(f.runtime, f.ports);
+        await assert.rejects(job.run());
+        assert.equal(f.selectedAdapters.length, 0);
+        assert.equal(f.metadataCalls.includes('lstat:/usr/bin/python3'), false);
+    }
+});
 
 test('driver consumes original canonical producer bytes before selecting its adapter and records only the current job', async () => {
     const f = await fixture(),

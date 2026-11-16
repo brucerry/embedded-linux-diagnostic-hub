@@ -342,6 +342,7 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
                                     read(file, maximum, execution.filesystem),
                                 realpath: (file) => execution.filesystem.realpath(file),
                                 lstat: (file) => execution.filesystem.lstat(file),
+                                systemRoot: files.systemRoot,
                                 async sourceFile(name) {
                                     const rows = result.record.sourceBridge.inventory.filter(
                                         (row) => row.path === name,

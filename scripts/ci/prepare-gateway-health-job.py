@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 
-BRANCH = "ci/v060-gateway-health-smoke-20261116"
+BRANCH = "ci/v060-gateway-health-root-metadata-20261116"
 _SPEC = importlib.util.spec_from_file_location(
     "gateway_publisher_health_preparation", Path(__file__).with_name("prepare-gateway-publisher-node.py"))
 P = importlib.util.module_from_spec(_SPEC)

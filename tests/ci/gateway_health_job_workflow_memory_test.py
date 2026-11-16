@@ -181,7 +181,7 @@ class GatewayHealthWorkflowMemory(unittest.TestCase):
         self.assertEqual(WORKFLOW.split("env:\n", 1)[1].split("\njobs:", 1)[0],
                          OLD_WORKFLOW.split("env:\n", 1)[1].split("\njobs:", 1)[0])
         self.assertIn("shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}", WORKFLOW)
-        self.assertEqual(WORKFLOW.count("/usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH"), 1)
+        self.assertEqual(WORKFLOW.count("/usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH"), 2)
         self.assertNotIn("\n                  env -u", WORKFLOW)
         self.assertEqual(WORKFLOW.count("scripts/observe-gateway-health-job.mjs --qualify-branch"), 1)
         self.assertNotIn("scripts/build-gateway-tag-archive.mjs", WORKFLOW)
@@ -189,6 +189,20 @@ class GatewayHealthWorkflowMemory(unittest.TestCase):
         self.assertIn("steps.health_report.outcome == 'success' && steps.health_report.outputs.result", " ".join(WORKFLOW.split()))
         self.assertIn('run: test "$HEALTH_RESULT" = passed', WORKFLOW)
         self.assertNotIn("|| true", WORKFLOW)
+
+    def test_inert_import_check_is_prepared_and_precedes_the_single_worker(self):
+        preparation = WORKFLOW.index('run: test "$PREPARATION_RESULT" = prepared')
+        imported = WORKFLOW.index("- name: Check inert health entry imports before the worker")
+        worker = WORKFLOW.index("- name: Produce once and exercise the same-job verified package health")
+        self.assertLess(preparation, imported)
+        self.assertLess(imported, worker)
+        block = " ".join(WORKFLOW[imported:worker].split())
+        self.assertIn("success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared'", block)
+        self.assertIn("/usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH", block)
+        self.assertIn('"$RUNNER_TEMP/gateway-publisher-node-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/node"', block)
+        self.assertEqual(WORKFLOW.count("scripts/check-gateway-health-entry.mjs"), 1)
+        self.assertEqual(WORKFLOW.count("scripts/observe-gateway-health-job.mjs --qualify-branch"), 1)
+        self.assertNotIn("scripts/build-gateway-tag-archive.mjs", WORKFLOW)
 
     def test_exact_context_and_report_filename(self):
         selected = R.context(environment(), 1001)
@@ -239,6 +253,27 @@ class GatewayHealthWorkflowMemory(unittest.TestCase):
             files.read_error = failure
             self.assertEqual(R.main(environment(), files, lambda: 1001), 0)
             self.assertEqual(files.output, [b"result=failed\nstage=unavailable\nreason=report-unavailable\n"])
+
+    def test_authored_absent_unsafe_and_malformed_reports_share_only_unavailable(self):
+        for variant in ["absent", "unsafe-mode", "malformed", "mismatched-source"]:
+            system = MemoryOS()
+            if variant == "absent":
+                original = system.lstat
+                def missing(path):
+                    if path == system.report:
+                        raise FileNotFoundError("Private inert missing-report detail.")
+                    return original(path)
+                system.lstat = missing
+            elif variant == "unsafe-mode":
+                system.nodes[system.report].st_mode = stat.S_IFREG | 0o644
+            else:
+                data = b'{"inert-malformed":' if variant == "malformed" else encoded({**record(), "sourceCommit": "b" * 40})
+                system.nodes[system.report].data = bytearray(data)
+                system.nodes[system.report].st_size = len(data)
+            with self.subTest(variant=variant):
+                self.assertEqual(R.main(environment(), system.files(), lambda: 1001), 0)
+                self.assertEqual(bytes(system.nodes[system.output].data),
+                                 b"result=failed\nstage=unavailable\nreason=report-unavailable\n")
 
     def test_post_worker_failure_cannot_be_masked_by_passed_record(self):
         files = MemoryFiles()

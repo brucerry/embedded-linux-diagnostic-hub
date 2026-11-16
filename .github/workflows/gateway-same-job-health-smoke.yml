@@ -2,7 +2,7 @@ name: Gateway same-job canonical package health smoke
 
 on:
     push:
-        branches: [ci/v060-gateway-health-smoke-20261116]
+        branches: [ci/v060-gateway-health-root-metadata-20261116]
 
 permissions:
     contents: read
@@ -25,7 +25,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-gateway-health-smoke-20261116' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-gateway-health-root-metadata-20261116' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         defaults:
@@ -36,7 +36,7 @@ jobs:
               run: |
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-health-smoke-20261116
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-health-root-metadata-20261116
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$RUNNER_ENVIRONMENT" = github-hosted
                   test "$RUNNER_OS" = Linux
@@ -68,6 +68,14 @@ jobs:
                       ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result
                       || 'unavailable' }}
               run: test "$PREPARATION_RESULT" = prepared
+            - name: Check inert health entry imports before the worker
+              if:
+                  ${{ success() && steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result == 'prepared' }}
+              run: |
+                  /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH \
+                    "$RUNNER_TEMP/gateway-publisher-node-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/node" \
+                    scripts/check-gateway-health-entry.mjs
             - name: Produce once and exercise the same-job verified package health
               id: smoke
               if:

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { GATEWAY_RUNTIME_CHILD_FILES } from './gateway-runtime-input-bridge.mjs';
 import { WEB_ARCHIVE_LIMITS } from './web-archive-limits.mjs';
 
-export const HEALTH_JOB_BRANCH = 'ci/v060-gateway-health-smoke-20261116';
+export const HEALTH_JOB_BRANCH = 'ci/v060-gateway-health-root-metadata-20261116';
 const repository = 'brucerry/embedded-linux-diagnostic-hub';
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const held = new Set();
@@ -243,7 +243,17 @@ export function createGatewayHealthJob(input, ports) {
                         assert.equal((await frame.lstat(nodePath)).size, profile.node.bytes);
                         // Fixed system alias: inspect its parents before following it. Never copy,
                         // change modes, substitute a downloaded Python or traverse a refused parent.
-                        for (const p of ['/', '/usr', '/usr/bin']) {
+                        // The source-file facade intentionally refuses the filesystem root.
+                        // Use its distinct fixed metadata capability for that one observation.
+                        const root = await frame.systemRoot.lstat();
+                        assert.ok(
+                            root.isDirectory() &&
+                                !root.isSymbolicLink() &&
+                                root.uid === 0 &&
+                                !(root.mode & 0o7022),
+                        );
+                        assert.equal(await frame.systemRoot.realpath(), '/');
+                        for (const p of ['/usr', '/usr/bin']) {
                             const row = await frame.lstat(p);
                             assert.ok(
                                 row.isDirectory() &&

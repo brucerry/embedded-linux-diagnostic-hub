@@ -13,7 +13,7 @@ import stat
 
 
 REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
-BRANCH = "ci/v060-gateway-health-smoke-20261116"
+BRANCH = "ci/v060-gateway-health-root-metadata-20261116"
 REF = "refs/heads/" + BRANCH
 PHASES = frozenset(("admission", "canonical-build", "package-readback", "tool-selection",
                     "runtime-inputs", "health", "complete", "report"))

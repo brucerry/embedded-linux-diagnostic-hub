@@ -264,5 +264,28 @@ export function createOwnedWebFiles(native) {
             namespaces.set(file, 'acknowledged');
         },
     };
-    return Object.freeze({ owner, filesystem: Object.freeze(filesystem) });
+    // Separate, pathless metadata capability. The general file facade still refuses '/'.
+    // These two fixed observations share its pending/failure custody and cannot open,
+    // enumerate, write or select another path.
+    const rootFailure = (cause) =>
+        cause instanceof Error ? cause : new Error('System-root metadata failed.', { cause });
+    const rootMetadata = (method, args) => {
+        assert.equal(args.length, 0);
+        return io(() => {
+            try {
+                const operation = native[method]('/');
+                assert.ok(operation && typeof operation.then === 'function');
+                return Promise.resolve(operation).catch((cause) => {
+                    throw rootFailure(cause);
+                });
+            } catch (cause) {
+                throw rootFailure(cause);
+            }
+        });
+    };
+    const systemRoot = Object.freeze({
+        lstat: (...args) => rootMetadata('lstat', args),
+        realpath: (...args) => rootMetadata('realpath', args),
+    });
+    return Object.freeze({ owner, filesystem: Object.freeze(filesystem), systemRoot });
 }

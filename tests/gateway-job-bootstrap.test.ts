@@ -331,3 +331,89 @@ test('callback source reread refuses bytes that drifted from the canonical produ
     assert.equal(f.f.handles.size, 0);
     assert.equal(bootstrap.quiescent(), true);
 });
+
+test('actual callback exposes pathless root metadata on the same tracked file owner', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    const lstat = f.ports.filesystem.lstat,
+        realpath = f.ports.filesystem.realpath;
+    let rootStats = 0,
+        rootRealpaths = 0,
+        entered!: () => void,
+        release!: () => void;
+    const rootEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+    });
+    const rootRelease = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    f.controls.stat = (file: string) => (file === '/' ? { uid: 0 } : {});
+    f.ports.filesystem.lstat = async (file: string) => {
+        if (file === '/') {
+            rootStats++;
+            entered();
+            await rootRelease;
+        }
+        return lstat(file);
+    };
+    f.ports.filesystem.realpath = async (file: string) => {
+        if (file === '/') rootRealpaths++;
+        return realpath(file);
+    };
+    const bootstrap = f.make();
+    f.ports.afterReadback = async (frame: any) => {
+        assert.ok(Object.isFrozen(frame.systemRoot));
+        await assert.rejects(async () => frame.lstat('/'));
+        await assert.rejects(async () => frame.realpath('/'));
+        await assert.rejects(async () => frame.systemRoot.lstat('/usr'));
+        assert.equal(rootStats, 0);
+        assert.equal(rootRealpaths, 0);
+        const work = frame.systemRoot.lstat();
+        await Promise.race([
+            rootEntered,
+            work.then(() => {
+                throw Error('Root read milestone missing.');
+            }),
+        ]);
+        assert.equal(bootstrap.snapshot().files.pending, 1);
+        assert.equal(bootstrap.quiescent(), false);
+        release();
+        const root = await work;
+        assert.equal(root.isDirectory(), true);
+        assert.equal(root.uid, 0);
+        assert.equal(await frame.systemRoot.realpath(), '/');
+        assert.equal(rootStats, 1);
+        assert.equal(rootRealpaths, 1);
+        assert.equal(bootstrap.snapshot().files.pending, 0);
+        return { authoredMetadataOnly: true, releaseAcceptance: false };
+    };
+    await bootstrap.run();
+    assert.equal(bootstrap.snapshot().complete, true);
+    assert.equal(bootstrap.snapshot().files.pending, 0);
+    assert.equal(f.f.handles.size, 0);
+    assert.equal(bootstrap.quiescent(), true);
+});
+
+test('actual callback root metadata failure keeps raw cause and failed file custody', async () => {
+    const f = await nativeBootstrapFixture('branch', 0);
+    const lstat = f.ports.filesystem.lstat;
+    let rootCalls = 0;
+    f.ports.filesystem.lstat = async (file: string) => {
+        if (file === '/') {
+            rootCalls++;
+            throw undefined;
+        }
+        return lstat(file);
+    };
+    f.ports.afterReadback = (frame: any) => frame.systemRoot.lstat();
+    const bootstrap = f.make();
+    const error: any = await bootstrap.run().catch((value: unknown) => value);
+    assert.ok(error.cause instanceof Error);
+    assert.equal(error.cause.cause, undefined);
+    assert.equal(rootCalls, 1);
+    assert.equal(bootstrap.snapshot().failed, true);
+    assert.equal(bootstrap.snapshot().complete, false);
+    assert.equal(bootstrap.snapshot().files.primaryFailure, true);
+    assert.equal(bootstrap.snapshot().files.pending, 0);
+    assert.equal(f.f.handles.size, 0);
+    assert.equal(bootstrap.quiescent(), true);
+});
