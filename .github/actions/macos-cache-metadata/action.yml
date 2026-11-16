@@ -1,0 +1,21 @@
+name: Fixed macOS cache metadata
+description: Read fixed cache metadata or report a prior result; never invoke a cache executable
+inputs:
+    mode:
+        description: observe or report
+        required: true
+    expected_arch:
+        description: Fixed architecture from the hosted lane
+        required: true
+outputs:
+    status:
+        description: Finite metadata classification
+    reason:
+        description: Finite refusal or entrypoint code
+    custody:
+        description: Bounded observation custody class
+    valid:
+        description: Complete finite record marker; also require observation step success
+runs:
+    using: node24
+    main: main.cjs

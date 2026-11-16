@@ -1,0 +1,74 @@
+name: Inspect fixed macOS cache metadata
+on:
+    push:
+        branches: [ci/v060-macos-cache-metadata-20261116]
+permissions:
+    contents: read
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    NODE_OPTIONS: --no-addons
+    NODE_PATH: ''
+    NODE_COMPILE_CACHE: ''
+    NODE_DISABLE_COMPILE_CACHE: '1'
+    ESBUILD_BINARY_PATH: ''
+concurrency:
+    group: macos-cache-metadata-${{ github.ref }}
+    cancel-in-progress: false
+jobs:
+    cache_metadata:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.repository_id ==
+            '1405501450' && github.event.repository.private == false && github.event_name == 'push'
+            && github.ref == 'refs/heads/ci/v060-macos-cache-metadata-20261116' &&
+            github.run_attempt == 1 && github.workflow_sha == github.sha
+        name: Cache metadata (${{ matrix.arch }})
+        strategy:
+            fail-fast: false
+            max-parallel: 2
+            matrix:
+                include:
+                    - runner: macos-15-intel
+                      arch: x64
+                    - runner: macos-15
+                      arch: arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 2
+        env:
+            OBS_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+        steps:
+            - name: Checkout exact public overlay
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Observe fixed cache metadata
+              id: observe
+              uses: ./.github/actions/macos-cache-metadata
+              with:
+                  mode: observe
+                  expected_arch: ${{ matrix.arch }}
+            - name: >-
+                  Cache ${{ matrix.arch }} — ${{ steps.observe.outcome == 'success' &&
+                  steps.observe.outputs.valid == '1' && steps.observe.outputs.status ||
+                  'NOT_OBSERVED' }} / ${{ steps.observe.outcome == 'success' &&
+                  steps.observe.outputs.valid == '1' && steps.observe.outputs.reason ||
+                  'entry-report' }} / ${{ steps.observe.outcome == 'success' &&
+                  steps.observe.outputs.valid == '1' && steps.observe.outputs.custody ||
+                  'NOT_OBSERVED' }}
+              if: always()
+              uses: ./.github/actions/macos-cache-metadata
+              with:
+                  mode: report
+                  expected_arch: ${{ matrix.arch }}
+              env:
+                  OBS_OUTCOME: ${{ steps.observe.outcome }}
+                  OBS_VALID: ${{ steps.observe.outputs.valid }}
+                  OBS_STATUS: ${{ steps.observe.outputs.status }}
+                  OBS_REASON: ${{ steps.observe.outputs.reason }}
+                  OBS_CUSTODY: ${{ steps.observe.outputs.custody }}
