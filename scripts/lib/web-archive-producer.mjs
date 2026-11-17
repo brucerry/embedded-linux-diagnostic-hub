@@ -13,6 +13,7 @@ import { WEB_ARCHIVE_LIMITS } from './web-archive-limits.mjs';
 export { WEB_ARCHIVE_LIMITS } from './web-archive-limits.mjs';
 const hash = /^[a-f0-9]{64}$/;
 const oid = /^[a-f0-9]{40}$/;
+const nativeBuildPreset = 'shipping-vite-web-native-config';
 function closed(value, fields) {
     assert.ok(value && typeof value === 'object' && !Array.isArray(value));
     assert.deepEqual(Object.keys(value).sort(), [...fields].sort());
@@ -127,11 +128,14 @@ function builder(value) {
     // Snapshot all nested identity collections before awaiting a build.
     return JSON.parse(JSON.stringify(value));
 }
-function buildOutcome(result, observedBuilder) {
+function buildOutcome(result, observedBuilder, preset) {
+    // Historical bundled-config records remain readable under their original preset only.
+    // New production always requires native config loading; neither form grants runtime admission.
+    assert.ok(preset === 'shipping-vite-web' || preset === nativeBuildPreset);
     closed(result, ['pid', 'exitCode', 'signal', 'error', 'command', 'environment', 'custody']);
     assert.ok(
         Array.isArray(result.command) &&
-            result.command.length === 9 &&
+            result.command.length === (preset === nativeBuildPreset ? 11 : 9) &&
             result.command.every((value) => typeof value === 'string'),
     );
     assert.equal(result.command[0], observedBuilder.runtime.executablePath);
@@ -148,6 +152,8 @@ function buildOutcome(result, observedBuilder) {
     );
     assert.ok(result.command[4].startsWith('/') && result.command[4].endsWith('/vite.config.mts'));
     assert.ok(result.command[8].startsWith('/'));
+    if (preset === nativeBuildPreset)
+        assert.deepEqual(result.command.slice(9), ['--configLoader', 'native']);
     assert.deepEqual(result.environment, { NODE_ENV: 'production', WEB_BASE_PATH: './' });
     assert.ok(Number.isSafeInteger(result.pid) && result.pid > 0);
     assert.equal(result.error, null);
@@ -173,7 +179,7 @@ async function produceArchive(expected, sourceProvider, io, local) {
     assert.equal(JSON.parse(packageBytes.toString('utf8')).version, expected.version);
     const observedBuilder = builder(await io.builder());
     const result = structuredClone(await io.build());
-    buildOutcome(result, observedBuilder);
+    buildOutcome(result, observedBuilder, nativeBuildPreset);
     // A rejected/unknown build cannot be promoted into output collection or publication.
     const before = payload(await io.output());
     assert.deepEqual(
@@ -253,7 +259,7 @@ async function produceArchive(expected, sourceProvider, io, local) {
         sourceBridgeSHA256: sourceDigest(JSON.stringify(source) + '\n'),
         sourceBridge: source,
         builder: observedBuilder,
-        build: { preset: 'shipping-vite-web', ...result },
+        build: { preset: nativeBuildPreset, ...result },
         archive: artifact,
         checksum,
         payload: before.records,
@@ -320,8 +326,7 @@ function validateRecord(value, expected, local) {
     assert.equal(value.sourceBridgeSHA256, sourceDigest(JSON.stringify(value.sourceBridge) + '\n'));
     const observedBuilder = builder(value.builder),
         { preset, ...result } = value.build;
-    assert.equal(preset, 'shipping-vite-web');
-    buildOutcome(result, observedBuilder);
+    buildOutcome(result, observedBuilder, preset);
     for (const field of ['productRuntime', 'loaderProvenance', 'normalGC', 'forcedGC'])
         assert.equal(value[field], null);
     closed(value.archive, ['name', 'bytes', 'sha256']);

@@ -99,6 +99,8 @@ export function webBuildFixture(files = new Map<string, Buffer>()) {
                 'web',
                 '--outDir',
                 '/project/validation/web/site',
+                '--configLoader',
+                'native',
             ],
             environment: { NODE_ENV: 'production', WEB_BASE_PATH: './' },
             custody: {

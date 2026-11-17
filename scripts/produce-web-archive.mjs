@@ -198,6 +198,8 @@ async function runMain(raw, capability, local) {
                 'web',
                 '--outDir',
                 site,
+                '--configLoader',
+                'native',
             ];
             const environment = { NODE_ENV: 'production', WEB_BASE_PATH: './' };
             const owner = startOwnedWebBuild(

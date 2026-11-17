@@ -95,6 +95,8 @@ function fixture() {
             'web',
             '--outDir',
             '/synthetic/validation/new/site',
+            '--configLoader',
+            'native',
         ],
         environment: { NODE_ENV: 'production', WEB_BASE_PATH: './' },
         custody: {
@@ -202,6 +204,8 @@ test('actual-source producer encodes the complete captured payload and binds sou
         sourceDigest(JSON.stringify(result.sourceBridge) + '\n'),
     );
     assert.deepEqual(result.build.command, f.build.command);
+    assert.equal(result.build.preset, 'shipping-vite-web-native-config');
+    assert.deepEqual(result.build.command.slice(9), ['--configLoader', 'native']);
     assert.deepEqual(result.builder, f.builder);
     assert.ok(f.observations >= 12);
     assert.equal(result.archive.name, 'Diagnostic-Hub-Web-0.6.0.zip');
@@ -270,6 +274,59 @@ for (const update of [
             assert.equal(f.record, undefined);
         },
     );
+
+test('historical bundled-config records remain readable without relabeling or qualification', async () => {
+    const f = fixture();
+    const native = await produceWebArchive(f.context, f.provider, f.io);
+    const legacy = structuredClone(native);
+    legacy.build.preset = 'shipping-vite-web';
+    legacy.build.command = legacy.build.command.slice(0, 9);
+    assert.equal(validateWebArchiveBuildRecord(legacy, f.context), legacy);
+    assert.deepEqual(
+        parseWebArchiveBuildRecord(Buffer.from(JSON.stringify(legacy) + '\n'), f.context),
+        legacy,
+    );
+    assert.equal(legacy.releaseAcceptance, false);
+    assert.equal(legacy.loaderProvenance, null);
+    assert.equal(legacy.productRuntime, null);
+});
+
+test('current producer refuses a legacy build before output or publication', async () => {
+    const f = fixture();
+    f.build.command = f.build.command.slice(0, 9);
+    await assert.rejects(produceWebArchive(f.context, f.provider, f.io));
+    assert.ok(!f.calls.includes('output'));
+    assert.equal(f.archives.size, 0);
+    assert.equal(f.record, undefined);
+});
+
+for (const mode of [
+    'missing-preset',
+    'unknown-preset',
+    'legacy-label-native-command',
+    'native-label-legacy-command',
+    'bundle-loader',
+    'runner-loader',
+    'duplicate-loader',
+    'foreign-option',
+])
+    test('record reader refuses mismatched config-loader contract: ' + mode, async () => {
+        const f = fixture();
+        const record = await produceWebArchive(f.context, f.provider, f.io);
+        const changed: any = structuredClone(record);
+        if (mode === 'missing-preset') delete changed.build.preset;
+        if (mode === 'unknown-preset') changed.build.preset = 'unreviewed-web';
+        if (mode === 'legacy-label-native-command') changed.build.preset = 'shipping-vite-web';
+        if (mode === 'native-label-legacy-command') changed.build.command.length = 9;
+        if (mode === 'bundle-loader') changed.build.command[10] = 'bundle';
+        if (mode === 'runner-loader') changed.build.command[10] = 'runner';
+        if (mode === 'duplicate-loader') changed.build.command.push('--configLoader', 'native');
+        if (mode === 'foreign-option') changed.build.command[9] = '--configLoader=native';
+        assert.throws(() => validateWebArchiveBuildRecord(changed, f.context));
+        assert.throws(() =>
+            parseWebArchiveBuildRecord(Buffer.from(JSON.stringify(changed) + '\n'), f.context),
+        );
+    });
 
 test('pending build holds admission before any output is collected', async () => {
     const f = fixture();
@@ -549,6 +606,7 @@ test('held CLI uses only fixed shipping config, new output paths and exclusive w
         /\[\s*await fs\.realpath\(process\.execPath\),\s*vite,\s*'build',\s*'--config'/,
     );
     assert.match(source, /startOwnedWebBuild/);
+    assert.match(source, /site,\s*'--configLoader',\s*'native'/);
     assert.doesNotMatch(source, /spawnSync|stdio: 'inherit'/);
     assert.equal((source.match(/flag: 'wx'/g) || []).length, 3);
     assert.doesNotMatch(source, /fs\.(rm|unlink|chmod|chown)|--no-sandbox|npm.*install/);
