@@ -122,6 +122,15 @@ function inspect(value) {
                 ),
             );
         }
+        if (phase === 'host') {
+            assert.ok(
+                guard.name
+                    .replace(/\s+/g, ' ')
+                    .includes(
+                        "steps.host_report.outcome == 'success' && steps.host_report.outputs.reason || 'unavailable'",
+                    ),
+            );
+        }
         assert.deepEqual(guard.env, {
             WORKER_OUTCOME: '${{ steps.' + phase + '.outcome }}',
             REPORT_OUTCOME: '${{ steps.' + phase + '_report.outcome }}',
@@ -195,6 +204,18 @@ test('metadata fields cannot override a failed worker or collector acknowledgeme
         v.jobs.web_baseline.steps[at + 1].run = v.jobs.web_baseline.steps[at + 1].run.replace(
             'test "$' + label + '" = success\n',
             '',
+        );
+        assert.throws(() => inspect(v));
+    }
+});
+test('host predicate names require successful collection and cannot hide failure', () => {
+    for (const change of ['omit', 'ungated']) {
+        const v = original();
+        const steps = v.jobs.web_baseline.steps;
+        const guard = steps[steps.findIndex((s) => s.id === 'host_report') + 1];
+        guard.name = guard.name.replace(
+            /\$\{\{ steps.host_report.outcome == 'success' &&\s*steps.host_report.outputs.reason \|\| 'unavailable' }}/,
+            change === 'omit' ? 'none' : '${{ steps.host_report.outputs.reason }}',
         );
         assert.throws(() => inspect(v));
     }

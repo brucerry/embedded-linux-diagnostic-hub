@@ -129,7 +129,11 @@ class WebReportMemoryTests(unittest.TestCase):
             result = REPORT.classify(encoded(positive(phase)), b"", b"0\n", phase, "success")
             self.assertEqual(result["result"], "passed")
             output = REPORT.encode_outputs(result)
-            self.assertEqual(set(line.split(b"=", 1)[0] for line in output.splitlines()), {b"result", b"stage", b"closure", b"input"})
+            expected = {b"result", b"stage", b"closure", b"input"}
+            if phase == "host":
+                expected.add(b"reason")
+                self.assertIn(b"reason=none\n", output)
+            self.assertEqual(set(line.split(b"=", 1)[0] for line in output.splitlines()), expected)
             self.assertNotIn(b"releaseAcceptance", output)
             self.assertNotIn(b"runId", output)
             self.assertNotIn(b"authenticated", output)
@@ -155,12 +159,41 @@ class WebReportMemoryTests(unittest.TestCase):
         host = positive("host")
         host.update(status="nonpassing", stage="executable", reason="close", input="driver", closure="retained-unknown")
         result = REPORT.classify(b"", encoded(host), b"1\n", "host", "failure")
-        self.assertEqual(result, {"result": "nonpassing", "stage": "executable", "closure": "retained-unknown", "input": "driver"})
+        self.assertEqual(result, {"result": "nonpassing", "stage": "executable", "closure": "retained-unknown", "input": "driver", "reason": "close"})
         prep = {"schemaVersion": 1, "status": "refused", "stage": "package-parse", "reason": "archive-policy", "input": "26"}
         self.assertEqual(REPORT.classify(b"", encoded(prep), b"1\n", "preparation", "failure")["input"], "26")
         runtime = positive("runtime")
         runtime.update(status="nonpassing", stage="owned-browser", closure="retained-unknown")
         self.assertEqual(REPORT.classify(encoded(runtime), b"", b"1\n", "runtime", "failure")["closure"], "retained-unknown")
+
+    def test_host_reason_is_allowlisted_and_cannot_promote_a_rejection(self):
+        for reason in REPORT.HOST_REASONS - {"none"}:
+            host = positive("host")
+            host.update(status="nonpassing", stage="parents", reason=reason, input="chrome")
+            result = REPORT.classify(b"", encoded(host), b"1\n", "host", "failure")
+            self.assertEqual(result["result"], "nonpassing")
+            self.assertIn(("reason=" + reason + "\n").encode(), REPORT.encode_outputs(result))
+            host.update(status="passed", stage="complete", input="none")
+            with self.assertRaises(REPORT.ReportRefused):
+                REPORT.classify(encoded(host), b"", b"0\n", "host", "success")
+        host = positive("host")
+        host.update(status="nonpassing", stage="parents", reason="unlisted-reason", input="driver")
+        with self.assertRaises(REPORT.ReportRefused):
+            REPORT.classify(b"", encoded(host), b"1\n", "host", "failure")
+
+    def test_host_outcome_mismatch_and_unavailable_data_never_report_reason_none(self):
+        result = REPORT.classify(encoded(positive("host")), b"", b"1\n", "host", "failure")
+        self.assertEqual(result["reason"], "post-worker")
+        self.assertEqual(result["result"], "nonpassing")
+        for reason in ("none", "unlisted-reason"):
+            with self.assertRaises(REPORT.ReportRefused):
+                REPORT.encode_outputs(dict(result, reason=reason))
+        env, native, files, _ = memory("host", body=b"ordinary invalid fixture")
+        self.assertEqual(REPORT.main(["--phase", "host"], env, files, lambda: 1000, lambda: 1000), 0)
+        output = native.bodies[env["GITHUB_OUTPUT"]]
+        self.assertIn(b"reason=unavailable\n", output)
+        self.assertIn(b"result=nonpassing\n", output)
+        self.assertNotIn(b"ordinary", output)
 
     def test_initialization_is_one_fresh_private_namespace_without_output_claim(self):
         env, native, files, selected = memory("initialize")

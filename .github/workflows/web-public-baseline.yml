@@ -91,7 +91,8 @@ jobs:
                   'unavailable' }} / ${{ steps.host_report.outcome == 'success' &&
                   steps.host_report.outputs.closure || 'unavailable' }} / ${{
                   steps.host_report.outcome == 'success' && steps.host_report.outputs.input ||
-                  'none' }}
+                  'none' }} / ${{ steps.host_report.outcome == 'success' &&
+                  steps.host_report.outputs.reason || 'unavailable' }}
               if: ${{ always() }}
               env:
                   WORKER_OUTCOME: ${{ steps.host.outcome }}

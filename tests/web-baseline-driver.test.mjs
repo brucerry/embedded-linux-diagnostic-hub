@@ -199,6 +199,26 @@ test('unexpected browser version never becomes a UI pass', async () => {
     assert.equal(h.calls.filter((c) => c.method === 'DELETE').length, 1);
     assert.ok(!h.calls.some((c) => c.target.endsWith('/value')));
 });
+test('a denied sandboxed session remains nonpassing with no fallback or second launch', async () => {
+    // A protocol denial is injected; no sandbox or browser process is exercised.
+    const h = harness({ fail: '/session' });
+    await assert.rejects(
+        runWebBaseline(selection, h.ports),
+        (e) => e.stage === 'sandboxed-browser-startup' && !e.owner.snapshot().closed,
+    );
+    const creates = h.calls.filter((c) => c.target === '/session');
+    assert.equal(creates.length, 1);
+    assert.deepEqual(creates[0].body.capabilities.alwaysMatch['goog:chromeOptions'].args, [
+        '--headless=new',
+        '--user-data-dir=/private/state/profile',
+        '--no-first-run',
+        '--no-default-browser-check',
+    ]);
+    assert.equal(h.events.filter((e) => e === 'driver-start').length, 1);
+    assert.ok(!h.calls.some((c) => c.target.endsWith('/value')));
+    assert.ok(!h.calls.some((c) => c.method === 'DELETE' || c.target === '/shutdown'));
+    assert.equal(h.closeCount(), 0);
+});
 test('missing original session identity retains uncertain browser/service custody', async () => {
     const h = harness({ badSession: true });
     await assert.rejects(

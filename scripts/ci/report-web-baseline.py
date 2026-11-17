@@ -95,7 +95,7 @@ def classify(stdout, stderr, exit_bytes, phase, outcome):
         passed = value["status"] == "passed"
         require((passed and stdout and value["stage"] == "complete" and value["reason"] == "none" and value["input"] == "none" and value["closure"] == "known-readonly-scope") or
                 (not passed and stderr and value["reason"] != "none"))
-        result = {"result": "passed" if passed else "nonpassing", "stage": value["stage"], "closure": value["closure"], "input": value["input"]}
+        result = {"result": "passed" if passed else "nonpassing", "stage": value["stage"], "closure": value["closure"], "input": value["input"], "reason": value["reason"]}
     elif phase == "preparation":
         passed = value.get("status") == "prepared-inputs-not-runtime"
         if passed:
@@ -113,14 +113,22 @@ def classify(stdout, stderr, exit_bytes, phase, outcome):
         result["result"] = "nonpassing"
         if passed:
             result["stage"] = "post-worker"
+            if phase == "host":
+                result["reason"] = "post-worker"
     return result
 
 
 def encode_outputs(value):
-    require(type(value) is dict and set(value) == {"result", "stage", "closure", "input"})
+    fields = {"result", "stage", "closure", "input"}
+    require(type(value) is dict and set(value) in (fields, fields | {"reason"}))
     require(value["result"] in ("passed", "nonpassing") and value["stage"] in HOST_STAGES | PREP_STAGES | RUNTIME_STAGES | {"post-worker", "unavailable"} and value["closure"] in CLOSURES and value["input"] in INPUTS)
     require(value["result"] != "passed" or (value["stage"] == "complete" and value["closure"] in ("known-readonly-scope", "not-runtime", "known-direct-scope") and value["input"] == "none"))
-    return ("result=" + value["result"] + "\nstage=" + value["stage"] + "\nclosure=" + value["closure"] + "\ninput=" + value["input"] + "\n").encode("ascii")
+    reason = ""
+    if "reason" in value:
+        require(value["reason"] in HOST_REASONS | {"post-worker", "unavailable"})
+        require((value["result"] == "passed") == (value["reason"] == "none"))
+        reason = "reason=" + value["reason"] + "\n"
+    return ("result=" + value["result"] + "\nstage=" + value["stage"] + "\nclosure=" + value["closure"] + "\ninput=" + value["input"] + "\n" + reason).encode("ascii")
 
 
 class WebReportFiles(OwnedReportFiles):
@@ -189,6 +197,8 @@ def main(args=None, environment=None, files=None, uid_provider=os.getuid, euid_p
         except BaseException as error:
             RETAINED.append({"readbackError": error, "files": files})
             result = {"result": "nonpassing", "stage": "unavailable", "closure": "unavailable", "input": "none"}
+            if selected["phase"] == "host":
+                result["reason"] = "unavailable"
         files.append_outputs(selected["output"], encode_outputs(result))
         return 0  # Append/fsync/close acknowledgment only; workflow also requires worker success.
     except BaseException as error:

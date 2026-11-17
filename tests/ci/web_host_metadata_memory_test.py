@@ -16,6 +16,10 @@ SPEC = importlib.util.spec_from_file_location("web_host_metadata_memory_subject"
                                             ROOT / "scripts/ci/check-web-host-metadata.py")
 SUBJECT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SUBJECT)
+REPORT_SPEC = importlib.util.spec_from_file_location("web_parent_reason_report_subject",
+                                                   ROOT / "scripts/ci/report-web-baseline.py")
+REPORT = importlib.util.module_from_spec(REPORT_SPEC)
+REPORT_SPEC.loader.exec_module(REPORT)
 
 
 def row(*, directory=False, uid=0, permissions=0o755, ino=7, nlink=1, size=4096, tick=1):
@@ -191,6 +195,91 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(SUBJECT.entry(f.run, out, err), 1)
         self.assertEqual(json.loads(err.getvalue())["closure"], "retained-unknown")
         self.assertFalse(any(c[0] == "close" for c in f.calls))
+
+
+class ParentReasonReportingTests(unittest.TestCase):
+    def report(self, fixture, reason, role):
+        stdout, stderr = io.BytesIO(), io.BytesIO()
+        self.assertEqual(SUBJECT.entry(fixture.run, stdout, stderr), 1)
+        self.assertEqual(stdout.getvalue(), b"")
+        result = REPORT.classify(stdout.getvalue(), stderr.getvalue(), b"1\n", "host", "failure")
+        self.assertEqual(result["result"], "nonpassing")
+        self.assertEqual(result["stage"], "parents")
+        self.assertEqual(result["input"], role)
+        self.assertEqual(result["reason"], reason)
+        output = REPORT.encode_outputs(result)
+        self.assertLess(len(output), 256)
+        self.assertNotIn(b"/", output)
+        self.assertNotIn(b"ordinary", output)
+        return result
+
+    def test_each_fixed_parent_predicate_stops_before_descendant_inspection(self):
+        cases = [("type", {"st_mode": stat.S_IFREG | 0o755}), ("owner", {"st_uid": 1000}),
+                 ("mode", {"st_mode": stat.S_IFDIR | 0o775}),
+                 ("mode", {"st_mode": stat.S_IFDIR | 0o757}),
+                 ("mode", {"st_mode": stat.S_IFDIR | 0o4755}),
+                 ("mode", {"st_mode": stat.S_IFDIR | 0o2755}),
+                 ("mode", {"st_mode": stat.S_IFDIR | 0o1755}),
+                 ("inode", {"st_ino": 0}), ("inode", {"st_ino": SUBJECT.MAX_SAFE + 1}),
+                 ("inode", {"st_dev": -1}), ("inode", {"st_gid": -1}),
+                 ("inode", {"st_mtime_ns": -1}), ("inode", {"st_ctime_ns": -1})]
+        seen = set()
+        for role, file in SUBJECT.FILES:
+            for parent in SUBJECT.parents(file):
+                if parent in seen:
+                    continue  # Shared parents are first inspected as Chrome parents.
+                seen.add(parent)
+                for reason, changed in cases:
+                    with self.subTest(role=role, reason=reason, changed=changed):
+                        fixture = Fixture()
+                        metadata = row(directory=True)
+                        metadata.__dict__.update(changed)
+                        fixture.overrides[parent] = metadata
+                        self.report(fixture, reason, role)
+                        at = fixture.calls.index(("lstat", parent))
+                        self.assertEqual(fixture.calls[at + 1:], [])
+                        self.assertEqual(len(fixture.closed), 0 if role == "chrome" else 1)
+
+    def test_missing_and_denied_parent_observation_only_emit_fixed_reason(self):
+        for role, parent in (("chrome", "/opt/google"), ("driver", "/usr/local/share")):
+            for error, reason in ((FileNotFoundError("ordinary fixture"), "missing"),
+                                  (PermissionError("ordinary fixture"), "access-denied")):
+                with self.subTest(role=role, reason=reason):
+                    fixture = Fixture()
+                    fixture.overrides[parent] = error
+                    result = self.report(fixture, reason, role)
+                    self.assertEqual(result["closure"], "known-readonly-scope")
+                    self.assertEqual(fixture.calls[-1], ("lstat", parent))
+
+    def test_changed_parent_during_readback_preserves_failure_and_owned_close(self):
+        fixture = Fixture()
+        original = fixture.lstat
+        observations = 0
+        def changed(path):
+            nonlocal observations
+            metadata = original(path)
+            if path == "/opt/google":
+                observations += 1
+                if observations == 2:
+                    return SimpleNamespace(**dict(metadata.__dict__, st_ino=9999))
+            return metadata
+        ports = fixture.ports()
+        ports["lstat"] = changed
+        fixture.run = lambda: SUBJECT.inspect_host({"uid": 1000}, ports)
+        result = self.report(fixture, "file-identity", "chrome")
+        self.assertEqual(result["closure"], "known-readonly-scope")
+        self.assertEqual(fixture.closed, [17])
+        self.assertEqual(sum(call[0] == "open" for call in fixture.calls), 1)
+
+    def test_unchanged_safe_parent_chain_keeps_positive_reason_none(self):
+        fixture = Fixture()
+        stdout, stderr = io.BytesIO(), io.BytesIO()
+        self.assertEqual(SUBJECT.entry(fixture.run, stdout, stderr), 0)
+        result = REPORT.classify(stdout.getvalue(), stderr.getvalue(), b"0\n", "host", "success")
+        self.assertEqual(result["result"], "passed")
+        self.assertEqual(result["reason"], "none")
+        self.assertEqual(result["input"], "none")
+        self.assertIn(b"reason=none\n", REPORT.encode_outputs(result))
 
 
 class ContextAndReportTests(unittest.TestCase):
