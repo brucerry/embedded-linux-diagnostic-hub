@@ -1,0 +1,261 @@
+{
+    "schemaVersion": 1,
+    "scope": "web-build-inputs-only",
+    "target": {
+        "os": "linux",
+        "cpu": "x64",
+        "libc": "glibc"
+    },
+    "sourcePackageSHA256": "67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116",
+    "sourceLockSHA256": "19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3",
+    "node": {
+        "version": "24.22.2",
+        "sha256": "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52",
+        "bytes": 126881248,
+        "npmVersion": "11.19.1",
+        "npmInventorySHA256": "86c8f0b981ac3e1e424cd9d3c9f3f26c3edf4bad388cbcd6bf761a373c35d4ac",
+        "npmEntries": 2380,
+        "npmFileBytes": 12205960
+    },
+    "reference": {
+        "distribution": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.gz",
+        "distributionSHA256": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9"
+    },
+    "packages": [
+        {
+            "name": "@esbuild/linux-x64",
+            "version": "0.28.2",
+            "url": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz",
+            "integrity": "sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==",
+            "maximumCompressedBytes": 16777216,
+            "maximumExpandedBytes": 67108864,
+            "maximumMembers": 4096
+        },
+        {
+            "name": "@oxc-project/types",
+            "version": "0.152.0",
+            "url": "https://registry.npmjs.org/@oxc-project/types/-/types-0.152.0.tgz",
+            "integrity": "sha512-oM/5rLBm2tPkg0iBgkH/FOeR3PCDpY19GTgAZjMFM8h9WI9VW7cLgzp6nwtarYKmovavIQZ+Fe/RKX/8C8O/Rw==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "@rolldown/binding-linux-x64-gnu",
+            "version": "1.2.12",
+            "url": "https://registry.npmjs.org/@rolldown/binding-linux-x64-gnu/-/binding-linux-x64-gnu-1.2.12.tgz",
+            "integrity": "sha512-Q9uLBO53Xd4QIq1WOycVQyPP1O4HhraEV2qqb3uTrnVw6QZih9duY4vNXOivL1xoUS1/z+W8eF4NMfl2a8Sdjw==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "@rolldown/pluginutils",
+            "version": "1.0.1",
+            "url": "https://registry.npmjs.org/@rolldown/pluginutils/-/pluginutils-1.0.1.tgz",
+            "integrity": "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "@vitejs/plugin-react",
+            "version": "6.1.1",
+            "url": "https://registry.npmjs.org/@vitejs/plugin-react/-/plugin-react-6.1.1.tgz",
+            "integrity": "sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "@xterm/addon-fit",
+            "version": "0.11.0",
+            "url": "https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.11.0.tgz",
+            "integrity": "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "@xterm/xterm",
+            "version": "6.0.0",
+            "url": "https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz",
+            "integrity": "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "detect-libc",
+            "version": "2.1.2",
+            "url": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
+            "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "esbuild",
+            "version": "0.28.2",
+            "url": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+            "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
+            "maximumCompressedBytes": 16777216,
+            "maximumExpandedBytes": 67108864,
+            "maximumMembers": 4096
+        },
+        {
+            "name": "fdir",
+            "version": "6.5.0",
+            "url": "https://registry.npmjs.org/fdir/-/fdir-6.5.0.tgz",
+            "integrity": "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "fflate",
+            "version": "0.8.3",
+            "url": "https://registry.npmjs.org/fflate/-/fflate-0.8.3.tgz",
+            "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==",
+            "maximumCompressedBytes": 16777216,
+            "maximumExpandedBytes": 67108864,
+            "maximumMembers": 4096
+        },
+        {
+            "name": "lightningcss",
+            "version": "1.33.0",
+            "url": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.33.0.tgz",
+            "integrity": "sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "lightningcss-linux-x64-gnu",
+            "version": "1.33.0",
+            "url": "https://registry.npmjs.org/lightningcss-linux-x64-gnu/-/lightningcss-linux-x64-gnu-1.33.0.tgz",
+            "integrity": "sha512-ar+Ju7LmcN0Jo4FpL4hpFybwNG9/3A/Br5KW2n2jyODg3MEZXaDYADdemoNS+BDNfMgKvylJLj4S5tyRActuAg==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "lucide-react",
+            "version": "0.577.0",
+            "url": "https://registry.npmjs.org/lucide-react/-/lucide-react-0.577.0.tgz",
+            "integrity": "sha512-4LjoFv2eEPwYDPg/CUdBJQSDfPyzXCRrVW1X7jrx/trgxnxkHFjnVZINbzvzxjN70dxychOfg+FTYwBiS3pQ5A==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "nanoid",
+            "version": "3.3.19",
+            "url": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.19.tgz",
+            "integrity": "sha512-Y2tUNy4ouw6tq5oDSKeQYGOyhkUBhNOcGV/02KC+6kd9eDGqdZd++mjMiIDilrBYvjEnCYvVtsuHCuP+okSfug==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "picocolors",
+            "version": "1.1.1",
+            "url": "https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz",
+            "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "picomatch",
+            "version": "4.0.7",
+            "url": "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
+            "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "postcss",
+            "version": "8.5.28",
+            "url": "https://registry.npmjs.org/postcss/-/postcss-8.5.28.tgz",
+            "integrity": "sha512-RRuzqDtt5Y9h3quz5hWhK+TPnsmVs6WwSU6LkJMeY4HstUEDuYTG8UJSdawMRzmzAtV+KEoG8N3Qg2qLy5vM/A==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "react",
+            "version": "19.3.0",
+            "url": "https://registry.npmjs.org/react/-/react-19.3.0.tgz",
+            "integrity": "sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "react-dom",
+            "version": "19.3.0",
+            "url": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.0.tgz",
+            "integrity": "sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "rolldown",
+            "version": "1.2.12",
+            "url": "https://registry.npmjs.org/rolldown/-/rolldown-1.2.12.tgz",
+            "integrity": "sha512-8wafseiaG80xmXSfqidUNqZcylTlhmPZZt+za2m+js2sFZ8dTNlhIOV2WcbIPx2hgwPBJpEUGFAMZ9bgBBLTSQ==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "scheduler",
+            "version": "0.28.0",
+            "url": "https://registry.npmjs.org/scheduler/-/scheduler-0.28.0.tgz",
+            "integrity": "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "semver",
+            "version": "7.8.5",
+            "url": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+            "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
+            "maximumCompressedBytes": 16777216,
+            "maximumExpandedBytes": 67108864,
+            "maximumMembers": 4096
+        },
+        {
+            "name": "source-map-js",
+            "version": "1.2.2",
+            "url": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.2.tgz",
+            "integrity": "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "tinyglobby",
+            "version": "0.2.17",
+            "url": "https://registry.npmjs.org/tinyglobby/-/tinyglobby-0.2.17.tgz",
+            "integrity": "sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        },
+        {
+            "name": "vite",
+            "version": "8.3.2",
+            "url": "https://registry.npmjs.org/vite/-/vite-8.3.2.tgz",
+            "integrity": "sha512-SQr1x6W5vVSbROg7vsyXIaxK9b0G7zsT68acdWWRmnBUsgDieLCRG+Rep9WdZgcposvv/GSnr4GUUBqB3vXq6w==",
+            "maximumCompressedBytes": 33554432,
+            "maximumExpandedBytes": 134217728,
+            "maximumMembers": 8192
+        }
+    ],
+    "sizeMeaning": "Finite refusal bounds, not publisher-reported exact compressed lengths. Existing four package bounds are unchanged. Other bounds accommodate retained verified file inventories; SRI pins exact compressed bytes. No package request is authorized by this profile alone."
+}

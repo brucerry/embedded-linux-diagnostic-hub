@@ -18,10 +18,11 @@ export async function main(raw, capability) {
     return runMain(raw, capability, false);
 }
 /** Explicit local entry; the same source-owned IO capability is still mandatory. */
-export async function mainLocal(raw, capability) {
-    return runMain(raw, capability, true);
+export async function mainLocal(raw, capability, writeSummary) {
+    assert.ok(writeSummary === undefined || typeof writeSummary === 'function');
+    return runMain(raw, capability, true, writeSummary);
 }
-async function runMain(raw, capability, local) {
+async function runMain(raw, capability, local, writeSummary) {
     // No serialized manifest, ambient environment or inactive workflow can grant native execution.
     const native = requireOwnedWebCapabilities(capability),
         fs = native.filesystem;
@@ -241,23 +242,23 @@ async function runMain(raw, capability, local) {
         },
     });
     native.assertSettled();
-    console.log(
-        JSON.stringify({
-            status: result.status,
-            archive: result.archive,
-            completeChildEnvironmentSHA256: native.profile.sha256,
-            releaseAcceptance: false,
-            blocked: [
-                'native-executor-group-and-profile-admission',
-                'independent-service-build-provenance',
-                'installed-toolchain-provenance',
-                'product-runtime',
-                'loader',
-                'per-GC-policies-and-measurements',
-                'normal-retirement',
-            ],
-        }),
-    );
+    const summary = JSON.stringify({
+        status: result.status,
+        archive: result.archive,
+        completeChildEnvironmentSHA256: native.profile.sha256,
+        releaseAcceptance: false,
+        blocked: [
+            'native-executor-group-and-profile-admission',
+            'independent-service-build-provenance',
+            'installed-toolchain-provenance',
+            'product-runtime',
+            'loader',
+            'per-GC-policies-and-measurements',
+            'normal-retirement',
+        ],
+    });
+    if (local && writeSummary) await writeSummary(Buffer.from(summary + '\n'));
+    else console.log(summary);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
     await runHeldWebProducer(() => main(process.argv.slice(2)), {

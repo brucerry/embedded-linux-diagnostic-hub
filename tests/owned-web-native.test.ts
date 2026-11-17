@@ -549,6 +549,7 @@ test('no serialized object grants either held native entry capability or reads e
     const call = ';return {main, mainLocal}[entry]([],{});';
     const run = new AsyncFunction(
         'requireOwnedWebCapabilities',
+        'assert',
         'process',
         'entry',
         declaration + call,
@@ -558,6 +559,7 @@ test('no serialized object grants either held native entry capability or reads e
     // Mutation control: moving an environment access ahead of the real guard is detected.
     const earlyEnvironment = new AsyncFunction(
         'requireOwnedWebCapabilities',
+        'assert',
         'process',
         'entry',
         declaration.replace(guard, '(process.env, ' + guard + ')') + call,
@@ -574,12 +576,12 @@ test('no serialized object grants either held native entry capability or reads e
             },
         );
         await assert.rejects(
-            run(requireOwnedWebCapabilities, ambient, entry),
+            run(requireOwnedWebCapabilities, assert, ambient, entry),
             /Default producer execution held: source-owned Git\/file\/environment capabilities required/,
         );
         assert.equal(touched, 0);
         await assert.rejects(
-            earlyEnvironment(requireOwnedWebCapabilities, ambient, entry),
+            earlyEnvironment(requireOwnedWebCapabilities, assert, ambient, entry),
             /No ambient access/,
         );
         assert.equal(touched, 1);
