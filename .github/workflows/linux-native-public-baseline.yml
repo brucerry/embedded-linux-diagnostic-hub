@@ -1,0 +1,64 @@
+name: Public Linux native startup baseline
+
+on:
+    push:
+        branches: [ci/v060-linux-native-baseline-20261117]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: public-native-${{ github.ref }}
+    cancel-in-progress: false
+
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    NODE_OPTIONS: ''
+    NODE_PATH: ''
+    NODE_COMPILE_CACHE: ''
+    NODE_DISABLE_COMPILE_CACHE: '1'
+    LD_PRELOAD: ''
+    LD_LIBRARY_PATH: ''
+    PYTHONPATH: ''
+    PYTHONHOME: ''
+    PYTHONDONTWRITEBYTECODE: '1'
+
+defaults:
+    run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+    native_baseline:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name ==
+            'push' && github.ref == 'refs/heads/ci/v060-linux-native-baseline-20261117' &&
+            github.run_attempt == 1 && github.event.repository.private == false &&
+            github.event.deleted == false
+        runs-on: ubuntu-22.04
+        timeout-minutes: 20
+        steps:
+            - name: Check out only the admitted public test source
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+                  fetch-depth: 1
+            - name: Check fixed tooling, custody and necessary sandbox metadata
+              run: python3 scripts/ci/run-linux-native-baseline.py host
+            - name: Verify publisher inputs and build this public directory payload
+              run: python3 scripts/ci/run-linux-native-baseline.py build
+            - name: Authenticate one owned Xvfb display and exercise startup and normal quit
+              run: python3 scripts/ci/run-linux-native-baseline.py smoke
+            - name: Collect fixed outcome without logs or artifacts
+              id: outcome
+              if: always()
+              run: python3 scripts/ci/run-linux-native-baseline.py report
+            - name:
+                  Native baseline / ${{ steps.outcome.outputs.status || 'fail' }} / ${{
+                  steps.outcome.outputs.stage || 'report' }} / ${{ steps.outcome.outputs.reason ||
+                  'report' }}
+              if: always()
+              env:
+                  BASELINE_STATUS: ${{ steps.outcome.outputs.status }}
+              run: test "$BASELINE_STATUS" = pass

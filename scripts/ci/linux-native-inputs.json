@@ -1,0 +1,60 @@
+{
+    "schema": 1,
+    "branch": "ci/v060-linux-native-baseline-20261117",
+    "workflow": ".github/workflows/linux-native-public-baseline.yml",
+    "job": "native_baseline",
+    "publicBase": "0ff00dc43994f9e735083f6d00cca22dcdb2e8bf",
+    "lockSHA256": "19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3",
+    "node": {
+        "version": "24.22.2",
+        "sha256": "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52",
+        "bytes": 126881248,
+        "npmVersion": "11.19.1",
+        "npmInventorySHA256": "86c8f0b981ac3e1e424cd9d3c9f3f26c3edf4bad388cbcd6bf761a373c35d4ac",
+        "npmEntries": 2380,
+        "npmFileBytes": 12205960
+    },
+    "nodeDistribution": {
+        "url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.gz",
+        "bytes": 58299872,
+        "sha256": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9"
+    },
+    "headers": [
+        {
+            "path": "include/node/node_api.h",
+            "bytes": 10370,
+            "sha256": "2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a"
+        },
+        {
+            "path": "include/node/node_api_types.h",
+            "bytes": 1930,
+            "sha256": "a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00"
+        },
+        {
+            "path": "include/node/js_native_api.h",
+            "bytes": 33170,
+            "sha256": "82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840"
+        },
+        {
+            "path": "include/node/js_native_api_types.h",
+            "bytes": 7871,
+            "sha256": "4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0"
+        }
+    ],
+    "electron": {
+        "version": "44.5.1",
+        "url": "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-linux-x64.zip",
+        "bytes": 122932200,
+        "sha256": "5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5"
+    },
+    "productFiles": {
+        "electron/main.ts": "b0dce4557c71fcbb11725f03b139730d92db31a8e94ed2b2f9b4f8422da5ccd4",
+        "electron/preload.ts": "66a7ddd3380603ef9263afc85e126478c3268b3a4ee7deb53b3d54e015afed15",
+        "electron/linux-window-identity.ts": "60f8081393253b7694fec923ebc3b6defd6c169a32b72aaec58057b66da044e6",
+        "scripts/linux-launcher.sh": "a9851e0e1d5e701c6cf5661d3bf68423e4827302d0e86ff1970829469b8a1d19",
+        "package.json": "67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116",
+        "scripts/build-linux-native.mjs": "1d658dfe4087818bd7765b3c99162519c04babdc71c7384b6a29b5de7154878a",
+        "scripts/linux-after-pack.cjs": "b0333b0d0eb0a1ec1e73a131ead40555d085e9d97f894b485f6a2549a8f79fd2"
+    },
+    "imageVersion": "20261111.360.2"
+}
