@@ -18,7 +18,7 @@ import time
 
 FILES = (("chrome", "/opt/google/chrome/chrome"),
          ("driver", "/usr/local/share/chromedriver-linux64/chromedriver"))
-BRANCH = "ci/v060-web-sandbox-baseline-20261117"
+BRANCH = "ci/v060-web-sandbox-reasons-20261117"
 WORKFLOW = ".github/workflows/web-public-baseline.yml"
 SECONDS = 15
 MAX_SAFE = 2**53 - 1

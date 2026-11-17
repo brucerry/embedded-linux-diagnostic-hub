@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import yaml from 'js-yaml';
 
 const workflowURL = new URL('../.github/workflows/web-public-baseline.yml', import.meta.url);
-const branch = 'ci/v060-web-sandbox-baseline-20261117';
+const branch = 'ci/v060-web-sandbox-reasons-20261117';
 const checkout = 'actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803';
 const phases = ['host', 'preparation', 'runtime'];
 function parse(text) {

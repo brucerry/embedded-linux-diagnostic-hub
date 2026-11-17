@@ -18,7 +18,7 @@ _spec.loader.exec_module(_files)
 OwnedReportFiles = _files.OwnedReportFiles
 
 REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
-REF = "refs/heads/ci/v060-web-sandbox-baseline-20261117"
+REF = "refs/heads/ci/v060-web-sandbox-reasons-20261117"
 PHASES = frozenset(("host", "preparation", "runtime"))
 HOST_STAGES = frozenset(("admission", "parents", "executable", "complete"))
 HOST_REASONS = frozenset(("none", "admission", "type", "owner", "mode", "inode", "link-count", "file-size", "file-identity", "elf", "read", "close", "clock", "deadline", "missing", "access-denied", "filesystem", "output", "unexpected"))

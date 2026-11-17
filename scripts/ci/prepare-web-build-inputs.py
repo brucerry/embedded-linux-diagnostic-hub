@@ -33,7 +33,7 @@ def sibling(filename, name):
 
 PUBLISHER = sibling("prepare-gateway-publisher-node.py", "web_publisher_parser")
 COMMON = PUBLISHER.COMMON
-BRANCH = "ci/v060-web-sandbox-baseline-20261117"
+BRANCH = "ci/v060-web-sandbox-reasons-20261117"
 JOB = "web_baseline"
 WORKFLOW_PATH = ".github/workflows/web-public-baseline.yml"
 SOURCE_PACKAGE_SHA256 = "67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116"

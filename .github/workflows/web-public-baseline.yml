@@ -2,7 +2,7 @@ name: Public Web archive and sandboxed fixture baseline
 
 on:
     push:
-        branches: [ci/v060-web-sandbox-baseline-20261117]
+        branches: [ci/v060-web-sandbox-reasons-20261117]
 
 permissions:
     contents: read
@@ -33,7 +33,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-web-sandbox-baseline-20261117' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-web-sandbox-reasons-20261117' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         defaults:
@@ -44,8 +44,8 @@ jobs:
               run: |
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/v060-web-sandbox-baseline-20261117
-                  test "$GITHUB_WORKFLOW_REF" = brucerry/embedded-linux-diagnostic-hub/.github/workflows/web-public-baseline.yml@refs/heads/ci/v060-web-sandbox-baseline-20261117
+                  test "$GITHUB_REF" = refs/heads/ci/v060-web-sandbox-reasons-20261117
+                  test "$GITHUB_WORKFLOW_REF" = brucerry/embedded-linux-diagnostic-hub/.github/workflows/web-public-baseline.yml@refs/heads/ci/v060-web-sandbox-reasons-20261117
                   test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$GITHUB_JOB" = web_baseline
