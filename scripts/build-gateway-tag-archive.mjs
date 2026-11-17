@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildGatewayArchiveFromSelectedJob } from './lib/gateway-job-bootstrap.mjs';
 import { startInstrumentedChildOutput } from './lib/instrumented-gateway-output.mjs';
+import { captureGatewayPackageHandoff } from './lib/gateway-package-handoff.mjs';
 export { buildGatewayArchiveFromSelectedJob } from './lib/gateway-job-bootstrap.mjs';
 let outputAttempted = false;
 function emit(which, bytes) {
@@ -25,13 +26,8 @@ function emit(which, bytes) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        await buildGatewayArchiveFromSelectedJob();
-        await emit(
-            'stdout',
-            Buffer.from(
-                'Gateway selected-source canonical build/readback complete; no upload or runtime qualification.\n',
-            ),
-        );
+        const produced = await buildGatewayArchiveFromSelectedJob();
+        await emit('stdout', captureGatewayPackageHandoff(produced.result));
     } catch {
         process.exitCode = 1;
         if (!outputAttempted)
