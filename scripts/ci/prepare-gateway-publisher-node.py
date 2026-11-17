@@ -20,7 +20,7 @@ _SPEC = importlib.util.spec_from_file_location(
 COMMON = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(COMMON)
 
-BRANCH = "ci/v060-gateway-producer-isolation-20261116"
+BRANCH = "ci/v060-gateway-two-stage-20261117"
 NODE_ARCHIVE = {
     "url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.gz",
     "sha256": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",

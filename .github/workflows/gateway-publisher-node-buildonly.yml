@@ -1,8 +1,8 @@
-name: Gateway publisher Node canonical build-only draft
+name: Gateway separate canonical build and health smoke
 
 on:
     push:
-        branches: [ci/v060-gateway-producer-isolation-20261116]
+        branches: [ci/v060-gateway-two-stage-20261117]
 
 permissions:
     contents: read
@@ -19,13 +19,17 @@ env:
     ESBUILD_BINARY_PATH: ''
     NODE_DISABLE_COMPILE_CACHE: '1'
     NODE_COMPILE_CACHE: ''
+    LD_PRELOAD: ''
+    LD_LIBRARY_PATH: ''
+    PYTHONPATH: ''
+    PYTHONHOME: ''
 
 jobs:
     gateway_build:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-gateway-producer-isolation-20261116' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-gateway-two-stage-20261117' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         defaults:
@@ -36,7 +40,7 @@ jobs:
               run: |
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-producer-isolation-20261116
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-two-stage-20261117
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$RUNNER_ENVIRONMENT" = github-hosted
                   test "$RUNNER_OS" = Linux
@@ -55,26 +59,51 @@ jobs:
               id: preparation
               run: /usr/bin/python3 -I -B scripts/ci/prepare-gateway-publisher-node.py
             - name: >-
-                  Preparation diagnostic /
-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'report-unavailable' }} /
-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.stage || 'report-unavailable' }} /
-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.reason || 'report-unavailable' }} /
-                  input-${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.input || 'none' }}
+                  Preparation diagnostic / ${{ steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result || 'report-unavailable' }} / ${{
+                  steps.preparation.outcome == 'success' && steps.preparation.outputs.stage ||
+                  'report-unavailable' }} / ${{ steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.reason || 'report-unavailable' }} / input-${{
+                  steps.preparation.outcome == 'success' && steps.preparation.outputs.input ||
+                  'none' }}
               if: ${{ always() }}
               env:
-                  PREPARATION_RESULT: ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'unavailable' }}
+                  PREPARATION_RESULT:
+                      ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result
+                      || 'unavailable' }}
               run: test "$PREPARATION_RESULT" = prepared
-            - name: Run the unchanged native branch source selector and canonical producer readback
+            - name: Build and read back the canonical package with its original binding
               id: producer
-              if: ${{ success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared' }}
+              if:
+                  ${{ success() && steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result == 'prepared' }}
               run: |
-                  # No setup-node, broad npm ci, package scripts, runtime, upload or cleanup.
-                  # Only the new publisher-authenticated private prefix may execute here.
-                  env -u NODE_OPTIONS -u NODE_PATH -u ESBUILD_BINARY_PATH \
-                    "$RUNNER_TEMP/gateway-publisher-node-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/node" \
-                    scripts/build-gateway-tag-archive.mjs --qualify-branch
-            - name: producer/canonical-build-readback/${{ steps.producer.outcome }}
+                  /usr/bin/python3 -I -B scripts/ci/gateway-two-stage-supervisor.py producer
+            - name:
+                  Producer / ${{ steps.producer.outcome }} / ${{ steps.producer.outputs.result ||
+                  'unavailable' }} / ${{ steps.producer.outputs.reason || 'unavailable' }}
               if: ${{ always() }}
               env:
                   PRODUCER_OUTCOME: ${{ steps.producer.outcome }}
-              run: test "$PRODUCER_OUTCOME" = success
+                  PRODUCER_RESULT: ${{ steps.producer.outputs.result || 'unavailable' }}
+              run: |
+                  test "$PRODUCER_OUTCOME" = success
+                  test "$PRODUCER_RESULT" = producer-ready
+            - name: Start the same package and observe loopback health auth and normal close
+              id: runtime
+              if:
+                  ${{ success() && steps.producer.outcome == 'success' &&
+                  steps.producer.outputs.result == 'producer-ready' }}
+              env:
+                  PRODUCER_BINDING_SHA: ${{ steps.producer.outputs.binding_sha256 }}
+              run: /usr/bin/python3 -I -B scripts/ci/gateway-two-stage-supervisor.py runtime
+            - name:
+                  Runtime / ${{ steps.runtime.outcome }} / ${{ steps.runtime.outputs.result ||
+                  'unavailable' }} / ${{ steps.runtime.outputs.reason || 'unavailable' }}
+              if: ${{ always() }}
+              env:
+                  RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+                  RUNTIME_RESULT: ${{ steps.runtime.outputs.result || 'unavailable' }}
+              run: |
+                  test "$RUNTIME_OUTCOME" = success
+                  test "$RUNTIME_RESULT" = runtime-closed

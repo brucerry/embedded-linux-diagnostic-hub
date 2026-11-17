@@ -10,6 +10,11 @@ const heldKeepers = new Set();
  */
 export async function observeGatewayHealthJob(runtime, bindings) {
     const job = createGatewayHealthJob(runtime, bindings);
+    return observeOwnedGatewayJob(job, bindings);
+}
+
+// Both entrypoints share the same referenced keeper and known-zero exit rule.
+export async function observeOwnedGatewayJob(job, bindings) {
     let cleared = false,
         clearIssued = false,
         clearFailure;

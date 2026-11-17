@@ -43,6 +43,7 @@ test('original output hash mismatch refuses before reading any package input', a
     let reads = 0;
     await assert.rejects(
         x.check(Buffer.from(x.bytes.toString() + ' '), x.originalHash, x.source, {
+            ...x.owned.filesystem,
             async lstat() {
                 reads++;
                 throw Error('No read should be attempted.');

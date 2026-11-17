@@ -21,7 +21,7 @@ async function emit(which, bytes) {
     }).result;
 }
 
-export async function checkGatewayRuntimePackage(bytes, originalSHA256, source, root, files, uid) {
+export async function readGatewayRuntimePackage(bytes, originalSHA256, source, root, files, uid) {
     assert.match(originalSHA256, /^[a-f0-9]{64}$/);
     assert.equal(createHash('sha256').update(bytes).digest('hex'), originalSHA256);
     const selected = parseGatewayPackageHandoff(bytes);
@@ -36,8 +36,11 @@ export async function checkGatewayRuntimePackage(bytes, originalSHA256, source, 
         sourcePackageBytes: await read('package.json', 4 * 1024 ** 2),
         sourceLockBytes: await read('package-lock.json', 4 * 1024 ** 2),
     };
-    verifyGatewayRuntimePackage(bytes, input, source);
-    return selected;
+    const record = verifyGatewayRuntimePackage(bytes, input, source);
+    return { selected, record, readback: input };
+}
+export async function checkGatewayRuntimePackage(...args) {
+    return (await readGatewayRuntimePackage(...args)).selected;
 }
 async function main() {
     try {
