@@ -44,7 +44,7 @@ export function webBaselineEntryContext(actual) {
         GITHUB_ACTIONS: 'true',
         GITHUB_REPOSITORY: 'brucerry/embedded-linux-diagnostic-hub',
         GITHUB_EVENT_NAME: 'push',
-        GITHUB_REF: 'refs/heads/ci/v060-web-chromedriver-baseline-20261117',
+        GITHUB_REF: 'refs/heads/ci/v060-web-sandbox-baseline-20261117',
         GITHUB_JOB: 'web_baseline',
         GITHUB_RUN_ATTEMPT: '1',
         RUNNER_ENVIRONMENT: 'github-hosted',

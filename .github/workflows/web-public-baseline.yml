@@ -1,0 +1,187 @@
+name: Public Web archive and sandboxed fixture baseline
+
+on:
+    push:
+        branches: [ci/v060-web-sandbox-baseline-20261117]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: web-public-baseline-${{ github.ref }}
+    cancel-in-progress: false
+
+# These controls apply before shell and checkout interpreter startup. Worker
+# programs additionally receive the explicit environments below; no host setting
+# or global configuration is edited.
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    NODE_OPTIONS: ''
+    NODE_PATH: ''
+    NODE_COMPILE_CACHE: ''
+    NODE_V8_COVERAGE: ''
+    NODE_DISABLE_COMPILE_CACHE: '1'
+    ESBUILD_BINARY_PATH: ''
+    LD_PRELOAD: ''
+    LD_LIBRARY_PATH: ''
+    PYTHONPATH: ''
+    PYTHONHOME: ''
+
+jobs:
+    web_baseline:
+        if: >-
+            ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+            'refs/heads/ci/v060-web-sandbox-baseline-20261117' && github.run_attempt == 1 }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 20
+        defaults:
+            run:
+                shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+        steps:
+            - name: Admit the single original public hosted branch job
+              run: |
+                  test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
+                  test "$GITHUB_EVENT_NAME" = push
+                  test "$GITHUB_REF" = refs/heads/ci/v060-web-sandbox-baseline-20261117
+                  test "$GITHUB_WORKFLOW_REF" = brucerry/embedded-linux-diagnostic-hub/.github/workflows/web-public-baseline.yml@refs/heads/ci/v060-web-sandbox-baseline-20261117
+                  test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+                  test "$GITHUB_RUN_ATTEMPT" = 1
+                  test "$GITHUB_JOB" = web_baseline
+                  test "$RUNNER_ENVIRONMENT" = github-hosted
+                  test "$RUNNER_OS" = Linux
+                  test "$RUNNER_ARCH" = X64
+                  test "$(/usr/bin/id -u)" -gt 0
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+                  clean: false
+                  set-safe-directory: false
+                  submodules: false
+                  lfs: false
+            - name: Create one guarded private capture directory
+              id: captures
+              run: /usr/bin/python3 -I -B scripts/ci/report-web-baseline.py --phase initialize
+            - name: Read fixed browser and driver metadata before acquiring tools
+              id: host
+              if: ${{ success() }}
+              run: |
+                  umask 077
+                  set -o noclobber
+                  capture="$RUNNER_TEMP/web-baseline-reports-$GITHUB_RUN_ID-1"
+                  set +e
+                  /usr/bin/python3 -I -B scripts/ci/check-web-host-metadata.py > "$capture/host.stdout" 2> "$capture/host.stderr"
+                  worker_exit=$?
+                  set -e
+                  printf '%s\n' "$worker_exit" > "$capture/host.exit-code"
+                  exit "$worker_exit"
+            - name: Collect only the original host metadata result
+              id: host_report
+              if: ${{ always() }}
+              env:
+                  WEB_WORKER_OUTCOME: ${{ steps.host.outcome }}
+              run: /usr/bin/python3 -I -B scripts/ci/report-web-baseline.py --phase host
+            - name: >-
+                  Host metadata / ${{ steps.host.outcome }} / ${{ steps.host_report.outcome ==
+                  'success' && steps.host_report.outputs.result || 'unavailable' }} / ${{
+                  steps.host_report.outcome == 'success' && steps.host_report.outputs.stage ||
+                  'unavailable' }} / ${{ steps.host_report.outcome == 'success' &&
+                  steps.host_report.outputs.closure || 'unavailable' }} / ${{
+                  steps.host_report.outcome == 'success' && steps.host_report.outputs.input ||
+                  'none' }}
+              if: ${{ always() }}
+              env:
+                  WORKER_OUTCOME: ${{ steps.host.outcome }}
+                  REPORT_OUTCOME: ${{ steps.host_report.outcome }}
+                  REPORT_RESULT: ${{ steps.host_report.outputs.result || 'unavailable' }}
+              run: |
+                  test "$WORKER_OUTCOME" = success
+                  test "$REPORT_OUTCOME" = success
+                  test "$REPORT_RESULT" = passed
+            - name: Verify publisher Node and exactly twenty-six locked Web inputs
+              id: preparation
+              if: ${{ success() }}
+              run: |
+                  umask 077
+                  set -o noclobber
+                  capture="$RUNNER_TEMP/web-baseline-reports-$GITHUB_RUN_ID-1"
+                  set +e
+                  /usr/bin/python3 -I -B scripts/ci/prepare-web-build-inputs.py > "$capture/preparation.stdout" 2> "$capture/preparation.stderr"
+                  worker_exit=$?
+                  set -e
+                  printf '%s\n' "$worker_exit" > "$capture/preparation.exit-code"
+                  exit "$worker_exit"
+            - name: Collect only the original input preparation result
+              id: preparation_report
+              if: ${{ always() }}
+              env:
+                  WEB_WORKER_OUTCOME: ${{ steps.preparation.outcome }}
+              run: /usr/bin/python3 -I -B scripts/ci/report-web-baseline.py --phase preparation
+            - name: >-
+                  Web inputs / ${{ steps.preparation.outcome }} / ${{
+                  steps.preparation_report.outcome == 'success' &&
+                  steps.preparation_report.outputs.result || 'unavailable' }} / ${{
+                  steps.preparation_report.outcome == 'success' &&
+                  steps.preparation_report.outputs.stage || 'unavailable' }} / ${{
+                  steps.preparation_report.outcome == 'success' &&
+                  steps.preparation_report.outputs.closure || 'unavailable' }} / ${{
+                  steps.preparation_report.outcome == 'success' &&
+                  steps.preparation_report.outputs.input || 'none' }}
+              if: ${{ always() }}
+              env:
+                  WORKER_OUTCOME: ${{ steps.preparation.outcome }}
+                  REPORT_OUTCOME: ${{ steps.preparation_report.outcome }}
+                  REPORT_RESULT: ${{ steps.preparation_report.outputs.result || 'unavailable' }}
+              run: |
+                  test "$WORKER_OUTCOME" = success
+                  test "$REPORT_OUTCOME" = success
+                  test "$REPORT_RESULT" = passed
+            - name: Build read back and exercise only the same-job public archive
+              id: runtime
+              if: ${{ success() }}
+              run: |
+                  umask 077
+                  set -o noclobber
+                  capture="$RUNNER_TEMP/web-baseline-reports-$GITHUB_RUN_ID-1"
+                  set +e
+                  /usr/bin/env -i \
+                    PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC NODE_DISABLE_COMPILE_CACHE=1 \
+                    GITHUB_ACTIONS="$GITHUB_ACTIONS" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+                    GITHUB_EVENT_PATH="$GITHUB_EVENT_PATH" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+                    GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" GITHUB_REF="$GITHUB_REF" \
+                    GITHUB_SHA="$GITHUB_SHA" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+                    GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_JOB="$GITHUB_JOB" \
+                    GITHUB_WORKFLOW_REF="$GITHUB_WORKFLOW_REF" GITHUB_WORKFLOW_SHA="$GITHUB_WORKFLOW_SHA" \
+                    RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" RUNNER_OS="$RUNNER_OS" \
+                    RUNNER_ARCH="$RUNNER_ARCH" RUNNER_TEMP="$RUNNER_TEMP" \
+                    "$RUNNER_TEMP/web-baseline-inputs-$GITHUB_RUN_ID-1/node/bin/node" \
+                    scripts/ci/run-web-baseline.mjs > "$capture/runtime.stdout" 2> "$capture/runtime.stderr"
+                  worker_exit=$?
+                  set -e
+                  printf '%s\n' "$worker_exit" > "$capture/runtime.exit-code"
+                  exit "$worker_exit"
+            - name: Collect only the original baseline and direct-closure result
+              id: runtime_report
+              if: ${{ always() }}
+              env:
+                  WEB_WORKER_OUTCOME: ${{ steps.runtime.outcome }}
+              run: /usr/bin/python3 -I -B scripts/ci/report-web-baseline.py --phase runtime
+            - name: >-
+                  Public Web baseline / ${{ steps.runtime.outcome }} / ${{
+                  steps.runtime_report.outcome == 'success' && steps.runtime_report.outputs.result
+                  || 'unavailable' }} / ${{ steps.runtime_report.outcome == 'success' &&
+                  steps.runtime_report.outputs.stage || 'unavailable' }} / ${{
+                  steps.runtime_report.outcome == 'success' && steps.runtime_report.outputs.closure
+                  || 'unavailable' }}
+              if: ${{ always() }}
+              env:
+                  WORKER_OUTCOME: ${{ steps.runtime.outcome }}
+                  REPORT_OUTCOME: ${{ steps.runtime_report.outcome }}
+                  REPORT_RESULT: ${{ steps.runtime_report.outputs.result || 'unavailable' }}
+              run: |
+                  test "$WORKER_OUTCOME" = success
+                  test "$REPORT_OUTCOME" = success
+                  test "$REPORT_RESULT" = passed
