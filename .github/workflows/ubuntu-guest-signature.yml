@@ -1,0 +1,171 @@
+name: Ubuntu guest signature and tool inventory
+on:
+  push:
+    branches: [ci/v060-ubuntu-guest-signature-20261118]
+permissions: {}
+env:
+  LD_PRELOAD: ''
+  LD_LIBRARY_PATH: ''
+  LC_ALL: C
+jobs:
+  signature_inventory:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.event_name == 'push' && github.event.deleted == false &&
+      github.event.repository.private == false && github.run_attempt == 1 &&
+      github.ref == 'refs/heads/ci/v060-ubuntu-guest-signature-20261118'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+    steps:
+      - name: Authenticate metadata and inventory installed paths
+        id: check
+        shell: /usr/bin/python3 -I -B {0}
+        run: |
+          import hashlib, os, stat, subprocess, tempfile
+          import urllib.request as http
+          from pathlib import Path
+
+          base = 'https://cloud-images.ubuntu.com/releases/jammy/release-20261109/'
+          pins = {
+              'SHA256SUMS': (8189, '8d56d645d0331430d71513db3d852524cb23a7cd478e2c0f5d3c75e4d179a4a4'),
+              'SHA256SUMS.gpg': (833, '7a5a6d3e0aed8602c78ce4885b2a48138178e329a129b40c4a2acc7360f26f66'),
+          }
+          asset = b'ubuntu-22.04-server-cloudimg-amd64.img'
+          digest = b'77d19e53656f87c95f1f6c6be59c789083b3f77fa08f9d88011ee04085c61f87'
+          signer = b'D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81'
+          key = Path('/usr/share/keyrings/ubuntu-cloudimage-keyring.gpg')
+          dpkg, gpgv = Path('/usr/bin/dpkg-query'), Path('/usr/bin/gpgv')
+          tools = {'qemu-system-x86_64': 'qemu-system-x86', 'qemu-img': 'qemu-utils',
+                   'cloud-localds': 'cloud-image-utils', 'genisoimage': 'genisoimage'}
+
+          def need(ok):
+              if not ok:
+                  raise ValueError()
+
+          def identity(s):
+              return (s.st_dev, s.st_ino, s.st_uid, s.st_gid, s.st_mode, s.st_nlink,
+                      s.st_size, s.st_ctime_ns, s.st_mtime_ns)
+
+          def safe(path, executable=False, elf=False):
+              rows = []
+              for part in (*reversed(path.parents), path):
+                  s = part.lstat()
+                  need(s.st_uid == 0 and 0 < s.st_ino <= 2**53-1 and not s.st_mode & 0o7022)
+                  if part != path:
+                      need(stat.S_ISDIR(s.st_mode))
+                  else:
+                      need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size > 0
+                           and s.st_mode & 0o400 and (not executable or s.st_mode & 0o100))
+                      if elf or path == key:
+                          need(s.st_size <= 8388608)
+                      with os.fdopen(os.open(part, os.O_RDONLY | os.O_NOFOLLOW |
+                                             os.O_NONBLOCK | os.O_CLOEXEC), 'rb') as fd:
+                          need(identity(os.fstat(fd.fileno())) == identity(s))
+                          if elf:
+                              h = fd.read(20)
+                              need(h[:6] == b'\x7fELF\x02\x01' and h[18:20] == b'\x3e\x00')
+                          need(identity(os.fstat(fd.fileno())) == identity(part.lstat()) == identity(s))
+                  rows.append(identity(s))
+              return rows
+
+          def query(*args):
+              return subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, timeout=6,
+                                    env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+
+          def owner(path, package):
+              r = query(dpkg, '-S', path)
+              need(r.returncode == 0 and r.stdout == f'{package}: {path}\n'.encode())
+
+          def locate(name, package):
+              path = Path('/usr/bin') / name
+              try:
+                  before = safe(path, executable=True)
+                  owner(path, package)
+                  need(safe(path, executable=True) == before)
+                  return 'present-metadata'
+              except FileNotFoundError:
+                  return 'absent'
+              except (OSError, ValueError, subprocess.SubprocessError):
+                  return 'unverified'
+
+          class NoRedirect(http.HTTPRedirectHandler):
+              def redirect_request(self, *args):
+                  return None
+
+          def pinned(name, body):
+              length, expected = pins[name]
+              need(len(body) == length and hashlib.sha256(body).hexdigest() == expected)
+
+          def fetch(client, name):
+              length = pins[name][0]
+              url = base + name
+              req = http.Request(url, headers={'Accept-Encoding': 'identity'})
+              with client.open(req, timeout=8) as r:
+                  need(r.status == 200 and r.geturl() == url
+                       and r.headers.get('Content-Encoding', 'identity') == 'identity')
+                  body = r.read(length + 1)
+              pinned(name, body)
+              return body
+
+          def read_signature(result):
+              bad = {b'BADSIG', b'ERRSIG', b'NO_PUBKEY', b'EXPSIG', b'EXPKEYSIG', b'REVKEYSIG',
+                     b'KEYEXPIRED', b'SIGEXPIRED', b'FAILURE', b'ERROR', b'NODATA'}
+              need(result.returncode == 0 and 0 < len(result.stdout) <= 8192)
+              rows = [line.split() for line in result.stdout.splitlines()]
+              need(all(len(row) > 1 and row[0] == b'[GNUPG:]' and row[1] not in bad for row in rows))
+              valid = [row[2:] for row in rows if row[1] == b'VALIDSIG']
+              need(len(valid) == 1 and len(valid[0]) in (9, 10) and valid[0][0] == signer
+                   and valid[0][2] == b'1794676537' and valid[0][6:9] == [b'1', b'10', b'00']
+                   and (len(valid[0]) == 9 or valid[0][9] == signer))
+
+          def signature(dpkg_stamp):
+              stage = 'trust-path'
+              try:
+                  stamp, key_stamp = safe(gpgv, True, True), safe(key)
+                  owner(key, 'ubuntu-keyring')
+                  need(safe(dpkg, True, True) == dpkg_stamp)
+                  stage = 'publisher-metadata'
+                  client = http.build_opener(NoRedirect())
+                  with tempfile.TemporaryDirectory(prefix='hub-guest-signature-') as home:
+                      for name in pins:
+                          with (Path(home) / name).open('xb') as out:
+                              out.write(fetch(client, name))
+                      stage = 'signature'
+                      need(safe(gpgv, True, True) == stamp and safe(key) == key_stamp)
+                      checked = query(gpgv, '--status-fd', '1', '--homedir', home, '--keyring', key,
+                                      Path(home) / 'SHA256SUMS.gpg', Path(home) / 'SHA256SUMS')
+                      read_signature(checked)
+                      need(safe(gpgv, True, True) == stamp and safe(key) == key_stamp)
+                      body = (Path(home) / 'SHA256SUMS').read_bytes()
+                      pinned('SHA256SUMS', body)
+                      pinned('SHA256SUMS.gpg', (Path(home) / 'SHA256SUMS.gpg').read_bytes())
+                      rows = [line.partition(b' *') for line in body.splitlines()]
+                      need([sha for sha, sep, name in rows if sep and name == asset] == [digest])
+              except Exception:
+                  return 'refused-' + stage
+              return 'verified-metadata'
+
+          def main():
+              inventory = ['unverified'] * len(tools)
+              signed = 'refused-trust-path'
+              try:
+                  need(os.getuid() == os.geteuid() and os.getuid() > 0)
+                  stamp = safe(dpkg, True, True)
+                  inventory = [locate(name, package) for name, package in tools.items()]
+                  need(safe(dpkg, True, True) == stamp)
+                  signed = signature(stamp)
+              except Exception:
+                  inventory = ['unverified'] * len(tools)
+              with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='ascii') as out:
+                  out.write('signature=' + signed + '\n' + 'tools=' + '/'.join(inventory) + '\n')
+              return 0 if signed == 'verified-metadata' and inventory == ['present-metadata'] * len(tools) else 1
+
+          if __name__ == '__main__':
+              raise SystemExit(main())
+      - name: >-
+          Guest signature ${{ steps.check.outputs.signature || 'unavailable' }} /
+          QEMU, IMG, seed, ISO ${{ steps.check.outputs.tools || 'unavailable' }}
+        if: ${{ always() && !cancelled() }}
+        shell: /usr/bin/python3 -I -B {0}
+        run: pass
