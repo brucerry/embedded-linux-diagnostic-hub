@@ -2,7 +2,7 @@ name: Public Linux host tool diagnostic
 
 on:
     push:
-        branches: [ci/v060-linux-native-host-tools-20261118]
+        branches: [ci/v060-linux-native-ldconfig-real-20261118]
 
 permissions:
     contents: read
@@ -25,7 +25,7 @@ jobs:
     host_tool_diagnostic:
         if: >-
             github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name ==
-            'push' && github.ref == 'refs/heads/ci/v060-linux-native-host-tools-20261118' &&
+            'push' && github.ref == 'refs/heads/ci/v060-linux-native-ldconfig-real-20261118' &&
             github.run_attempt == 1 && github.event.repository.private == false &&
             github.event.deleted == false
         runs-on: ubuntu-22.04

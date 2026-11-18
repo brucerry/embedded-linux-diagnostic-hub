@@ -14,7 +14,7 @@ TOOLS = (
     ('xauth', '/usr/bin/xauth'),
     ('cc', '/usr/bin/cc'),
     ('readelf', '/usr/bin/readelf'),
-    ('ldconfig', '/usr/sbin/ldconfig'),
+    ('ldconfig', '/usr/sbin/ldconfig.real'),
 )
 TOOL_IDS = frozenset(name for name, _ in TOOLS)
 PREDICATES = frozenset({
