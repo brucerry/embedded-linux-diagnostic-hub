@@ -1,0 +1,47 @@
+name: Linux folder installer host check
+
+on:
+    push:
+        branches: [ci/v060-linux-folder-host-probe-20261118]
+
+permissions:
+    contents: read
+
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    LD_PRELOAD: ''
+    LD_LIBRARY_PATH: ''
+    PYTHONPATH: ''
+    PYTHONHOME: ''
+
+defaults:
+    run:
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+    host_check:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+            github.event.repository.private == false && github.event_name == 'push' &&
+            github.ref == 'refs/heads/ci/v060-linux-folder-host-probe-20261118' &&
+            github.run_attempt == 1 && github.event.deleted == false
+        runs-on: ubuntu-22.04
+        timeout-minutes: 2
+        steps:
+            - name: Check out admitted public source
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  fetch-depth: 1
+                  persist-credentials: false
+            - name: Check original path guard and inert process closure
+              id: probe
+              run: /usr/bin/python3 -I -B scripts/ci/linux-folder-host-check.py
+            - name: >-
+                  Linux folder host / ${{ steps.probe.outputs.status || 'fail' }} / ${{
+                  steps.probe.outputs.bucket || 'unavailable' }}
+              if: always()
+              env:
+                  HOST_CHECK_STATUS: ${{ steps.probe.outputs.status }}
+              run: test "$HOST_CHECK_STATUS" = pass
