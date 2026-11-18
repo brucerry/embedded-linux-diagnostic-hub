@@ -1,6 +1,6 @@
 {
     "schema": 1,
-    "branch": "ci/v060-linux-native-baseline-20261117",
+    "branch": "ci/v060-linux-native-smoke-v2-20261118",
     "workflow": ".github/workflows/linux-native-public-baseline.yml",
     "job": "native_baseline",
     "publicBase": "0ff00dc43994f9e735083f6d00cca22dcdb2e8bf",

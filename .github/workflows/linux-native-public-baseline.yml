@@ -2,7 +2,7 @@ name: Public Linux native startup baseline
 
 on:
     push:
-        branches: [ci/v060-linux-native-baseline-20261117]
+        branches: [ci/v060-linux-native-smoke-v2-20261118]
 
 permissions:
     contents: read
@@ -32,7 +32,7 @@ jobs:
     native_baseline:
         if: >-
             github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name ==
-            'push' && github.ref == 'refs/heads/ci/v060-linux-native-baseline-20261117' &&
+            'push' && github.ref == 'refs/heads/ci/v060-linux-native-smoke-v2-20261118' &&
             github.run_attempt == 1 && github.event.repository.private == false &&
             github.event.deleted == false
         runs-on: ubuntu-22.04

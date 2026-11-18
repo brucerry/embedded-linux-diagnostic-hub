@@ -192,7 +192,7 @@ def context(create=False):
 def host_phase(project, root, profile):
     HOST.need(shutil.disk_usage(root).free >= 4 * 1024**3, "custody")
     tools = {name: HOST.tool(Path("/usr/bin") / name, os.getuid()) for name in ("Xvfb", "xauth", "cc", "readelf")}
-    tools["ldconfig"] = HOST.tool(Path("/usr/sbin/ldconfig"), os.getuid())
+    tools["ldconfig"] = HOST.tool(Path("/usr/sbin/ldconfig.real"), os.getuid())
     HOST.physical_policy()
     HOST.display_slot()
     for name in ("home", "tmp", "config", "cache", "data", "runtime", "profile", "playwright-data"):
