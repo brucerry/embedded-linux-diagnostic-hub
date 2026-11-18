@@ -1,0 +1,54 @@
+name: Public Linux host tool diagnostic
+
+on:
+    push:
+        branches: [ci/v060-linux-native-host-tools-20261118]
+
+permissions:
+    contents: read
+
+env:
+    BASH_ENV: /dev/null
+    ENV: /dev/null
+    NODE_OPTIONS: ''
+    NODE_PATH: ''
+    NODE_COMPILE_CACHE: ''
+    NODE_DISABLE_COMPILE_CACHE: '1'
+    LD_PRELOAD: ''
+    LD_LIBRARY_PATH: ''
+
+defaults:
+    run:
+        shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+    host_tool_diagnostic:
+        if: >-
+            github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name ==
+            'push' && github.ref == 'refs/heads/ci/v060-linux-native-host-tools-20261118' &&
+            github.run_attempt == 1 && github.event.repository.private == false &&
+            github.event.deleted == false
+        runs-on: ubuntu-22.04
+        timeout-minutes: 2
+        steps:
+            - name: Check out the public diagnostic source
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+                  fetch-depth: 1
+            - name: Inspect the fixed host tool metadata and headers
+              id: tool_check
+              if: >-
+                  runner.os == 'Linux' && runner.arch == 'X64' && runner.environment ==
+                  'github-hosted'
+              run:
+                  /usr/bin/python3 -I -B scripts/ci/linux-native-host-tool-diagnostic.py
+                  "$GITHUB_OUTPUT"
+            - name:
+                  Host tool diagnostic / ${{ steps.tool_check.outputs.label || 'refused / none /
+                  unavailable' }}
+              if: always()
+              run:
+                  ${{ steps.tool_check.outcome == 'success' && '/usr/bin/true' || '/usr/bin/false'
+                  }}
