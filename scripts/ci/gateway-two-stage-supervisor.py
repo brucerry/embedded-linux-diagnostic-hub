@@ -25,15 +25,18 @@ RUNTIME_COMPLETE = b'Gateway runtime health/auth/normal-close complete; no SSH o
 
 def select(environment, role):
     assert role in ('producer', 'runtime') and os.getuid() > 0
+    ref=environment.get('GITHUB_REF')
+    branch=COMMON.SOURCE_TOOL_BRANCH if ref=='refs/heads/'+COMMON.SOURCE_TOOL_BRANCH else BRANCH
+    assert branch==BRANCH or role=='producer'
     for key, value in {
         'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':'brucerry/embedded-linux-diagnostic-hub',
-        'GITHUB_EVENT_NAME':'push','GITHUB_REF':'refs/heads/'+BRANCH,'GITHUB_RUN_ATTEMPT':'1',
+        'GITHUB_EVENT_NAME':'push','GITHUB_REF':'refs/heads/'+branch,'GITHUB_RUN_ATTEMPT':'1',
         'GITHUB_JOB':'gateway_build','RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'Linux','RUNNER_ARCH':'X64',
     }.items(): assert environment.get(key)==value
     sha=environment['GITHUB_SHA']; run=environment['GITHUB_RUN_ID']
     assert re.fullmatch('[a-f0-9]{40}',sha) and re.fullmatch('[1-9][0-9]{0,31}',run)
     assert environment['GITHUB_WORKFLOW_SHA']==sha
-    assert environment['GITHUB_WORKFLOW_REF']=='brucerry/embedded-linux-diagnostic-hub/.github/workflows/gateway-publisher-node-buildonly.yml@refs/heads/'+BRANCH
+    assert environment['GITHUB_WORKFLOW_REF']=='brucerry/embedded-linux-diagnostic-hub/.github/workflows/gateway-publisher-node-buildonly.yml@refs/heads/'+branch
     root=Path(environment['GITHUB_WORKSPACE']);temporary=Path(environment['RUNNER_TEMP'])
     COMMON.directory(root);COMMON.directory(temporary)
     node=temporary/('gateway-publisher-node-'+run+'-1')/'bin/node'

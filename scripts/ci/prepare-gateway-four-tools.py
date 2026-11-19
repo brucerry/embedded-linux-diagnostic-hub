@@ -22,6 +22,7 @@ import zlib
 
 
 BRANCH = "ci/v060-gateway-preparation-diagnostics-20261116"
+SOURCE_TOOL_BRANCH = "ci/v060-gateway-source-tool-buildonly-20261119"
 NAMES = ("semver", "fflate", "esbuild", "@esbuild/linux-x64")
 VERSIONS = ("7.8.5", "0.8.3", "0.28.2", "0.28.2")
 UID = os.getuid()
@@ -32,6 +33,7 @@ STAGES = frozenset((
     "node-integrity", "npm-integrity", "node-version", "tool-fetch",
     "safe-extraction", "build-preparation", "complete",
     "publisher-node", "publisher-archive", "publisher-materialization",
+    "esbuild-source-inputs", "esbuild-source-build", "esbuild-wrapper-build",
 ))
 REASONS = frozenset((
     "none", "guard-refused", "type", "owner", "mode", "inode", "link-count",
@@ -223,7 +225,27 @@ def inspect_package(data, package):
     return members
 
 
-def main(node_provider=None, expected_branch=BRANCH):
+def approved_members(profile, scratch, source_tools):
+    global PHASE, INPUT
+    inspected = []
+    if source_tools is not None:
+        derived = source_tools(scratch)
+        require(set(derived) == set(NAMES[2:]), "package-manifest")
+    for index, package in enumerate(profile["packages"], 1):
+        INPUT = str(index)
+        if source_tools is not None and package["name"] in NAMES[2:]:
+            inspected.append((package, derived[package["name"]]))
+            continue
+        PHASE = "tool-fetch"
+        b = download(package)
+        PHASE = "build-preparation"
+        write(scratch / (package["name"].replace("/", "-") + ".tgz"), b)
+        PHASE = "safe-extraction"
+        inspected.append((package, inspect_package(b, package)))
+    return inspected
+
+
+def main(node_provider=None, expected_branch=BRANCH, source_tools=None):
     global PHASE, INPUT
     require(UID > 0 and os.uname().sysname == "Linux" and os.uname().machine == "x86_64")
     expected_environment = {
@@ -233,6 +255,15 @@ def main(node_provider=None, expected_branch=BRANCH):
         "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64",
     }
     require(all(os.environ.get(key) == value for key, value in expected_environment.items()))
+    require((expected_branch == SOURCE_TOOL_BRANCH) == (source_tools is not None))
+    if source_tools is not None:
+        require(node_provider is not None)
+        require(metadata(Path("/"), True).st_uid == 0, "owner")
+        require(os.environ.get("GITHUB_JOB") == "gateway_build")
+        require(os.environ.get("GITHUB_WORKFLOW_SHA") == os.environ["GITHUB_SHA"])
+        require(os.environ.get("GITHUB_WORKFLOW_REF") ==
+                expected_environment["GITHUB_REPOSITORY"] +
+                "/.github/workflows/gateway-publisher-node-buildonly.yml@refs/heads/" + SOURCE_TOOL_BRANCH)
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
                 "all_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR"):
         require(not os.environ.get(key))  # Refuse unsupported routing/trust, never clear it.
@@ -304,15 +335,7 @@ def main(node_provider=None, expected_branch=BRANCH):
     temporary = Path(os.environ["RUNNER_TEMP"])
     directory(temporary)
     scratch = Path(tempfile.mkdtemp(prefix="gateway-four-tools-", dir=temporary))
-    inspected = []
-    for index, package in enumerate(profile["packages"], 1):
-        INPUT = str(index)
-        PHASE = "tool-fetch"
-        b = download(package)
-        PHASE = "build-preparation"
-        write(scratch / (package["name"].replace("/", "-") + ".tgz"), b)
-        PHASE = "safe-extraction"
-        inspected.append((package, inspect_package(b, package)))
+    inspected = approved_members(profile, scratch, source_tools)
     PHASE = "build-preparation"
     destination = root / "node_modules"
     destination.mkdir(mode=0o700)
@@ -330,7 +353,10 @@ def main(node_provider=None, expected_branch=BRANCH):
                 write(target, b, mode)
     PHASE = "complete"
     INPUT = "none"
-    print("Four locked Gateway build inputs prepared; no runtime or release qualification.")
+    if source_tools is None:
+        print("Four locked Gateway build inputs prepared; no runtime or release qualification.")
+    else:
+        print("Two locked registry inputs and two source-derived tool slots prepared.")
 
 
 def reason_for(error):
@@ -374,7 +400,7 @@ def publish_diagnostic(result, stage, reason, ordinal):
         os.close(fd)
 
 
-def collect_diagnostic(node_provider=None, expected_branch=BRANCH):
+def collect_diagnostic(node_provider=None, expected_branch=BRANCH, source_tools=None):
     """Exit 0 means the finite report closed, not that preparation succeeded.
 
     The workflow fails a reported refusal and requires both a closed report and
@@ -385,7 +411,9 @@ def collect_diagnostic(node_provider=None, expected_branch=BRANCH):
     PHASE, INPUT = "admission", "none"
     result, reason = "refused", "unexpected"
     try:
-        if node_provider is None and expected_branch == BRANCH:
+        if source_tools is not None:
+            main(node_provider=node_provider, expected_branch=expected_branch, source_tools=source_tools)
+        elif node_provider is None and expected_branch == BRANCH:
             main()
         else:
             main(node_provider=node_provider, expected_branch=expected_branch)

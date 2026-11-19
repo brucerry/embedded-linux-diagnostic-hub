@@ -1,14 +1,14 @@
-name: Gateway separate canonical build and health smoke
+name: Gateway source-built esbuild build-only diagnostic
 
 on:
     push:
-        branches: [ci/v060-gateway-two-stage-20261117]
+        branches: [ci/v060-gateway-source-tool-buildonly-20261119]
 
 permissions:
     contents: read
 
 concurrency:
-    group: gateway-four-tool-buildonly-${{ github.ref }}
+    group: gateway-source-tool-buildonly-${{ github.ref }}
     cancel-in-progress: false
 
 env:
@@ -29,7 +29,7 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-gateway-two-stage-20261117' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-gateway-source-tool-buildonly-20261119' && github.run_attempt == 1 }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         defaults:
@@ -40,7 +40,7 @@ jobs:
               run: |
                   test "$GITHUB_REPOSITORY" = brucerry/embedded-linux-diagnostic-hub
                   test "$GITHUB_EVENT_NAME" = push
-                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-two-stage-20261117
+                  test "$GITHUB_REF" = refs/heads/ci/v060-gateway-source-tool-buildonly-20261119
                   test "$GITHUB_RUN_ATTEMPT" = 1
                   test "$RUNNER_ENVIRONMENT" = github-hosted
                   test "$RUNNER_OS" = Linux
@@ -55,9 +55,9 @@ jobs:
                   set-safe-directory: false
                   submodules: false
                   lfs: false
-            - name: Collect guarded publisher Node and four-input preparation outcome
+            - name: Build and verify the source-derived tools and other pinned inputs
               id: preparation
-              run: /usr/bin/python3 -I -B scripts/ci/prepare-gateway-publisher-node.py
+              run: /usr/bin/python3 -I -B scripts/ci/prepare-gateway-source-esbuild.py
             - name: >-
                   Preparation diagnostic / ${{ steps.preparation.outcome == 'success' &&
                   steps.preparation.outputs.result || 'report-unavailable' }} / ${{
@@ -89,21 +89,3 @@ jobs:
               run: |
                   test "$PRODUCER_OUTCOME" = success
                   test "$PRODUCER_RESULT" = producer-ready
-            - name: Start the same package and observe loopback health auth and normal close
-              id: runtime
-              if:
-                  ${{ success() && steps.producer.outcome == 'success' &&
-                  steps.producer.outputs.result == 'producer-ready' }}
-              env:
-                  PRODUCER_BINDING_SHA: ${{ steps.producer.outputs.binding_sha256 }}
-              run: /usr/bin/python3 -I -B scripts/ci/gateway-two-stage-supervisor.py runtime
-            - name:
-                  Runtime / ${{ steps.runtime.outcome }} / ${{ steps.runtime.outputs.result ||
-                  'unavailable' }} / ${{ steps.runtime.outputs.reason || 'unavailable' }}
-              if: ${{ always() }}
-              env:
-                  RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
-                  RUNTIME_RESULT: ${{ steps.runtime.outputs.result || 'unavailable' }}
-              run: |
-                  test "$RUNTIME_OUTCOME" = success
-                  test "$RUNTIME_RESULT" = runtime-closed

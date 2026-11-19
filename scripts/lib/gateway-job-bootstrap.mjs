@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { createOwnedWebFiles } from './owned-web-files.mjs';
 import { localSourceProvider } from './committed-source-provider.mjs';
 import { observeSourceBridge } from './committed-source-bridge.mjs';
+import { SOURCE_ESBUILD_REF, verifySourceDerivedEsbuild } from './gateway-source-esbuild.mjs';
 import {
     createGitHubSourceSelector,
     createGitHubSourceSelectorModel,
@@ -159,7 +160,22 @@ function makeBootstrap(input, ports, selectorFactory, mode) {
                 const npmPath =
                     path.dirname(path.dirname(nodePath)) + '/lib/node_modules/npm/bin/npm-cli.js';
                 assert.equal(await io.realpath(npmPath), npmPath);
+                const sourceDerivedEsbuild = context.ref === SOURCE_ESBUILD_REF;
+                if (sourceDerivedEsbuild) {
+                    assert.equal(coverage, 'branch-qualification');
+                    assert.equal(context.event, 'push');
+                    assert.equal(context.jobKey, 'gateway_build');
+                    assert.equal(
+                        context.workflowRef,
+                        context.repository + '/.github/workflows/gateway-publisher-node-buildonly.yml@' +
+                            SOURCE_ESBUILD_REF,
+                    );
+                }
                 const observed = async (filesystem = io) => {
+                    if (sourceDerivedEsbuild)
+                        await verifySourceDerivedEsbuild(
+                            root, runtime.uid, filesystem, files.systemRoot, read,
+                        );
                     const entry = await read(esbuildPath, 64 * 1024, filesystem),
                         npmPackage = await read(
                             path.dirname(path.dirname(npmPath)) + '/package.json',
