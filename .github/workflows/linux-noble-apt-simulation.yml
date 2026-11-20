@@ -118,7 +118,7 @@ env:
         END { exit !(caps&&nnp&&sec) }
     ' /proc/self/status
     shift 5
-    status_hash="$1"; shift
+    status_hash="$1"; archive_pins="$2"; shift 2
     test "$#" -eq 39
     test "$(/usr/bin/ls -1 /sys/class/net)" = lo
     /usr/bin/awk '
@@ -142,6 +142,42 @@ env:
         printf '%s\n' "$config" | /usr/bin/grep -Fxq "$required"
     done
     printf 'HUB-NOBLE-APT-CONFIG-READY\n'
+    archive_refuse() {
+        printf 'HUB-NOBLE-WORKER-ARCHIVES %s %02d\n' "$1" "$ordinal"
+        exit 1
+    }
+    # The subshell only inspects positional arguments. The worker's "$@" is unchanged.
+    printf '%s\n' "$archive_pins" | (
+        ordinal=0
+        for argument do
+            ordinal=$((ordinal+1))
+            IFS=' ' read -r expected_size expected_sha expected_path extra || archive_refuse mapping
+            test -z "$extra" && test "$argument" = "$expected_path" || archive_refuse mapping
+            test -f "$argument" && test ! -L "$argument" || archive_refuse read
+            result=$(
+                spec='%s:%d:%i:%u:%h:%f:%y:%z'
+                test -f /proc/self/fd/3 || exit 1
+                before=$(/usr/bin/stat -Lc "$spec" /proc/self/fd/3) || exit 1
+                pathname=$(/usr/bin/stat -c "$spec" -- "$argument") || exit 1
+                if test "$before" != "$pathname"; then printf changed; exit 0; fi
+                if test "${before%%:*}" != "$expected_size"; then printf size; exit 0; fi
+                sum=$(/usr/bin/timeout --kill-after=1 3 /usr/bin/sha256sum <&3) || exit 1
+                after=$(/usr/bin/stat -Lc "$spec" /proc/self/fd/3) || exit 1
+                pathname=$(/usr/bin/stat -c "$spec" -- "$argument") || exit 1
+                if test "$before" != "$after" || test "$after" != "$pathname"; then printf changed; exit 0; fi
+                if test "$sum" != "$expected_sha  -"; then printf digest; exit 0; fi
+                printf ok
+            ) 2>/dev/null 3<"$argument" || archive_refuse read
+            case "$result" in
+                ok) ;;
+                size|digest|changed) archive_refuse "$result" ;;
+                *) archive_refuse read ;;
+            esac
+        done
+        if IFS= read -r extra; then archive_refuse mapping; fi
+        test "$ordinal" -eq 39 || archive_refuse mapping
+    )
+    printf 'HUB-NOBLE-WORKER-ARCHIVES ok\n'
     printf 'HUB-NOBLE-SIM-BEGIN\n'
     exec 3>&1
     summary=$(
@@ -470,9 +506,19 @@ env:
             status=local_directory(source,owner_only=True)
             ids.append(f'{status["dev"]}:{status["ino"]}')
             binds+=['--mount',f'type=bind,source={source},target={target},readonly']
+        archive_paths=[]
+        archive_rows=[]
+        for name,row in sorted(policy['archives'].items()):
+            size,digest=row['Size'],row['SHA256']
+            need(re.fullmatch(r'[a-z0-9][a-z0-9.+-]*',name) and type(size) is int and
+                 0<size<=32<<20 and re.fullmatch(HEX,digest),'fixed-worker-archive-pin')
+            path='/approved/'+name+'.deb'
+            archive_paths.append(path)
+            archive_rows.append(f'{size} {digest} {path}')
+        need(len(archive_paths)==39,'fixed-worker-archive-count')
         runtime=['-i','PATH=/usr/bin:/bin','LANG=C','LC_ALL=C','/bin/sh','-ec',WORKER,
                  'noble-read-only-simulation',str(uid),str(gid),*ids,policy['statusSHA256'],
-                 *['/approved/'+name+'.deb' for name in sorted(policy['archives'])]]
+                 '\n'.join(archive_rows),*archive_paths]
         args=docker(scratch,'container','create','--platform',BASE_ABI,'--pull=never','--network','none',
              '--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--user',f'{uid}:{gid}',
              '--pids-limit','64','--memory','512m','--ulimit','cpu=45:45','--log-driver','none',
@@ -531,6 +577,12 @@ env:
         'worker-entry':'entered',
         'worker-mounts':'mountsReady',
         'apt-config':'configReady',
+        'archive-worker-readback':'archiveWorkerMatched',
+        'archive-worker-mapping':'archiveWorkerNotMapping',
+        'archive-worker-read':'archiveWorkerNotRead',
+        'archive-worker-size':'archiveWorkerNotSize',
+        'archive-worker-digest':'archiveWorkerNotDigest',
+        'archive-worker-changed':'archiveWorkerNotChanged',
         'solver-reported':'solverReported',
         'solver-exit':'solverExitZero',
         'apt-stderr-reported':'workerAptStderrReported',
@@ -556,12 +608,24 @@ env:
         entry=[b'HUB-NOBLE-WORKER-ENTERED']
         mounts=entry+[b'HUB-NOBLE-MOUNTS-READY']
         config=mounts+[b'HUB-NOBLE-APT-CONFIG-READY']
-        opened=config+[b'HUB-NOBLE-SIM-BEGIN']
+        archive_prefix=b'HUB-NOBLE-WORKER-ARCHIVES'
+        records=[(i,line) for i,line in enumerate(lines) if line.startswith(archive_prefix)]
+        archive_kind=None
+        if lines[:3]==config and len(records)==1 and records[0][0]==3:
+            record=records[0][1]
+            if record==archive_prefix+b' ok':
+                archive_kind=b'ok'
+            else:
+                diagnostic=re.fullmatch(rb'HUB-NOBLE-WORKER-ARCHIVES (mapping|read|size|digest|changed) (0[1-9]|[12][0-9]|3[0-9])',record)
+                if diagnostic and len(lines)==4:
+                    archive_kind=diagnostic[1]
+        archive_matched=archive_kind==b'ok'
+        opened=config+[archive_prefix+b' ok',b'HUB-NOBLE-SIM-BEGIN']
         closed=b'HUB-NOBLE-SIM-CLOSED'
         exits=[(i,v) for i,v in enumerate(lines) if v.startswith(b'HUB-NOBLE-APT-EXIT')]
         exit_index, marker=exits[0] if len(exits)==1 else (-1,b'')
         status=re.fullmatch(rb'HUB-NOBLE-APT-EXIT (0|[1-9][0-9]{0,2})',marker)
-        reported=(lines[:4]==opened and status is not None and int(status[1])<=255 and
+        reported=(archive_matched and lines[:len(opened)]==opened and status is not None and int(status[1])<=255 and
                   exit_index>=len(opened) and lines[exit_index+1:] in ([],[closed]))
         solver_zero=reported and status[1]==b'0'
         worker_closed=solver_zero and lines[-1:]==[closed]
@@ -580,12 +644,18 @@ env:
         exact=False
         if worker_closed and code==0 and stderr_empty and apt_stderr_empty:
             try:
-                exact_transaction(b'\n'.join(lines[3:exit_index-1]+[closed])+b'\n',archives)
+                exact_transaction(b'\n'.join(lines[len(opened)-1:exit_index-1]+[closed])+b'\n',archives)
             except (ValueError,UnicodeError,IndexError):
                 pass
             else:
                 exact=True
         return {'entered':lines[:1]==entry,'mountsReady':lines[:2]==mounts,'configReady':lines[:3]==config,
+                'archiveWorkerMatched':archive_matched,
+                'archiveWorkerNotMapping':archive_kind is not None and archive_kind!=b'mapping',
+                'archiveWorkerNotRead':archive_kind is not None and archive_kind!=b'read',
+                'archiveWorkerNotSize':archive_kind is not None and archive_kind!=b'size',
+                'archiveWorkerNotDigest':archive_kind is not None and archive_kind!=b'digest',
+                'archiveWorkerNotChanged':archive_kind is not None and archive_kind!=b'changed',
                 'solverReported':reported,'solverExitZero':solver_zero,'workerClosed':worker_closed,'attachReturned':returned,
                 'attachExitZero':code==0,'stderrAvailable':returned,
                 'stderrNoAptDiagnostic':returned and not any(line.startswith((b'E:',b'W:',b'N:'))
@@ -1841,6 +1911,144 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - apt-config <<< "$PINNED_SCRIPT"
+      - name: Verify all 39 mounted archives from the APT worker
+        id: archive-worker-readback
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - archive-worker-readback <<< "$PINNED_SCRIPT"
+      - name: Rule out a mounted worker archive mapping refusal
+        id: archive-worker-mapping
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - archive-worker-mapping <<< "$PINNED_SCRIPT"
+      - name: Rule out a mounted worker archive read refusal
+        id: archive-worker-read
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - archive-worker-read <<< "$PINNED_SCRIPT"
+      - name: Rule out a mounted worker archive size refusal
+        id: archive-worker-size
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - archive-worker-size <<< "$PINNED_SCRIPT"
+      - name: Rule out a mounted worker archive digest refusal
+        id: archive-worker-digest
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - archive-worker-digest <<< "$PINNED_SCRIPT"
+      - name: Rule out a mounted worker archive identity change
+        id: archive-worker-changed
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - archive-worker-changed <<< "$PINNED_SCRIPT"
       - name: Observe one framed worker APT exit result
         id: solver-reported
         if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
