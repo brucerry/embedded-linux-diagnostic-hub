@@ -1,0 +1,206 @@
+name: Observe stock Intel macOS CLT Git
+on:
+  push:
+    branches:
+      - ci/v060-macos-clt-attribution-20261120
+permissions: {}
+jobs:
+  clt_git:
+    if: ${{ github.event_name == 'push' && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.repository_id == '1405501450' && github.event.repository.private == false && github.ref == 'refs/heads/ci/v060-macos-clt-attribution-20261120' && github.run_attempt == 1 }}
+    runs-on: macos-15-intel
+    timeout-minutes: 3
+    env:
+      CLT_READ_ONLY_PROBE: |
+        use strict;
+        use warnings;
+        use Digest::SHA;
+        use Fcntl qw(O_RDONLY O_NOFOLLOW O_NONBLOCK :mode);
+        use IO::Select;
+        use POSIX qw(WNOHANG setpgid);
+        use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
+        use filetest 'access';
+
+        my $git = '/Library/Developer/CommandLineTools/usr/bin/git';
+        my $pkg = 'com.apple.pkg.CLTools_Executables';
+        my $clt = '16.4.0.0.1.1747106510';
+
+        sub insist { die "REFUSED\n" unless $_[0]; }
+        sub now { return clock_gettime(CLOCK_MONOTONIC); }
+
+        sub run_read {
+            my ($cap, @argv) = @_;
+            pipe(my $reader, my $writer) or die "REFUSED\n";
+            my $pid = fork();
+            insist(defined $pid);
+            if (!$pid) {
+                close $reader;
+                my $group = setpgid(0, 0);
+                defined($group) && $group == 0 or POSIX::_exit(126);
+                open(STDIN, '<', '/dev/null') or POSIX::_exit(126);
+                open(STDOUT, '>&', $writer) or POSIX::_exit(126);
+                open(STDERR, '>&', $writer) or POSIX::_exit(126);
+                close $writer;
+                %ENV = (PATH => '/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL => 'C', LANG => 'C');
+                exec { $argv[0] } @argv or POSIX::_exit(127);
+            }
+            close $writer;
+            setpgid($pid, $pid);
+            my $limit = now() + 6;
+            my $select = IO::Select->new($reader);
+            my $data = '';
+            my $reaped = 0;
+            my $ok = eval {
+                while (1) {
+                    my $remaining = $limit - now();
+                    insist($remaining > 0 && $select->can_read($remaining));
+                    my $count = sysread($reader, my $chunk, 65536);
+                    insist(defined($count) && length($data) + $count <= $cap);
+                    last if $count == 0;
+                    $data .= $chunk;
+                }
+                close $reader;
+                my $closed;
+                while (now() < $limit) {
+                    my $found = waitpid($pid, WNOHANG);
+                    if ($found == $pid) {
+                        $closed = 1;
+                        $reaped = 1;
+                        insist($? == 0 && !kill(0, -$pid));
+                        last;
+                    }
+                    insist($found == 0);
+                    sleep(0.02);
+                }
+                insist($closed);
+                1;
+            };
+            if (!$ok) {
+                kill('KILL', -$pid);
+                kill('KILL', $pid) unless $reaped;
+                my $cleanup_limit = now() + 1;
+                while (!$reaped && now() < $cleanup_limit && waitpid($pid, WNOHANG) == 0) { sleep(0.02); }
+                die "REFUSED\n";
+            }
+            return $data;
+        }
+
+        sub single {
+            my ($raw, $label) = @_;
+            my @values = ($raw =~ /^\Q$label\E:[ \t]*([^\r\n]*)$/mg);
+            insist(@values == 1);
+            return $values[0];
+        }
+
+        sub receipt_location {
+            my ($info) = @_;
+            insist(single($info, 'package-id') eq $pkg &&
+                       single($info, 'version') eq $clt && single($info, 'volume') eq '/');
+            my $root = single($info, 'location');
+            return '/' if $root eq '' || $root eq '/';
+            insist($root eq '/Library/Developer/CommandLineTools' ||
+                       $root eq 'Library/Developer/CommandLineTools');
+            return '/Library/Developer/CommandLineTools/';
+        }
+
+        sub attributed {
+            my ($info, $files, $root) = @_;
+            insist(single($info, 'volume') eq '/' && single($info, 'path') eq $git &&
+                       single($info, 'pkgid') eq $pkg && single($info, 'pkg-version') eq $clt);
+            my $member = substr($git, length($root));
+            insist(substr($git, 0, length($root)) eq $root);
+            my @matches = grep { $_ eq $member || $_ eq './' . $member } split /\n/, $files;
+            insist(@matches == 1);
+        }
+
+        sub stable_file {
+            insist($> != 0);
+            my $parent = '';
+            my @parts = split('/', substr($git, 1));
+            pop @parts;
+            for my $part ('', @parts) {
+                $parent .= '/' . $part if length $part;
+                my $dir = length($parent) ? $parent : '/';
+                my @s = lstat($dir);
+                insist(@s && S_ISDIR($s[2]) && $s[4] == 0 && !($s[2] & 0022) && !-w $dir);
+            }
+            my @path = lstat($git);
+            insist(@path && S_ISREG($path[2]) && $path[4] == 0 && $path[3] == 1 &&
+                       !($path[2] & 0022) && ($path[2] & 0111) && !-w $git &&
+                       $path[7] > 0 && $path[7] <= 32*1024*1024);
+            sysopen(my $fh, $git, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or die "REFUSED\n";
+            my @fields = (0, 1, 2, 3, 4, 5, 7, 9, 10);
+            my $stamp = join(':', @path[@fields]);
+            my @opened = stat($fh);
+            insist(@opened && join(':', @opened[@fields]) eq $stamp);
+            my $sha = Digest::SHA->new(256);
+            my $remaining = $path[7];
+            while ($remaining) {
+                my $n = sysread($fh, my $block, $remaining > 65536 ? 65536 : $remaining);
+                insist(defined($n) && $n > 0);
+                $sha->add($block);
+                $remaining -= $n;
+            }
+            my $tail = sysread($fh, my $byte, 1);
+            insist(defined($tail) && $tail == 0);
+            my @after = stat($fh);
+            my @linked = lstat($git);
+            insist(@after && @linked && join(':', @after[@fields]) eq $stamp &&
+                       join(':', @linked[@fields]) eq $stamp);
+            close($fh) or die "REFUSED\n";
+            return $stamp . ':' . $sha->hexdigest;
+        }
+
+        sub main {
+            my ($stage) = @ARGV;
+            insist(defined($stage) && $stage =~ /\A(?:host|receipt|attribution|signature)\z/);
+            my $worked = eval {
+                if ($stage eq 'host') {
+                    insist($> != 0 && ($ENV{RUNNER_ENVIRONMENT} // '') eq 'github-hosted' &&
+                          ($ENV{RUNNER_OS} // '') eq 'macOS' && ($ENV{RUNNER_ARCH} // '') eq 'X64' &&
+                          ($ENV{ImageVersion} // '') eq '20260824.0482.1');
+                    insist(run_read(4096, '/usr/bin/uname', '-m') eq "x86_64\n" &&
+                          run_read(4096, '/usr/bin/sw_vers', '-productVersion') eq "15.7.9\n" &&
+                          run_read(4096, '/usr/bin/sw_vers', '-buildVersion') eq "24G830\n");
+                    my $xc = '/Applications/Xcode_16.4.app/Contents';
+                    insist(run_read(4096, '/usr/libexec/PlistBuddy', '-c',
+                                 'Print :CFBundleShortVersionString', "$xc/Info.plist") eq "16.4\n" &&
+                          run_read(4096, '/usr/libexec/PlistBuddy', '-c',
+                                 'Print :ProductBuildVersion', "$xc/version.plist") eq "16F6\n");
+                } elsif ($stage eq 'receipt') {
+                    receipt_location(run_read(65536, '/usr/sbin/pkgutil', '--volume', '/', '--pkg-info', $pkg));
+                } elsif ($stage eq 'attribution') {
+                    my $root = receipt_location(run_read(65536, '/usr/sbin/pkgutil', '--volume', '/', '--pkg-info', $pkg));
+                    attributed(run_read(65536, '/usr/sbin/pkgutil', '--file-info', $git),
+                               run_read(4*1024*1024, '/usr/sbin/pkgutil', '--volume', '/', '--only-files', '--files', $pkg), $root);
+                    stable_file();
+                } else {
+                    my $before = stable_file();
+                    run_read(65536, '/usr/bin/codesign', '--verify', '--strict', '--all-architectures',
+                             '-R=anchor apple', $git);
+                    my $meta = run_read(65536, '/usr/bin/codesign', '--display', '--verbose=4', $git);
+                    my @ids = ($meta =~ /^Identifier=([A-Za-z0-9.\-]{1,128})$/mg);
+                    insist(@ids == 1 && stable_file() eq $before);
+                }
+                1;
+            };
+            if (!$worked) {
+                print "REFUSED $stage\n";
+                exit 1;
+            }
+            print "OBSERVED $stage\n";
+        }
+        main() unless caller;
+        1;
+    steps:
+      - name: Verify reviewed Intel image and Xcode build
+        shell: /bin/bash --noprofile --norc -e {0}
+        run: /usr/bin/perl -e "$CLT_READ_ONLY_PROBE" -- host
+      - name: Verify exact stock CLT receipt
+        shell: /bin/bash --noprofile --norc -e {0}
+        run: /usr/bin/perl -e "$CLT_READ_ONLY_PROBE" -- receipt
+      - name: Read installed Git file attribution
+        shell: /bin/bash --noprofile --norc -e {0}
+        run: /usr/bin/perl -e "$CLT_READ_ONLY_PROBE" -- attribution
+      - name: Verify Apple signature and stable installed Git bytes
+        shell: /bin/bash --noprofile --norc -e {0}
+        run: /usr/bin/perl -e "$CLT_READ_ONLY_PROBE" -- signature
