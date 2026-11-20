@@ -159,19 +159,25 @@ env:
             raise ValueError(label)
 
 
-    def bounded(argv,scratch,timeout=35,limit=128<<10):
+    def bounded(argv,scratch,timeout=35,limit=128<<10,*,capture_timeout=False):
         def cap():
             resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit))
         env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':str(scratch/'home')}
         with tempfile.TemporaryFile(dir=scratch) as out, tempfile.TemporaryFile(dir=scratch) as err:
-            call=subprocess.run(argv,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,
-                                timeout=timeout,preexec_fn=cap)
+            try:
+                code=subprocess.run(argv,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,
+                                    timeout=timeout,preexec_fn=cap).returncode
+            except subprocess.TimeoutExpired:
+                if not capture_timeout:
+                    raise
+                # subprocess.run kills and reaps the host child. The daemon state is checked independently.
+                code=None
             out.seek(0)
             err.seek(0)
             body=out.read(limit+1)
             problem=err.read(limit+1)
         need(len(body)<=limit and len(problem)<=limit,'tool-output-bound')
-        return call.returncode,body,problem
+        return code,body,problem
 
 
     def call(argv,scratch,timeout=35,limit=128<<10):
@@ -449,8 +455,11 @@ env:
              'exact-three-read-only-mounts')
         state=row['State']
         needed='exited' if finished else 'created'
+        code=state['ExitCode']
         need(state['Status']==needed and not state['Running'] and state['Pid']==0 and not state['OOMKilled']
-             and state['ExitCode']==0,'closed-container-state' if finished else 'unstarted-container-state')
+             and type(code) is int and 0<=code<=255 and (finished or code==0),
+             'closed-container-state' if finished else 'unstarted-container-state')
+        return code
 
 
     def exact_transaction(body,archives):
@@ -481,8 +490,16 @@ env:
         'worker-entry':'entered',
         'worker-mounts':'mountsReady',
         'apt-config':'configReady',
-        'solver-exit':'solverClosed',
-        'transaction':'exactTransaction',
+        'solver-reported':'solverReported',
+        'solver-exit':'solverExitZero',
+        'worker-closed':'workerClosed',
+        'attach-deadline':'attachReturned',
+        'attach-exit':'attachExitZero',
+        'stderr-available':'stderrAvailable',
+        'stderr-apt':'stderrNoAptDiagnostic',
+        'stderr-empty':'stderrEmpty',
+        'container-closed':'containerClosed',
+        'container-exit':'containerExitZero',
     }
 
 
@@ -492,18 +509,43 @@ env:
         mounts=entry+[b'HUB-NOBLE-MOUNTS-READY']
         config=mounts+[b'HUB-NOBLE-APT-CONFIG-READY']
         opened=config+[b'HUB-NOBLE-SIM-BEGIN']
-        closed=[b'HUB-NOBLE-APT-EXIT 0',b'HUB-NOBLE-SIM-CLOSED']
-        ready=lines[:4]==opened and lines[-2:]==closed and code==0 and not stderr
+        closed=b'HUB-NOBLE-SIM-CLOSED'
+        exits=[(i,v) for i,v in enumerate(lines) if v.startswith(b'HUB-NOBLE-APT-EXIT')]
+        exit_index, marker=exits[0] if len(exits)==1 else (-1,b'')
+        status=re.fullmatch(rb'HUB-NOBLE-APT-EXIT (0|[1-9][0-9]{0,2})',marker)
+        reported=(lines[:4]==opened and status is not None and int(status[1])<=255 and
+                  exit_index>=len(opened) and lines[exit_index+1:] in ([],[closed]))
+        solver_zero=reported and status[1]==b'0'
+        worker_closed=solver_zero and lines[-1:]==[closed]
+        returned=code is not None
+        stderr_empty=returned and not stderr
         exact=False
-        if ready:
+        if worker_closed and code==0 and stderr_empty:
             try:
-                exact_transaction(b'\n'.join(lines[3:-2]+[closed[1]])+b'\n',archives)
+                exact_transaction(b'\n'.join(lines[3:exit_index]+[closed])+b'\n',archives)
             except (ValueError,UnicodeError,IndexError):
                 pass
             else:
                 exact=True
-        return {'entered':lines[:1]==entry,'mountsReady':lines[:2]==mounts,
-                'configReady':lines[:3]==config,'solverClosed':ready,'exactTransaction':exact}
+        return {'entered':lines[:1]==entry,'mountsReady':lines[:2]==mounts,'configReady':lines[:3]==config,
+                'solverReported':reported,'solverExitZero':solver_zero,'workerClosed':worker_closed,'attachReturned':returned,
+                'attachExitZero':code==0,'stderrAvailable':returned,
+                'stderrNoAptDiagnostic':returned and not any(line.startswith((b'E:',b'W:',b'N:'))
+                                                           for line in stderr.splitlines()),
+                'stderrEmpty':stderr_empty,'exactTransaction':exact}
+
+
+    def capture_worker(scratch,cid,archives,observe_closed,*,timeout=65):
+        code,body,err=bounded(docker(scratch,'container','start','--attach',cid),scratch,timeout,capture_timeout=True)
+        result=classify_worker(code,body,err,archives)
+        exit_code=None
+        try:
+            exit_code=observe_closed()
+        except (OSError,ValueError,KeyError,IndexError,TypeError,subprocess.SubprocessError):
+            # An unreadable or ineligible inspect never establishes closure.
+            pass
+        result.update(containerClosed=exit_code is not None,containerExitZero=exit_code==0)
+        return result
 
 
     def worker_receipt(path,binding,result=None):
@@ -522,7 +564,7 @@ env:
                  (final.st_dev,final.st_ino,final.st_ctime_ns)==(leaf.st_dev,leaf.st_ino,leaf.st_ctime_ns)
                  and len(raw)==first.st_size,'stable-worker-receipt')
         data=json.loads(raw)
-        need(data['binding']==binding and set(data['results'])==set(PHASE_OBSERVATIONS.values()) and
+        need(data['binding']==binding and set(data['results'])==set(PHASE_OBSERVATIONS.values())|{'exactTransaction'} and
              all(type(value) is bool for value in data['results'].values()),'worker-receipt-binding')
         return data['results']
 
@@ -582,7 +624,7 @@ env:
                     exact_archive_intake(policy,scratch,only=int(phase[8:]))
                 elif phase=='archives':
                     archive_readback(policy,scratch)
-                elif phase in ('isolation','capacity','worker-capture',*PHASE_OBSERVATIONS):
+                elif phase in ('isolation','capacity','worker-capture','transaction',*PHASE_OBSERVATIONS):
                     archive_readback(policy,scratch)
                     uid,gid=os.getuid(),os.getgid()
                     if phase in ('capacity','worker-capture'):
@@ -606,13 +648,15 @@ env:
                             isolation(observe(),cid,policy,worker,binds,uid,gid)
                             if phase=='worker-capture':
                                 need(not os.path.lexists(receipt),'single-worker-capture')
-                                code,body,err=bounded(docker(scratch,'container','start','--attach',cid),scratch,65)
-                                worker_receipt(receipt,binding,classify_worker(code,body,err,policy['archives']))
+                                def observe_closed():
+                                    return isolation(observe(),cid,policy,worker,binds,uid,gid,finished=True)
+                                worker_receipt(receipt,binding,capture_worker(scratch,cid,policy['archives'],observe_closed))
                         else:
                             result=worker_receipt(receipt,binding)
-                            need(result[PHASE_OBSERVATIONS[phase]],'verified-'+phase)
-                            if phase=='solver-exit':
-                                isolation(observe(),cid,policy,worker,binds,uid,gid,finished=True)
+                            if phase=='transaction':
+                                need(all(result.values()),'complete-solver-and-container-proof')
+                            else:
+                                need(result[PHASE_OBSERVATIONS[phase]],'verified-'+phase)
                 else:
                     raise ValueError('fixed-phase')
         except (OSError,ValueError,KeyError,IndexError,subprocess.SubprocessError) as error:
@@ -1666,6 +1710,7 @@ jobs:
             /usr/bin/python3 -I -B - worker-capture <<< "$PINNED_SCRIPT"
       - name: Observe worker launch in the pinned container
         id: worker-entry
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1688,6 +1733,7 @@ jobs:
             /usr/bin/python3 -I -B - worker-entry <<< "$PINNED_SCRIPT"
       - name: Verify nonroot identity and read-only worker mounts
         id: worker-mounts
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1710,6 +1756,7 @@ jobs:
             /usr/bin/python3 -I -B - worker-mounts <<< "$PINNED_SCRIPT"
       - name: Verify effective offline APT source and cache settings
         id: apt-config
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1730,8 +1777,32 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - apt-config <<< "$PINNED_SCRIPT"
-      - name: Verify zero APT exit and closed container state
+      - name: Observe one framed worker APT exit result
+        id: solver-reported
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - solver-reported <<< "$PINNED_SCRIPT"
+      - name: Verify the worker reported APT solver exit zero
         id: solver-exit
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1752,6 +1823,190 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - solver-exit <<< "$PINNED_SCRIPT"
+      - name: Verify the worker closed after unchanged package-state readback
+        id: worker-closed
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - worker-closed <<< "$PINNED_SCRIPT"
+      - name: Verify Docker attach returned before its host deadline
+        id: attach-deadline
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - attach-deadline <<< "$PINNED_SCRIPT"
+      - name: Verify the host Docker attach process exited zero
+        id: attach-exit
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - attach-exit <<< "$PINNED_SCRIPT"
+      - name: Observe attached stderr after the host process returned
+        id: stderr-available
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - stderr-available <<< "$PINNED_SCRIPT"
+      - name: Verify attached stderr contains no APT diagnostic prefix
+        id: stderr-apt
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - stderr-apt <<< "$PINNED_SCRIPT"
+      - name: Verify attached stderr is exactly empty
+        id: stderr-empty
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - stderr-empty <<< "$PINNED_SCRIPT"
+      - name: Verify the same isolated container exited with no live PID
+        id: container-closed
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - container-closed <<< "$PINNED_SCRIPT"
+      - name: Verify inspected container exit code zero
+        id: container-exit
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - container-exit <<< "$PINNED_SCRIPT"
       - name: Verify exact 37-add 2-upgrade 0-remove transaction
         id: transaction
         shell: bash
