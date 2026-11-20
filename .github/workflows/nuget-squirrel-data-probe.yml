@@ -1,4 +1,4 @@
-name: Squirrel NuGet six-member provenance probe
+name: NuGet hosted SDK availability preflight
 
 on:
   push:
@@ -8,16 +8,20 @@ permissions:
   contents: read
 
 jobs:
-  verify-members:
+  sdk-preflight:
     if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-nuget-squirrel-members-20261120'
     runs-on: ubuntu-24.04
     timeout-minutes: 4
     steps:
-      - name: Check out exact public probe
+      - name: Check out exact public preflight
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - name: Verify hosted SDK and signed public package members
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-squirrel-data-probe.py
+      - name: Require hosted Ubuntu 24.04 x64 image 20261116.376.1
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py inventory
+      - name: Select preinstalled stock SDK 10.0.404
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py sdk
+      - name: Check NuGet verify CLI and stock trust inputs
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py cli
