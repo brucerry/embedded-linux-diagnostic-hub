@@ -42,9 +42,48 @@ env:
     HEX=r'[0-9a-f]{64}'
     SNAPSHOT='https://snapshot.ubuntu.com/ubuntu/20261120T060000Z'
     INRELEASE_LIMIT=256<<10
-    SECURITY_ARCHIVE_NAME='gcc-13-x86-64-linux-gnu'
-    SECURITY_ARCHIVE_URL='https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb'
-    SECURITY_ARCHIVE_IDENTITY={'Architecture': 'amd64', 'Filename': 'pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb', 'SHA256': 'a134b0319a82d14581b3a14820d2832af4ec9778ed8b9b4ddaeecfb0555ec325', 'Size': 21084546, 'Version': '13.3.0-6ubuntu2~24.04.1'}
+    # Reviewed acquisition manifest SHA-256 ae39d9683d422a4eb6f82717cb772b9b7d981e2b26e3e24a5ad8b038cdab325a
+    POOL_URLS={
+        'binutils': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils_2.42-4ubuntu2.10_amd64.deb',
+        'binutils-common': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils-common_2.42-4ubuntu2.10_amd64.deb',
+        'binutils-x86-64-linux-gnu': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb',
+        'cpp': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/cpp_13.2.0-7ubuntu1_amd64.deb',
+        'cpp-13': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/cpp-13_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+        'cpp-13-x86-64-linux-gnu': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+        'cpp-x86-64-linux-gnu': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/cpp-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb',
+        'gcc': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/gcc_13.2.0-7ubuntu1_amd64.deb',
+        'gcc-13': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+        'gcc-13-base': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13-base_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+        'gcc-13-x86-64-linux-gnu': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+        'gcc-x86-64-linux-gnu': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/gcc-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb',
+        'libasan8': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libasan8_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libatomic1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libbinutils': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb',
+        'libc-bin': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc-bin_2.39-0ubuntu8.12_amd64.deb',
+        'libc-dev-bin': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc-dev-bin_2.39-0ubuntu8.12_amd64.deb',
+        'libc6': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8.12_amd64.deb',
+        'libc6-dev': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dev_2.39-0ubuntu8.12_amd64.deb',
+        'libcc1-0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libcc1-0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libcrypt-dev': 'https://archive.ubuntu.com/ubuntu/pool/main/libx/libxcrypt/libcrypt-dev_4.4.36-4build1_amd64.deb',
+        'libctf-nobfd0': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libctf-nobfd0_2.42-4ubuntu2.10_amd64.deb',
+        'libctf0': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb',
+        'libgcc-13-dev': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+        'libgomp1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libgomp1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libgprofng0': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libgprofng0_2.42-4ubuntu2.10_amd64.deb',
+        'libhwasan0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libhwasan0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libisl23': 'https://archive.ubuntu.com/ubuntu/pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb',
+        'libitm1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libitm1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libjansson4': 'https://archive.ubuntu.com/ubuntu/pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb',
+        'liblsan0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/liblsan0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libmpc3': 'https://archive.ubuntu.com/ubuntu/pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb',
+        'libmpfr6': 'https://archive.ubuntu.com/ubuntu/pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb',
+        'libquadmath0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libquadmath0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libsframe1': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb',
+        'libtsan2': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libtsan2_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'libubsan1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libubsan1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+        'linux-libc-dev': 'https://archive.ubuntu.com/ubuntu/pool/main/l/linux/linux-libc-dev_6.8.0-151.151_amd64.deb',
+        'rpcsvc-proto': 'https://archive.ubuntu.com/ubuntu/pool/main/r/rpcsvc-proto/rpcsvc-proto_1.4.2-0ubuntu7_amd64.deb',
+    }
 
     APT_CONF="""Dir::Etc::main "/policy/empty.conf";
     Dir::Etc::parts "/policy/empty";
@@ -213,9 +252,7 @@ env:
 
 
     def fetch_https(url,destination,limit,scratch):
-        snapshot_url=url.startswith(SNAPSHOT+'/') and '//' not in url[8:]
-        compiler_url=url==SECURITY_ARCHIVE_URL and limit==SECURITY_ARCHIVE_IDENTITY['Size']
-        need(snapshot_url or compiler_url,'approved-transport-route')
+        need(url.startswith(SNAPSHOT+'/') and '//' not in url[8:],'approved-transport-route')
         need(limit>0 and not os.path.lexists(destination),'fresh-bounded-download')
         # curl bounds the archive body; the process file-size limit also bounds disk writes.
         raw=call(('/usr/bin/curl','--disable','--fail','--silent','--show-error','--proto','=https',
@@ -225,9 +262,6 @@ env:
 
 
     def fetch(url,destination,size,digest,scratch):
-        if url==SECURITY_ARCHIVE_URL:
-            need((size,digest)==(SECURITY_ARCHIVE_IDENTITY['Size'],SECURITY_ARCHIVE_IDENTITY['SHA256']),
-                 'exact-security-archive-pins')
         fetch_https(url,destination,size,scratch)
         return bound_file(destination,size,digest)
 
@@ -318,27 +352,54 @@ env:
         need(covered==records.keys(),'all-pinned-archives-signed')
 
 
+    def pool_download(url,destination,size,digest,scratch):
+        need(size>0 and not os.path.lexists(destination),'fresh-bounded-download')
+        for attempt in range(2):
+            with tempfile.TemporaryDirectory(prefix='archive-attempt-',dir=scratch) as attempt_dir:
+                candidate=Path(attempt_dir)/'body'
+                code,status,_=bounded(('/usr/bin/curl','--disable','--fail','--silent','--show-error','--proto','=https',
+                     '--connect-timeout','8','--max-time','24','--max-filesize',str(size),
+                     '--output',str(candidate),'--write-out','%{http_code}',url),scratch,28,size)
+                if code==0 and status==b'200':
+                    bound_file(candidate,size,digest)
+                    # Publish only an authenticated inode and never overwrite an approved body.
+                    os.link(candidate,destination,follow_symlinks=False)
+                    break
+                need(status not in (b'401',b'403',b'407',b'451'),'pool-access-denied')
+                need(not re.fullmatch(rb'3[0-9]{2}',status),'pool-redirect-refused')
+                need(code in (18,28,52,56) and status in (b'000',b'200'),'pool-transport-refused')
+                # A complete-size but unclosed transfer cannot qualify for a retry.
+                need(not os.path.lexists(candidate) or candidate.lstat().st_size<size,'pool-transport-ambiguous')
+                need(attempt==0,'pool-transport-exhausted')
+        bound_file(destination,size,digest)
+
+
+    def pool_routes(records):
+        need(POOL_URLS.keys()==records.keys(),'complete-reviewed-pool-routes')
+        for name,row in records.items():
+            filename=row['Filename']
+            need(re.fullmatch(r'pool/main/[a-z0-9]+/[a-z0-9.+-]+/[a-z0-9.+_~%-]+.deb',filename) and
+                 filename.rsplit('/',1)[-1]==name+'_'+row['Version'].split(':')[-1]+'_'+row['Architecture']+'.deb',
+                 'signed-archive-path')
+            host='security.ubuntu.com' if 'noble-security' in row['pockets'] else 'archive.ubuntu.com'
+            need(POOL_URLS[name]=='https://'+host+'/ubuntu/'+filename,'exact-reviewed-pool-route')
+        return POOL_URLS
+
+
     def exact_archive_intake(policy,scratch,*,only=None):
         checked_tool('/usr/bin/curl')
-        # Reopen the admitted indexes before any package request. There is no mirror fallback.
+        # The original snapshot still authenticates every package, before the pool is used.
         signed_index_intake(policy,scratch,download=False)
         records=policy['archives']
-        need(len(records)==39 and sum(x['Size'] for x in records.values())==58852226,'exact-archive-count-and-transfer')
+        need(len(records)==39 and sum(row['Size'] for row in records.values())==58852226,'exact-archive-count-and-transfer')
+        routes=pool_routes(records)
         names=sorted(records)
         if only is not None:
             need(1<=only<=len(names),'pinned-archive-ordinal')
             names=[names[only-1]]
         for name in names:
             row=records[name]
-            need(re.fullmatch('[a-z0-9][a-z0-9.+-]+',name) and
-                 re.fullmatch(r'pool/main/[A-Za-z0-9.+~_/-]+\.deb',row['Filename']) and
-                 not set(row['Filename'].split('/'))&{'.','..'},'signed-archive-path')
-            url=SNAPSHOT+'/'+row['Filename']
-            if name==SECURITY_ARCHIVE_NAME:
-                need(all(row.get(k)==v for k,v in SECURITY_ARCHIVE_IDENTITY.items()) and
-                     'noble-security' in row['pockets'],'exact-signed-security-archive')
-                url=SECURITY_ARCHIVE_URL
-            fetch(url,scratch/'approved'/(name+'.deb'),row['Size'],row['SHA256'],scratch)
+            pool_download(routes[name],scratch/'approved'/(name+'.deb'),row['Size'],row['SHA256'],scratch)
 
 
     def archive_readback(policy,scratch):
