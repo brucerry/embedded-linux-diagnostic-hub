@@ -26,8 +26,8 @@ jobs:
             github.event.repository.private == false && github.event_name == 'push' &&
             github.ref == 'refs/heads/ci/v060-linux-folder-host-probe-20261118' &&
             github.run_attempt == 1 && github.event.deleted == false
-        runs-on: ubuntu-22.04
-        timeout-minutes: 2
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
         steps:
             - name: Check out admitted public source
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -35,9 +35,41 @@ jobs:
                   ref: ${{ github.sha }}
                   fetch-depth: 1
                   persist-credentials: false
-            - name: Check original path guard and inert process closure
+                  set-safe-directory: false
+            - name: Check stock container, owned prefix, rename and inert PTY closure
               id: probe
-              run: /usr/bin/python3 -I -B scripts/ci/linux-folder-host-check.py
+              run: |
+                  refuse() { printf 'status=fail\nbucket=%s\n' "$1" >> "$GITHUB_OUTPUT"; exit 1; }
+                  [[ "$RUNNER_ENVIRONMENT" == github-hosted && "$RUNNER_OS" == Linux &&
+                     "$RUNNER_ARCH" == X64 && "${ImageOS:-}" == ubuntu24 && $EUID -gt 0 &&
+                     "$GITHUB_SHA" == "$GITHUB_WORKFLOW_SHA" &&
+                     "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || refuse admission
+                  image=docker.io/library/ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec
+                  identity='sha256:7da97f743f397971f35dd21cd2d19a7da070a150e0cfa3eda559e71891ec7533 linux amd64'
+                  scratch="$(mktemp -d "$RUNNER_TEMP/hub-inert.XXXXXXXX")" || refuse scratch
+                  trap 'rm -f -- "$scratch/probe"; rmdir -- "$scratch"' EXIT
+                  timeout 20s /usr/bin/cc -static -O2 -Wall -Wextra -Werror \
+                      scripts/ci/linux-folder-container-probe.c -o "$scratch/probe" \
+                      >/dev/null 2>&1 || refuse compile
+                  chmod 0555 "$scratch/probe" || refuse scratch
+                  timeout 90s docker pull --platform linux/amd64 "$image" >/dev/null 2>&1 || refuse image
+                  [[ "$(timeout 10s docker image inspect --format '{{.Id}} {{.Os}} {{.Architecture}}' "$image")" == "$identity" ]] || refuse image
+                  result=0
+                  output="$(timeout 20s docker run --rm --pull never --platform linux/amd64 \
+                      --network none --user ubuntu --entrypoint /probe \
+                      --mount "type=bind,src=$scratch/probe,dst=/probe,readonly" "$image" 2>/dev/null)" || result=$?
+                  case "$result" in
+                      0) [[ "$output" == linux-folder-host=pass ]] || refuse receipt ;;
+                      10) refuse home ;;
+                      11) refuse ancestor ;;
+                      12) refuse network ;;
+                      13) refuse prefix ;;
+                      14) refuse rename ;;
+                      15) refuse closure ;;
+                      16) refuse teardown ;;
+                      *) refuse container ;;
+                  esac
+                  printf 'status=pass\nbucket=container-host\n' >> "$GITHUB_OUTPUT"
             - name: >-
                   Linux folder host / ${{ steps.probe.outputs.status || 'fail' }} / ${{
                   steps.probe.outputs.bucket || 'unavailable' }}
