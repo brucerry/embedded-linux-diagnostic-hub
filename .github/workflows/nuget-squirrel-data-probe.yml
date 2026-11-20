@@ -1,4 +1,4 @@
-name: NuGet hosted SDK availability preflight
+name: NuGet hosted SDK layout diagnostic
 
 on:
   push:
@@ -20,8 +20,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
       - name: Require hosted Ubuntu 24.04 x64 image 20261116.376.1
+        id: inventory
         run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py inventory
-      - name: Select preinstalled stock SDK 10.0.404
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py sdk
-      - name: Check NuGet verify CLI and stock trust inputs
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py cli
+      - name: Check system dotnet launcher presence
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py launcher
+      - name: Check stock SDK 10.0.404 files
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py sdk-files
+      - name: Check the documented dotnet symlink and target file
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py link
+      - name: Check launcher and SDK ownership and path custody
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py custody
+      - name: Select exact SDK 10.0.404 via system launcher
+        run: /usr/bin/python3 -I -B scripts/ci/nuget-sdk-preflight.py select
