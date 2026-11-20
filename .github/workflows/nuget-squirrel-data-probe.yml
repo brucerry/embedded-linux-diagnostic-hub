@@ -1,46 +1,184 @@
-name: Windows stock NuGet file admission diagnostic
+name: Windows Setup runner input identity diagnostic
 
-on:
+'on':
   push:
     branches: [ci/v060-nuget-squirrel-members-20261120]
+    paths: [.github/workflows/nuget-squirrel-data-probe.yml]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  windows-file-admission:
+  windows-input-identity:
     if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-nuget-squirrel-members-20261120'
-    runs-on: windows-2025-vs2026
-    timeout-minutes: 5
+    runs-on: windows-2025
+    timeout-minutes: 4
     defaults:
       run:
         shell: pwsh
     steps:
-      - name: Check out exact public file diagnostic
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 1
-      - name: Require hosted Windows Server 2025 x64 image 20261116.315.1 build 33828
+      - name: Require hosted Windows Server 2025 and x64 PowerShell
         id: host
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py host'
-      - name: Check existing NuGet revocation mode
+        env:
+          INPUT_CHECK: host
+        run: &check |
+          $ErrorActionPreference = 'Stop'
+          $WarningPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          Set-StrictMode -Version Latest
+
+          # Upstream package metadata alone cannot authenticate installed files.
+          # 26.06 publisher SFX asset ID 720544254, length 1659704.
+          $assetSha256 = '9b697f65ecc2d9b0152f5ee96d72dde522a7827690349d9307935dacf40f42ec'
+          $expected7Zip = @{
+            '7z.exe' = @{ Bytes = 574464; Sha256 = 'dc0493429fe28136fcb177a0e77c9875cbb3b0bff5f2f8eeba4df302e98cef76' }
+            '7z.dll' = @{ Bytes = 1897984; Sha256 = '500db9eb17f3c21b729ba41dd02ecfe1823da05028c7e4ba129084cc74cc364e' }
+          }
+          $groups = @{
+            'x86-msvcp' = @('msvcp60.dll')
+            'x86-msvcrt' = @('msvcrt.dll')
+            'x86-core' = @('advapi32.dll', 'kernel32.dll', 'ole32.dll', 'oleaut32.dll', 'version.dll')
+            'x86-ui' = @('comctl32.dll', 'comdlg32.dll', 'gdi32.dll', 'shell32.dll', 'shlwapi.dll', 'user32.dll')
+          }
+
+          function Require([bool]$Condition) {
+            if (-not $Condition) { throw 'INPUT_CHECK_FAILED' }
+          }
+
+          function Assert-PublisherPins {
+            foreach ($name in @('7z.exe', '7z.dll')) {
+              $pin = $expected7Zip[$name]
+              Require ($null -ne $pin.Bytes -and $pin.Bytes -gt 0 -and $pin.Bytes -le 32MB)
+              Require ($pin.Sha256 -cmatch '\A[0-9a-f]{64}\z' -and $pin.Sha256 -cne $assetSha256)
+            }
+            Require ($expected7Zip['7z.exe'].Sha256 -cne $expected7Zip['7z.dll'].Sha256)
+          }
+
+          function Open-Input([string]$Directory, [string]$Leaf) {
+            Require ($Leaf -cmatch '\A[0-9a-z]+\.(exe|dll)\z')
+            $root = [IO.DirectoryInfo]::new($Directory)
+            while ($null -ne $root) {
+              Require ($root.Exists -and -not ($root.Attributes -band [IO.FileAttributes]::ReparsePoint))
+              $root = $root.Parent
+            }
+            $path = [IO.Path]::Combine($Directory, $Leaf)
+            $info = [IO.FileInfo]::new($path)
+            Require ($info.Exists -and -not ($info.Attributes -band [IO.FileAttributes]::ReparsePoint))
+            $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            return $stream
+          }
+
+          function Assert-PE([IO.Stream]$Stream, [int]$Machine, [int]$Magic, [bool]$IsDll) {
+            Require ($Stream.Length -ge 90 -and $Stream.Length -le 32MB)
+            $reader = [IO.BinaryReader]::new($Stream, [Text.Encoding]::UTF8, $true)
+            try {
+              Require ($reader.ReadUInt16() -eq 0x5a4d)
+              $Stream.Position = 0x3c
+              $offset = $reader.ReadUInt32()
+              Require ($offset -ge 64 -and $offset -le 1MB -and ([long]$offset + 26) -le $Stream.Length)
+              $Stream.Position = $offset
+              Require ($reader.ReadUInt32() -eq 0x00004550 -and $reader.ReadUInt16() -eq $Machine)
+              $Stream.Position = [long]$offset + 20
+              $optionalSize = $reader.ReadUInt16()
+              $flags = $reader.ReadUInt16()
+              $minimumOptionalSize = if ($Magic -eq 0x10b) { 96 } else { 112 }
+              Require ($optionalSize -ge $minimumOptionalSize -and ([long]$offset + 24 + $optionalSize) -le $Stream.Length)
+              Require ((($flags -band 0x2) -ne 0) -and ([bool]($flags -band 0x2000) -eq $IsDll))
+              Require ($reader.ReadUInt16() -eq $Magic)
+            } finally {
+              $reader.Dispose()
+            }
+          }
+
+          function Assert-MicrosoftSystemDll([string]$Directory, [string]$Leaf) {
+            $stream = Open-Input $Directory $Leaf
+            try {
+              Assert-PE $stream 0x14c 0x10b $true
+              $path = [IO.Path]::Combine($Directory, $Leaf)
+              $signature = Get-AuthenticodeSignature -LiteralPath $path
+              Require ($signature.Status -eq 'Valid' -and $signature.IsOSBinary -and $null -ne $signature.SignerCertificate)
+              $signer = $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+              Require ($signer -cin @('Microsoft Windows', 'Microsoft Corporation'))
+            } finally {
+              $stream.Dispose()
+            }
+          }
+
+          function Assert-PublisherMember([string]$Directory, [string]$Leaf) {
+            Assert-PublisherPins
+            $stream = Open-Input $Directory $Leaf
+            try {
+              $pin = $expected7Zip[$Leaf]
+              Require ($stream.Length -eq $pin.Bytes)
+              Assert-PE $stream 0x8664 0x20b ($Leaf -ceq '7z.dll')
+              $stream.Position = 0
+              $sha = [Security.Cryptography.SHA256]::Create()
+              try {
+                $hex = [Convert]::ToHexString($sha.ComputeHash($stream)).ToLowerInvariant()
+              } finally {
+                $sha.Dispose()
+              }
+              Require ($hex -ceq $pin.Sha256)
+            } finally {
+              $stream.Dispose()
+            }
+          }
+
+          try {
+            $check = $env:INPUT_CHECK
+            if ($check -ceq 'host') {
+              Require ($env:RUNNER_ENVIRONMENT -ceq 'github-hosted' -and $env:RUNNER_OS -ceq 'Windows' -and $env:RUNNER_ARCH -ceq 'X64')
+              Require ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'X64' -and [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'X64')
+              $serverType = Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name InstallationType
+              Require ([Environment]::OSVersion.Version.Build -eq 26100 -and $serverType -cin @('Server', 'Server Core'))
+            } elseif ($groups.ContainsKey($check)) {
+              $wow64 = [IO.Path]::Combine([IO.Path]::GetDirectoryName([Environment]::SystemDirectory), 'SysWOW64')
+              foreach ($name in $groups[$check]) { Assert-MicrosoftSystemDll $wow64 $name }
+            } elseif ($check -ceq 'publisher-pins') {
+              Assert-PublisherPins
+            } elseif ($check -cin @('7z.exe', '7z.dll')) {
+              $directory = [IO.Path]::Combine([Environment]::GetFolderPath([System.Environment+SpecialFolder]::ProgramFiles), '7-Zip')
+              Require ([IO.Path]::IsPathFullyQualified($directory))
+              Assert-PublisherMember $directory $check
+            } else {
+              throw 'INPUT_CHECK_FAILED'
+            }
+            exit 0
+          } catch {
+            exit 1
+          }
+      - name: Verify Microsoft x86 MSVCP60 runtime
         if: ${{ !cancelled() && steps.host.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py revocation'
-      - name: Check stock NuGet command resolution
+        env:
+          INPUT_CHECK: x86-msvcp
+        run: *check
+      - name: Verify Microsoft x86 MSVCRT runtime
         if: ${{ !cancelled() && steps.host.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py path'
-      - name: Check packaged NuGet payload path and custody
-        id: custody
+        env:
+          INPUT_CHECK: x86-msvcrt
+        run: *check
+      - name: Verify Microsoft x86 core system DLLs
         if: ${{ !cancelled() && steps.host.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py custody'
-      - name: Compare the exact stock NuGet SHA-256
-        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py hash'
-      - name: Require NuGet file version 8.0.0.137
-        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py version'
-      - name: Check Microsoft Authenticode with stock Windows trust
-        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py signature'
+        env:
+          INPUT_CHECK: x86-core
+        run: *check
+      - name: Verify Microsoft x86 UI system DLLs
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        env:
+          INPUT_CHECK: x86-ui
+        run: *check
+      - name: Require independent publisher pins for both 7-Zip files
+        id: publisher_pins
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        env:
+          INPUT_CHECK: publisher-pins
+        run: *check
+      - name: Match stock x64 7z.exe to the publisher member
+        if: ${{ !cancelled() && steps.host.outcome == 'success' && steps.publisher_pins.outcome == 'success' }}
+        env:
+          INPUT_CHECK: 7z.exe
+        run: *check
+      - name: Match stock x64 7z.dll to the publisher member
+        if: ${{ !cancelled() && steps.host.outcome == 'success' && steps.publisher_pins.outcome == 'success' }}
+        env:
+          INPUT_CHECK: 7z.dll
+        run: *check
