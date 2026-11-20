@@ -1,0 +1,51 @@
+name: Linux eight-provider custody
+on:
+  push:
+    branches: [ci/v060-linux-all-eight-custody-20261120]
+    paths:
+      - .github/workflows/linux-all-eight-provider-custody.yml
+      - scripts/ci/linux-all-eight.py
+      - scripts/ci/linux-all-eight-inputs.json
+      - scripts/ci/linux-all-eight-capacity.cjs
+permissions: {}
+
+jobs:
+  linux-provider-custody:
+    if: github.event_name == 'push' && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-linux-all-eight-custody-20261120'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 14
+    steps:
+      - name: Validate runner context and exact recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$RUNNER_OS" == Linux && "$RUNNER_ARCH" == X64 ]]
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$GITHUB_WORKSPACE" = /* && "$(realpath -e -- "$GITHUB_WORKSPACE")" = "$GITHUB_WORKSPACE" ]]
+          [[ -O "$GITHUB_WORKSPACE" && "$(id -u)" != 0 ]]
+          cd -- "$GITHUB_WORKSPACE"
+          mkdir -m 700 -- .hub-all-eight-bootstrap
+          cd -- .hub-all-eight-bootstrap
+          for file in linux-all-eight.py linux-all-eight-inputs.json linux-all-eight-capacity.cjs linux-provider-rehearsal.py linux-provider-inputs.json linux-provider-capacity.cjs; do
+            status="$(/usr/bin/env -i PATH=/usr/bin:/bin LANG=C /usr/bin/curl --disable --fail --silent --show-error --proto '=https' --connect-timeout 5 --max-time 15 --max-filesize 1048576 --output "$file" --write-out '%{http_code}' "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/$GITHUB_SHA/scripts/ci/$file")"
+            [[ "$status" == 200 && -f "$file" && ! -L "$file" ]]
+          done
+          /usr/bin/sha256sum --check --strict <<'EOF'
+          59b5f27a3b9a86f4889483480424871a08de466a38de48758a24cdedb81b0b63  linux-all-eight.py
+          2df7ede2f96b922bf2b4f239223c7ad8f00f9dcfafdf810a8a5c730aba147c7d  linux-all-eight-inputs.json
+          ffffa043f8006ccc993654b39b35847f65fb9b5e068d74477bf2cc452a031647  linux-all-eight-capacity.cjs
+          e5d8224c08c2a45b07800480e12f554c1dae6970f99f71c6c2ab0b1cad183fae  linux-provider-rehearsal.py
+          fde75f4f5e0693b48f309705f1b295a8a70d0f796a776cb86465431c227c031c  linux-provider-inputs.json
+          b3184eef8abc8c4767cf223cbda6a572080fd96bf225689aa4ba76a2ac4295f3  linux-provider-capacity.cjs
+          EOF
+      - name: Reconstruct and verify eight provider digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I -B "$GITHUB_WORKSPACE/.hub-all-eight-bootstrap/linux-all-eight.py" custody
+      - name: Check staged native ancestry and archive capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I -B "$GITHUB_WORKSPACE/.hub-all-eight-bootstrap/linux-all-eight.py" capacity
