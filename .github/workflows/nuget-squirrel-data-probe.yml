@@ -1,4 +1,4 @@
-name: Hosted runner image inventory for NuGet
+name: Windows native NuGet trust preflight
 
 on:
   push:
@@ -8,30 +8,29 @@ permissions:
   contents: read
 
 jobs:
-  image-inventory:
+  windows-trust:
     if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-nuget-squirrel-members-20261120'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - name: Check out exact public inventory probe
-        id: checkout
+      - name: Check out exact public inert preflight
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
-      - name: Check GitHub-hosted non-root identity
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-runner-image-inventory.py identity
-      - name: Check Ubuntu 24.04 x64 platform
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-runner-image-inventory.py platform
-      - name: Require an exact reviewed stock image revision
-        id: image
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-runner-image-inventory.py image
-      - name: Confirm SDK 10.0.404 in published image 20261111.370.1 inventory
-        if: steps.image.outputs.image == '20261111.370.1'
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-runner-image-inventory.py published 20261111.370.1
-      - name: Confirm SDK 10.0.404 in published image 20261116.376.1 inventory
-        if: steps.image.outputs.image == '20261116.376.1'
-        run: /usr/bin/python3 -I -B scripts/ci/nuget-runner-image-inventory.py published 20261116.376.1
+      - name: Require hosted Windows Server 2025 x64 image 20261116.315.1 build 33828
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py host'
+      - name: Authenticate stock NuGet 8.0.0.137 before execution
+        id: tool
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py tool'
+      - name: Check exact SDK-bundled signed inert template
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py fixture'
+      - name: Verify the signed template under Windows trust without warnings
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py signed'
+      - name: Require NU3004 rejection of the unsigned synthetic package
+        if: ${{ !cancelled() && steps.tool.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py unsigned'
