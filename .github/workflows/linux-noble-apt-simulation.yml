@@ -143,11 +143,52 @@ env:
     done
     printf 'HUB-NOBLE-APT-CONFIG-READY\n'
     printf 'HUB-NOBLE-SIM-BEGIN\n'
-    if APT_CONFIG=/policy/apt.conf /usr/bin/timeout --kill-after=2 45 /usr/bin/apt-get --simulate --no-download --no-remove --no-install-recommends install "$@"; then
-        result=0
-    else
-        result=$?
-    fi
+    exec 3>&1
+    summary=$(
+        {
+            if APT_CONFIG=/policy/apt.conf /usr/bin/timeout --kill-after=2 45 /usr/bin/apt-get --simulate --no-download --no-remove --no-install-recommends install "$@" 1>&3; then
+                status=0
+            else
+                status=$?
+            fi
+            printf '\nHUB-NOBLE-APT-PIPE-STATUS %s\n' "$status"
+        } 2>&1 | /usr/bin/awk '
+            function classify(line, bucket) {
+                if (line ~ /^HUB-NOBLE-APT-PIPE-STATUS/) malformed=1
+                if (++lines>128 || length(line)>4096) bucket="unknown"
+                else if (line ~ /^E: Unsupported file .+ given on commandline$/) bucket="unsupported-archive"
+                else if (line ~ /^E: (Could not open file |Unable to open |Read error)/) bucket="input-open"
+                else if (line ~ /^E: (Unable to correct problems, you have held broken packages\.?|Unmet dependencies\.?|Unable to satisfy dependencies\.?)/) bucket="solver-dependencies"
+                else if (line ~ /^(E: (Could not get lock |Unable to acquire .*lock|Unable to lock directory |Syntax error )|W: Not using locking for read only lock file )/) bucket="configuration-or-lock"
+                else bucket="unknown"
+                if (!category) category=bucket
+                else if (category!=bucket) category="unknown"
+            }
+            {
+                if (NR>1 && !(previous=="" && $0 ~ /^HUB-NOBLE-APT-PIPE-STATUS /)) classify(previous)
+                previous=$0
+            }
+            END {
+                if (malformed || previous !~ /^HUB-NOBLE-APT-PIPE-STATUS (0|[1-9][0-9]?[0-9]?)$/) exit 1
+                sub(/^HUB-NOBLE-APT-PIPE-STATUS /,"",previous)
+                if (previous+0>255) exit 1
+                print previous, (lines ? category : "empty")
+            }
+        '
+    )
+    exec 3>&-
+    result=${summary%% *}
+    apt_stderr=${summary#* }
+    case "$result" in
+        0|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+        *) exit 1 ;;
+    esac
+    test "$result" -le 255
+    case "$apt_stderr" in
+        empty|input-open|unsupported-archive|solver-dependencies|configuration-or-lock|unknown) ;;
+        *) exit 1 ;;
+    esac
+    printf 'HUB-NOBLE-APT-STDERR %s\n' "$apt_stderr"
     printf 'HUB-NOBLE-APT-EXIT %s\n' "$result"
     test "$result" -eq 0
     test "$(/usr/bin/sha256sum /var/lib/dpkg/status | /usr/bin/cut -d " " -f 1)" = "$status_hash"
@@ -492,6 +533,13 @@ env:
         'apt-config':'configReady',
         'solver-reported':'solverReported',
         'solver-exit':'solverExitZero',
+        'apt-stderr-reported':'workerAptStderrReported',
+        'apt-stderr-empty':'workerAptStderrEmpty',
+        'apt-stderr-input-open':'workerAptStderrNotInputOpen',
+        'apt-stderr-unsupported':'workerAptStderrNotUnsupported',
+        'apt-stderr-dependencies':'workerAptStderrNotDependencies',
+        'apt-stderr-config-lock':'workerAptStderrNotConfigLock',
+        'apt-stderr-unknown':'workerAptStderrNotUnknown',
         'worker-closed':'workerClosed',
         'attach-deadline':'attachReturned',
         'attach-exit':'attachExitZero',
@@ -517,12 +565,22 @@ env:
                   exit_index>=len(opened) and lines[exit_index+1:] in ([],[closed]))
         solver_zero=reported and status[1]==b'0'
         worker_closed=solver_zero and lines[-1:]==[closed]
+        stderr_prefix=b'HUB-NOBLE-APT-STDERR'
+        categories=[(i,line) for i,line in enumerate(lines) if line.startswith(stderr_prefix)]
+        category_set=(b'empty',b'input-open',b'unsupported-archive',b'solver-dependencies',b'configuration-or-lock',b'unknown')
+        category=None
+        if reported and len(categories)==1:
+            i,line=categories[0]
+            name=line.removeprefix(stderr_prefix+b' ')
+            if len(opened)<=i==exit_index-1 and name in category_set:
+                category=name
+        apt_stderr_empty=category==b'empty'
         returned=code is not None
         stderr_empty=returned and not stderr
         exact=False
-        if worker_closed and code==0 and stderr_empty:
+        if worker_closed and code==0 and stderr_empty and apt_stderr_empty:
             try:
-                exact_transaction(b'\n'.join(lines[3:exit_index]+[closed])+b'\n',archives)
+                exact_transaction(b'\n'.join(lines[3:exit_index-1]+[closed])+b'\n',archives)
             except (ValueError,UnicodeError,IndexError):
                 pass
             else:
@@ -532,6 +590,12 @@ env:
                 'attachExitZero':code==0,'stderrAvailable':returned,
                 'stderrNoAptDiagnostic':returned and not any(line.startswith((b'E:',b'W:',b'N:'))
                                                            for line in stderr.splitlines()),
+                'workerAptStderrReported':category is not None,'workerAptStderrEmpty':apt_stderr_empty,
+                'workerAptStderrNotInputOpen':category is not None and category!=b'input-open',
+                'workerAptStderrNotUnsupported':category is not None and category!=b'unsupported-archive',
+                'workerAptStderrNotDependencies':category is not None and category!=b'solver-dependencies',
+                'workerAptStderrNotConfigLock':category is not None and category!=b'configuration-or-lock',
+                'workerAptStderrNotUnknown':category is not None and category!=b'unknown',
                 'stderrEmpty':stderr_empty,'exactTransaction':exact}
 
 
@@ -1823,6 +1887,167 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - solver-exit <<< "$PINNED_SCRIPT"
+      - name: Observe one fixed worker APT stderr category
+        id: apt-stderr-reported
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-reported <<< "$PINNED_SCRIPT"
+      - name: Verify worker APT stderr was empty
+        id: apt-stderr-empty
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-empty <<< "$PINNED_SCRIPT"
+      - name: Rule out the worker APT input-open category
+        id: apt-stderr-input-open
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-input-open <<< "$PINNED_SCRIPT"
+      - name: Rule out the worker APT unsupported-archive category
+        id: apt-stderr-unsupported
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-unsupported <<< "$PINNED_SCRIPT"
+      - name: Rule out the worker APT dependency-solver category
+        id: apt-stderr-dependencies
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-dependencies <<< "$PINNED_SCRIPT"
+      - name: Rule out the worker APT configuration-or-lock category
+        id: apt-stderr-config-lock
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-config-lock <<< "$PINNED_SCRIPT"
+      - name: Rule out the worker APT unknown stderr category
+        id: apt-stderr-unknown
+        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - apt-stderr-unknown <<< "$PINNED_SCRIPT"
       - name: Verify the worker closed after unchanged package-state readback
         id: worker-closed
         if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
@@ -1915,7 +2140,7 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - stderr-available <<< "$PINNED_SCRIPT"
-      - name: Verify attached stderr contains no APT diagnostic prefix
+      - name: Verify remaining attach stderr contains no APT diagnostic prefix
         id: stderr-apt
         if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
         shell: bash
@@ -1938,7 +2163,7 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - stderr-apt <<< "$PINNED_SCRIPT"
-      - name: Verify attached stderr is exactly empty
+      - name: Verify remaining attach stderr is exactly empty
         id: stderr-empty
         if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
         shell: bash
