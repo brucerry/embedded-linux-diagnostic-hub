@@ -1,0 +1,544 @@
+name: Linux native compiler observation
+on:
+  push:
+    branches:
+      - ci/v060-linux-native-compiler-observe-20261120
+    paths:
+      - .github/workflows/linux-native-compiler-observation.yml
+permissions: {}
+env:
+  PINNED_POLICY: |
+    {"archiveKeyFingerprint":"F6ECB3762474EDA9D21B7022871920D1991BC93C","basis":"5e3c66f4a62e3606abdd650972e0f76b71ff5c54","compilerPaths":{"/usr/bin/as":"/usr/bin/x86_64-linux-gnu-as","/usr/bin/cc":"/usr/bin/x86_64-linux-gnu-gcc-13","/usr/bin/gcc":"/usr/bin/x86_64-linux-gnu-gcc-13","/usr/bin/gcc-13":"/usr/bin/x86_64-linux-gnu-gcc-13","/usr/bin/ld":"/usr/bin/x86_64-linux-gnu-ld.bfd","/usr/bin/ld.bfd":"/usr/bin/x86_64-linux-gnu-ld.bfd","/usr/libexec/gcc/x86_64-linux-gnu/13/cc1":"/usr/libexec/gcc/x86_64-linux-gnu/13/cc1","/usr/libexec/gcc/x86_64-linux-gnu/13/collect2":"/usr/libexec/gcc/x86_64-linux-gnu/13/collect2"},"files":{"/usr/bin/x86_64-linux-gnu-as":["0755",745768,"21aff249b692b5c31a44007491f922dcb49f41323e362c57d2ada3f52eddb7f0"],"/usr/bin/x86_64-linux-gnu-gcc-13":["0755",1023032,"1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26"],"/usr/bin/x86_64-linux-gnu-ld.bfd":["0755",1359128,"e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b"],"/usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o":["0644",2752,"667ff5f1edc931d44d1f2bb44d313907aa274bcc207c0beff71a398335f0d29f"],"/usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o":["0644",1168,"9c8b2caad195193301ef072895dc89bea1d23371d4c19accd821debe27773063"],"/usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a":["0644",3093656,"d9376c55f97863a4e5fbb6c6beca2591b319bf786f3a7ca56da8964c5662171f"],"/usr/lib/gcc/x86_64-linux-gnu/13/libgcc_s.so":["0644",132,"69a56a9993b7729b29b274e65016031c81f2397f176ed5ad44d59bd50425e0bd"],"/usr/lib/x86_64-linux-gnu/crti.o":["0644",1192,"077ccb6c68db1794da3ee262c4a16a3c6f8e902845dd0829110ad4b7065e5aa3"],"/usr/lib/x86_64-linux-gnu/crtn.o":["0644",760,"a2266079f95b84ccc2162ebbf279bcd78858a748aa1882e0bdb912316c76a58f"],"/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2":["0755",236616,"5fc0940888e9d2e1a00e66d6b1a559c36364ee867683652e1074fa576952cc3f"],"/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so":["0644",1479888,"11f084bc6ff5fc64e91c0b6422040fab1245419e7ff29560a95c1176ce1b9ff4"],"/usr/lib/x86_64-linux-gnu/libc.so":["0644",283,"fe2a4ce2930fc6b3966aa987fae808375446c8d3823b8c21792e991aad9c75df"],"/usr/lib/x86_64-linux-gnu/libc.so.6":["0755",2129424,"755a371e86cc9f564ab54f66140747700fb0a103f698f659f2060f707897e09a"],"/usr/lib/x86_64-linux-gnu/libc_nonshared.a":["0644",5594,"3341391290ddd596521a61152b4e2612f4625cc85f737d875b918f6cfb2b2786"],"/usr/lib/x86_64-linux-gnu/libctf.so.0.0.0":["0644",220384,"25c8f765c259d05b59a3dc3634d711912a7f5ce9be8a28ace081507b925b3ad1"],"/usr/lib/x86_64-linux-gnu/libgcc_s.so.1":["0644",183024,"d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb"],"/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0":["0644",534896,"0ccdfb6d6f5c039465f6d002cf7e4c072d48ac6a2cffc8dd6c748dec31592804"],"/usr/lib/x86_64-linux-gnu/libisl.so.23.3.0":["0644",1863352,"db4f717fd1678b48e5dddea1cbdd2d239594a70b57e96d0923bfd9533351efa8"],"/usr/lib/x86_64-linux-gnu/libjansson.so.4.14.0":["0644",64008,"c49935a4b3ac599064281b1f257576087806d0dad7ec46f353bd983b052c5e26"],"/usr/lib/x86_64-linux-gnu/libm.so.6":["0644",952616,"5dcc4d25466e29ca390ed6fabb371c69b65dff6fa4e91c34561057a020d6994a"],"/usr/lib/x86_64-linux-gnu/libmpc.so.3.3.1":["0644",134440,"91d2b2b0b794028c733431e01acc227ff39ee289384fdf22869c8b42ad3aaa3b"],"/usr/lib/x86_64-linux-gnu/libmpfr.so.6.2.1":["0644",760464,"2156351fa3dedd04a7381c6ac7a8a26efa2d6fb08b80f8a2d644ccdd653710ae"],"/usr/lib/x86_64-linux-gnu/libsframe.so.1.0.0":["0644",35168,"1693a2dbd77c909d279ae34aa9b5d8d08d97f116f8d0ed724063df11151b3c69"],"/usr/lib/x86_64-linux-gnu/libz.so.1.3":["0644",113000,"f61677c7bdb7c2aa2a243ea781bfd16afcb361cede7b4ef76127a9d8eb9a5242"],"/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5":["0644",755864,"0a2128bc10841fb29e76d08d945864dfb0b6a66da5df6df5d8299197439e54bb"],"/usr/libexec/gcc/x86_64-linux-gnu/13/cc1":["0755",30487984,"5d1679131184e2de4435b426eb264bf13472fe026db8e5c6bc97445814e8e2f4"],"/usr/libexec/gcc/x86_64-linux-gnu/13/collect2":["0755",336056,"4d1f341ae5b763b513258ee2812422a45e063c30a2f1924a0cf63d3699f3a158"],"/usr/share/keyrings/ubuntu-archive-keyring.gpg":["0644",3607,"80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31"]},"headers":{"libc6-dev":[["/usr/include/"],476,"7b7e94ea20ea9625cd34b0cd74b3ca23eb97cb04e146a7287602854fa6cddb34"],"libgcc-13-dev":[["/usr/lib/gcc/x86_64-linux-gnu/13/include/","/usr/lib/gcc/x86_64-linux-gnu/13/include-fixed/"],132,"fe3dfacc5afd834e404c4505e3c713cdbe4896ed8c5d6208927b670cf9d2bf31"],"linux-libc-dev":[["/usr/include/"],988,"a91dd77be2e4177441cd06d3f3c0f56c300ebc7dd01df224c01435ec923d5c16"]},"image":"20261116.376.1","libraries":{"ld-linux-x86-64.so.2":"/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2","libbfd-2.42-system.so":"/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so","libc.so.6":"/usr/lib/x86_64-linux-gnu/libc.so.6","libctf.so.0":"/usr/lib/x86_64-linux-gnu/libctf.so.0.0.0","libgmp.so.10":"/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0","libisl.so.23":"/usr/lib/x86_64-linux-gnu/libisl.so.23.3.0","libjansson.so.4":"/usr/lib/x86_64-linux-gnu/libjansson.so.4.14.0","libm.so.6":"/usr/lib/x86_64-linux-gnu/libm.so.6","libmpc.so.3":"/usr/lib/x86_64-linux-gnu/libmpc.so.3.3.1","libmpfr.so.6":"/usr/lib/x86_64-linux-gnu/libmpfr.so.6.2.1","libsframe.so.1":"/usr/lib/x86_64-linux-gnu/libsframe.so.1.0.0","libz.so.1":"/usr/lib/x86_64-linux-gnu/libz.so.1.3","libzstd.so.1":"/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5"},"linkInputs":["/usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o","/usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o","/usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a","/usr/lib/gcc/x86_64-linux-gnu/13/libgcc_s.so","/usr/lib/x86_64-linux-gnu/crti.o","/usr/lib/x86_64-linux-gnu/crtn.o","/usr/lib/x86_64-linux-gnu/libc.so","/usr/lib/x86_64-linux-gnu/libc_nonshared.a","/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"],"links":{"/etc/alternatives/cc":"/usr/bin/gcc","/usr/bin/as":"x86_64-linux-gnu-as","/usr/bin/cc":"/etc/alternatives/cc","/usr/bin/gcc":"gcc-13","/usr/bin/gcc-13":"x86_64-linux-gnu-gcc-13","/usr/bin/ld":"x86_64-linux-gnu-ld","/usr/bin/ld.bfd":"x86_64-linux-gnu-ld.bfd","/usr/bin/x86_64-linux-gnu-ld":"x86_64-linux-gnu-ld.bfd","/usr/lib/x86_64-linux-gnu/libctf.so.0":"libctf.so.0.0.0","/usr/lib/x86_64-linux-gnu/libgmp.so.10":"libgmp.so.10.5.0","/usr/lib/x86_64-linux-gnu/libisl.so.23":"libisl.so.23.3.0","/usr/lib/x86_64-linux-gnu/libjansson.so.4":"libjansson.so.4.14.0","/usr/lib/x86_64-linux-gnu/libmpc.so.3":"libmpc.so.3.3.1","/usr/lib/x86_64-linux-gnu/libmpfr.so.6":"libmpfr.so.6.2.1","/usr/lib/x86_64-linux-gnu/libsframe.so.1":"libsframe.so.1.0.0","/usr/lib/x86_64-linux-gnu/libz.so.1":"libz.so.1.3","/usr/lib/x86_64-linux-gnu/libzstd.so.1":"libzstd.so.1.5.5","/usr/lib64/ld-linux-x86-64.so.2":"../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"},"packages":{"binutils":{"Architecture":"amd64","Filename":"pool/main/b/binutils/binutils_2.42-4ubuntu2.10_amd64.deb","SHA256":"b3b5a84181a38fd191820b2cdcc1a3eeb1cd6333ad472f2092f96e81047e9c74","Size":18154,"Version":"2.42-4ubuntu2.10","pocket":"noble-updates"},"binutils-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb","SHA256":"1e510a15f30208d39edcd840e48f26a77bbca7c417805eeccb1e3f7de198ef29","Size":2462744,"Version":"2.42-4ubuntu2.10","pocket":"noble-updates"},"cpp-13-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"2ca48bf0c2d6465bc39322899715a85d934b4d7442dd5586a7bebbe3ce0f806b","Size":10714542,"Version":"13.3.0-6ubuntu2~24.04.1","pocket":"noble-updates"},"gcc":{"Architecture":"amd64","Filename":"pool/main/g/gcc-defaults/gcc_13.2.0-7ubuntu1_amd64.deb","SHA256":"0e0bb8b25153ed1c44ab92bc219eed469fcb5820c5c0bc6454b2fd366a33d3ee","Size":5018,"Version":"4:13.2.0-7ubuntu1","pocket":"noble"},"gcc-13":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"7438ff160b020a74970672189ecae25d0ca650de6d7f543f12a3134192cffbd9","Size":494262,"Version":"13.3.0-6ubuntu2~24.04.1","pocket":"noble-updates"},"gcc-13-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"a134b0319a82d14581b3a14820d2832af4ec9778ed8b9b4ddaeecfb0555ec325","Size":21084546,"Version":"13.3.0-6ubuntu2~24.04.1","pocket":"noble-updates"},"libbinutils":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb","SHA256":"064dce00ce94e1fc2d33779cb0071088f4c8aac79e85345f2e78a020f7d14699","Size":576834,"Version":"2.42-4ubuntu2.10","pocket":"noble-updates"},"libc6":{"Architecture":"amd64","Filename":"pool/main/g/glibc/libc6_2.39-0ubuntu8.12_amd64.deb","SHA256":"d821b41fc59cb4978ecd53bc83e5c964ac15d305c8d2ac4c8a35aebe55010fb9","Size":3264258,"Version":"2.39-0ubuntu8.12","pocket":"noble-updates"},"libc6-dev":{"Architecture":"amd64","Filename":"pool/main/g/glibc/libc6-dev_2.39-0ubuntu8.12_amd64.deb","SHA256":"d81dd6dc9d515762cc93f338efa6219252acf3e2e87b5b89dd7dc517741e6eed","Size":2124506,"Version":"2.39-0ubuntu8.12","pocket":"noble-updates"},"libctf0":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb","SHA256":"7ec86d697c3668503c85f308a6832f092075b5880ad002f22185264da0bd4645","Size":94474,"Version":"2.42-4ubuntu2.10","pocket":"noble-updates"},"libgcc-13-dev":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"cd689db2691edaa10f37329307292796bb599e722e0505c79e14caaa1fe9a93a","Size":2680642,"Version":"13.3.0-6ubuntu2~24.04.1","pocket":"noble-updates"},"libgcc-s1":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libgcc-s1_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"aa7fadbe33b78bcf99885318040601c550c208929565b179891d9a3cc2aa68cd","Size":78392,"Version":"14.2.0-4ubuntu2~24.04.1","pocket":"noble-updates"},"libgmp10":{"Architecture":"amd64","Filename":"pool/main/g/gmp/libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb","SHA256":"285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d","Size":253460,"Version":"2:6.3.0+dfsg-2ubuntu6.1","pocket":"noble-updates"},"libisl23":{"Architecture":"amd64","Filename":"pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb","SHA256":"4e040926e50fb961fae9bf95660189d468336a4a17bc321872c434fc8f777e7f","Size":679812,"Version":"0.26-3build1.1","pocket":"noble-updates"},"libjansson4":{"Architecture":"amd64","Filename":"pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb","SHA256":"0cf79113f5d193ce9af2be2ff4b2c3b30dd4e55a0b6c47f7d28f6c849ff3aa60","Size":32830,"Version":"2.14-2build2","pocket":"noble"},"libmpc3":{"Architecture":"amd64","Filename":"pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb","SHA256":"cebe6098bb3d66fdacac9dc6fe406a651216d9c00f27c3f9c159d15d96cdf864","Size":54636,"Version":"1.3.1-1build1.1","pocket":"noble-updates"},"libmpfr6":{"Architecture":"amd64","Filename":"pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb","SHA256":"aebc1c8b69a1f98bb43dfc268daecd181116dbf40b13ee4e822eb4bdd52b493a","Size":353020,"Version":"4.2.1-1build1.1","pocket":"noble-updates"},"libsframe1":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb","SHA256":"72093fb456864db55f1352bfa5e952a94f7abaff64e71dff1fbf001db1984564","Size":15724,"Version":"2.42-4ubuntu2.10","pocket":"noble-updates"},"libzstd1":{"Architecture":"amd64","Filename":"pool/main/libz/libzstd/libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb","SHA256":"dfcf25061e07aad7efd3f4f880ba5ad4d4d09ebe7fc8cc77ab6b8a161d6d4727","Size":299472,"Version":"1.5.5+dfsg2-2build1.1","pocket":"noble-updates"},"linux-libc-dev":{"Architecture":"amd64","Filename":"pool/main/l/linux/linux-libc-dev_6.8.0-151.151_amd64.deb","SHA256":"badd744a9dc7e43c53975ac08d88e23dd13223f2334637c25fd9b9e9bb5d236d","Size":1711930,"Version":"6.8.0-151.151","pocket":"noble-updates"},"ubuntu-keyring":{"Architecture":"all","Filename":"pool/main/u/ubuntu-keyring/ubuntu-keyring_2023.11.28.1_all.deb","SHA256":"36de43b15853ccae0028e9a767613770c704833f82586f28eb262f0311adb8a8","Size":11124,"Version":"2023.11.28.1","pocket":"noble"},"zlib1g":{"Architecture":"amd64","Filename":"pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb","SHA256":"376249c8de139568221dbb242318cc8cb8f02299e3a62b7432948e1754fbddf9","Size":63158,"Version":"1:1.3.dfsg-3.1ubuntu2.3","pocket":"noble-updates"}},"referenceSHA256":"bd9984d62023c8f161426429fdfb1a6ea7e5da66eea62a2e529e7c8e0970bd62","signedIndexes":{"noble":{"date":"Thu, 25 Apr 2024 15:10:33 UTC","indexSHA256":"2a6a199e1031a5c279cb346646d594993f35b1c03dd4a82aaa0323980dd92451","signedSHA256":"cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0","validUntil":null},"noble-security":{"date":"Fri, 20 Nov 2026  4:37:01 UTC","indexSHA256":"452533a8cf4f38487e8f98c6f42d260bd2963e74e6ab30c6b608b09865171ecb","signedSHA256":"80beb7f75233442837aa9bc888708687e906d6287b8b3063aaa018376f5b18d0","validUntil":null},"noble-updates":{"date":"Fri, 20 Nov 2026  4:37:51 UTC","indexSHA256":"42e89ec7f0565dae276ca17aa702fb31573b6857f668ae1ce8cd7c76181d9e4e","signedSHA256":"0f65b674ba2fcbdb06661a2687ec0bab72c83f8fde16c6fa3e9caacf0a712e8e","validUntil":null}},"sourceProfileSHA256":"456c1e4714f29d06c8650ace8d1a3d22f305a0bcf8b5607488d6b4009b98a776"}
+  PINNED_SCRIPT: |
+    EXPECTED_POLICY = '4981300610dff9e779e2388cedebeb485311306c918b97fbb43d1a306f6415c9'
+    """Observe stock Noble compiler inputs as data, with no compiler subprocess."""
+    import hashlib
+    import json
+    import os
+    import re
+    import stat
+    import struct
+    import sys
+
+    REPO='brucerry/embedded-linux-diagnostic-hub'
+    BRANCH='ci/v060-linux-native-compiler-observe-20261120'
+    REF='refs/heads/'+BRANCH
+    WORKFLOW='.github/workflows/linux-native-compiler-observation.yml'
+    JOB='native-compiler-observation'
+    LIB='/usr/lib/x86_64-linux-gnu/'
+    LOADER='/lib64/ld-linux-x86-64.so.2'
+    CACHE=b'glibc-ld.so.cache1.1'
+
+
+    def require(ok, code):
+        if not ok:
+            raise ValueError(code)
+
+
+    def runner(policy, env):
+        require(all(env.get(k)==v for k,v in {
+            'ImageOS':'ubuntu24','ImageVersion':policy['image'], 'RUNNER_ARCH':'X64',
+            'RUNNER_ENVIRONMENT':'github-hosted','RUNNER_OS':'Linux',
+        }.items()), 'reviewed-image')
+
+
+    def workflow(env):
+        sha=env.get('GITHUB_SHA','')
+        require(
+            env.get('GITHUB_REPOSITORY')==REPO and env.get('GITHUB_EVENT_NAME')=='push'
+            and env.get('GITHUB_REF')==REF and env.get('GITHUB_JOB')==JOB
+            and re.fullmatch('[0-9a-f]{40}',sha)
+            and env.get('GITHUB_WORKFLOW_REF')==REPO+'/'+WORKFLOW+'@'+REF
+            and env.get('GITHUB_WORKFLOW_SHA')==sha
+            and re.fullmatch('[1-9][0-9]{0,18}',env.get('GITHUB_RUN_ID',''))
+            and env.get('GITHUB_RUN_ATTEMPT')=='1','workflow-identity')
+
+
+    def identity(st):
+        return (st.st_dev,st.st_ino,st.st_uid,st.st_gid,st.st_mode,st.st_nlink,st.st_size,st.st_mtime_ns,st.st_ctime_ns)
+
+
+    def path_chain(name, trust=True):
+        require(re.fullmatch(r'/[A-Za-z0-9_./+~-]+',name) and os.path.normpath(name)==name and '//' not in name,'stock-path')
+        root=os.lstat('/')
+        if trust:
+            require(stat.S_ISDIR(root.st_mode) and root.st_uid==root.st_gid==0 and not root.st_mode&0o7022,'stock-root')
+        todo=name.split('/')[1:]
+        location='/'
+        links={}
+        while todo:
+            leaf=todo.pop(0)
+            require(leaf not in ('','.','..'),'stock-component')
+            item=os.path.join(location,leaf)
+            metadata=os.lstat(item)
+            if trust:
+                require(metadata.st_uid==metadata.st_gid==0,'stock-owner')
+            if stat.S_ISLNK(metadata.st_mode):
+                target=os.readlink(item)
+                require(len(links)<10 and item not in links and re.fullmatch(r'[A-Za-z0-9_./+~-]+',target),'stock-link')
+                if trust:
+                    require(stat.S_IMODE(metadata.st_mode)==0o777,'stock-link-mode')
+                links[item]=target
+                absolute=os.path.normpath(os.path.join(location,target))
+                require(absolute.split('/')[1] in {'bin','etc','lib','lib64','usr','var'},'stock-link-root')
+                todo=absolute.split('/')[1:]+todo
+                location='/'
+            else:
+                require(stat.S_ISDIR(metadata.st_mode) if todo else stat.S_ISREG(metadata.st_mode),'stock-file-type')
+                if trust:
+                    require(not metadata.st_mode&0o7022,'stock-mode')
+                location=item
+        require(os.path.realpath(name,strict=True)==location,'canonical-path')
+        return location,links
+
+
+    def held(name, maximum, exact=None, allow_empty=False):
+        real,links=path_chain(name)
+        require(exact is None or real==exact,'canonical-file')
+        expected=os.lstat(real)
+        fd=os.open(real,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            start=os.fstat(stream.fileno())
+            require(identity(start)==identity(expected) and start.st_uid==start.st_gid==0
+                and stat.S_ISREG(start.st_mode) and start.st_nlink==1 and not start.st_mode&0o7022
+                and (0 if allow_empty else 1)<=start.st_size<=maximum,'held-file')
+            body=stream.read(start.st_size+1)
+            require(len(body)==start.st_size and identity(start)==identity(os.fstat(stream.fileno()))
+                ==identity(os.lstat(real)) and path_chain(name)==(real,links),'file-changed')
+        return body,format(stat.S_IMODE(start.st_mode),'04o')
+
+
+    def stock_os():
+        require(os.getuid()>0 and os.getuid()==os.geteuid() and os.uname().sysname=='Linux'
+            and os.uname().machine=='x86_64','stock-platform')
+        raw,_=held('/etc/os-release',8192,'/usr/lib/os-release')
+        expect={'ID':'ubuntu','VERSION_ID':'24.04','VERSION_CODENAME':'noble'}
+        found={}
+        for line in raw.decode('utf-8').splitlines():
+            key,sep,value=line.partition('=')
+            if sep and key in expect:
+                require(key not in found,'os-release-fields')
+                found[key]=value.strip('"')
+        require(found==expect,'stock-noble')
+
+
+    def package_status(raw, packages):
+        matched={}
+        for paragraph in raw.split(b'\n\n'):
+            if not paragraph.startswith(b'Package: '):
+                continue
+            name=paragraph.split(b'\n',1)[0][9:].decode('ascii')
+            if name not in packages:
+                continue
+            fields={}
+            for line in paragraph.splitlines():
+                key,sep,value=line.partition(b': ')
+                if sep and key in (b'Architecture',b'Status',b'Version'):
+                    require(key not in fields,'dpkg-duplicate-field')
+                    fields[key]=value.decode('ascii')
+            spec=packages[name]
+            if fields.get(b'Architecture')!=spec['Architecture']:
+                continue
+            require(name not in matched,'dpkg-duplicate-package')
+            require(fields.get(b'Status')=='install ok installed' and fields.get(b'Version')==spec['Version'],'dpkg-version')
+            matched[name]=fields[b'Version']
+        require(matched=={k:p['Version'] for k,p in packages.items()},'dpkg-package-missing')
+
+
+    def compiler_paths(policy):
+        for alias,expected in policy['compilerPaths'].items():
+            real,traversed=path_chain(alias,trust=False)
+            require(real==expected,'compiler-target')
+            expected_links={k:v for k,v in traversed.items() if k in policy['links']}
+            require(all(policy['links'][k]==v for k,v in expected_links.items()),'compiler-link')
+            require(set(traversed)==set(expected_links),'compiler-unexpected-link')
+            if alias=='/usr/bin/cc':
+                require(set(traversed)=={'/usr/bin/cc','/etc/alternatives/cc','/usr/bin/gcc','/usr/bin/gcc-13'},
+                        'compiler-cc-alternatives')
+
+
+    def member_modes(policy):
+        for name,pin in policy['files'].items():
+            real,_=path_chain(name)
+            require(real==name,'member-alias')
+            metadata=os.lstat(real)
+            require(metadata.st_uid==metadata.st_gid==0 and stat.S_IMODE(metadata.st_mode)==int(pin[0],8)
+                and metadata.st_nlink==1,'signed-owner-mode')
+        for alias,target in policy['links'].items():
+            real,seen=path_chain(alias)
+            require(seen.get(alias)==target and real in policy['files'],'signed-link-identity')
+
+
+    def match(name, pin):
+        mode,length,sha=pin
+        body,seen=held(name,length,name)
+        require((seen,len(body),hashlib.sha256(body).hexdigest())==(mode,length,sha),'signed-member-digest')
+        return body
+
+
+    def cache_aliases(raw,names):
+        require(raw.startswith(CACHE) and len(raw)>=48,'cache-format')
+        count,length=struct.unpack_from('<II',raw,20)
+        start=48+24*count
+        end=start+length
+        require(0<count<=32768 and start<end<=len(raw),'cache-length')
+
+        def string(offset):
+            require(start<=offset<end,'cache-offset')
+            stop=raw.find(b'\0',offset,min(end,offset+1024))
+            require(offset<stop,'cache-string')
+            return raw[offset:stop].decode('ascii')
+
+        found={name:set() for name in names}
+        for i in range(count):
+            flags,key,value,_,hwcap=struct.unpack_from('<iIIIQ',raw,48+24*i)
+            name=string(key)
+            if name in found:
+                require(flags==0x303 and hwcap==0,'cache-variant')
+                alias=string(value)
+                require(alias in (LIB+name,'/lib/x86_64-linux-gnu/'+name),'cache-selection')
+                found[name].add(alias)
+        require(all(values or name=='ld-linux-x86-64.so.2' for name,values in found.items()),'cache-missing-library')
+        return found
+
+
+    def verify_loader(policy):
+        loader=policy['libraries']['ld-linux-x86-64.so.2']
+        real,links=path_chain(LOADER)
+        require(real==loader and links.get('/usr/lib64/ld-linux-x86-64.so.2')==
+            policy['links']['/usr/lib64/ld-linux-x86-64.so.2'],'loader-interpreter')
+        try:
+            os.lstat('/etc/ld.so.preload')
+        except FileNotFoundError:
+            pass
+        else:
+            raw,_=held('/etc/ld.so.preload',4096,'/etc/ld.so.preload',allow_empty=True)
+            require(not raw.strip(),'loader-preload')
+        cache,_=held('/etc/ld.so.cache',4<<20,'/etc/ld.so.cache')
+        found=cache_aliases(cache,policy['libraries'])
+        for name,expected in policy['libraries'].items():
+            require(path_chain(LIB+name)[0]==expected,'loader-soname')
+            for alias in found[name]:
+                require(path_chain(alias)[0]==expected,'loader-cache-alias')
+            match(expected,policy['files'][expected])
+
+
+    def headers(policy):
+        for package,(roots,count,digest) in policy['headers'].items():
+            info='/var/lib/dpkg/info/'+package+':amd64.list'
+            # dpkg uses an architecture suffix for Multi-Arch packages.
+            # Only one of the two standard metadata spellings may be present.
+            plain=info.replace(':amd64.list','.list')
+            observed=[]
+            for path in (info,plain):
+                try:
+                    os.lstat(path)
+                except FileNotFoundError:
+                    continue
+                observed.append(path)
+            require(len(observed)==1,'header-package-file-list')
+            raw,_=held(observed[0],2<<20,observed[0])
+            names=[line for line in raw.decode('ascii').splitlines()
+                   if line.endswith('.h') and any(line.startswith(root) for root in roots)]
+            require(len(names)==len(set(names))==count,'header-census')
+            table=hashlib.sha256()
+            for name in sorted(names):
+                body,mode=held(name,8<<20,name)
+                table.update((f'{name}\t{mode}\t{len(body)}\t{hashlib.sha256(body).hexdigest()}\n').encode())
+            require(table.hexdigest()==digest,'signed-header-digest')
+
+
+    def run_phase(phase, policy, env):
+        if phase=='runner':
+            return runner(policy,env)
+        if phase=='workflow':
+            return workflow(env)
+        if phase=='os':
+            return stock_os()
+        runner(policy,env)
+        workflow(env)
+        stock_os()
+        if phase=='packages':
+            status,_=held('/var/lib/dpkg/status',24<<20,'/var/lib/dpkg/status')
+            return package_status(status,policy['packages'])
+        if phase=='paths':
+            return compiler_paths(policy)
+        if phase=='modes':
+            return member_modes(policy)
+        if phase=='compiler':
+            for member in sorted(set(policy['compilerPaths'].values())|{'/usr/share/keyrings/ubuntu-archive-keyring.gpg'}):
+                match(member,policy['files'][member])
+            return
+        if phase=='loader':
+            return verify_loader(policy)
+        if phase=='linker':
+            for member in policy['linkInputs']:
+                match(member,policy['files'][member])
+            return
+        if phase=='headers':
+            return headers(policy)
+        raise ValueError('phase')
+
+
+    def main():
+        phase=sys.argv[1]
+        try:
+            raw=os.environ['PINNED_POLICY'].encode()
+            require(hashlib.sha256(raw).hexdigest()==EXPECTED_POLICY,'policy-digest')
+            run_phase(phase,json.loads(raw),os.environ)
+        except (KeyError,ValueError,OSError,struct.error) as exc:
+            code=str(exc)
+            print('observation-refused/'+phase+'/'+(code if re.fullmatch('[a-z][a-z0-9-]{0,55}',code) else 'stock-read'))
+            return 1
+        print('observation-matched/'+phase)
+        return 0
+
+
+    if __name__=='__main__':
+        raise SystemExit(main())
+jobs:
+  native-compiler-observation:
+    if: github.event_name == 'push' && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-linux-native-compiler-observe-20261120'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Verify pinned hosted runner image
+        id: runner
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - runner <<< "$PINNED_SCRIPT"
+      - name: Verify workflow and run identity
+        id: workflow
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - workflow <<< "$PINNED_SCRIPT"
+      - name: Verify nonroot stock Ubuntu identity
+        id: os
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - os <<< "$PINNED_SCRIPT"
+      - name: Match 22 signed package identities
+        id: packages
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - packages <<< "$PINNED_SCRIPT"
+      - name: Resolve stock cc, assembler and linker paths
+        id: paths
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - paths <<< "$PINNED_SCRIPT"
+      - name: Verify compiler member ownership and modes
+        id: modes
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - modes <<< "$PINNED_SCRIPT"
+      - name: Match signed compiler executable bytes
+        id: compiler
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - compiler <<< "$PINNED_SCRIPT"
+      - name: Verify signed loader chain and cache selection
+        id: loader
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - loader <<< "$PINNED_SCRIPT"
+      - name: Match signed startup and link inputs
+        id: linker
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - linker <<< "$PINNED_SCRIPT"
+      - name: Match signed header census
+        id: headers
+        if: ${{ !cancelled() && steps.runner.outcome == 'success' && steps.workflow.outcome == 'success' && steps.os.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            PINNED_SCRIPT="${PINNED_SCRIPT-}" \
+            /usr/bin/python3 -I -B - headers <<< "$PINNED_SCRIPT"
