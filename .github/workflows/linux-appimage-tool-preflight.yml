@@ -1,0 +1,842 @@
+name: Linux AppImage stock tools preflight
+on:
+  push:
+    branches: [ci/v060-linux-appimage-tool-preflight-20261120]
+    paths: [.github/workflows/linux-appimage-tool-preflight.yml]
+permissions: {}
+env:
+  PREFLIGHT_POLICY: |
+    {
+      "aliases": {
+        "appimage-stock": {},
+        "compiler-stock": {
+          "/usr/bin/as": "/usr/bin/x86_64-linux-gnu-as",
+          "/usr/bin/cc": "/usr/bin/x86_64-linux-gnu-gcc-13",
+          "/usr/bin/ld": "/usr/bin/x86_64-linux-gnu-ld.bfd"
+        },
+        "reader-stock": {}
+      },
+      "appImageToolset": {
+        "bundled": {
+          "liblz4.so.1": {
+            "alias": "linux/x64/lib/liblz4.so.1",
+            "path": "linux/x64/lib/liblz4.so.1.7.1",
+            "sha256": "536ab2f5d4448fd1ff62d43b99ece092ec7824b083af7c7007bb0889353d2777"
+          },
+          "liblzma.so.5": {
+            "alias": "linux/x64/lib/liblzma.so.5",
+            "path": "linux/x64/lib/liblzma.so.5.2.2",
+            "sha256": "cf2f5872a6c7fd81fd530ea2e1af2485cb1e8458846fb108cbef71efafe4eac7"
+          },
+          "liblzo2.so.2": {
+            "alias": "linux/x64/lib/liblzo2.so.2",
+            "path": "linux/x64/lib/liblzo2.so.2.0.0",
+            "sha256": "fa749c759be3caa72fe8430a8baf73a9fd4082e4974c79e6e74a9c9c74a9f7a8"
+          },
+          "libz.so.1": {
+            "alias": "linux/x64/lib/libz.so.1",
+            "path": "linux/x64/lib/libz.so.1.2.11",
+            "sha256": "7d49957222b354be17425cc5cc59e255a97ae8415dcd414c920c1c5c04dc5d32"
+          },
+          "libzstd.so.1": {
+            "alias": "linux/x64/lib/libzstd.so.1",
+            "path": "linux/x64/lib/libzstd.so.1.3.3",
+            "sha256": "70ccbc667e32cf4fb66bb7183c32ced9e0df4eec6a9093aae7d2471b7c053b64"
+          }
+        },
+        "packer": "dac172a43e46b9d3f96a8ef270d1fe8194e46ace2863f72a03a24eb0f8f9e61c",
+        "selector": "4dd903764f04d65559508e67a98e91b054af2962181e3bc6a2b0449b1b07bf80",
+        "sha256": "84021a78ee214ae6fd33a2d62a92ba25542dd10bc86bf117a9b2d0bba44e7665",
+        "version": "1.0.3",
+        "wrapper": "b4a6ca0d0cde9a665ed6e9adac266dc00c3449b3885a4718a0bcb530ed6d0be8"
+      },
+      "archivePins": {
+        "bash": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/bash/bash_5.2.21-2ubuntu4_amd64.deb",
+          "SHA256": "73de311a21e094e29ac01527d2b52226cc87fde0a5b57032902251b426d92c66",
+          "Size": 794086,
+          "Version": "5.2.21-2ubuntu4",
+          "pocket": "noble"
+        },
+        "binutils-x86-64-linux-gnu": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb",
+          "SHA256": "1e510a15f30208d39edcd840e48f26a77bbca7c417805eeccb1e3f7de198ef29",
+          "Size": 2462744,
+          "Version": "2.42-4ubuntu2.10",
+          "pocket": "noble-updates"
+        },
+        "coreutils": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/c/coreutils/coreutils_9.4-3ubuntu6.3_amd64.deb",
+          "SHA256": "e1e9a17892be0cc83b7cea747edf331ffeb6d6c010b4db296e60d888e8e9274c",
+          "Size": 1413428,
+          "Version": "9.4-3ubuntu6.3",
+          "pocket": "noble-updates"
+        },
+        "cpp-13-x86-64-linux-gnu": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+          "SHA256": "2ca48bf0c2d6465bc39322899715a85d934b4d7442dd5586a7bebbe3ce0f806b",
+          "Size": 10714542,
+          "Version": "13.3.0-6ubuntu2~24.04.1",
+          "pocket": "noble-updates"
+        },
+        "gcc-13-x86-64-linux-gnu": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+          "SHA256": "a134b0319a82d14581b3a14820d2832af4ec9778ed8b9b4ddaeecfb0555ec325",
+          "Size": 21084546,
+          "Version": "13.3.0-6ubuntu2~24.04.1",
+          "pocket": "noble-updates"
+        },
+        "libbinutils": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb",
+          "SHA256": "064dce00ce94e1fc2d33779cb0071088f4c8aac79e85345f2e78a020f7d14699",
+          "Size": 576834,
+          "Version": "2.42-4ubuntu2.10",
+          "pocket": "noble-updates"
+        },
+        "libc6": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/glibc/libc6_2.39-0ubuntu8.12_amd64.deb",
+          "SHA256": "d821b41fc59cb4978ecd53bc83e5c964ac15d305c8d2ac4c8a35aebe55010fb9",
+          "Size": 3264258,
+          "Version": "2.39-0ubuntu8.12",
+          "pocket": "noble-updates"
+        },
+        "libctf0": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb",
+          "SHA256": "7ec86d697c3668503c85f308a6832f092075b5880ad002f22185264da0bd4645",
+          "Size": 94474,
+          "Version": "2.42-4ubuntu2.10",
+          "pocket": "noble-updates"
+        },
+        "libgmp10": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/g/gmp/libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb",
+          "SHA256": "285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d",
+          "Size": 253460,
+          "Version": "2:6.3.0+dfsg-2ubuntu6.1",
+          "pocket": "noble-updates"
+        },
+        "libisl23": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb",
+          "SHA256": "4e040926e50fb961fae9bf95660189d468336a4a17bc321872c434fc8f777e7f",
+          "Size": 679812,
+          "Version": "0.26-3build1.1",
+          "pocket": "noble-updates"
+        },
+        "libjansson4": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb",
+          "SHA256": "0cf79113f5d193ce9af2be2ff4b2c3b30dd4e55a0b6c47f7d28f6c849ff3aa60",
+          "Size": 32830,
+          "Version": "2.14-2build2",
+          "pocket": "noble"
+        },
+        "liblz4-1": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lz4/liblz4-1_1.9.4-1build1.1_amd64.deb",
+          "SHA256": "319331270d5cc52d5ebffe51c941d7b01b432bc402c2924b557209a64d4ecbad",
+          "Size": 63062,
+          "Version": "1.9.4-1build1.1",
+          "pocket": "noble-updates"
+        },
+        "liblzma5": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/x/xz-utils/liblzma5_5.6.1+really5.4.5-1ubuntu0.4_amd64.deb",
+          "SHA256": "5bcf5da2339331e21d3f42a831e82c61c54c6b2f29804010e8d59abd0ae52167",
+          "Size": 127704,
+          "Version": "5.6.1+really5.4.5-1ubuntu0.4",
+          "pocket": "noble-updates"
+        },
+        "liblzo2-2": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/l/lzo2/liblzo2-2_2.10-2build4_amd64.deb",
+          "SHA256": "e0d13be155013138b8db4cfe68212b866080af661c78302c2eab0d2f9d0d454e",
+          "Size": 54148,
+          "Version": "2.10-2build4",
+          "pocket": "noble"
+        },
+        "libmpc3": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb",
+          "SHA256": "cebe6098bb3d66fdacac9dc6fe406a651216d9c00f27c3f9c159d15d96cdf864",
+          "Size": 54636,
+          "Version": "1.3.1-1build1.1",
+          "pocket": "noble-updates"
+        },
+        "libmpfr6": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb",
+          "SHA256": "aebc1c8b69a1f98bb43dfc268daecd181116dbf40b13ee4e822eb4bdd52b493a",
+          "Size": 353020,
+          "Version": "4.2.1-1build1.1",
+          "pocket": "noble-updates"
+        },
+        "libsframe1": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb",
+          "SHA256": "72093fb456864db55f1352bfa5e952a94f7abaff64e71dff1fbf001db1984564",
+          "Size": 15724,
+          "Version": "2.42-4ubuntu2.10",
+          "pocket": "noble-updates"
+        },
+        "libtinfo6": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/n/ncurses/libtinfo6_6.4+20240113-1ubuntu2.2_amd64.deb",
+          "SHA256": "b67a6df2bdab61d273eabebd208bb6a3fb12618a390a067e1ee305a409ff03d9",
+          "Size": 108086,
+          "Version": "6.4+20240113-1ubuntu2.2",
+          "pocket": "noble-updates"
+        },
+        "libzstd1": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/libz/libzstd/libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb",
+          "SHA256": "dfcf25061e07aad7efd3f4f880ba5ad4d4d09ebe7fc8cc77ab6b8a161d6d4727",
+          "Size": 299472,
+          "Version": "1.5.5+dfsg2-2build1.1",
+          "pocket": "noble-updates"
+        },
+        "squashfs-tools": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/s/squashfs-tools/squashfs-tools_4.6.1-1build1_amd64.deb",
+          "SHA256": "87fae263846bab255d4a51ad9fc623685497ad830db60758dde39589c9fdadcb",
+          "Size": 189326,
+          "Version": "1:4.6.1-1build1",
+          "pocket": "noble"
+        },
+        "zlib1g": {
+          "Architecture": "amd64",
+          "Filename": "pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb",
+          "SHA256": "376249c8de139568221dbb242318cc8cb8f02299e3a62b7432948e1754fbddf9",
+          "Size": 63158,
+          "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+          "pocket": "noble-updates"
+        }
+      },
+      "basis": "5e3c66f4a62e3606abdd650972e0f76b71ff5c54",
+      "basisTree": "5af9dbea99de92cc3ae3b4c44bed42ae60219e7e",
+      "custodyBase": "d29df1e66d96f18bfdb778a653a249c9adbd8931",
+      "custodyTree": "8c9c636610604410da9a91e3f1796daae5096c14",
+      "host": {
+        "ImageOS": "ubuntu24",
+        "ImageVersion": "20261116.376.1",
+        "RUNNER_ARCH": "X64",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "RUNNER_OS": "Linux"
+      },
+      "imageReadme": "https://github.com/actions/runner-images/blob/ubuntu24/20261116.376/images/ubuntu/Ubuntu2404-Readme.md",
+      "phases": {
+        "appimage-stock": [
+          "/usr/bin/basename",
+          "/usr/bin/bash",
+          "/usr/bin/dirname",
+          "/usr/bin/env",
+          "/usr/bin/tr",
+          "/usr/bin/uname",
+          "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+          "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+          "/usr/lib/x86_64-linux-gnu/libm.so.6",
+          "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+          "/usr/lib/x86_64-linux-gnu/libtinfo.so.6"
+        ],
+        "compiler-stock": [
+          "/usr/bin/x86_64-linux-gnu-as",
+          "/usr/bin/x86_64-linux-gnu-gcc-13",
+          "/usr/bin/x86_64-linux-gnu-ld.bfd",
+          "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+          "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so",
+          "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "/usr/lib/x86_64-linux-gnu/libctf.so.0",
+          "/usr/lib/x86_64-linux-gnu/libgmp.so.10",
+          "/usr/lib/x86_64-linux-gnu/libisl.so.23",
+          "/usr/lib/x86_64-linux-gnu/libjansson.so.4",
+          "/usr/lib/x86_64-linux-gnu/libm.so.6",
+          "/usr/lib/x86_64-linux-gnu/libmpc.so.3",
+          "/usr/lib/x86_64-linux-gnu/libmpfr.so.6",
+          "/usr/lib/x86_64-linux-gnu/libsframe.so.1",
+          "/usr/lib/x86_64-linux-gnu/libz.so.1",
+          "/usr/lib/x86_64-linux-gnu/libzstd.so.1",
+          "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1",
+          "/usr/libexec/gcc/x86_64-linux-gnu/13/collect2"
+        ],
+        "reader-stock": [
+          "/usr/bin/unsquashfs",
+          "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+          "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "/usr/lib/x86_64-linux-gnu/liblz4.so.1",
+          "/usr/lib/x86_64-linux-gnu/liblzma.so.5",
+          "/usr/lib/x86_64-linux-gnu/liblzo2.so.2",
+          "/usr/lib/x86_64-linux-gnu/libm.so.6",
+          "/usr/lib/x86_64-linux-gnu/libz.so.1",
+          "/usr/lib/x86_64-linux-gnu/libzstd.so.1"
+        ]
+      },
+      "providerManifest": "2df7ede2f96b922bf2b4f239223c7ad8f00f9dcfafdf810a8a5c730aba147c7d",
+      "records": {
+        "/usr/bin/basename": {
+          "bytes": 35336,
+          "canonical": "/usr/bin/basename",
+          "digest": "fc455c57afe3afb1772c097c6be408725ece261be9182840a490bbe1545992c8",
+          "mode": 493,
+          "package": "coreutils",
+          "version": "9.4-3ubuntu6.3"
+        },
+        "/usr/bin/bash": {
+          "bytes": 1446024,
+          "canonical": "/usr/bin/bash",
+          "digest": "bc5945feb8bd26203ebfafea5ce1878bb2e32cb8fb50ab7ae395cfb1e1aaaef1",
+          "mode": 493,
+          "package": "bash",
+          "version": "5.2.21-2ubuntu4"
+        },
+        "/usr/bin/dirname": {
+          "bytes": 35208,
+          "canonical": "/usr/bin/dirname",
+          "digest": "0c6767fd8f78935fef72524709bf57e147498a077eaf47ad29eacf8f8e8d4413",
+          "mode": 493,
+          "package": "coreutils",
+          "version": "9.4-3ubuntu6.3"
+        },
+        "/usr/bin/env": {
+          "bytes": 48072,
+          "canonical": "/usr/bin/env",
+          "digest": "886e5fa8be716b03eeda48856e0f04493f2969fc148fb7812594ffac647fa050",
+          "mode": 493,
+          "package": "coreutils",
+          "version": "9.4-3ubuntu6.3"
+        },
+        "/usr/bin/tr": {
+          "bytes": 47624,
+          "canonical": "/usr/bin/tr",
+          "digest": "35ee22fe3bc5387017902f243d19f5d967e74d9f682b10d1c25fe0bce2b03733",
+          "mode": 493,
+          "package": "coreutils",
+          "version": "9.4-3ubuntu6.3"
+        },
+        "/usr/bin/uname": {
+          "bytes": 35336,
+          "canonical": "/usr/bin/uname",
+          "digest": "c6e023b172383fae5318c600e6f2f3a153513df62bf06ad6c9269296d2a78e89",
+          "mode": 493,
+          "package": "coreutils",
+          "version": "9.4-3ubuntu6.3"
+        },
+        "/usr/bin/unsquashfs": {
+          "bytes": 151448,
+          "canonical": "/usr/bin/unsquashfs",
+          "digest": "b305985eb764b6d0ef757571e3e44044ebf71c827c4263efe576e9e14b4abcfb",
+          "mode": 493,
+          "package": "squashfs-tools",
+          "version": "1:4.6.1-1build1"
+        },
+        "/usr/bin/x86_64-linux-gnu-as": {
+          "bytes": 745768,
+          "canonical": "/usr/bin/x86_64-linux-gnu-as",
+          "digest": "21aff249b692b5c31a44007491f922dcb49f41323e362c57d2ada3f52eddb7f0",
+          "mode": 493,
+          "package": "binutils-x86-64-linux-gnu",
+          "version": "2.42-4ubuntu2.10"
+        },
+        "/usr/bin/x86_64-linux-gnu-gcc-13": {
+          "bytes": 1023032,
+          "canonical": "/usr/bin/x86_64-linux-gnu-gcc-13",
+          "digest": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+          "mode": 493,
+          "package": "gcc-13-x86-64-linux-gnu",
+          "version": "13.3.0-6ubuntu2~24.04.1"
+        },
+        "/usr/bin/x86_64-linux-gnu-ld.bfd": {
+          "bytes": 1359128,
+          "canonical": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+          "digest": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+          "mode": 493,
+          "package": "binutils-x86-64-linux-gnu",
+          "version": "2.42-4ubuntu2.10"
+        },
+        "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+          "bytes": 236616,
+          "canonical": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+          "digest": "5fc0940888e9d2e1a00e66d6b1a559c36364ee867683652e1074fa576952cc3f",
+          "mode": 493,
+          "package": "libc6",
+          "version": "2.39-0ubuntu8.12"
+        },
+        "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so": {
+          "bytes": 1479888,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so",
+          "digest": "11f084bc6ff5fc64e91c0b6422040fab1245419e7ff29560a95c1176ce1b9ff4",
+          "mode": 420,
+          "package": "libbinutils",
+          "version": "2.42-4ubuntu2.10"
+        },
+        "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+          "bytes": 2129424,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+          "digest": "755a371e86cc9f564ab54f66140747700fb0a103f698f659f2060f707897e09a",
+          "mode": 493,
+          "package": "libc6",
+          "version": "2.39-0ubuntu8.12"
+        },
+        "/usr/lib/x86_64-linux-gnu/libctf.so.0": {
+          "bytes": 220384,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libctf.so.0.0.0",
+          "digest": "25c8f765c259d05b59a3dc3634d711912a7f5ce9be8a28ace081507b925b3ad1",
+          "mode": 420,
+          "package": "libctf0",
+          "version": "2.42-4ubuntu2.10"
+        },
+        "/usr/lib/x86_64-linux-gnu/libdl.so.2": {
+          "bytes": 14408,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+          "digest": "4dbcca3c01ca84d092b5b7b2610f5835b55fc70a0288dd9d766b40ac9386e2d9",
+          "mode": 420,
+          "package": "libc6",
+          "version": "2.39-0ubuntu8.12"
+        },
+        "/usr/lib/x86_64-linux-gnu/libgmp.so.10": {
+          "bytes": 534896,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0",
+          "digest": "0ccdfb6d6f5c039465f6d002cf7e4c072d48ac6a2cffc8dd6c748dec31592804",
+          "mode": 420,
+          "package": "libgmp10",
+          "version": "2:6.3.0+dfsg-2ubuntu6.1"
+        },
+        "/usr/lib/x86_64-linux-gnu/libisl.so.23": {
+          "bytes": 1863352,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libisl.so.23.3.0",
+          "digest": "db4f717fd1678b48e5dddea1cbdd2d239594a70b57e96d0923bfd9533351efa8",
+          "mode": 420,
+          "package": "libisl23",
+          "version": "0.26-3build1.1"
+        },
+        "/usr/lib/x86_64-linux-gnu/libjansson.so.4": {
+          "bytes": 64008,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libjansson.so.4.14.0",
+          "digest": "c49935a4b3ac599064281b1f257576087806d0dad7ec46f353bd983b052c5e26",
+          "mode": 420,
+          "package": "libjansson4",
+          "version": "2.14-2build2"
+        },
+        "/usr/lib/x86_64-linux-gnu/liblz4.so.1": {
+          "bytes": 137440,
+          "canonical": "/usr/lib/x86_64-linux-gnu/liblz4.so.1.9.4",
+          "digest": "40bffd0a098387368b16b992abd5f7cf43c0fa2f05cabe5a6d483719554adfda",
+          "mode": 420,
+          "package": "liblz4-1",
+          "version": "1.9.4-1build1.1"
+        },
+        "/usr/lib/x86_64-linux-gnu/liblzma.so.5": {
+          "bytes": 202904,
+          "canonical": "/usr/lib/x86_64-linux-gnu/liblzma.so.5.4.5",
+          "digest": "26b37d25f7ca2a2d348de8ecabacda12e921cd933b21fa069a179760db77219d",
+          "mode": 420,
+          "package": "liblzma5",
+          "version": "5.6.1+really5.4.5-1ubuntu0.4"
+        },
+        "/usr/lib/x86_64-linux-gnu/liblzo2.so.2": {
+          "bytes": 129096,
+          "canonical": "/usr/lib/x86_64-linux-gnu/liblzo2.so.2.0.0",
+          "digest": "67a7624b45b4af0dd0d61122cfe16cf26353533a6b9d443179f6ec72093e0d48",
+          "mode": 420,
+          "package": "liblzo2-2",
+          "version": "2.10-2build4"
+        },
+        "/usr/lib/x86_64-linux-gnu/libm.so.6": {
+          "bytes": 952616,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+          "digest": "5dcc4d25466e29ca390ed6fabb371c69b65dff6fa4e91c34561057a020d6994a",
+          "mode": 420,
+          "package": "libc6",
+          "version": "2.39-0ubuntu8.12"
+        },
+        "/usr/lib/x86_64-linux-gnu/libmpc.so.3": {
+          "bytes": 134440,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libmpc.so.3.3.1",
+          "digest": "91d2b2b0b794028c733431e01acc227ff39ee289384fdf22869c8b42ad3aaa3b",
+          "mode": 420,
+          "package": "libmpc3",
+          "version": "1.3.1-1build1.1"
+        },
+        "/usr/lib/x86_64-linux-gnu/libmpfr.so.6": {
+          "bytes": 760464,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libmpfr.so.6.2.1",
+          "digest": "2156351fa3dedd04a7381c6ac7a8a26efa2d6fb08b80f8a2d644ccdd653710ae",
+          "mode": 420,
+          "package": "libmpfr6",
+          "version": "4.2.1-1build1.1"
+        },
+        "/usr/lib/x86_64-linux-gnu/libpthread.so.0": {
+          "bytes": 14408,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+          "digest": "cd34f895c9d2aa669d5d2654bed6b71210fc9003c3a1e96bb5311a40feb86039",
+          "mode": 420,
+          "package": "libc6",
+          "version": "2.39-0ubuntu8.12"
+        },
+        "/usr/lib/x86_64-linux-gnu/libsframe.so.1": {
+          "bytes": 35168,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libsframe.so.1.0.0",
+          "digest": "1693a2dbd77c909d279ae34aa9b5d8d08d97f116f8d0ed724063df11151b3c69",
+          "mode": 420,
+          "package": "libsframe1",
+          "version": "2.42-4ubuntu2.10"
+        },
+        "/usr/lib/x86_64-linux-gnu/libtinfo.so.6": {
+          "bytes": 208328,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.4",
+          "digest": "e6089d7bb95eee5b545f3770dd69095b0bca47d26701cad145af429561d16306",
+          "mode": 420,
+          "package": "libtinfo6",
+          "version": "6.4+20240113-1ubuntu2.2"
+        },
+        "/usr/lib/x86_64-linux-gnu/libz.so.1": {
+          "bytes": 113000,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+          "digest": "f61677c7bdb7c2aa2a243ea781bfd16afcb361cede7b4ef76127a9d8eb9a5242",
+          "mode": 420,
+          "package": "zlib1g",
+          "version": "1:1.3.dfsg-3.1ubuntu2.3"
+        },
+        "/usr/lib/x86_64-linux-gnu/libzstd.so.1": {
+          "bytes": 755864,
+          "canonical": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5",
+          "digest": "0a2128bc10841fb29e76d08d945864dfb0b6a66da5df6df5d8299197439e54bb",
+          "mode": 420,
+          "package": "libzstd1",
+          "version": "1.5.5+dfsg2-2build1.1"
+        },
+        "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1": {
+          "bytes": 30487984,
+          "canonical": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1",
+          "digest": "5d1679131184e2de4435b426eb264bf13472fe026db8e5c6bc97445814e8e2f4",
+          "mode": 493,
+          "package": "cpp-13-x86-64-linux-gnu",
+          "version": "13.3.0-6ubuntu2~24.04.1"
+        },
+        "/usr/libexec/gcc/x86_64-linux-gnu/13/collect2": {
+          "bytes": 336056,
+          "canonical": "/usr/libexec/gcc/x86_64-linux-gnu/13/collect2",
+          "digest": "4d1f341ae5b763b513258ee2812422a45e063c30a2f1924a0cf63d3699f3a158",
+          "mode": 493,
+          "package": "gcc-13-x86-64-linux-gnu",
+          "version": "13.3.0-6ubuntu2~24.04.1"
+        }
+      },
+      "sourceProfile": "ed8f994dec25682805f206882173db8c16c9382d88c6f4bb2da14619fa35fcb6",
+      "ubuntuPockets": {
+        "noble": {
+          "date": "Thu, 25 Apr 2024 15:10:33 UTC",
+          "inReleaseSHA256": "cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0",
+          "mainIndexSHA256": "2a6a199e1031a5c279cb346646d594993f35b1c03dd4a82aaa0323980dd92451"
+        },
+        "noble-security": {
+          "date": "Fri, 20 Nov 2026  4:37:01 UTC",
+          "inReleaseSHA256": "80beb7f75233442837aa9bc888708687e906d6287b8b3063aaa018376f5b18d0",
+          "mainIndexSHA256": "452533a8cf4f38487e8f98c6f42d260bd2963e74e6ab30c6b608b09865171ecb"
+        },
+        "noble-updates": {
+          "date": "Fri, 20 Nov 2026  4:37:51 UTC",
+          "inReleaseSHA256": "0f65b674ba2fcbdb06661a2687ec0bab72c83f8fde16c6fa3e9caacf0a712e8e",
+          "mainIndexSHA256": "42e89ec7f0565dae276ca17aa702fb31573b6857f668ae1ce8cd7c76181d9e4e"
+        }
+      },
+      "ubuntuSigner": "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+    }
+  PREFLIGHT_SCRIPT: |
+    EXPECTED_POLICY = '943651e9b43beced5ff3d1f3494d322935405c42ca2850ef8a6bd769fbd4c182'
+    """Read-only verifier for one reviewed Noble tool preflight."""
+    import hashlib
+    import json
+    import os
+    import re
+    import stat
+    import struct
+    import sys
+
+    REPO = "brucerry/embedded-linux-diagnostic-hub"
+    REF = "refs/heads/ci/v060-linux-appimage-tool-preflight-20261120"
+    WORKFLOW = ".github/workflows/linux-appimage-tool-preflight.yml"
+    JOB = "appimage-tool-preflight"
+    LIB = "/usr/lib/x86_64-linux-gnu/"
+    LOADER = "/lib64/ld-linux-x86-64.so.2"
+    CACHE = b"glibc-ld.so.cache1.1"
+
+    def need(test, status):
+        if not test:
+            raise ValueError(status)
+
+    def evidence(policy, env):
+        need(all(env.get(k)==v for k,v in policy["host"].items()),"image-identity")
+        commit=env.get("GITHUB_SHA","")
+        need(env.get("GITHUB_REPOSITORY")==REPO and env.get("GITHUB_EVENT_NAME")=="push" and
+             env.get("GITHUB_REF")==REF and env.get("GITHUB_JOB")==JOB and
+             re.fullmatch(r"[a-f0-9]{40}",commit) and
+             env.get("GITHUB_WORKFLOW_REF")==REPO+"/"+WORKFLOW+"@"+REF and
+             env.get("GITHUB_WORKFLOW_SHA")==commit and
+             re.fullmatch(r"[1-9][0-9]{0,19}",env.get("GITHUB_RUN_ID","")) and
+             re.fullmatch(r"[1-9][0-9]{0,8}",env.get("GITHUB_RUN_ATTEMPT","")),"run-identity")
+        return commit
+
+    def present(p):
+        try:
+            os.lstat(p)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def guarded_path(path):
+        # Match each symlink or directory traversal to a root-owned stock location.
+        # The caller checks the final absolute name independently.
+        allowed={"/","/bin","/etc","/lib","/lib64","/usr","/var"}
+        need(path.startswith("/") and "/../" not in path and not any(
+            c in path for c in ("\0","\r","\n","\\","//")),"lookup-path")
+        todo=path.split("/")[1:]
+        resolved="/"
+        links=0
+        while todo:
+            name=todo.pop(0)
+            need(name not in ("",".",".."),"lookup-component")
+            item=os.path.join(resolved,name)
+            st=os.lstat(item)
+            need(st.st_uid==0 and st.st_gid==0,"stock-owner")
+            if stat.S_ISLNK(st.st_mode):
+                links+=1
+                target=os.readlink(item)
+                need(links<=10 and target and not any(ord(c)<32 or c=="\\" for c in target),"stock-link")
+                absolute=os.path.normpath(os.path.join(resolved,target))
+                top="/"+absolute.split("/",2)[1]
+                need(top in allowed,"stock-link-root")
+                todo=absolute.split("/")[1:]+todo
+                resolved="/"
+            else:
+                need(not(st.st_mode & 0o7022),"stock-mode")
+                need(stat.S_ISDIR(st.st_mode) if todo else stat.S_ISREG(st.st_mode),"stock-file-type")
+                resolved=item
+        need(os.path.realpath(path,strict=True)==resolved,"stock-canonical-path")
+        return resolved
+
+    def owned_file(name, limit, expected=None):
+        real=guarded_path(name)
+        need(expected is None or real==expected,"path-selection")
+        def identity(st):
+            return (st.st_dev,st.st_ino,st.st_uid,st.st_gid,st.st_mode,st.st_size,st.st_nlink,st.st_mtime_ns,st.st_ctime_ns)
+        named=os.lstat(real)
+        with os.fdopen(os.open(real,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),"rb") as stream:
+            start=os.fstat(stream.fileno())
+            need(identity(start)==identity(named) and start.st_uid==start.st_gid==0
+                 and stat.S_ISREG(start.st_mode) and start.st_nlink==1 and 0<start.st_size<=limit,"stock-handle")
+            body=stream.read(start.st_size+1)
+            need(len(body)==start.st_size and
+                 identity(start)==identity(os.fstat(stream.fileno()))==identity(os.lstat(real)) and
+                 guarded_path(name)==real,"changed-file")
+        return body,stat.S_IMODE(start.st_mode)
+
+    def match(body, mode, pin):
+        need((len(body), mode, hashlib.sha256(body).hexdigest())==
+             (pin["bytes"],pin["mode"],pin["digest"]),"signed-member-mismatch")
+
+    def installed_status(raw, packages):
+        found={}
+        for row in raw.split(b"\n\n"):
+            if not row.startswith(b"Package: "):
+                continue
+            name=row.split(b"\n",1)[0][9:].decode("ascii")
+            if name not in packages:
+                continue
+            fields={}
+            for line in row.splitlines():
+                for field in (b"Architecture",b"Status",b"Version"):
+                    prefix=field+b": "
+                    if line.startswith(prefix):
+                        need(field not in fields,"dpkg-duplicate-field")
+                        fields[field]=line[len(prefix):].decode("ascii")
+            if fields.get(b"Architecture")!="amd64":
+                continue
+            need(name not in found,"dpkg-duplicate-package")
+            need(fields.get(b"Status")=="install ok installed" and
+                 fields.get(b"Version")==packages[name],"dpkg-stock-version")
+            found[name]=fields[b"Version"]
+        need(found==packages,"dpkg-stock-package-absent")
+
+    def cache_lookup(raw, names):
+        need(raw.startswith(CACHE) and len(raw)>=48,"loader-cache-format")
+        count,length=struct.unpack_from("<II",raw,20)
+        start=48+24*count
+        end=start+length
+        need(0<count<=32768 and start<end<=len(raw),"loader-cache-size")
+        def string(offset):
+            need(start<=offset<end,"loader-cache-string")
+            stop=raw.find(b"\0",offset,min(end,offset+1024))
+            need(offset<stop,"loader-cache-string")
+            return raw[offset:stop].decode("ascii")
+        wanted={name:set() for name in names}
+        for i in range(count):
+            flags,key,value,_,hwcap=struct.unpack_from("<iIIIQ",raw,48+24*i)
+            soname=string(key)
+            if soname in wanted:
+                need(flags==0x303 and hwcap==0,"loader-cache-variant")
+                location=string(value)
+                need(location.startswith(("/lib/x86_64-linux-gnu/","/usr/lib/x86_64-linux-gnu/"))
+                     and os.path.basename(location)==soname,"loader-cache-path")
+                wanted[soname].add(location)
+        return wanted
+
+    def check_host(policy, env):
+        commit=evidence(policy,env)
+        need(os.getuid()>0 and os.getuid()==os.geteuid() and os.uname().sysname=="Linux" and
+             os.uname().machine=="x86_64","stock-platform")
+        info,_=owned_file("/etc/os-release",8192,"/usr/lib/os-release")
+        values={}
+        for row in info.decode("utf-8").splitlines():
+            key,sep,value=row.partition("=")
+            if sep and key in {"ID","VERSION_ID","VERSION_CODENAME"}:
+                need(key not in values,"os-release-shape")
+                values[key]=value.strip('"')
+        need(values=={"ID":"ubuntu","VERSION_ID":"24.04","VERSION_CODENAME":"noble"},"os-release-identity")
+        # Safe, fixed-format receipt fields only.
+        print("source-context",commit,policy["basis"],policy["custodyBase"],policy["sourceProfile"])
+        print("reviewed-image",policy["host"]["ImageVersion"])
+
+    def stock_phase(policy, mode):
+        records={p:policy["records"][p] for p in policy["phases"][mode]}
+        packages={row["package"]:row["version"] for row in records.values()}
+        statuses,_=owned_file("/var/lib/dpkg/status",24<<20,"/var/lib/dpkg/status")
+        installed_status(statuses,packages)
+        for alias, expected in policy["aliases"][mode].items():
+            need(guarded_path(alias)==expected,"stock-tool-alias")
+        need(guarded_path(LOADER)==LIB+"ld-linux-x86-64.so.2","stock-interpreter-alias")
+        if present("/etc/ld.so.preload"):
+            preload,_=owned_file("/etc/ld.so.preload",4096,"/etc/ld.so.preload")
+            need(not preload.strip(),"system-loader-preload")
+        library_names={p.removeprefix(LIB) for p in records if p.startswith(LIB)}
+        raw_cache,_=owned_file("/etc/ld.so.cache",4<<20,"/etc/ld.so.cache")
+        caches=cache_lookup(raw_cache,library_names)
+        for path,pin in records.items():
+            if path.startswith(LIB):
+                for alias in caches[path.removeprefix(LIB)]:
+                    need(guarded_path(alias)==pin["canonical"],"cache-alias-mismatch")
+            body,mode_bits=owned_file(path,pin["bytes"],pin["canonical"])
+            match(body,mode_bits,pin)
+        print(mode,"signed-stock-members-match",len(records))
+
+    def main():
+        label=sys.argv[1]
+        try:
+            raw=os.environ["PREFLIGHT_POLICY"].encode()
+            need(hashlib.sha256(raw).hexdigest()==EXPECTED_POLICY,"reviewed-policy")
+            policy=json.loads(raw)
+            if label=="host":
+                check_host(policy,os.environ)
+            else:
+                evidence(policy,os.environ)
+                stock_phase(policy,label)
+        except (KeyError,ValueError,OSError,struct.error) as error:
+            code=str(error)
+            print("preflight-refused/"+label+"/"+(code if re.fullmatch(r"[a-z][a-z0-9-]{0,55}",code) else "stock-observation"))
+            return 1
+        return 0
+
+    if __name__=="__main__":
+        raise SystemExit(main())
+jobs:
+  appimage-tool-preflight:
+    if: github.event_name == 'push' && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-linux-appimage-tool-preflight-20261120'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Verify exact Noble hosted image and source context
+        id: host
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PREFLIGHT_POLICY="${PREFLIGHT_POLICY-}" \
+            /usr/bin/python3 -I -B - host <<< "$PREFLIGHT_SCRIPT"
+      - name: Verify stock compiler file chain
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PREFLIGHT_POLICY="${PREFLIGHT_POLICY-}" \
+            /usr/bin/python3 -I -B - compiler-stock <<< "$PREFLIGHT_SCRIPT"
+      - name: Verify stock AppImage loader file chain
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PREFLIGHT_POLICY="${PREFLIGHT_POLICY-}" \
+            /usr/bin/python3 -I -B - appimage-stock <<< "$PREFLIGHT_SCRIPT"
+      - name: Verify signed Ubuntu SquashFS reader file chain
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C.UTF-8 \
+            ImageOS="${ImageOS-}" \
+            ImageVersion="${ImageVersion-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            PREFLIGHT_POLICY="${PREFLIGHT_POLICY-}" \
+            /usr/bin/python3 -I -B - reader-stock <<< "$PREFLIGHT_SCRIPT"
