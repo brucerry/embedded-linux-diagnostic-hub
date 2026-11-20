@@ -1,4 +1,4 @@
-name: Windows native NuGet trust preflight
+name: Windows stock NuGet file admission diagnostic
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  windows-trust:
+  windows-file-admission:
     if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-nuget-squirrel-members-20261120'
     runs-on: windows-2025-vs2026
     timeout-minutes: 5
@@ -16,21 +16,31 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Check out exact public inert preflight
+      - name: Check out exact public file diagnostic
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Require hosted Windows Server 2025 x64 image 20261116.315.1 build 33828
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py host'
-      - name: Authenticate stock NuGet 8.0.0.137 before execution
-        id: tool
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py tool'
-      - name: Check exact SDK-bundled signed inert template
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py fixture'
-      - name: Verify the signed template under Windows trust without warnings
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py signed'
-      - name: Require NU3004 rejection of the unsigned synthetic package
-        if: ${{ !cancelled() && steps.tool.outcome == 'success' }}
-        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-trust-probe.py unsigned'
+        id: host
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py host'
+      - name: Check existing NuGet revocation mode
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py revocation'
+      - name: Check stock NuGet command resolution
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py path'
+      - name: Check packaged NuGet payload path and custody
+        id: custody
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py custody'
+      - name: Compare the exact stock NuGet SHA-256
+        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py hash'
+      - name: Require NuGet file version 8.0.0.137
+        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py version'
+      - name: Check Microsoft Authenticode with stock Windows trust
+        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
+        run: '& "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64\python.exe" -I -B scripts/ci/windows-nuget-file-preflight.py signature'
