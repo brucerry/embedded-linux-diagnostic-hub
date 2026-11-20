@@ -1,0 +1,38 @@
+name: Linux first provider custody
+
+on:
+  push:
+    branches: [ci/v060-linux-first-provider-custody-20261120]
+    paths:
+      - .github/workflows/linux-first-provider-custody.yml
+      - scripts/ci/linux-provider-rehearsal.py
+      - scripts/ci/linux-provider-inputs.json
+      - scripts/ci/linux-provider-capacity.cjs
+
+permissions: {}
+
+jobs:
+  provider-digests:
+    if: github.event_name == 'push' && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-linux-first-provider-custody-20261120'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Reconstruct and verify three provider digests
+        shell: bash
+        run: |
+          umask 077
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          staging=$(/usr/bin/mktemp -d "$RUNNER_TEMP/hub-provider-job.XXXXXXXX")
+          cd -- "$staging"
+          for file in linux-provider-rehearsal.py linux-provider-inputs.json linux-provider-capacity.cjs; do
+            /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/curl --disable --silent --show-error --fail \
+              --proto '=https' --connect-timeout 5 --max-time 20 --max-filesize 40000 \
+              --output "$file" "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/$GITHUB_SHA/scripts/ci/$file"
+          done
+          /usr/bin/sha256sum --check --strict <<'SUMS'
+          e5d8224c08c2a45b07800480e12f554c1dae6970f99f71c6c2ab0b1cad183fae  linux-provider-rehearsal.py
+          fde75f4f5e0693b48f309705f1b295a8a70d0f796a776cb86465431c227c031c  linux-provider-inputs.json
+          b3184eef8abc8c4767cf223cbda6a572080fd96bf225689aa4ba76a2ac4295f3  linux-provider-capacity.cjs
+          SUMS
+          /usr/bin/timeout 390s /usr/bin/env -i PATH=/usr/bin:/bin TZ=UTC LANG=C.UTF-8 \
+            RUNNER_TEMP="$RUNNER_TEMP" /usr/bin/python3 -I -B linux-provider-rehearsal.py
