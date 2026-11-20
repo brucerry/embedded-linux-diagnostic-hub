@@ -1,0 +1,99 @@
+name: Linux native build directory
+
+on:
+  push:
+    branches: [ci/v060-linux-build-directory-20261120]
+    paths: [.github/workflows/linux-native-build-directory.yml]
+
+permissions: {}
+
+jobs:
+  build-directory:
+    if: github.event_name == 'push' && github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-linux-build-directory-20261120'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Native output-parent ancestry
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          import os
+          import stat
+
+          def ancestry(directory, uid):
+              # Mirrors scripts/lib/linux-native-build-ancestors.mjs at 5e3c66f4.
+              cursor = "/"
+              for part in directory.split("/")[1:]:
+                  cursor = os.path.join(cursor, part)
+                  entry = os.lstat(cursor)
+                  if not stat.S_ISDIR(entry.st_mode):
+                      return "type"
+                  if stat.S_ISLNK(entry.st_mode):
+                      return "type"
+                  if entry.st_uid not in (0, uid):
+                      return "owner"
+                  if entry.st_mode & 0o7022:
+                      return "mode"
+                  if os.path.realpath(cursor, strict=True) != cursor:
+                      return "canonical"
+              return "accepted"
+
+          def observe():
+              parent = os.environ.get("GITHUB_WORKSPACE", "")
+              identity = os.uname()
+              uid = os.getuid()
+              if (os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
+                      or (identity.sysname, identity.machine) != ("Linux", "x86_64")
+                      or uid == 0 or uid != os.geteuid()):
+                  return "host"
+              target = parent + "/dist-linux-native"
+              if (not parent.startswith("/") or parent == "/" or parent.startswith("//")
+                      or len(target.encode("utf-16-le", errors="surrogatepass")) // 2 > 4096
+                      or os.path.normpath(parent) != parent
+                      or any(c == "\\" or ord(c) < 32 or ord(c) == 127 for c in parent)
+                      or os.environ.get("PWD") != parent):
+                  return "workspace"
+              try:
+                  result = ancestry(parent, uid)
+                  if result == "accepted" and not os.path.samestat(os.lstat(parent), os.stat(".")):
+                      return "workspace"
+                  return result
+              except (OSError, ValueError):
+                  return "unavailable"
+
+          result = observe()
+          print("native-output-parent/" + result)
+          raise SystemExit(0 if result == "accepted" else 1)
+          PY
+      - name: Native output-parent 4 GiB reserve
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          import os
+
+          def reserve(fs):
+              return (fs.f_frsize > 0 and fs.f_bavail >= 0
+                      and fs.f_bavail * fs.f_frsize >= 4 * 1024**3)
+
+          def observe():
+              parent = os.environ.get("GITHUB_WORKSPACE", "")
+              try:
+                  if not parent or parent != os.getcwd():
+                      return "workspace"
+                  fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                  try:
+                      info = os.fstatvfs(fd)
+                      if not os.path.samestat(os.fstat(fd), os.lstat(parent)):
+                          return "workspace"
+                      return "accepted" if reserve(info) else "below-floor"
+                  finally:
+                      os.close(fd)
+              except (OSError, ValueError):
+                  return "unavailable"
+
+          result = observe()
+          print("native-output-reserve/" + result)
+          raise SystemExit(0 if result == "accepted" else 1)
+          PY
