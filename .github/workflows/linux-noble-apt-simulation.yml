@@ -235,6 +235,9 @@ env:
     TEMP_WORKER=TEMP_WORKER.replace('if APT_CONFIG=/policy/apt.conf /usr/bin/timeout', 'if TMPDIR="$apt_tmp" APT_CONFIG=/policy/apt.conf /usr/bin/timeout', 1)
     TEMP_WORKER=TEMP_WORKER.replace("printf 'HUB-NOBLE-SIM-CLOSED\\n'", "close_tmp\nprintf 'HUB-NOBLE-TMP-CLEAN\\n'\nprintf 'HUB-NOBLE-SIM-CLOSED\\n'", 1)
 
+    TEMP_WORKER=TEMP_WORKER.replace('test "$result" -eq 0\ntest "$(/usr/bin/sha256sum /var/lib/dpkg/status | /usr/bin/cut -d " " -f 1)" = "$status_hash"', 'test "$(/usr/bin/sha256sum /var/lib/dpkg/status | /usr/bin/cut -d " " -f 1)" = "$status_hash"\nprintf \'HUB-NOBLE-STATUS-UNCHANGED\\n\'\ntest "$result" -eq 0', 1)
+    TEMP_WORKER=TEMP_WORKER.replace("then close_tmp || exit 1; fi' EXIT", 'then close_tmp && printf "HUB-NOBLE-TMP-CLEAN\\n" || exit 1; fi\' EXIT', 1)
+
     def need(ok,label):
         if not ok:
             raise ValueError(label)
@@ -598,6 +601,8 @@ env:
         'apt-stderr-unknown':'workerAptStderrNotUnknown',
         'worker-closed':'workerClosed',
         'scratch-lifecycle':'scratchLifecycle',
+        'scratch-admitted':'scratchAdmitted',
+        'package-state':'packageStateChecked',
         'attach-deadline':'attachReturned',
         'attach-exit':'attachExitZero',
         'stderr-available':'stderrAvailable',
@@ -677,9 +682,9 @@ env:
     def paired_command(policy,scratch,work,uid,gid):
         args,worker,binds=command(policy,scratch,work,uid,gid)
         treated=worker.copy()
-        need(treated.count(WORKER)==1 and args[-len(worker):]==worker,'fixed-worker-argv')
+        need(treated.count(WORKER)==1 and args[-len(worker):]==tuple(worker),'fixed-worker-argv')
         treated[treated.index(WORKER)]=TEMP_WORKER
-        return args[:-len(worker)]+treated,treated,binds
+        return (*args[:-len(worker)],*treated),treated,binds
 
 
     def stock_scratch(row):
@@ -688,68 +693,146 @@ env:
              'bounded-private-stock-shm')
 
 
-    def scratch_frame(body):
-        opened=b'HUB-NOBLE-TMP-READY'
-        cleaned=b'HUB-NOBLE-TMP-CLEAN'
-        lines=body.splitlines()
-        start=[i for i,line in enumerate(lines) if line.startswith(opened)]
-        end=[i for i,line in enumerate(lines) if line.startswith(cleaned)]
-        valid_start=(start==[4] and lines[4:6]==[opened,b'HUB-NOBLE-SIM-BEGIN'])
-        valid_end=(end==[len(lines)-2] and lines[-2:]==[cleaned,b'HUB-NOBLE-SIM-CLOSED'])
-        return (b'\n'.join(line for line in lines if line not in (opened,cleaned))+b'\n',
-                valid_start and valid_end)
+    AUXILIARY=(b'HUB-NOBLE-TMP-READY',b'HUB-NOBLE-TMP-CLEAN',b'HUB-NOBLE-STATUS-UNCHANGED')
+    CONTAINER_FIELDS={'containerClosed','containerExitZero'}
+    ATTACH_FIELDS=(set(PHASE_OBSERVATIONS.values())-CONTAINER_FIELDS)|{'exactTransaction'}
 
 
-    def baseline_reproduced(code,body,result,exit_code):
-        required=('entered','mountsReady','configReady','archiveWorkerMatched','solverReported',
-                  'workerAptStderrReported','attachReturned','stderrAvailable','stderrEmpty',
-                  'stderrNoAptDiagnostic','containerClosed')
-        return (all(result[gate] for gate in required) and code==exit_code==1
-                and body.splitlines()[-2:]==[b'HUB-NOBLE-APT-STDERR unknown',b'HUB-NOBLE-APT-EXIT 100']
-                and not any(result[gate] for gate in ('solverExitZero','workerClosed','exactTransaction')))
+    def private_record(path):
+        with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as stream:
+            before=os.fstat(stream.fileno())
+            need(stat.S_ISREG(before.st_mode) and before.st_uid==os.getuid() and before.st_nlink==1
+                 and not before.st_mode&0o077 and 0<before.st_size<=4096,'private-phase-receipt')
+            raw=stream.read(4097)
+            after=os.fstat(stream.fileno())
+            leaf=path.lstat()
+            identity=lambda item:(item.st_dev,item.st_ino,item.st_ctime_ns,item.st_size)
+            need(identity(before)==identity(after)==identity(leaf) and len(raw)==before.st_size,
+                 'stable-phase-receipt')
+        return json.loads(raw)
 
 
-    def remove_closed(scratch,cid,observe_closed):
-        observe_closed()
-        removed=call(docker(scratch,'container','rm',cid),scratch,12).decode().strip()
-        need(removed==cid,'exact-owned-container-removed')
+    def phase_record(path,binding,result=None):
+        if result is not None:
+            with path.open('xb') as stream:
+                stream.write((json.dumps({'binding':binding,'result':result},sort_keys=True)+'\n').encode())
+            return
+        obj=private_record(path)
+        need(type(obj) is dict and set(obj)=={'binding','result'} and obj['binding']==binding,
+             'phase-receipt-binding')
+        return obj['result']
 
 
-    def capture_worker(scratch,cid,archives,observe_closed,*,timeout=65,baseline=False):
-        code,body,err=bounded(docker(scratch,'container','start','--attach',cid),scratch,timeout,capture_timeout=True)
-        clean_body,scratch_lifecycle=(body,False) if baseline else scratch_frame(body)
-        result=classify_worker(code,clean_body,err,archives)
-        exit_code=None
-        try:
-            exit_code=observe_closed()
-        except (OSError,ValueError,KeyError,IndexError,TypeError,subprocess.SubprocessError):
-            # An unreadable or ineligible inspect never establishes closure.
-            pass
-        result.update(containerClosed=exit_code is not None,containerExitZero=exit_code==0,
-                      scratchLifecycle=scratch_lifecycle)
-        result['baselineReproduced']=baseline and baseline_reproduced(code,body,result,exit_code)
+    def checked_results(path,binding,fields):
+        result=phase_record(path,binding)
+        need(type(result) is dict and set(result)==fields and all(type(x) is bool for x in result.values()),
+             'phase-receipt-schema')
         return result
 
 
-    def worker_receipt(path,binding,result=None):
-        if result is not None:
-            with path.open('xb') as stream:
-                stream.write((json.dumps({'binding':binding,'results':result},sort_keys=True)+'\n').encode())
+    def create_treatment(args,scratch,binding):
+        path=scratch/'treatment-id.json'
+        need(not os.path.lexists(path),'fresh-treatment-id')
+        output=call(args,scratch,18)
+        need(re.fullmatch(rb'[0-9a-f]{64}\n',output),'exact-created-id')
+        cid=output[:-1].decode('ascii')
+        phase_record(path,binding,cid)
+
+
+    def treatment_id(scratch,binding):
+        cid=phase_record(scratch/'treatment-id.json',binding)
+        need(type(cid) is str and re.fullmatch(HEX,cid),'exact-created-id')
+        return cid
+
+
+    def verify_treatment(row,cid,policy,worker,binds,uid,gid,*,finished=False):
+        stock_scratch(row)
+        return isolation(row,cid,policy,worker,binds,uid,gid,finished=finished)
+
+
+    def treatment_frames(body):
+        ready,clean,unchanged=AUXILIARY
+        lines=body.splitlines()
+        starts,ends,states=[[i for i,x in enumerate(lines) if x.startswith(marker)]
+                             for marker in AUXILIARY]
+        admitted=starts==[4] and lines[4:6]==[ready,b'HUB-NOBLE-SIM-BEGIN']
+        state_ok=len(states)==1 and states[0]>5 and lines[states[0]]==unchanged and bool(
+            re.fullmatch(rb'HUB-NOBLE-APT-EXIT (0|[1-9][0-9]{0,2})',lines[states[0]-1]))
+        terminal=lines[-1:]==[b'HUB-NOBLE-SIM-CLOSED']
+        expected_end=len(lines)-2 if terminal else len(lines)-1
+        cleaned=ends==[expected_end] and lines[expected_end:expected_end+1]==[clean] and admitted
+        malformed=any(any(lines[i]!=marker for i in positions) or len(positions)>1
+                      for positions,marker in zip((starts,ends,states),AUXILIARY))
+        need(not malformed,'fixed-treatment-frame')
+        plain=b'\n'.join(line for line in lines if line not in AUXILIARY)+b'\n'
+        return plain,admitted,state_ok,cleaned
+
+
+    def treatment_results(code,body,err,archives):
+        plain,admitted,state_ok,cleaned=treatment_frames(body)
+        result=classify_worker(code,plain,err,archives)
+        result.update(scratchAdmitted=admitted,packageStateChecked=state_ok and result['solverReported'],
+                      scratchLifecycle=cleaned)
+        return result
+
+
+    def attach_treatment(scratch,cid,archives,binding):
+        path=scratch/'attach-results.json'
+        need(not os.path.lexists(path),'single-attach-receipt')
+        code,body,err=bounded(docker(scratch,'container','start','--attach',cid),scratch,65,capture_timeout=True)
+        # Persist each observation before asking Docker to inspect or remove the worker.
+        results=treatment_results(code,body,err,archives)
+        phase_record(path,binding,results)
+
+
+    def remove_treatment(scratch,cid,observed,verify):
+        state=observed['State']['Status']
+        need(state in ('created','exited'),'remove-only-stopped-owned-worker')
+        verify(observed,finished=state=='exited')
+        removed=call(docker(scratch,'container','rm',cid),scratch,12)
+        need(removed==cid.encode()+b'\n','exact-owned-worker-removed')
+
+
+    def treatment_phase(phase,policy,scratch,work,run,attempt):
+        checked_tool(DOCKER)
+        uid,gid=os.getuid(),os.getgid()
+        if phase in ('worker-create','isolation','worker-capture'):
+            archive_readback(policy,scratch)
+            need(local_directory(work,owner_only=True)['bytes']>=4*GIB,'post-staging-native-capacity')
+            image_identity(one(call(docker(scratch,'image','inspect',policy['image']),scratch,12)),policy)
+        args,worker,binds=paired_command(policy,scratch,work,uid,gid)
+        run_binding=[os.environ['GITHUB_SHA'],run,attempt]
+        if phase=='worker-create':
+            create_treatment(args,scratch,run_binding)
             return
-        with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as stream:
-            first=os.fstat(stream.fileno())
-            need(stat.S_ISREG(first.st_mode) and first.st_uid==os.getuid() and first.st_nlink==1
-                 and not first.st_mode&0o077 and 0<first.st_size<=4096,'private-worker-receipt')
-            raw=stream.read(4097)
-            final=os.fstat(stream.fileno())
-            leaf=path.lstat()
-            need((first.st_dev,first.st_ino,first.st_ctime_ns)==
-                 (final.st_dev,final.st_ino,final.st_ctime_ns)==(leaf.st_dev,leaf.st_ino,leaf.st_ctime_ns)
-                 and len(raw)==first.st_size,'stable-worker-receipt')
-        data=json.loads(raw)
-        need(data['binding']==binding and set(data['results'])==set(PHASE_OBSERVATIONS.values())|{'exactTransaction','baselineReproduced'} and
-             all(type(value) is bool for value in data['results'].values()),'worker-receipt-binding')
-        return data['results']
+        cid=treatment_id(scratch,run_binding)
+        binding=run_binding+[cid]
+        observe=lambda:one(call(docker(scratch,'container','inspect',cid),scratch,12))
+        verify=lambda row,finished=False:verify_treatment(row,cid,policy,worker,binds,uid,gid,finished=finished)
+        attach=scratch/'attach-results.json'
+        container=scratch/'container-results.json'
+        if phase in ('isolation','worker-capture'):
+            verify(observe())
+            if phase=='worker-capture':
+                attach_treatment(scratch,cid,policy['archives'],binding)
+        elif phase=='worker-receipt':
+            checked_results(attach,binding,ATTACH_FIELDS)
+        elif phase=='observe-closure':
+            code=verify(observe(),finished=True)
+            phase_record(container,binding,{'containerClosed':True,'containerExitZero':code==0})
+        elif phase=='remove-worker':
+            remove_treatment(scratch,cid,observe(),verify)
+            phase_record(scratch/'cleanup-result.json',binding,{'removed':True})
+        elif phase=='transaction':
+            archive_readback(policy,scratch)
+            solver=checked_results(attach,binding,ATTACH_FIELDS)
+            closure=checked_results(container,binding,CONTAINER_FIELDS)
+            cleanup=checked_results(scratch/'cleanup-result.json',binding,{'removed'})
+            need(all((solver|closure|cleanup).values()),'complete-solver-scratch-and-cleanup-proof')
+        else:
+            key=PHASE_OBSERVATIONS[phase]
+            source,fields=(container,CONTAINER_FIELDS) if key in CONTAINER_FIELDS else (attach,ATTACH_FIELDS)
+            need(checked_results(source,binding,fields)[key],'verified-'+phase)
 
 
     def one(inspect):
@@ -807,63 +890,15 @@ env:
                     exact_archive_intake(policy,scratch,only=int(phase[8:]))
                 elif phase=='archives':
                     archive_readback(policy,scratch)
-                elif phase in ('isolation','capacity','baseline-capture','worker-capture','transaction',*PHASE_OBSERVATIONS):
+                elif phase=='capacity':
                     archive_readback(policy,scratch)
-                    uid,gid=os.getuid(),os.getgid()
-                    if phase in ('capacity','baseline-capture','worker-capture'):
-                        need(local_directory(work,owner_only=True)['bytes']>=4*GIB,'post-staging-native-capacity')
-                    if phase!='capacity':
-                        checked_tool(DOCKER)
-                        image_identity(one(call(docker(scratch,'image','inspect',policy['image']),scratch,12)),policy)
-                        baseline=phase in ('isolation','baseline-capture')
-                        saved=scratch/('cid' if baseline else 'treatment-cid')
-                        builder=command if baseline else paired_command
-                        args,worker,binds=builder(policy,scratch,work,uid,gid)
-                        receipt=scratch/('baseline-results.json' if baseline else 'worker-results.json')
-                        if phase in ('isolation','worker-capture'):
-                            need(not os.path.lexists(saved) and not os.path.lexists(receipt),'fresh-owned-worker')
-                            if not baseline:
-                                base_cid=(scratch/'cid').read_text().strip()
-                                need(re.fullmatch(HEX,base_cid),'same-run-baseline-id')
-                                base_binding=[os.environ['GITHUB_SHA'],run,attempt,base_cid]
-                                prior=worker_receipt(scratch/'baseline-results.json',base_binding)
-                                need(prior['baselineReproduced'],'verified-same-run-baseline')
-                            cid=call(args,scratch,18).decode().strip()
-                            need(re.fullmatch(HEX,cid),'single-created-container')
-                            with saved.open('x') as stream:
-                                stream.write(cid+'\n')
-                        else:
-                            cid=saved.read_text().strip()
-                        need(re.fullmatch(HEX,cid),'exact-self-created-container')
-                        observe=lambda:one(call(docker(scratch,'container','inspect',cid),scratch,12))
-                        binding=[os.environ['GITHUB_SHA'],run,attempt,cid]
-                        if phase in ('isolation','baseline-capture','worker-capture'):
-                            row=observe()
-                            isolation(row,cid,policy,worker,binds,uid,gid)
-                            stock_scratch(row)
-                            if phase!='isolation':
-                                need(not os.path.lexists(receipt),'single-worker-capture')
-                                def observe_closed():
-                                    closed=observe()
-                                    stock_scratch(closed)
-                                    return isolation(closed,cid,policy,worker,binds,uid,gid,finished=True)
-                                result=capture_worker(scratch,cid,policy['archives'],observe_closed,baseline=baseline)
-                                # Remove only our exact closed container. The runner owns abnormal teardown.
-                                remove_closed(scratch,cid,observe_closed)
-                                if baseline:
-                                    need(result['baselineReproduced'],'paired-baseline-did-not-reproduce')
-                                worker_receipt(receipt,binding,result)
-                        else:
-                            result=worker_receipt(receipt,binding)
-                            if phase=='transaction':
-                                need(not result['baselineReproduced'] and
-                                     all(value for key,value in result.items() if key!='baselineReproduced'),
-                                     'complete-solver-scratch-and-container-proof')
-                            else:
-                                need(result[PHASE_OBSERVATIONS[phase]],'verified-'+phase)
+                    need(local_directory(work,owner_only=True)['bytes']>=4*GIB,'post-staging-native-capacity')
+                elif phase in ('worker-create','isolation','worker-capture','worker-receipt','observe-closure',
+                               'remove-worker','transaction',*PHASE_OBSERVATIONS):
+                    treatment_phase(phase,policy,scratch,work,run,attempt)
                 else:
                     raise ValueError('fixed-phase')
-        except (OSError,ValueError,KeyError,IndexError,subprocess.SubprocessError) as error:
+        except (OSError,ValueError,KeyError,IndexError,TypeError,subprocess.SubprocessError) as error:
             label=str(error)
             print('noble-simulation-refused/'+phase+'/'+(label if re.fullmatch('[a-z][a-z0-9-]{0,70}',label) else 'bounded-observation'))
             return 1
@@ -1846,28 +1881,6 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - archives <<< "$PINNED_SCRIPT"
-      - name: Verify nonroot and network-isolated read-only container
-        id: isolation
-        shell: bash
-        run: |
-          set -euo pipefail
-          /usr/bin/env -i LANG=C LC_ALL=C \
-            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
-            GITHUB_REF="${GITHUB_REF-}" \
-            GITHUB_SHA="${GITHUB_SHA-}" \
-            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
-            GITHUB_JOB="${GITHUB_JOB-}" \
-            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
-            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
-            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
-            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
-            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
-            RUNNER_TEMP="${RUNNER_TEMP-}" \
-            RUNNER_OS="${RUNNER_OS-}" \
-            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
-            RUNNER_ARCH="${RUNNER_ARCH-}" \
-            PINNED_POLICY="${PINNED_POLICY-}" \
-            /usr/bin/python3 -I -B - isolation <<< "$PINNED_SCRIPT"
       - name: Verify four GiB free in the real workspace after staging
         id: capacity
         shell: bash
@@ -1890,8 +1903,8 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - capacity <<< "$PINNED_SCRIPT"
-      - name: Reproduce the unchanged read-only APT baseline
-        id: baseline-capture
+      - name: Create the exact treatment container
+        id: worker-create
         shell: bash
         run: |
           set -euo pipefail
@@ -1911,7 +1924,29 @@ jobs:
             RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
-            /usr/bin/python3 -I -B - baseline-capture <<< "$PINNED_SCRIPT"
+            /usr/bin/python3 -I -B - worker-create <<< "$PINNED_SCRIPT"
+      - name: Verify nonroot and network-isolated read-only container
+        id: isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - isolation <<< "$PINNED_SCRIPT"
       - name: Collect one APT scratch-directory treatment
         id: worker-capture
         shell: bash
@@ -1934,9 +1969,78 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - worker-capture <<< "$PINNED_SCRIPT"
+      - name: Verify bound treatment worker receipt
+        id: worker-receipt
+        if: ${{ !cancelled() && steps.worker-create.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - worker-receipt <<< "$PINNED_SCRIPT"
+      - name: Inspect stopped treatment container independently
+        id: observe-closure
+        if: ${{ !cancelled() && steps.worker-create.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - observe-closure <<< "$PINNED_SCRIPT"
+      - name: Remove only the stopped treatment container
+        id: remove-worker
+        if: ${{ !cancelled() && steps.worker-create.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - remove-worker <<< "$PINNED_SCRIPT"
       - name: Observe worker launch in the pinned container
         id: worker-entry
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1959,7 +2063,7 @@ jobs:
             /usr/bin/python3 -I -B - worker-entry <<< "$PINNED_SCRIPT"
       - name: Verify nonroot identity and read-only worker mounts
         id: worker-mounts
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1982,7 +2086,7 @@ jobs:
             /usr/bin/python3 -I -B - worker-mounts <<< "$PINNED_SCRIPT"
       - name: Verify effective offline APT source and cache settings
         id: apt-config
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2005,7 +2109,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-config <<< "$PINNED_SCRIPT"
       - name: Verify all 39 mounted archives from the APT worker
         id: archive-worker-readback
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2028,7 +2132,7 @@ jobs:
             /usr/bin/python3 -I -B - archive-worker-readback <<< "$PINNED_SCRIPT"
       - name: Rule out a mounted worker archive mapping refusal
         id: archive-worker-mapping
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2051,7 +2155,7 @@ jobs:
             /usr/bin/python3 -I -B - archive-worker-mapping <<< "$PINNED_SCRIPT"
       - name: Rule out a mounted worker archive read refusal
         id: archive-worker-read
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2074,7 +2178,7 @@ jobs:
             /usr/bin/python3 -I -B - archive-worker-read <<< "$PINNED_SCRIPT"
       - name: Rule out a mounted worker archive size refusal
         id: archive-worker-size
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2097,7 +2201,7 @@ jobs:
             /usr/bin/python3 -I -B - archive-worker-size <<< "$PINNED_SCRIPT"
       - name: Rule out a mounted worker archive digest refusal
         id: archive-worker-digest
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2120,7 +2224,7 @@ jobs:
             /usr/bin/python3 -I -B - archive-worker-digest <<< "$PINNED_SCRIPT"
       - name: Rule out a mounted worker archive identity change
         id: archive-worker-changed
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2141,9 +2245,32 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - archive-worker-changed <<< "$PINNED_SCRIPT"
+      - name: Verify worker-owned bounded APT temporary directory
+        id: scratch-admitted
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - scratch-admitted <<< "$PINNED_SCRIPT"
       - name: Observe one framed worker APT exit result
         id: solver-reported
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2166,7 +2293,7 @@ jobs:
             /usr/bin/python3 -I -B - solver-reported <<< "$PINNED_SCRIPT"
       - name: Verify the worker reported APT solver exit zero
         id: solver-exit
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2189,7 +2316,7 @@ jobs:
             /usr/bin/python3 -I -B - solver-exit <<< "$PINNED_SCRIPT"
       - name: Observe one fixed worker APT stderr category
         id: apt-stderr-reported
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2212,7 +2339,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-stderr-reported <<< "$PINNED_SCRIPT"
       - name: Verify worker APT stderr was empty
         id: apt-stderr-empty
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2235,7 +2362,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-stderr-empty <<< "$PINNED_SCRIPT"
       - name: Rule out the worker APT input-open category
         id: apt-stderr-input-open
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2258,7 +2385,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-stderr-input-open <<< "$PINNED_SCRIPT"
       - name: Rule out the worker APT unsupported-archive category
         id: apt-stderr-unsupported
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2281,7 +2408,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-stderr-unsupported <<< "$PINNED_SCRIPT"
       - name: Rule out the worker APT dependency-solver category
         id: apt-stderr-dependencies
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2304,7 +2431,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-stderr-dependencies <<< "$PINNED_SCRIPT"
       - name: Rule out the worker APT configuration-or-lock category
         id: apt-stderr-config-lock
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2327,7 +2454,7 @@ jobs:
             /usr/bin/python3 -I -B - apt-stderr-config-lock <<< "$PINNED_SCRIPT"
       - name: Rule out the worker APT unknown stderr category
         id: apt-stderr-unknown
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2348,9 +2475,32 @@ jobs:
             RUNNER_ARCH="${RUNNER_ARCH-}" \
             PINNED_POLICY="${PINNED_POLICY-}" \
             /usr/bin/python3 -I -B - apt-stderr-unknown <<< "$PINNED_SCRIPT"
+      - name: Verify pinned package database after APT
+        id: package-state
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/env -i LANG=C LC_ALL=C \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY-}" \
+            GITHUB_REF="${GITHUB_REF-}" \
+            GITHUB_SHA="${GITHUB_SHA-}" \
+            GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME-}" \
+            GITHUB_JOB="${GITHUB_JOB-}" \
+            GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-}" \
+            GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID-}" \
+            GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-}" \
+            GITHUB_WORKSPACE="${GITHUB_WORKSPACE-}" \
+            RUNNER_TEMP="${RUNNER_TEMP-}" \
+            RUNNER_OS="${RUNNER_OS-}" \
+            RUNNER_ENVIRONMENT="${RUNNER_ENVIRONMENT-}" \
+            RUNNER_ARCH="${RUNNER_ARCH-}" \
+            PINNED_POLICY="${PINNED_POLICY-}" \
+            /usr/bin/python3 -I -B - package-state <<< "$PINNED_SCRIPT"
       - name: Verify bounded worker-owned APT scratch and cleanup
         id: scratch-lifecycle
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2373,7 +2523,7 @@ jobs:
             /usr/bin/python3 -I -B - scratch-lifecycle <<< "$PINNED_SCRIPT"
       - name: Verify the worker closed after unchanged package-state readback
         id: worker-closed
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2396,7 +2546,7 @@ jobs:
             /usr/bin/python3 -I -B - worker-closed <<< "$PINNED_SCRIPT"
       - name: Verify Docker attach returned before its host deadline
         id: attach-deadline
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2419,7 +2569,7 @@ jobs:
             /usr/bin/python3 -I -B - attach-deadline <<< "$PINNED_SCRIPT"
       - name: Verify the host Docker attach process exited zero
         id: attach-exit
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2442,7 +2592,7 @@ jobs:
             /usr/bin/python3 -I -B - attach-exit <<< "$PINNED_SCRIPT"
       - name: Observe attached stderr after the host process returned
         id: stderr-available
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2465,7 +2615,7 @@ jobs:
             /usr/bin/python3 -I -B - stderr-available <<< "$PINNED_SCRIPT"
       - name: Verify remaining attach stderr contains no APT diagnostic prefix
         id: stderr-apt
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2488,7 +2638,7 @@ jobs:
             /usr/bin/python3 -I -B - stderr-apt <<< "$PINNED_SCRIPT"
       - name: Verify remaining attach stderr is exactly empty
         id: stderr-empty
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.worker-receipt.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2511,7 +2661,7 @@ jobs:
             /usr/bin/python3 -I -B - stderr-empty <<< "$PINNED_SCRIPT"
       - name: Verify the same isolated container exited with no live PID
         id: container-closed
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.observe-closure.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2534,7 +2684,7 @@ jobs:
             /usr/bin/python3 -I -B - container-closed <<< "$PINNED_SCRIPT"
       - name: Verify inspected container exit code zero
         id: container-exit
-        if: ${{ !cancelled() && steps.worker-capture.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.observe-closure.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
