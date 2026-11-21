@@ -1,0 +1,942 @@
+name: Held Noble toolchain transaction
+on:
+  push:
+    branches: [ci/v060-noble-held-followup-20261121]
+    paths: [.github/workflows/linux-noble-held-runtime.yml]
+permissions: {}
+jobs:
+  noble_review:
+    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.ref == 'refs/heads/ci/v060-noble-held-followup-20261121' && github.actor == 'brucerry' && github.event.sender.login == 'brucerry' && github.run_attempt == 1 && github.event.created == true && github.event.deleted == false && github.event.forced == false && github.event.before == '0000000000000000000000000000000000000000' && github.event.after == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    env:
+      NOBLE_POLICY: |
+        {"archives":{"binutils":{"Architecture":"amd64","Filename":"pool/main/b/binutils/binutils_2.42-4ubuntu2.10_amd64.deb","SHA256":"b3b5a84181a38fd191820b2cdcc1a3eeb1cd6333ad472f2092f96e81047e9c74","Size":18154,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"binutils-common":{"Architecture":"amd64","Filename":"pool/main/b/binutils/binutils-common_2.42-4ubuntu2.10_amd64.deb","SHA256":"d136073f5e2153f3df11c1d08d66727b9466b28ff483f50085f14bbe3464b5ee","Size":240286,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"binutils-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb","SHA256":"1e510a15f30208d39edcd840e48f26a77bbca7c417805eeccb1e3f7de198ef29","Size":2462744,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"cpp":{"Architecture":"amd64","Filename":"pool/main/g/gcc-defaults/cpp_13.2.0-7ubuntu1_amd64.deb","SHA256":"b51f8094760f7b41afdcb1fe1b5a57fc64b75a090859918af17450a10f8c7d31","Size":22442,"Version":"4:13.2.0-7ubuntu1","before":null,"pockets":["noble"]},"cpp-13":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/cpp-13_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"c7535331fbb183c802c3bf4b6b210872dcc12d0421b3212b3c4b940f2c59ed3a","Size":1042,"Version":"13.3.0-6ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"cpp-13-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"2ca48bf0c2d6465bc39322899715a85d934b4d7442dd5586a7bebbe3ce0f806b","Size":10714542,"Version":"13.3.0-6ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"cpp-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/g/gcc-defaults/cpp-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb","SHA256":"85059b30960de3582e8612740614da3dfe47241d0368a28dea686188cf7648dd","Size":5326,"Version":"4:13.2.0-7ubuntu1","before":null,"pockets":["noble"]},"gcc":{"Architecture":"amd64","Filename":"pool/main/g/gcc-defaults/gcc_13.2.0-7ubuntu1_amd64.deb","SHA256":"0e0bb8b25153ed1c44ab92bc219eed469fcb5820c5c0bc6454b2fd366a33d3ee","Size":5018,"Version":"4:13.2.0-7ubuntu1","before":null,"pockets":["noble"]},"gcc-13":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"7438ff160b020a74970672189ecae25d0ca650de6d7f543f12a3134192cffbd9","Size":494262,"Version":"13.3.0-6ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"gcc-13-base":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/gcc-13-base_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"e859aca26585bb91113a451f1e66bc0e5283cb08797d679aacc1d936ae6dff8e","Size":51616,"Version":"13.3.0-6ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"gcc-13-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"a134b0319a82d14581b3a14820d2832af4ec9778ed8b9b4ddaeecfb0555ec325","Size":21084546,"Version":"13.3.0-6ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"gcc-x86-64-linux-gnu":{"Architecture":"amd64","Filename":"pool/main/g/gcc-defaults/gcc-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb","SHA256":"72e79089a10e381360bfc6f03c5e5d8c2ff177d6dbac2cd7ffb3cc1383f57591","Size":1212,"Version":"4:13.2.0-7ubuntu1","before":null,"pockets":["noble"]},"libasan8":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libasan8_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"8321aac6230fa1da320e76eb6288b7436164624aec449ed3933ea6c4cc86daac","Size":3026656,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libatomic1":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"fe49cbbc7be753528380c724a8eef5f1e31dffa9221f692c5069048d81c7449d","Size":10466,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libbinutils":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb","SHA256":"064dce00ce94e1fc2d33779cb0071088f4c8aac79e85345f2e78a020f7d14699","Size":576834,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"libc-bin":{"Architecture":"amd64","Filename":"pool/main/g/glibc/libc-bin_2.39-0ubuntu8.12_amd64.deb","SHA256":"22f0393621e72ed1b53d228ee332180269182b5445761c7d7b74f5cba75a1dd6","Size":681714,"Version":"2.39-0ubuntu8.12","before":"2.39-0ubuntu8.9","pockets":["noble-updates","noble-security"]},"libc-dev-bin":{"Architecture":"amd64","Filename":"pool/main/g/glibc/libc-dev-bin_2.39-0ubuntu8.12_amd64.deb","SHA256":"74ac21dab2a0a6524a2cf9de623adf1bb1f7d9b672e6b0f70adec0c40452bae3","Size":20450,"Version":"2.39-0ubuntu8.12","before":null,"pockets":["noble-updates","noble-security"]},"libc6":{"Architecture":"amd64","Filename":"pool/main/g/glibc/libc6_2.39-0ubuntu8.12_amd64.deb","SHA256":"d821b41fc59cb4978ecd53bc83e5c964ac15d305c8d2ac4c8a35aebe55010fb9","Size":3264258,"Version":"2.39-0ubuntu8.12","before":"2.39-0ubuntu8.9","pockets":["noble-updates","noble-security"]},"libc6-dev":{"Architecture":"amd64","Filename":"pool/main/g/glibc/libc6-dev_2.39-0ubuntu8.12_amd64.deb","SHA256":"d81dd6dc9d515762cc93f338efa6219252acf3e2e87b5b89dd7dc517741e6eed","Size":2124506,"Version":"2.39-0ubuntu8.12","before":null,"pockets":["noble-updates","noble-security"]},"libcc1-0":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libcc1-0_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"454456436ca767817a860557263d7cc2489f0a410f03efff4c0bb236d579ec09","Size":48002,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libcrypt-dev":{"Architecture":"amd64","Filename":"pool/main/libx/libxcrypt/libcrypt-dev_4.4.36-4build1_amd64.deb","SHA256":"2edff420ef80b4a3f3751e65c33423ef30e563122a58b759e4854ea8d84ba1b1","Size":111780,"Version":"1:4.4.36-4build1","before":null,"pockets":["noble"]},"libctf-nobfd0":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libctf-nobfd0_2.42-4ubuntu2.10_amd64.deb","SHA256":"da352eb7fa6c4369d2a6c1e5e680f574eda2e38576563326b18d9e47e61c4078","Size":98012,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"libctf0":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb","SHA256":"7ec86d697c3668503c85f308a6832f092075b5880ad002f22185264da0bd4645","Size":94474,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"libgcc-13-dev":{"Architecture":"amd64","Filename":"pool/main/g/gcc-13/libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb","SHA256":"cd689db2691edaa10f37329307292796bb599e722e0505c79e14caaa1fe9a93a","Size":2680642,"Version":"13.3.0-6ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libgomp1":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libgomp1_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"e8a95ec58125b4933597f30ff56c2ae10edf90f287262e366d4b6edea3019144","Size":148062,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libgprofng0":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libgprofng0_2.42-4ubuntu2.10_amd64.deb","SHA256":"1b7e3c2fc162e8358ca6e5a3fffdb4d0d632f790630323215841bb36a63c0ab8","Size":848684,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"libhwasan0":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libhwasan0_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"2195318cfe68fe16b601913ef7b33c9a900372f57861643fdc9ae6fef84534cd","Size":1640706,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libisl23":{"Architecture":"amd64","Filename":"pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb","SHA256":"4e040926e50fb961fae9bf95660189d468336a4a17bc321872c434fc8f777e7f","Size":679812,"Version":"0.26-3build1.1","before":null,"pockets":["noble-updates"]},"libitm1":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libitm1_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"1fca498129dd3510294809d77ee754f72a9de281111200e9b7b9a5adf37faa9f","Size":29702,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libjansson4":{"Architecture":"amd64","Filename":"pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb","SHA256":"0cf79113f5d193ce9af2be2ff4b2c3b30dd4e55a0b6c47f7d28f6c849ff3aa60","Size":32830,"Version":"2.14-2build2","before":null,"pockets":["noble"]},"liblsan0":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/liblsan0_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"dc0c2a1a053e833ba4d71e1ec2ba4244fe301761ad4a91d6725f927a52d86a14","Size":1321652,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libmpc3":{"Architecture":"amd64","Filename":"pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb","SHA256":"cebe6098bb3d66fdacac9dc6fe406a651216d9c00f27c3f9c159d15d96cdf864","Size":54636,"Version":"1.3.1-1build1.1","before":null,"pockets":["noble-updates"]},"libmpfr6":{"Architecture":"amd64","Filename":"pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb","SHA256":"aebc1c8b69a1f98bb43dfc268daecd181116dbf40b13ee4e822eb4bdd52b493a","Size":353020,"Version":"4.2.1-1build1.1","before":null,"pockets":["noble-updates"]},"libquadmath0":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libquadmath0_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"dc8f0ca542e09d662f29370c8393c016440dd4bc5c996c5fcc19f632b63ce3b0","Size":153316,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libsframe1":{"Architecture":"amd64","Filename":"pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb","SHA256":"72093fb456864db55f1352bfa5e952a94f7abaff64e71dff1fbf001db1984564","Size":15724,"Version":"2.42-4ubuntu2.10","before":null,"pockets":["noble-updates"]},"libtsan2":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libtsan2_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"8cbcc9b3ae5ef23b449383d47a9035b27596e307d7dce7df9b83d47a7acd1d91","Size":2771910,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"libubsan1":{"Architecture":"amd64","Filename":"pool/main/g/gcc-14/libubsan1_14.2.0-4ubuntu2~24.04.1_amd64.deb","SHA256":"a16dea3abe2dcac99bcfae27e7e5672fde64573c3c170dcb0cd55631238f9814","Size":1183812,"Version":"14.2.0-4ubuntu2~24.04.1","before":null,"pockets":["noble-updates","noble-security"]},"linux-libc-dev":{"Architecture":"amd64","Filename":"pool/main/l/linux/linux-libc-dev_6.8.0-151.151_amd64.deb","SHA256":"badd744a9dc7e43c53975ac08d88e23dd13223f2334637c25fd9b9e9bb5d236d","Size":1711930,"Version":"6.8.0-151.151","before":null,"pockets":["noble-updates"]},"rpcsvc-proto":{"Architecture":"amd64","Filename":"pool/main/r/rpcsvc-proto/rpcsvc-proto_1.4.2-0ubuntu7_amd64.deb","SHA256":"7eb710fe148d224c159ddec1ceb0ba53ead52a80a6793dcdae1474acf20d8f71","Size":67446,"Version":"1.4.2-0ubuntu7","before":null,"pockets":["noble"]}},"config":"sha256:7da97f743f397971f35dd21cd2d19a7da070a150e0cfa3eda559e71891ec7533","diffID":"sha256:21210938f5a37a9887b2d0a20428917b923a636ca6efe038c3c7d9cd9f1f9b61","image":"docker.io/library/ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec","indexes":{"noble":{"checks":{"":["8f6f71ae839c8cba390a7643fcbbdacddb0bc7d12c1583a2dd80a1f8443a30e5",7165069],".xz":["2a6a199e1031a5c279cb346646d594993f35b1c03dd4a82aaa0323980dd92451",1401160]},"releaseBytes":255850,"releaseSHA256":"cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0"},"noble-security":{"checks":{"":["5695d7a023f42e63c27f5e1b952f61184ba165f93e79f454fb67016b5a139333",6526918],".xz":["452533a8cf4f38487e8f98c6f42d260bd2963e74e6ab30c6b608b09865171ecb",1198516]},"releaseBytes":126127,"releaseSHA256":"3f60cc22bf795408889effe48ebbe268c33da6fff6f74dd07d039af021abd811"},"noble-updates":{"checks":{"":["ec67160e8c9e943f39b96e808102af3f300e9133eb6596cde683311d90e76b4c",7988321],".xz":["42e89ec7f0565dae276ca17aa702fb31573b6857f668ae1ce8cd7c76181d9e4e",1474640]},"releaseBytes":126125,"releaseSHA256":"0f65b674ba2fcbdb06661a2687ec0bab72c83f8fde16c6fa3e9caacf0a712e8e"}},"keyringB64":"mQINBE+tgXgBEADfiL1KNFHT4H4Dw0OR9LemR8ebsFl+b9E44IpGhgWYDufj0gaM/UJ1Ti3bHfRT39VVZ6cv1P4mQy0bnAKFbYz/wo+GhzjBWtn6dThYv7n+KL8bptSCXgg1a6en8dCCIA/pwtS2Ut/g4Eu6Z467dvYNlMgCqvg+prKIrXf5ibio48j3AFvd1dDJl2cHfyuON35/83vXKXz0FPohQ7N7kPfI+qrlGBYGWFzC/QEGje360Q2Yo+rfMoyDEXmPsoZVqf7EE8gjfnXiRqmz/Bg5YQb5bgnGbLGiHWtjS+ACIdLUq/h+jlSp57jw8oQktMh2xVMX4utDM0UENeZnPllVJSlR0b+ZmZz7paeSar8Yxn4wsNlL7GZbpW5A/WmcmWfuMYoPhBo5Fq1V2/siKNU3UKuf1KH+X0p1oZ4oOcZ2bS0Zh3YEG8IQce9Bferq4QMKsekcG9IKS6WBIU7BwaElI2ILD0gSwu8KzvNSEeIJhYSsBIEzrWxIBXoN2AC9PCqqXkWlI5Xr/86RWllB3CsoPwEfO8CLJW2LlXTen/Fkq4wT+apdhHeiWiSsq/J5OEff0rKHBQ3fK7fyVuVNrJFb2CopaBLyCxTupvxs162jjUNopt0c7OqNBoPoUoVFAxUSpeEwAw6xrM5vROyLMSeh/YnTuRy8WviRapZCYo6naTCY5wARAQABsAwAAGdwZwEAAAAAAAC0QlVidW50dSBBcmNoaXZlIEF1dG9tYXRpYyBTaWduaW5nIEtleSAoMjAxMikgPGZ0cG1hc3RlckB1YnVudHUuY29tPrAMAABncGcCAAAAAAAAiQI4BBMBAgAiBQJPrYF4AhsDBgsJCAcDAgYVCAIJCgsEFgIDAQIeAQIXgAAKCRA7T+aswLIfMl1+EACR1HSunmDMiXKxT98il7VGEDKWh0TP35aKmbThYZZnC1TIATTq9Hi7wVNCXGcmaRzL2XIkwwTFl/CLQmFY0Xo39CtJT7xx0RmhO7eiR1VAns5zWwzJzj2FcJVSXWSzmuj5hOVl1V6ZPLkwPL5ukTtq0tt7xO1NKUJVftRlVzFh+GS42kLP05u8Hb0cXqk27XzhHhxi45rKIdHqx38zFeMAP/WavOls7iUtR8V0ejmAwt/2kF+wsWE9TEMRMPzzm5x7ZJdz0TFnU1u30kLbpRF86a9vyQnr+jH3PFMtGg9454PW8lZPRqXTRRIxoGlKo6smaLL8AGeP3ZkY5jBIm13jVBgvB3lgt1jlVfC/w4gPpoiZcD78D4gNWbigSOQPFRdKzR1u0FbBvJEPjwx4EXbJoac0kYMpDdT4CulMUnCl/C6jSgrSqbhDwKZGuxUNbuAaGSo46QYWNUeE6XxZDCHu6lvF36qGj/faRA98V3IdsxUTR4rTSa/skCR+M/6PtlL50wNp4lEx5RUggaFNTL0qtTdid6lOqEdnDmCeGcalsgqHkEdcfGj5y5XJ+JXuh1O06HGGx2iJnCLe6pxuDYtDlj+IIhIYzqYMba1oJd+pnbn764sMmvhB1859+hL0PTvm5t38mq7J4T3tNa5bEcagYitSTsP4OBp6V/IixhF9VbAGAANncGcAmQINBE+tjmgBEAC7pKK78t89DW7mvMoSgiScLfPNF8/TSF380is0hFRL3dOmcXEfNsX26jtv8bdvvtkElB1fPwOntmqSAsrLOuURVQ6GSxH7IDU5QFfaTIsudtLR5YTlC3ZuOTOb1HWEK26fDRXuIWjhFDXJH3KLv+rSrq0+x7ZtH++CHq5XJWk7VUh/wWcGxZefs7+1HTivymhjXCOwQvqblzZ5MAec9i4QIXxkqX1HY7ryxGVdjj9lApOnoU5EcSYr08cm7xQEgrdDLAZFQxDYBLDuV6E6jKEfAfwZINSEe4Ocm82vtCF5K0HiwhFU09ky2yogbMuTTi2f8ibN8SbbhZDJlDPd2ZkkpsKNfIALmOiPhHGvXGmtg6FdzRUOSGirSm8tcakpS+d0/IElbD453sksxg6s3cTs7Q+PudaccyQ0BqatMnzmfxCVOotT65kVnmz2P+4Q0gRSQ/Zi9Inz+OrzWxtn6/Tdw+FMUwvBccxW1r88k6uVLz23jW/8jOuwnUp4JKmZta/U2UZKTyPyrvTYhp/zK332BEnxiRY4ZfQjA4Iwlw00l4pYBDLLc6TFJtLbDv859UCisXa8MtWYWrlM3YfGFs9k1WemML8u79g2DK8g3VPkD94Q5anqufEGm74K/keOmss8cQoBX9VPFMpS1mFCT+2UdGP0UvMlADct0aFnAwtb9QARAQABsAwAAGdwZwEAAAAAAAC0QVVidW50dSBDRCBJbWFnZSBBdXRvbWF0aWMgU2lnbmluZyBLZXkgKDIwMTIpIDxjZGltYWdlQHVidW50dS5jb20+sAwAAGdwZwIAAAAAAACJAjcEEwEKACEFAk+tjmgCGwMFCwkIBwMFFQoJCAsFFgIDAQACHgECF4AACgkQ2Uqj8O/iEJJIQBAAiY2WV7gGmzKwuPWedh8sFWYqSYKFebnzIti0GDJMhilUEPxO+JVI3HDJm0OI9NIoU2Afhf4tvQMX2ryZ5UqVoJsIzzuGGOY76KFIl0JlR19dKDNcN/mPcEnJnlGNyIU7cIhWgSa+k2e0bzk4P6W0NBr88TZZEqG7qhQmdNt5nJdmOzpGNT2YMYi2nw+kcdjv4HJUD7OGHx6PGykQOKNdO9NpxPGBPnYsSIAEMOu08YauYnTcbFqbnSqvSdXy4JxM+4vQCVDn9drIPV+2b6V2d0LzFeYjrywOA0S7/RyMcs+9F6nmpEvrs3yl7gjM4XVEyG/7TQAjQd+/q3iKnT7MlBd7cVclmi9YzJEbL+te8igImLzzcDA0b62yoieCHJ3eLT85qs+RwRVMlC57NycyTY6YCgryxoVavpVbHaTJaUMRBuf24cyYAdY6yG5HDkn50NctBr/QiLXpftatARzJ9HT1VmjXymBRrM+IoFvro//wtPf4LRjJu/D0H46hKEdo/02pv7ZrnMUit99cn5uWoNgkGBgt27MHyCPuBGp1/XTf0Rt/9nbEsmK7lqUyEBul2u/gGbWAQxFzWKL4HSbV1slLVtF+0eryI4dR2Hq93Ueoryfqv21hmOOcx3jQTVN94ZZ5cRBDYn90Wf4/8N0oxq7UkCuvZmjUeqJ6uPdnvuuwBgADZ3BnAJkCDQRbn8HaARAA7/xscrcfy3El2LjNDMCqI2wcnvNbNBtZxMfpc+lQFKSFGZ25KnVwRwvncKxkvwnni7gIz0S1PAKMRP4472VafMRRhFh2HZJalxmf4CXz+Xd3yFAbWR2RCZfAfJvaTB3/wEEHbAvmM4s0hubeTIZ6LcNOOC17XRBJMdreic9Dhq4fuSKMal+6WYqugr9fQaIWlIqCjHaexEukWHze6Jeh0ixZazF7VX4f4o6TfY92YVRlXkQvJCh0LCeT5CG5r8QYlIe0iZn2VMdCEITTGgx133WQBjbZ4c8zUXm9RajS0lZK0vz57AEMzIRtQQ5tlTkheuI3myl33xajOS10UE3qky7I1G266kerPxgjvFBe431I+iO7Wi8oJrBzvyQ+I6SkQtIG6VAX2oici77nqcd5FqKi97DdC4ZTCPNPnwOxk76DseLaalZc5ROk2o2Lvo31t0KThUuXsBDHS9uoc8bGYP4Hmb02wK3D/jrCSkZob+JDaOgMnch0P92Vf391/Zk9/0jy2yWrppIKd2M3ereT3gbvmUJP5jeVjTbmooTRFe5ZW9WYb2NBcbvQVXfwTZdK87sad6yIpwdk19kgoO8BOcV5MF7kP9nkwxNL9B5Rp7ZLmYxqMA2ZMR2UEsWVTs3WQkVWl/1hBS6SmtgEKcOUSa0OKGfzn4n18icz9u6NN8EAEQEAAbAMAABncGcBAAAAAAAAtEJVYnVudHUgQXJjaGl2ZSBBdXRvbWF0aWMgU2lnbmluZyBLZXkgKDIwMTgpIDxmdHBtYXN0ZXJAdWJ1bnR1LmNvbT6wDAAAZ3BnAgAAAAAAAIkCOAQTAQoAIgUCW5/B2gIbAwYLCQgHAwIGFQgCCQoLBBYCAwECHgECF4AACgkQhxkg0ZkbyTwscxAApLZyfHP/lZqgI5YCt/mDpQdt44KBzkMGbSEK4UNlZa/jbtoZ6LcI+4vDQMYsJdl3Jzl2oTya+MyU6aYAoqWPW4aDdNgJtBaNY94ycE9luQWCRmhcnv/oIHttZGG3WwfOm3UtNn5JgPA7AnrxBGnsNFpmX1jpCJRt66GrYNRxOh9VsHFuGtyQ3hm14u+b7+cb2b9yKilzrovBF2TGp8nfYLKr7VNLlVogkMbsNbOIb4pu7qoIMzhA2WDcsfunXgKtHEBtziW+iFGCxXh5Cqwhx0WS5Vjkc8+PYrxOqljpJN7waHRqmsbVFXxkprLcpIymfJXV8Aqfh8z1vKIvNACi8LQtn0wwyysBL/jkC8LcgQpJKGMsWfVfV1EKI7r/uOZkShm0CnneGR/xIwGyLvyFU2sG6ZnB8h0EDW/bb4tjjFAryrhcKhFwD0b6m/NT1hVbtxGcNlkaXS7A7DvP0+RAEXkoUqNYPPh8KT4rr5i0ami8Yp6QYFvwjsQDpSm8+CoD9B0jS3UgE/Q3TpFByzV9RoBAS3PoMbLnORGFHikZJmf50URPs90CMQrzjLsF1ji35TWNxIi8GPQXYHsvBEvvEalKkgqL96QBcuzXXtu8UdoK+ZRg3slWnUYyZUXGEh3HoIWbd/EbxCM1vm16t79ior646BxefLVSXC0JTOWtJo+wBgADZ3BnAA==","keyringSHA256":"80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31","rootManifestSHA256":"55f6caae002e725ed0ef828b3f75436b007ce98f35974b6c16903f137003e62d","snapshot":"https://snapshot.ubuntu.com/ubuntu/20261120T060000Z","statusSHA256":"52a5a1caea59f1b8b990c3b0199db442a9c2c40393d639cc4ffafc428f04d778"}
+      PREFLIGHT_SCRIPT: |
+        import base64
+
+        import hashlib
+
+        import io
+
+        import json
+
+        import lzma
+
+        import os
+
+        import re
+
+        import resource
+
+        import shutil
+
+        import stat
+
+        import struct
+
+        import subprocess
+
+        import sys
+
+        import tarfile
+
+        import tempfile
+
+        import unicodedata
+
+        import zlib
+
+        from datetime import datetime, timezone
+
+        from email.utils import parsedate_to_datetime
+
+        from pathlib import Path
+
+        from types import SimpleNamespace
+
+        from urllib.parse import urlsplit
+
+        REPO = 'brucerry/embedded-linux-diagnostic-hub'
+
+        BRANCH = 'ci/v060-noble-held-followup-20261121'
+
+        WORKFLOW = '.github/workflows/linux-noble-held-runtime.yml'
+
+        JOB = 'noble_review'
+
+        CANDIDATE = '5e3c66f4a62e3606abdd650972e0f76b71ff5c54'
+
+        CANDIDATE_TREE = '5af9dbea99de92cc3ae3b4c44bed42ae60219e7e'
+
+        DIAGNOSTIC_SOURCE = 'https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/39f4910eec3630c0cf41f6bdd985a1c1e2c53eb6/scripts/ci/gateway-diagnostic/'
+
+        GATEWAY_PINS_BYTES = 30791
+
+        GATEWAY_PINS_SHA = '6b409fa18f5ee76e1bb25f4dc98efde510666bea6b5a01d3bc61d84f23d24046'
+
+        DIAGNOSTIC_LOCK_BYTES = 2212
+
+        DIAGNOSTIC_LOCK_SHA = '08d8f01de2007ae609c93fafbb571ec012d8b864772ce5b8b0627b58a211056c'
+
+        DIAGNOSTIC_MANIFEST_BYTES = 252
+
+        NODE_BYTES = 58299872
+
+        NODE_SHA = '361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9'
+
+        NODE_URL = 'https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.gz'
+
+        NODE_HEADERS = {'js_native_api.h': (33170, '82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840'), 'js_native_api_types.h': (7871, '4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0'), 'node_api.h': (10370, '2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a'), 'node_api_types.h': (1930, 'a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00')}
+
+        HOSTS = ('raw.githubusercontent.com', 'api.github.com', 'registry.npmjs.org', 'nodejs.org')
+
+        SOURCE = 'https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/'
+
+        AUTHENTICATED_RELEASES = {'noble': [254967, '58716ccd6ce78bf798b0f643bb4d0ebc71b5688cc8871aff81c2363ba9fa5755'], 'noble-security': [125244, '6ab90e45f1b0e9d4671ae1a3e3b0e791ec3ccda62d4776e1acfdaf38df8f7cb9'], 'noble-updates': [125242, 'ce485ccb879dfa3e7b70f0ecfddad51af82d6ef6c6d0f143c7d923351da57bd2']}
+
+        EXPECTED_POLICY = '8e0b11b057d980fffedb179f47a06e951b58ee842b3629e54742a5a8ccea5387'
+
+        PUB='F6ECB3762474EDA9D21B7022871920D1991BC93C'
+
+        DOCKER='/usr/bin/docker'
+
+        SHA=lambda b:hashlib.sha256(b).hexdigest()
+
+        HEX=r'[0-9a-f]{64}'
+
+        SNAPSHOT='https://snapshot.ubuntu.com/ubuntu/20261120T060000Z'
+
+        INRELEASE_LIMIT=256<<10
+
+        POOL_URLS={
+            'binutils': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils_2.42-4ubuntu2.10_amd64.deb',
+            'binutils-common': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils-common_2.42-4ubuntu2.10_amd64.deb',
+            'binutils-x86-64-linux-gnu': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb',
+            'cpp': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/cpp_13.2.0-7ubuntu1_amd64.deb',
+            'cpp-13': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/cpp-13_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+            'cpp-13-x86-64-linux-gnu': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+            'cpp-x86-64-linux-gnu': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/cpp-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb',
+            'gcc': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/gcc_13.2.0-7ubuntu1_amd64.deb',
+            'gcc-13': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+            'gcc-13-base': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13-base_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+            'gcc-13-x86-64-linux-gnu': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+            'gcc-x86-64-linux-gnu': 'https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-defaults/gcc-x86-64-linux-gnu_13.2.0-7ubuntu1_amd64.deb',
+            'libasan8': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libasan8_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libatomic1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libatomic1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libbinutils': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb',
+            'libc-bin': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc-bin_2.39-0ubuntu8.12_amd64.deb',
+            'libc-dev-bin': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc-dev-bin_2.39-0ubuntu8.12_amd64.deb',
+            'libc6': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8.12_amd64.deb',
+            'libc6-dev': 'https://security.ubuntu.com/ubuntu/pool/main/g/glibc/libc6-dev_2.39-0ubuntu8.12_amd64.deb',
+            'libcc1-0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libcc1-0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libcrypt-dev': 'https://archive.ubuntu.com/ubuntu/pool/main/libx/libxcrypt/libcrypt-dev_4.4.36-4build1_amd64.deb',
+            'libctf-nobfd0': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libctf-nobfd0_2.42-4ubuntu2.10_amd64.deb',
+            'libctf0': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb',
+            'libgcc-13-dev': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-13/libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb',
+            'libgomp1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libgomp1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libgprofng0': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libgprofng0_2.42-4ubuntu2.10_amd64.deb',
+            'libhwasan0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libhwasan0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libisl23': 'https://archive.ubuntu.com/ubuntu/pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb',
+            'libitm1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libitm1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libjansson4': 'https://archive.ubuntu.com/ubuntu/pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb',
+            'liblsan0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/liblsan0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libmpc3': 'https://archive.ubuntu.com/ubuntu/pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb',
+            'libmpfr6': 'https://archive.ubuntu.com/ubuntu/pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb',
+            'libquadmath0': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libquadmath0_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libsframe1': 'https://archive.ubuntu.com/ubuntu/pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb',
+            'libtsan2': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libtsan2_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'libubsan1': 'https://security.ubuntu.com/ubuntu/pool/main/g/gcc-14/libubsan1_14.2.0-4ubuntu2~24.04.1_amd64.deb',
+            'linux-libc-dev': 'https://archive.ubuntu.com/ubuntu/pool/main/l/linux/linux-libc-dev_6.8.0-151.151_amd64.deb',
+            'rpcsvc-proto': 'https://archive.ubuntu.com/ubuntu/pool/main/r/rpcsvc-proto/rpcsvc-proto_1.4.2-0ubuntu7_amd64.deb',
+        }
+
+        def need(ok,label):
+            if not ok:
+                raise ValueError(label)
+
+        def bounded(argv,scratch,timeout=35,limit=128<<10,*,capture_timeout=False):
+            def cap():
+                resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit))
+            env={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':str(scratch/'home')}
+            with tempfile.TemporaryFile(dir=scratch) as out, tempfile.TemporaryFile(dir=scratch) as err:
+                try:
+                    code=subprocess.run(argv,env=env,stdin=subprocess.DEVNULL,stdout=out,stderr=err,
+                                        timeout=timeout,preexec_fn=cap).returncode
+                except subprocess.TimeoutExpired:
+                    if not capture_timeout:
+                        raise
+                    # subprocess.run kills and reaps the host child. The daemon state is checked independently.
+                    code=None
+                out.seek(0)
+                err.seek(0)
+                body=out.read(limit+1)
+                problem=err.read(limit+1)
+            need(len(body)<=limit and len(problem)<=limit,'tool-output-bound')
+            return code,body,problem
+
+        def call(argv,scratch,timeout=35,limit=128<<10):
+            code,out,_=bounded(argv,scratch,timeout,limit)
+            need(code==0,'bounded-tool-failed')
+            return out
+
+        def bound_file(path, size, digest, *, allow_terminal_lf=False):
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            with os.fdopen(fd,'rb') as h:
+                a=os.fstat(h.fileno())
+                sizes=(size,size+1) if allow_terminal_lf else (size,)
+                need(stat.S_ISREG(a.st_mode) and a.st_nlink==1 and a.st_uid==os.getuid() and not a.st_mode&0o077
+                     and a.st_size in sizes, 'held-file-shape')
+                raw=h.read(a.st_size+1)
+                b=os.fstat(h.fileno())
+                c=path.lstat()
+                need((a.st_dev,a.st_ino,a.st_ctime_ns)==(b.st_dev,b.st_ino,b.st_ctime_ns)==(c.st_dev,c.st_ino,c.st_ctime_ns)
+                     and len(raw)==a.st_size,'held-file-digest')
+                # GnuPG can emit the final cleartext separator LF (RFC 9580 section 7.1).
+                if allow_terminal_lf and len(raw)==size+1 and raw.endswith(b'\n'):
+                    raw=raw[:-1]
+                need(len(raw)==size and SHA(raw)==digest,'held-file-digest')
+            return raw
+
+        def checked_tool(path):
+            p=Path(path)
+            need(p.resolve(strict=True)==p,'stock-tool-path')
+            s=p.lstat()
+            need(stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and not s.st_mode&0o7022 and s.st_mode&0o100,'stock-tool-mode')
+
+        def job(env):
+            sha=env.get('GITHUB_SHA','')
+            ref='refs/heads/'+BRANCH
+            need(env.get('GITHUB_REPOSITORY')==REPO and env.get('GITHUB_REF')==ref and env.get('GITHUB_EVENT_NAME')=='push'
+                 and env.get('GITHUB_JOB')==JOB and env.get('RUNNER_ENVIRONMENT')=='github-hosted'
+                 and env.get('RUNNER_OS')=='Linux' and env.get('RUNNER_ARCH')=='X64'
+                 and env.get('GITHUB_WORKFLOW_SHA')==sha and re.fullmatch('[0-9a-f]{40}',sha)
+                 and env.get('GITHUB_WORKFLOW_REF')==REPO+'/'+WORKFLOW+'@'+ref,'reviewed-job-scope')
+            run=env.get('GITHUB_RUN_ID','')
+            attempt=env.get('GITHUB_RUN_ATTEMPT','')
+            need(re.fullmatch('[1-9][0-9]{0,18}',run) and attempt=='1'
+                 and os.getuid()==os.geteuid()>0 and os.getgid()==os.getegid()>0,'normal-runner-identity')
+            return run,attempt
+
+        def local_directory(path,owner_only=False):
+            need(re.fullmatch(r'/[A-Za-z0-9._/-]+',str(path)) and path.resolve(strict=True)==path
+                 and '//' not in str(path),'canonical-scratch')
+            for entry in [*reversed(path.parents),path]:
+                row=entry.lstat()
+                need(stat.S_ISDIR(row.st_mode) and row.st_uid in (0,os.getuid()) and not row.st_mode&0o7022,
+                     'original-directory-ancestry')
+            fd=os.open(path,os.O_PATH|os.O_DIRECTORY|os.O_NOFOLLOW)
+            try:
+                st=os.fstat(fd)
+                sp=os.fstatvfs(fd)
+                need(st.st_ino==path.lstat().st_ino and st.st_dev==path.lstat().st_dev,'capacity-handle')
+                if owner_only:
+                    need(st.st_uid==os.getuid(),'job-owned-path')
+                return {'dev':st.st_dev,'ino':st.st_ino,'bytes':sp.f_bavail*sp.f_frsize}
+            finally:
+                os.close(fd)
+
+        def image_identity(row,policy):
+            need(row.get('Id')==policy['config'] and row.get('Os')=='linux' and row.get('Architecture')=='amd64'
+                 and row.get('RootFS')=={'Type':'layers','Layers':[policy['diffID']]},'oci-config-and-layer')
+            names=[policy['image'],policy['image'].replace('docker.io/library/','')]
+            need(any(name in row.get('RepoDigests',[]) for name in names),'oci-amd64-manifest')
+
+        def docker(scratch,*args):
+            return (DOCKER,'--host','unix:///var/run/docker.sock','--config',str(scratch/'docker'),*args)
+
+        def fetch_https(url,destination,limit,scratch):
+            need(url.startswith(SNAPSHOT+'/') and '//' not in url[8:],'approved-transport-route')
+            need(limit>0 and not os.path.lexists(destination),'fresh-bounded-download')
+            # curl bounds the archive body; the process file-size limit also bounds disk writes.
+            raw=call(('/usr/bin/curl','--disable','--fail','--silent','--show-error','--proto','=https',
+                  '--connect-timeout','8','--max-time','24','--max-filesize',str(limit),
+                  '--output',str(destination),'--write-out','%{http_code}',url),scratch,28,limit)
+            need(raw==b'200','direct-official-http')
+
+        def fetch(url,destination,size,digest,scratch):
+            fetch_https(url,destination,size,scratch)
+            return bound_file(destination,size,digest)
+
+        def index_fields(signed, suite):
+            fields=dict(re.findall(rb'^([A-Za-z0-9-]+): (.+)$',signed,re.M))
+            need((fields.get(b'Origin'),fields.get(b'Codename'),fields.get(b'Suite'))==
+                 (b'Ubuntu',b'noble',suite.encode()),'signed-ubuntu-suite')
+            now=datetime.now(timezone.utc)
+            need(parsedate_to_datetime(fields[b'Date'].decode())<=now,'signed-index-date')
+            if b'Valid-Until' in fields:
+                need(now<=parsedate_to_datetime(fields[b'Valid-Until'].decode()),'signed-index-expiry')
+            section=signed.split(b'\nSHA256:\n',1)[1].partition(b'\nSHA512:\n')[0]
+            matches=re.findall(rb'^ ([0-9a-f]{64}) +([0-9]+) main/binary-amd64/Packages(\.xz)?$',section,re.M)
+            need(len(matches)==2,'signed-plain-and-compressed-index')
+            found={suffix.decode():[digest.decode(),int(size)] for digest,size,suffix in matches}
+            need(set(found)=={'','.xz'} and found[''][1]<=24<<20 and found['.xz'][1]<=4<<20,'signed-index-size')
+            return found
+
+        def signed_rows(raw, suite, records):
+            selected={}
+            for paragraph in raw.split(b'\n\n'):
+                name=paragraph.partition(b'\n')[0].removeprefix(b'Package: ').decode()
+                expected=records.get(name)
+                if expected is None or suite not in expected['pockets']:
+                    continue
+                fields={}
+                for key,value in re.findall(rb'^(Version|Architecture|Filename|Size|SHA256): (.+)$',paragraph,re.M):
+                    need(key not in fields,'signed-record-field')
+                    fields[key]=value.decode()
+                if fields.get(b'Version')!=expected['Version'] or fields.get(b'Architecture')!=expected['Architecture']:
+                    continue
+                need(name not in selected and fields[b'Filename']==expected['Filename'] and fields[b'SHA256']==expected['SHA256']
+                     and int(fields[b'Size'])==expected['Size'],'signed-exact-package')
+                selected[name]=True
+            return set(selected)
+
+        def snapshot_https(policy,scratch):
+            checked_tool('/usr/bin/curl')
+            need(policy['snapshot']==SNAPSHOT,'exact-dated-snapshot')
+            for suite in policy['indexes']:
+                fetch_https(SNAPSHOT+'/dists/'+suite+'/InRelease',scratch/(suite+'.InRelease'),INRELEASE_LIMIT,scratch)
+
+        def snapshot_signatures(policy,scratch):
+            import base64
+            checked_tool('/usr/bin/gpgv')
+            key=base64.b64decode(policy['keyringB64'],validate=True)
+            need(len(key)==3607 and SHA(key)==policy['keyringSHA256'],'pinned-ubuntu-keyring')
+            ring=scratch/'archive-keyring.gpg'
+            with ring.open('xb') as destination:
+                destination.write(key)
+            for suite,pin in policy['indexes'].items():
+                message=scratch/(suite+'.InRelease')
+                bound_file(message,pin['releaseBytes'],pin['releaseSHA256'])
+                clear=scratch/(suite+'.Release')
+                need(not os.path.lexists(clear),'fresh-authenticated-metadata')
+                status=call(('/usr/bin/gpgv','--homedir',str(scratch/'gpgv'),'--keyring',str(ring),'--status-fd','1',
+                    '--output',str(clear),str(message)),scratch,12,INRELEASE_LIMIT).decode()
+                valid=re.findall(r'(?m)^\[GNUPG:\] VALIDSIG ([A-F0-9]{40})\b',status)
+                need(valid==[PUB] and not re.search(r'(?m)^\[GNUPG:\] (?:BADSIG|ERRSIG|EXPKEYSIG|EXPSIG|REVKEYSIG|KEYEXPIRED)\b',status),
+                     'canonical-snapshot-signature')
+                bound_file(clear,*AUTHENTICATED_RELEASES[suite],allow_terminal_lf=True)
+
+        def signed_index_intake(policy,scratch,*,download):
+            records=policy['archives']
+            covered=set()
+            for suite,pin in policy['indexes'].items():
+                clear=bound_file(scratch/(suite+'.Release'),*AUTHENTICATED_RELEASES[suite],allow_terminal_lf=True)
+                checks=index_fields(clear,suite)
+                need(checks==pin['checks'],'exact-signed-index-pins')
+                packed=scratch/(suite+'.Packages.xz')
+                digest,size=checks['.xz']
+                if download:
+                    compressed=fetch(SNAPSHOT+'/dists/'+suite+'/main/binary-amd64/Packages.xz',packed,size,digest,scratch)
+                else:
+                    compressed=bound_file(packed,size,digest)
+                with lzma.open(io.BytesIO(compressed),'rb') as index:
+                    raw=index.read(checks[''][1]+1)
+                need(len(raw)==checks[''][1] and SHA(raw)==checks[''][0],'whole-plain-index')
+                expected={name for name,row in records.items() if suite in row['pockets']}
+                found=signed_rows(raw,suite,records)
+                need(found==expected,'complete-signed-package-membership')
+                covered.update(found)
+            need(covered==records.keys(),'all-pinned-archives-signed')
+
+        def pool_download(url,destination,size,digest,scratch):
+            need(size>0 and not os.path.lexists(destination),'fresh-bounded-download')
+            for attempt in range(2):
+                with tempfile.TemporaryDirectory(prefix='archive-attempt-',dir=scratch) as attempt_dir:
+                    candidate=Path(attempt_dir)/'body'
+                    code,status,_=bounded(('/usr/bin/curl','--disable','--fail','--silent','--show-error','--proto','=https',
+                         '--connect-timeout','8','--max-time','24','--max-filesize',str(size),
+                         '--output',str(candidate),'--write-out','%{http_code}',url),scratch,28,size)
+                    if code==0 and status==b'200':
+                        bound_file(candidate,size,digest)
+                        # Publish only an authenticated inode and never overwrite an approved body.
+                        os.link(candidate,destination,follow_symlinks=False)
+                        break
+                    need(status not in (b'401',b'403',b'407',b'451'),'pool-access-denied')
+                    need(not re.fullmatch(rb'3[0-9]{2}',status),'pool-redirect-refused')
+                    need(code in (18,28,52,56) and status in (b'000',b'200'),'pool-transport-refused')
+                    # A complete-size but unclosed transfer cannot qualify for a retry.
+                    need(not os.path.lexists(candidate) or candidate.lstat().st_size<size,'pool-transport-ambiguous')
+                    need(attempt==0,'pool-transport-exhausted')
+            bound_file(destination,size,digest)
+
+        def pool_routes(records):
+            need(POOL_URLS.keys()==records.keys(),'complete-reviewed-pool-routes')
+            for name,row in records.items():
+                filename=row['Filename']
+                need(re.fullmatch(r'pool/main/[a-z0-9]+/[a-z0-9.+-]+/[a-z0-9.+_~%-]+.deb',filename) and
+                     filename.rsplit('/',1)[-1]==name+'_'+row['Version'].split(':')[-1]+'_'+row['Architecture']+'.deb',
+                     'signed-archive-path')
+                host='security.ubuntu.com' if 'noble-security' in row['pockets'] else 'archive.ubuntu.com'
+                need(POOL_URLS[name]=='https://'+host+'/ubuntu/'+filename,'exact-reviewed-pool-route')
+            return POOL_URLS
+
+        def exact_archive_intake(policy,scratch,*,only=None):
+            checked_tool('/usr/bin/curl')
+            # The original snapshot still authenticates every package, before the pool is used.
+            signed_index_intake(policy,scratch,download=False)
+            records=policy['archives']
+            need(len(records)==39 and sum(row['Size'] for row in records.values())==58852226,'exact-archive-count-and-transfer')
+            routes=pool_routes(records)
+            names=sorted(records)
+            if only is not None:
+                need(1<=only<=len(names),'pinned-archive-ordinal')
+                names=[names[only-1]]
+            for name in names:
+                row=records[name]
+                pool_download(routes[name],scratch/'approved'/(name+'.deb'),row['Size'],row['SHA256'],scratch)
+
+        LIMITS = {"compressed": 16 * 1024**2, "expanded": 64 * 1024**2,
+                  "expandedTotal": 256 * 1024**2, "entriesTotal": 4096,
+                  "member": 32 * 1024**2, "secondsPerInput": 45, "chunksPerInput": 4096}
+
+        class RuntimeInputRefused(ValueError):
+            def __init__(self, reason, custody=None):
+                self.reason = reason
+                self.custody = custody
+                super().__init__("Gateway runtime-input preparation refused: " + reason)
+
+        def require(condition, reason):
+            if not condition:
+                raise RuntimeInputRefused(reason)
+
+        def json_bytes(raw, maximum):
+            require(type(raw) is bytes and 0 < len(raw) <= maximum, "json-bounds")
+
+            def pairs(items):
+                result = {}
+                for key, value in items:
+                    require(key not in result, "json-duplicate")
+                    result[key] = value
+                return result
+
+            try:
+                return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs,
+                                  parse_constant=lambda _: require(False, "json-number"))
+            except RuntimeInputRefused:
+                raise
+            except (ValueError, UnicodeError):
+                raise RuntimeInputRefused("json-invalid") from None
+
+        def text(raw):
+            end = raw.find(b"\0")
+            if end >= 0:
+                require(not any(raw[end:]), "tar-padding")
+                raw = raw[:end]
+            try:
+                return raw.decode("utf-8")
+            except UnicodeError:
+                raise RuntimeInputRefused("tar-text") from None
+
+        def octal(raw, blank=False):
+            if blank and re.fullmatch(b"[ \0]*", raw):
+                return 0
+            require(re.fullmatch(b" *[0-7]+[ \0]*", raw) is not None, "tar-number")
+            return int(raw.rstrip(b" \0").lstrip(), 8)
+
+        def canonical(value):
+            require(type(value) is str and 0 < len(value.encode("utf-8")) <= 1024 and
+                    value == unicodedata.normalize("NFC", value) and
+                    not re.search(r"[\\:\x00-\x1f\x7f]", value), "member-path")
+            parts = value.split("/")
+            require(all(p not in ("", ".", "..") and not p.endswith((" ", ".")) for p in parts),
+                    "member-path")
+            return parts
+
+        def sha(data):
+            return hashlib.sha256(data).hexdigest()
+
+        def match(data, pin):
+            need((len(data), sha(data)) == (pin["bytes"], pin["sha256"]), "input-hash")
+            return data
+
+        def write_private(path, data):
+            with path.open("xb") as output:
+                output.write(data)
+                os.fchmod(output.fileno(), 0o600)
+
+        def initialize(root, env):
+            check = Path("/usr/bin/python3.12")
+            checked_tool(check)
+            need(Path(sys.executable) == check, "stock-python")
+            root.mkdir(mode=0o700)
+            try:
+                for name in ("home", "docker", "gpgv", "approved", "apt-input", "gateway"):
+                    (root / name).mkdir(mode=0o700)
+                write_private(root / "owner", marker(env))
+            except BaseException:
+                shutil.rmtree(root)
+                raise
+
+        def owned_scratch(root, env):
+            local_directory(root, owner_only=True)
+            need(stat.S_IMODE(root.lstat().st_mode) == 0o700, "private-root")
+            owner = marker(env)
+            bound_file(root / "owner", len(owner), SHA(owner))
+
+        def docker_read(scratch, operation, policy):
+            commands = {
+                "backing": ("info", "--format",
+                            "{{.OSType}} {{.Architecture}} {{.Driver}} {{.DockerRootDir}}{{range .SecurityOptions}} {{.}}{{end}}"),
+                "cache": ("image", "ls", "--digests", "--no-trunc", "--format",
+                          "{{.Repository}} {{.Digest}} {{.ID}}", "--filter", "reference=ubuntu"),
+                "identity": ("image", "inspect", policy["image"]),
+            }
+            checked_tool("/usr/bin/docker")
+            socket = Path("/var/run/docker.sock").lstat()
+            need(stat.S_ISSOCK(socket.st_mode) and socket.st_uid == 0 and not socket.st_mode & 0o002,
+                 "ordinary-local-docker")
+            return call(docker(scratch, *commands[operation]), scratch, 20)
+
+        def backing(raw):
+            parts = raw.decode().split()
+            need(len(parts) >= 5 and parts[0] == "linux" and parts[1] in ("x86_64", "amd64")
+                 and parts[2] in ("overlay2", "vfs") and parts[3] == "/var/lib/docker"
+                 and "name=seccomp,profile=builtin" in parts[4:], "normal-engine-backing")
+            return Path(parts[3])
+
+        def cached(raw, policy):
+            wanted = policy["image"].split("@", 1)[1]
+            found = []
+            for line in raw.decode().splitlines():
+                fields = line.split()
+                need(len(fields) == 3 and fields[0] in ("ubuntu", "docker.io/library/ubuntu")
+                     and (fields[1] == "<none>" or re.fullmatch("sha256:" + HEX, fields[1]))
+                     and re.fullmatch("sha256:" + HEX, fields[2]), "cache-metadata-shape")
+                if fields[1] == wanted:
+                    found.append(fields[2])
+            need(all(identity == policy["config"] for identity in found), "cached-config-pin")
+            return bool(found)
+
+        def storage(rows):
+            groups = {}
+            for row, reserve in rows:
+                groups.setdefault(row["dev"], []).append((row["bytes"], reserve))
+            need(all(min(free for free, _ in group) >= sum(reserve for _, reserve in group)
+                     for group in groups.values()), "free-space")
+
+        def verify_census(folder, records, folder_mode, file_mode):
+            fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                before = os.fstat(fd)
+                need(before.st_uid == os.getuid() and stat.S_IMODE(before.st_mode) == folder_mode
+                     and sorted(os.listdir(fd)) == sorted(name + ".deb" for name in records),
+                     "archive-census-custody")
+                for name, pin in records.items():
+                    file = name + ".deb"
+                    handle = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                    with os.fdopen(handle, "rb") as stream:
+                        original = os.fstat(stream.fileno())
+                        need(stat.S_ISREG(original.st_mode) and original.st_nlink == 1
+                             and original.st_uid == os.getuid() and stat.S_IMODE(original.st_mode) == file_mode
+                             and original.st_size == pin["Size"], "archive-body-custody")
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                        end = os.fstat(stream.fileno())
+                        named = os.stat(file, dir_fd=fd, follow_symlinks=False)
+                        key = lambda state: (state.st_dev, state.st_ino, state.st_ctime_ns, state.st_size)
+                        need(key(original) == key(end) == key(named) and digest == pin["SHA256"],
+                             "archive-readback")
+                after = os.fstat(fd)
+                need((before.st_dev, before.st_ino, before.st_ctime_ns)
+                     == (after.st_dev, after.st_ino, after.st_ctime_ns), "archive-directory-stability")
+            finally:
+                os.close(fd)
+
+        def noble_custody(root, policy):
+            records = policy["archives"]
+            verify_census(root / "approved", records, 0o700, 0o600)
+            copied = root / "apt-input"
+            for name, row in records.items():
+                relative = name + ".deb"
+                raw = bound_file(root / "approved" / relative, row["Size"], row["SHA256"])
+                destination = copied / relative
+                with destination.open("xb") as output:
+                    output.write(raw)
+                    os.fchmod(output.fileno(), 0o444)
+            copied.chmod(0o555)
+            verify_census(copied, records, 0o555, 0o444)
+            verify_census(root / "approved", records, 0o700, 0o600)
+
+        def public_body(url, cap, scratch):
+            part = urlsplit(url)
+            need(part.scheme == "https" and part.netloc in HOSTS and not part.query and not part.fragment
+                 and part.path.startswith("/") and "//" not in part.path
+                 and not set(part.path.split("/")) & {".", ".."}, "public-input-route")
+            data = call(("/usr/bin/curl", "--disable", "--fail", "--silent", "--proto", "=https",
+                         "--connect-timeout", "5", "--max-time", "20", "--max-filesize", str(cap),
+                         "--write-out", "%{http_code}", url), scratch, 24, cap + 3)
+            need(0 < len(data) - 3 <= cap and data[-3:] == b"200", "public-input-response")
+            return data[:-3]
+
+        def node_members(raw, pins):
+            need(len(raw) == NODE_BYTES and SHA(raw) == NODE_SHA, "node-distribution-digest")
+            prefix = "node-v24.22.2-linux-x64/"
+            targets = {prefix + "bin/node": (pins["node"]["bytes"], pins["node"]["sha256"])}
+            for name, row in NODE_HEADERS.items():
+                targets[prefix + "include/node/" + name] = row
+            seen = set()
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r|gz") as archive:
+                for ordinal, member in enumerate(archive, 1):
+                    need(ordinal <= 10000 and member.offset_data + member.size <= (512 << 20),
+                         "node-member-budget")
+                    if member.name not in targets:
+                        continue
+                    size, digest = targets[member.name]
+                    need(member.name not in seen and member.isfile() and not member.issparse()
+                         and member.size == size, "node-member-custody")
+                    with archive.extractfile(member) as streams:
+                        need(hashlib.file_digest(streams, "sha256", _bufsize=1 << 20).hexdigest() == digest,
+                             "node-member-digest")
+                    seen.add(member.name)
+            need(seen == targets.keys(), "node-member-census")
+
+        LANE = 'noble'
+
+        RUNTIME_ENABLED = True
+
+        DATA_REQUIRED = ('scope', 'capacity', 'cache', 'snapshot', 'signature', 'index', 'archives', 'custody', 'node', 'post_capacity')
+
+        NODE_BINARY = {'version': '24.22.2', 'bytes': 126881248, 'sha256': '904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52'}
+
+        RUNTIME_DIRECTORY = 'scripts/ci/noble-provision'
+
+        RUNTIME_FILES = {'intake.py': (19626, 'ffe99877181e3368b21f631b21b2f69c5531aa280e76c9fb176ae34887a1eaca'), 'lifecycle.py': (1307, '33b5d478f88897e253ab78a3975f3ddb2528aee62024201ce717270a506cc7bd'), 'pins.json': (511199, '6e685c54df1fceef365c0dd28cd763e65468cf7194601e2450f54de6fef8e4b9'), 'reader.sh': (2772, '00f3c45d73e520f07d197e3bfc615db7bb4a2a4529e61540c75766908b25999e'), 'signed-policy.json': (17429, '8e0b11b057d980fffedb179f47a06e951b58ee842b3629e54742a5a8ccea5387'), 'transaction.py': (22900, 'e687e55cac505d639685a229264ac94d4998fb63140f359819cd03d175960a52'), 'writer.sh': (3366, 'b6736aa7f8f89b5505e012f9b6f6710e6b5fe71c4f3ef5551fa38b09f1637b72')}
+
+        RUNTIME_ENTRY = 'transaction.py'
+
+        RUNTIME_TIMEOUT = 1230
+
+        def launch_reviewed_runtime(root, env):
+            require_handoff(root, env)
+            checked_tool("/usr/bin/curl")
+            code_root = root / "launch"
+            code_root.mkdir(mode=0o700)
+            source = SOURCE + env["GITHUB_SHA"] + "/" + RUNTIME_DIRECTORY + "/"
+            for name, (size, digest) in RUNTIME_FILES.items():
+                raw = public_body(source + name, size, root)
+                need(len(raw) == size and SHA(raw) == digest, "exact-active-adapter")
+                put_data(code_root, name, raw)
+            script = env["PREFLIGHT_SCRIPT"].encode()
+            put_data(code_root, "preflight_data.py", script)
+            fields = ("GITHUB_REPOSITORY", "GITHUB_REF", "GITHUB_EVENT_NAME", "GITHUB_JOB", "GITHUB_ACTOR",
+                      "GITHUB_TRIGGERING_ACTOR", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH",
+                      "GITHUB_WORKFLOW_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
+                      "GITHUB_SHA", "RUNNER_TEMP", "GITHUB_WORKSPACE", "GITHUB_OUTPUT", "NOBLE_POLICY")
+            child_env = {key: env[key] for key in fields} | {"PATH": "/usr/bin:/bin", "HOME": str(root / "home"),
+                                                           "LANG": "C", "LC_ALL": "C"}
+
+            child = subprocess.run(("/usr/bin/python3.12", "-I", "-B", str(code_root / RUNTIME_ENTRY)),
+                env=child_env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=RUNTIME_TIMEOUT)
+            need(child.returncode == 0, "runtime-stage-refused")
+
+        def scratch_path(env):
+            run, attempt = job(env)
+            need(env.get("GITHUB_ACTOR") == env.get("GITHUB_TRIGGERING_ACTOR") == "brucerry",
+                 "reviewed-actor")
+            parent = Path(env["GITHUB_WORKSPACE" if LANE == "noble" else "RUNNER_TEMP"])
+            local_directory(parent, owner_only=True)
+            return parent / ("hub-held-" + LANE + "-" + run + "-" + attempt)
+
+        def marker(env):
+            root = scratch_path(env)
+            state = root.lstat()
+            return (env["GITHUB_WORKFLOW_REF"] + "\n" + env["GITHUB_SHA"] + "\n"
+                    + env["GITHUB_RUN_ID"] + ":" + env["GITHUB_RUN_ATTEMPT"] + ":" + env["GITHUB_JOB"] + "\n"
+                    + str(state.st_dev) + ":" + str(state.st_ino) + ":" + str(state.st_uid) + "\n").encode()
+
+        def same_note(root, env, phase):
+            body = marker(env) + phase.encode() + b"\n"
+            bound_file(root / "checks" / phase, len(body), SHA(body))
+
+        def note(root, env, phase):
+            write_private(root / "checks" / phase, marker(env) + phase.encode() + b"\n")
+
+        def require_handoff(root, env):
+            need(root == scratch_path(env), "same-job-scratch-path")
+            owned_scratch(root, env)
+            for phase in (*DATA_REQUIRED, "seal"):
+                same_note(root, env, phase)
+            need(not os.path.lexists(root / "checks/runtime-entered")
+                 and not os.path.lexists(root / "checks/runtime-retired"), "one-attempt-only")
+
+        def safe_cleanup(root, env):
+            entered = root / "checks/runtime-entered"
+            retired = root / "checks/runtime-retired"
+            if os.path.lexists(entered) or os.path.lexists(retired):
+                same_note(root, env, "runtime-entered")
+                same_note(root, env, "runtime-retired")
+            for name in (("apt-input", "policy") if LANE == "noble" else ()):
+                path = root / name
+                row = path.lstat()
+                need(stat.S_ISDIR(row.st_mode) and row.st_uid == os.getuid()
+                     and stat.S_IMODE(row.st_mode) in (0o700, 0o555), "owned-cleanup")
+                path.chmod(0o700)
+            need(shutil.rmtree.avoids_symlink_attacks, "fd-safe-cleanup")
+            shutil.rmtree(root)
+            need(not os.path.lexists(root), "private-scratch-retired")
+
+        def put_data(base, key, raw):
+            path = Path(key)
+            need(not path.is_absolute() and path.parts and path.as_posix() == key and ".." not in path.parts,
+                 "private-staged-path")
+            destination = base / path
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            write_private(destination, raw)
+            bound_file(destination, len(raw), SHA(raw))
+
+        def observe_capacity(root, policy, initial):
+            target = local_directory(root, owner_only=True)
+            engine = local_directory(backing(docker_read(root, "backing", policy)))
+            need(min(target["bytes"], engine["bytes"]) >= (4 << 30), "gateway-both-paths")
+            if LANE == "noble":
+                index_bytes = sum(pin["releaseBytes"] + pin["checks"][".xz"][1]
+                                  + AUTHENTICATED_RELEASES[suite][0] + 1
+                                  for suite, pin in policy["indexes"].items())
+                due = (2 * 58_852_226 + index_bytes + NODE_BYTES + (2 << 20)) if initial else 0
+                storage([(target, (4 << 30) + (384 << 20) + due), (engine, 639_963_136)])
+            elif initial:
+                # Cover retained Node media and bounded data inputs while preserving both floors.
+                need(target["bytes"] >= (4 << 30) + NODE_BYTES + (16 << 20), "gateway-data-stage-space")
+
+        def initialize_job(root, env):
+            initialize(root, env)
+            try:
+                (root / "checks").mkdir(mode=0o700)
+                if LANE == "noble":
+                    for leaf in ("policy", "evidence", "work", "sdk", "probe"):
+                        (root / leaf).mkdir(mode=0o700)
+                else:
+                    for leaf in ("compile", "helpers"):
+                        (root / leaf).mkdir(mode=0o700)
+                note(root, env, "scope")
+            except BaseException:
+                shutil.rmtree(root)
+                raise
+
+        def dispatch(phase, root, policy, env):
+            read = lambda url, cap: public_body(url, cap, root)
+            if phase == "scope":
+                initialize_job(root, env)
+                return
+            owned_scratch(root, env)
+            if phase == "runtime":
+                need(RUNTIME_ENABLED is True, "runtime-literally-disabled")
+                launch_reviewed_runtime(root, env)
+                return
+            if phase == "cleanup":
+                safe_cleanup(root, env)
+                return
+            if phase in ("capacity", "post_capacity"):
+                observe_capacity(root, policy, phase == "capacity")
+            elif phase == "cache":
+                present = cached(docker_read(root, "cache", policy), policy)
+                with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as result:
+                    result.write("present=" + ("yes" if present else "no") + "\n")
+                if present:
+                    note(root, env, "cache-hit")
+            elif phase == "image":
+                rows = json.loads(docker_read(root, "identity", policy))
+                need(type(rows) is list and len(rows) == 1 and type(rows[0]) is dict, "cached-image-response")
+                need(type(rows[0].get("RepoDigests")) is list
+                     and all(type(value) is str for value in rows[0]["RepoDigests"]), "cached-repository-digests")
+                image_identity(rows[0], policy)
+            elif phase == "snapshot" and LANE == "noble":
+                snapshot_https(policy, root)
+            elif phase == "signature" and LANE == "noble":
+                snapshot_signatures(policy, root)
+            elif phase == "index" and LANE == "noble":
+                signed_index_intake(policy, root, download=True)
+            elif phase == "archives" and LANE == "noble":
+                exact_archive_intake(policy, root)
+            elif phase == "custody" and LANE == "noble":
+                noble_custody(root, policy)
+            elif phase == "gateway_pins" and LANE == "gateway":
+                checked_tool("/usr/bin/curl")
+                raw = read(DIAGNOSTIC_SOURCE + "pins.json", GATEWAY_PINS_BYTES)
+                need(len(raw) == GATEWAY_PINS_BYTES and SHA(raw) == GATEWAY_PINS_SHA, "gateway-pins-digest")
+                write_private(root / "gateway" / "pins", raw)
+                gateway_pins(root)
+            elif phase == "source" and LANE == "gateway":
+                gateway_source(root, gateway_pins(root), read)
+            elif phase == "provider" and LANE == "gateway":
+                pins = gateway_pins(root)
+                data = ssh2_archive(pins, signed_source(pins, read=read), read=read)
+                write_private(root / "gateway" / "provider", data)
+            elif phase == "closure" and LANE == "gateway":
+                gateway_closure(root, gateway_pins(root), read)
+            elif phase == "node":
+                checked_tool("/usr/bin/curl")
+                pins = gateway_pins(root) if LANE == "gateway" else {"node": NODE_BINARY}
+                raw = read(NODE_URL, NODE_BYTES)
+                node_members(raw, pins)
+                write_private(root / "node-distribution.tar.gz", raw)
+                bound_file(root / "node-distribution.tar.gz", NODE_BYTES, NODE_SHA)
+            elif phase == "seal":
+                for expected in DATA_REQUIRED:
+                    same_note(root, env, expected)
+                if os.path.lexists(root / "checks/cache-hit"):
+                    same_note(root, env, "cache-hit")
+                    same_note(root, env, "image")
+            else:
+                raise ValueError("unreviewed-check")
+            note(root, env, phase)
+
+        def main():
+            phase = sys.argv[1]
+            try:
+                os.umask(0o077)
+                root = scratch_path(os.environ)
+                raw = os.environ["NOBLE_POLICY"].encode()
+                need(SHA(raw) == EXPECTED_POLICY, "signed-policy-digest")
+                dispatch(phase, root, json.loads(raw), os.environ)
+            except Exception:
+                sys.exit("data-only check failed")
+
+        if __name__ == "__main__":
+            main()
+    steps:
+      - name: Verify exact push scope and create private scratch
+        id: scope
+        timeout-minutes: 1
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'scope'
+      - name: Check runner workspace and Docker backing capacity
+        id: capacity
+        if: ${{ !cancelled() && steps.scope.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'capacity'
+      - name: Look for the exact Ubuntu image in local cache only
+        id: cache
+        if: ${{ !cancelled() && steps.capacity.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'cache'
+      - name: Verify optional cached Ubuntu image identity
+        id: image
+        if: ${{ !cancelled() && steps.cache.outcome == 'success' && steps.cache.outputs.present == 'yes' }}
+        timeout-minutes: 1
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'image'
+      - name: Read pinned Canonical snapshot wire bytes
+        id: snapshot
+        if: ${{ !cancelled() && steps.capacity.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'snapshot'
+      - name: Verify Canonical snapshot signatures
+        id: signature
+        if: ${{ !cancelled() && steps.snapshot.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'signature'
+      - name: Verify signed indexes and all 39 package records
+        id: index
+        if: ${{ !cancelled() && steps.signature.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'index'
+      - name: Verify all 39 exact signed Ubuntu archive bodies
+        id: archives
+        if: ${{ !cancelled() && steps.index.outcome == 'success' }}
+        timeout-minutes: 6
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'archives'
+      - name: Read back Ubuntu archives and read-only custody copy
+        id: custody
+        if: ${{ !cancelled() && steps.archives.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'custody'
+      - name: Verify exact Node archive, executable and header digests as data
+        id: node
+        if: ${{ !cancelled() && steps.custody.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'node'
+      - name: Recheck backing space with this job's actual staged inputs
+        id: post_capacity
+        if: ${{ !cancelled() && steps.scope.outcome == 'success' && steps.capacity.outcome == 'success' && steps.cache.outcome == 'success' && steps.snapshot.outcome == 'success' && steps.signature.outcome == 'success' && steps.index.outcome == 'success' && steps.archives.outcome == 'success' && steps.custody.outcome == 'success' && steps.node.outcome == 'success' && (steps.image.outcome == 'success' || steps.cache.outputs.present == 'no') }}
+        timeout-minutes: 1
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'post_capacity'
+      - name: Check all required data receipts for this exact job
+        id: seal
+        if: ${{ !cancelled() && steps.post_capacity.outcome == 'success' }}
+        timeout-minutes: 1
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'seal'
+      # Pending separate one-run approval and an action-time scope check.
+      - name: Held Noble toolchain transaction (one approved attempt)
+        id: runtime
+        if: ${{ success() && steps.seal.outcome == 'success' && steps.post_capacity.outcome == 'success' }}
+        timeout-minutes: 21
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'runtime'
+      - name: Bind original Noble inputs to this exact job
+        if: ${{ !cancelled() && (steps.runtime.outputs['same-job-inputs'] == 'pass' || steps.runtime.outputs['same-job-inputs'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['same-job-inputs'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify exact Noble runtime image
+        if: ${{ !cancelled() && (steps.runtime.outputs['image'] == 'pass' || steps.runtime.outputs['image'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['image'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify Noble policy, headers and post-staging capacity
+        if: ${{ !cancelled() && (steps.runtime.outputs['runtime-inputs'] == 'pass' || steps.runtime.outputs['runtime-inputs'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['runtime-inputs'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify writer mounts, identity and capacity
+        if: ${{ !cancelled() && (steps.runtime.outputs['writer-admitted'] == 'pass' || steps.runtime.outputs['writer-admitted'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['writer-admitted'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Default unprivileged APT user verified all 39 inputs
+        if: ${{ !cancelled() && (steps.runtime.outputs['apt-readable'] == 'pass' || steps.runtime.outputs['apt-readable'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['apt-readable'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Reached the one offline APT invocation
+        if: ${{ !cancelled() && (steps.runtime.outputs['transaction-invoked'] == 'pass' || steps.runtime.outputs['transaction-invoked'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['transaction-invoked'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify the 37 additions, two upgrades, and final 129 packages
+        if: ${{ !cancelled() && (steps.runtime.outputs['transaction'] == 'pass' || steps.runtime.outputs['transaction'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['transaction'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify signed payload and generated files only
+        if: ${{ !cancelled() && (steps.runtime.outputs['delta'] == 'pass' || steps.runtime.outputs['delta'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['delta'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify nonroot compiler inputs and final package database
+        if: ${{ !cancelled() && (steps.runtime.outputs['reader'] == 'pass' || steps.runtime.outputs['reader'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['reader'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify Noble container and derived image retirement
+        if: ${{ !cancelled() && (steps.runtime.outputs['container-cleanup'] == 'pass' || steps.runtime.outputs['container-cleanup'] == 'fail') }}
+        env:
+          OBSERVED: ${{ steps.runtime.outputs['container-cleanup'] }}
+        shell: bash
+        run: test "$OBSERVED" = pass
+      - name: Verify owned scratch retirement only after any container retirement
+        id: cleanup
+        if: ${{ !cancelled() && steps.scope.outcome == 'success' }}
+        timeout-minutes: 2
+        shell: bash
+        run: /usr/bin/python3.12 -I -B -c "$PREFLIGHT_SCRIPT" 'cleanup'
