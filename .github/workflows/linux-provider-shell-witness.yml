@@ -1,0 +1,445 @@
+name: Inert Noble shell boundary witness
+on:
+  push:
+    branches:
+      - ci/v060-linux-provider-shell-witness-20261121
+    paths:
+      - .github/workflows/linux-provider-shell-witness.yml
+permissions: {}
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+jobs:
+  stock-shell-boundary:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-linux-provider-shell-witness-20261121' &&
+      github.event_name == 'push' &&
+      github.event.created == true &&
+      github.event.deleted == false &&
+      github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Run one bounded inert witness
+        id: witness
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          """Stock host supervisor for one synthetic shell witness."""
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import secrets
+          import selectors
+          import shutil
+          import stat
+          import subprocess
+          import tempfile
+          import time
+
+          REPO = 'brucerry/embedded-linux-diagnostic-hub'
+          BRANCH = 'ci/v060-linux-provider-shell-witness-20261121'
+          REF = 'refs/heads/' + BRANCH
+          WORKFLOW = '.github/workflows/linux-provider-shell-witness.yml'
+          MANIFEST = 'sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec'
+          CONFIG = 'sha256:7da97f743f397971f35dd21cd2d19a7da070a150e0cfa3eda559e71891ec7533'
+          LAYER = 'sha256:21210938f5a37a9887b2d0a20428917b923a636ca6efe038c3c7d9cd9f1f9b61'
+          IMAGE = 'docker.io/library/ubuntu@' + MANIFEST
+          FIXTURE = b'inert shell proof'
+          LABEL = 'org.hub.provider-run'
+          FLOOR = 4 * 1024**3
+          STAGES = ('host', 'image', 'capacity', 'isolation', 'frame', 'container', 'scratch')
+          ENV = {'PATH':'/usr/bin:/bin', 'LC_ALL':'C', 'LANG':'C', 'TZ':'UTC'}
+
+
+          class Refused(Exception):
+              pass
+
+
+          def require(condition):
+              if not condition:
+                  raise Refused
+
+
+          def digest(raw):
+              return hashlib.sha256(raw).hexdigest()
+
+
+          def matches(pattern, text):
+              return isinstance(text, str) and re.fullmatch(pattern, text) is not None
+
+
+          def canonical(path):
+              require(path.is_absolute() and path.resolve(strict=True) == path and ',' not in str(path))
+              return path
+
+
+          def enough(path):
+              fd = os.open(canonical(path), os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  before = os.fstat(fd)
+                  space = os.fstatvfs(fd)
+                  now = path.lstat()
+                  require((before.st_dev, before.st_ino) == (now.st_dev, now.st_ino)
+                          and space.f_bavail * space.f_frsize >= FLOOR and not space.f_flag & os.ST_RDONLY)
+              finally:
+                  os.close(fd)
+
+
+          def read_file(path, limit):
+              with os.fdopen(os.open(canonical(path), os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), 'rb') as file:
+                  st = os.fstat(file.fileno())
+                  require(stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and st.st_size <= limit)
+                  data = file.read(limit + 1)
+                  identity = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_ctime_ns,s.st_mtime_ns)
+                  require(len(data) == st.st_size and identity(st) == identity(os.fstat(file.fileno()))
+                          == identity(path.lstat()))
+                  return data
+
+
+          def host_context(e):
+              expect = {'GITHUB_REPOSITORY':REPO, 'GITHUB_REF':REF, 'GITHUB_RUN_ATTEMPT':'1',
+                        'GITHUB_EVENT_NAME':'push', 'GITHUB_JOB':'stock-shell-boundary',
+                        'GITHUB_WORKFLOW_REF':f'{REPO}/{WORKFLOW}@{REF}', 'RUNNER_ENVIRONMENT':'github-hosted',
+                        'RUNNER_OS':'Linux', 'RUNNER_ARCH':'X64', 'ImageOS':'ubuntu24'}
+              require(all(e.get(k) == v for k,v in expect.items()))
+              commit, run = e.get('GITHUB_SHA'), e.get('GITHUB_RUN_ID')
+              require(matches(r'[a-f0-9]{40}',commit) and commit == e.get('GITHUB_WORKFLOW_SHA'))
+              require(matches(r'[1-9][0-9]{0,18}',run))
+              require(os.uname().sysname == 'Linux' and os.uname().machine == 'x86_64')
+              os_release = read_file(Path('/usr/lib/os-release'), 8192).splitlines()
+              require(b'ID=ubuntu' in os_release and b'VERSION_ID="24.04"' in os_release)
+              uid, gid = os.getuid(), os.getgid()
+              require(uid > 0 and gid > 0 and os.geteuid() == uid and os.getegid() == gid)
+              temp, work = (canonical(Path(e[k])) for k in ('RUNNER_TEMP','GITHUB_WORKSPACE'))
+              require(temp != work and temp.name == '_temp' and work.parent.name == work.name
+                      and work.parent.parent == temp.parent)
+              for path in (temp, work):
+                  info = path.lstat()
+                  require(stat.S_ISDIR(info.st_mode) and info.st_uid == uid and not info.st_mode & 0o022)
+              event = json.loads(read_file(Path(e['GITHUB_EVENT_PATH']), 4 * 1024**2))
+              require(event['repository']['full_name'] == REPO and event['ref'] == REF and event['after'] == commit
+                      and event['before'] == '0'*40 and event['created'] is True
+                      and event['forced'] is False and event['deleted'] is False)
+              output = canonical(Path(e['GITHUB_OUTPUT']))
+              info = output.lstat()
+              require(output.is_relative_to(temp) and stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                      and info.st_uid == uid and not info.st_mode & 0o022)
+              return commit, run, uid, gid, temp, output
+
+
+          def docker_call(argv, args, seconds=8, out_limit=65536, err_limit=4096):
+              """Capture private bounded bytes and require EOF on both pipes before returning."""
+              end = time.monotonic() + seconds
+              pipes = [bytearray(), bytearray()]
+              with subprocess.Popen([*argv, *args], env=ENV, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                  with selectors.DefaultSelector() as selector:
+                      selector.register(process.stdout, selectors.EVENT_READ, 0)
+                      selector.register(process.stderr, selectors.EVENT_READ, 1)
+                      try:
+                          while selector.get_map():
+                              remaining = end - time.monotonic()
+                              require(remaining > 0)
+                              for key,_ in selector.select(remaining):
+                                  limit = (out_limit, err_limit)[key.data]
+                                  block = os.read(key.fd, min(8192, limit + 1 - len(pipes[key.data])))
+                                  if not block:
+                                      selector.unregister(key.fileobj)
+                                  else:
+                                      pipes[key.data].extend(block)
+                                      require(len(pipes[key.data]) <= limit)
+                          status = process.wait(timeout=max(0.01, end-time.monotonic()))
+                      except BaseException:
+                          if process.poll() is None:
+                              process.kill()
+                              process.wait(timeout=3)
+                          raise
+              return status, bytes(pipes[0]), bytes(pipes[1])
+
+
+          def good(result):
+              status, body, errors = result
+              require(status == 0 and not errors)
+              return body
+
+
+          def absent(result, kind, name):
+              code, out, err = result
+              return code == 1 and not out and err.strip() in {
+                  f'Error: No such {kind}: {name}'.encode(),
+                  f'Error response from daemon: No such {kind}: {name}'.encode(),
+              }
+
+
+          def image_identity(row):
+              require((row['Id'], row['Os'], row['Architecture'], row['RootFS']['Layers'])
+                      == (CONFIG, 'linux', 'amd64', [LAYER]))
+              require(set(row['RepoDigests']) & {IMAGE, 'ubuntu@'+MANIFEST, 'library/ubuntu@'+MANIFEST})
+              require(not row['Config'].get('Volumes') and not row['Config'].get('Healthcheck'))
+
+
+          def scratch_option(uid,gid):
+              return f'rw,nosuid,nodev,size=768m,mode=0700,uid={uid},gid={gid}'
+
+
+          def create_args(name, inputs, run, uid, gid):
+              return ['container','create','--pull=never','--platform=linux/amd64','--name',name,
+                      '--label',f'{LABEL}={run}','--network=none','--read-only','--ipc=none',
+                      '--cap-drop=ALL','--security-opt=no-new-privileges','--user',f'{uid}:{gid}',
+                      '--pids-limit=256','--memory=1536m','--cpus=2','--log-driver=none','--no-healthcheck',
+                      '--mount',f'type=bind,src={inputs},dst=/inputs,readonly','--tmpfs',
+                      '/scratch:'+scratch_option(uid,gid),'--workdir=/scratch','--env','PATH=/usr/bin:/bin',
+                      '--env','HOME=/scratch/home','--env','TMPDIR=/scratch/tmp','--env','LANG=C.UTF-8',
+                      '--entrypoint=/bin/sh',IMAGE,'/inputs/reviewed-worker.sh']
+
+
+          def owns(row,cid,name,run):
+              require(row['Id'] == cid and row['Name'] == '/'+name and row['Image'] == CONFIG
+                      and row['Config']['Labels'] == {LABEL:run})
+
+
+          def isolation(row,cid,name,inputs,run,uid,gid):
+              owns(row,cid,name,run)
+              h, c = row['HostConfig'], row['Config']
+              state = row['State']
+              allowed_env = {'PATH=/usr/bin:/bin','HOME=/scratch/home','TMPDIR=/scratch/tmp','LANG=C.UTF-8'}
+              require(state['Status']=='created' and not state['Running'] and state['Pid']==0)
+              require(c['User']==f'{uid}:{gid}' and c['Entrypoint']==['/bin/sh']
+                      and c['Cmd']==['/inputs/reviewed-worker.sh'] and c['WorkingDir']=='/scratch'
+                      and len(c['Env'])==len(allowed_env) and set(c['Env'])==allowed_env and not c.get('Tty')
+                      and not c.get('OpenStdin') and not c.get('Volumes')
+                      and c.get('Healthcheck') in (None,{'Test':['NONE']}))
+              require(h['NetworkMode']=='none' and h['IpcMode']=='none' and h.get('PidMode','') in ('','private')
+                      and h['ReadonlyRootfs'] is True and h['Privileged'] is False and h['CapDrop']==['ALL']
+                      and h['SecurityOpt'] in (['no-new-privileges'], ['no-new-privileges:true'])
+                      and h['PidsLimit']==256 and h['Memory']==1536*1024**2 and h['NanoCpus']==2_000_000_000
+                      and h['LogConfig']['Type']=='none' and h['RestartPolicy']['Name']=='no'
+                      and h['AutoRemove'] is False and not h.get('PublishAllPorts')
+                      and not any(h.get(k) for k in ('CapAdd','Devices','DeviceRequests','PortBindings',
+                                                     'VolumesFrom','Binds','GroupAdd','ExtraHosts','Sysctls'))
+                      and set(row['NetworkSettings']['Networks']) in (set(),{'none'})
+                      and h['Tmpfs']=={'/scratch':scratch_option(uid,gid)})
+              binds = [m for m in row['Mounts'] if m['Type']=='bind']
+              require(len(binds)==1 and len(row['Mounts'])<=2
+                      and (binds[0]['Source'],binds[0]['Destination'],binds[0]['RW'],binds[0]['Propagation'])
+                      ==(str(inputs),'/inputs',False,'rprivate')
+                      and all(m['Type']=='bind' or (m['Type']=='tmpfs' and m['Destination']=='/scratch')
+                              for m in row['Mounts']))
+              requested = h.get('Mounts') or []
+              require(len(requested)==1 and
+                      (requested[0]['Type'],requested[0]['Source'],requested[0]['Target'],requested[0]['ReadOnly'])
+                      ==('bind',str(inputs),'/inputs',True))
+
+
+          def census(root):
+              found = {}
+              for path in sorted(root.rglob('*')):
+                  require(len(found) < 16)
+                  s = path.lstat()
+                  require(s.st_uid == os.geteuid() and s.st_gid == os.getegid() and not s.st_mode & 0o7022)
+                  metadata = (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_ctime_ns)
+                  found[str(path.relative_to(root))] = (
+                      metadata, None if stat.S_ISDIR(s.st_mode) else digest(read_file(path,8192)))
+              return found
+
+
+          def stage(root, commit, run, uid, gid):
+              require(digest(WORKER) == WORKER_SHA)
+              inputs = root/'inputs'
+              control = inputs/'control'
+              control.mkdir(mode=0o700, parents=True)
+              namespace = os.readlink('/proc/self/ns/pid')
+              require(matches(r'pid:\[[1-9][0-9]{0,19}\]',namespace))
+              binding = f'{REPO}\n{REF}\n{commit}\n{run}\n1\n{secrets.token_hex(32)}\n'.encode()
+              header = f'HUB-SHELL/1 fixture {digest(binding+b"fixture")}\n'.encode()
+              rows = {'reviewed-worker.sh':WORKER, 'control/header':header, 'control/fixture':FIXTURE,
+                      'control/identity':f'{uid}:{gid}\n'.encode(), 'control/host-pidns':(namespace+'\n').encode()}
+              for p,b in rows.items():
+                  with (inputs/p).open('xb') as file:
+                      file.write(b)
+              with (control/'checks.sha256').open('xb') as file:
+                  file.write(''.join(f'{digest(b)}  {p}\n' for p,b in sorted(rows.items())).encode())
+              require(len(header + FIXTURE) == 102)
+              return inputs, header + FIXTURE
+
+
+          def terminal_frame(result, state, expected):
+              require(good(result) == expected and len(expected)==102 and state['Status']=='exited'
+                      and not state['Running'] and state['Pid']==0 and state['ExitCode']==0
+                      and state['OOMKilled'] is False)
+
+
+          def run(e):
+              os.umask(0o077)
+              stage_name = 'host'
+              output = None
+              reached = set()
+              root = cid = baseline = root_identity = None
+              create_attempted = False
+              succeeded = False
+
+              def verdict(name, passed):
+                  if name not in reached:
+                      with os.fdopen(os.open(output,os.O_WRONLY|os.O_APPEND|os.O_NOFOLLOW), 'a') as file:
+                          file.write(f'{name}={"pass" if passed else "fail"}\n')
+                      reached.add(name)
+
+              try:
+                  commit, run_id, uid, gid, temp, output = host_context(e)
+                  docker = canonical(Path('/usr/bin/docker'))
+                  info = docker.lstat()
+                  require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o7022)
+                  require(stat.S_ISSOCK(Path('/run/docker.sock').lstat().st_mode))
+                  root = Path(tempfile.mkdtemp(prefix='hub-noble-witness-',dir=temp))
+                  root_info = root.lstat()
+                  require(root_info.st_uid==uid and root_info.st_gid==gid and stat.S_IMODE(root_info.st_mode)==0o700)
+                  root_identity = root_info.st_dev, root_info.st_ino
+                  config_dir = root/'docker'
+                  config_dir.mkdir(mode=0o700)
+                  # A blank registry entry disables CLI discovery of the user's credential helpers.
+                  with (config_dir/'config.json').open('xb') as file:
+                      file.write(b'{"auths":{"https://index.docker.io/v1/":{}}}\n')
+                  argv = [str(docker),'--config',str(config_dir),'--host','unix:///run/docker.sock']
+                  call = lambda *args,**kw: docker_call(argv,args,**kw)
+                  inspect_args = ('container','inspect','--format','{{json .}}')
+                  scope = lambda: good(call('container','ls','--all','--no-trunc','--quiet',
+                                            '--filter',f'label={LABEL}={run_id}'))
+                  name = f'hub-linux-provider-{run_id}-1'
+                  require(not scope() and absent(call(*inspect_args,name),'container',name))
+                  graph = canonical(Path(good(call('info','--format','{{.DockerRootDir}}')).decode().strip()))
+                  require(graph == Path('/var/lib/docker'))
+                  verdict('host',True)
+
+                  stage_name = 'capacity'
+                  for path in (root,graph):
+                      enough(path)
+                  stage_name = 'image'
+                  inputs, expected = stage(root,commit,run_id,uid,gid)
+                  baseline = census(root)
+                  image_cmd = ('image','inspect','--format','{{json .}}',IMAGE)
+                  observed = call(*image_cmd)
+                  if absent(observed,'image',IMAGE):
+                      good(call('image','pull','--platform=linux/amd64',IMAGE, seconds=90))
+                      observed = call(*image_cmd)
+                  image_identity(json.loads(good(observed)))
+                  verdict('image',True)
+
+                  stage_name = 'capacity'
+                  require(census(root)==baseline)
+                  for path in (root,graph):
+                      enough(path)
+                  verdict('capacity',True)
+
+                  stage_name = 'isolation'
+                  create_attempted = True
+                  raw = good(call(*create_args(name,inputs,run_id,uid,gid))).decode().strip()
+                  require(matches(r'[a-f0-9]{64}',raw))
+                  cid = raw
+                  inspect = lambda: json.loads(good(call(*inspect_args,cid)))
+                  isolation(inspect(),cid,name,inputs,run_id,uid,gid)
+                  verdict('isolation',True)
+
+                  stage_name = 'frame'
+                  result = call('container','start','--attach',cid,seconds=30,out_limit=256,err_limit=4096)
+                  row = inspect()
+                  owns(row,cid,name,run_id)
+                  terminal_frame(result,row['State'],expected)
+                  verdict('frame',True)
+                  succeeded = True
+              except Exception:
+                  if output is not None:
+                      verdict(stage_name,False)
+                  print('witness-refused-' + stage_name)
+              finally:
+                  # Ambiguous creation preserves scratch. Ownership and state determine exact-ID cleanup.
+                  retired = not create_attempted
+                  if cid is not None:
+                      try:
+                          row = inspect()
+                          owns(row,cid,name,run_id)
+                          if row['State']['Running'] is True:
+                              require(good(call('container','stop','--time=5',cid,seconds=10)).decode().strip()==cid)
+                              row = inspect()
+                              owns(row,cid,name,run_id)
+                          state = row['State']
+                          require(state['Status']=='exited' and not state['Running'] and state['Pid']==0)
+                          require(good(call('container','rm',cid)).decode().strip()==cid)
+                          require(absent(call(*inspect_args,cid),'container',cid) and not scope())
+                          retired = True
+                      except Exception:
+                          pass
+                  if create_attempted:
+                      verdict('container',retired)
+                  removed = False
+                  if root is not None and retired and baseline is not None:
+                      try:
+                          s = root.lstat()
+                          require((s.st_dev,s.st_ino)==root_identity and census(root)==baseline
+                                  and shutil.rmtree.avoids_symlink_attacks)
+                          fd = os.open(temp,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+                          try:
+                              s = os.stat(root.name,dir_fd=fd,follow_symlinks=False)
+                              require((s.st_dev,s.st_ino)==root_identity)
+                              shutil.rmtree(root.name,dir_fd=fd)
+                              try:
+                                  os.stat(root.name,dir_fd=fd,follow_symlinks=False)
+                              except FileNotFoundError:
+                                  removed = True
+                          finally:
+                              os.close(fd)
+                      except Exception:
+                          pass
+                  if root is not None:
+                      verdict('scratch',removed)
+              return 0 if succeeded and retired and removed else 1
+
+          WORKER = b'#!/bin/sh\nset -eu\numask 077\n# Effective checks before any compiler command. Outer host inspection is required.\ncheck_worker() {\n    uid=$(/usr/bin/id -u)\n    gid=$(/usr/bin/id -g)\n    [ "$uid" -ne 0 ] && [ "$gid" -ne 0 ] || return 74\n    [ "$uid" = "$(/usr/bin/id -ru)" ] && [ "$gid" = "$(/usr/bin/id -rg)" ] || return 74\n    [ "$uid:$gid" = "$(/usr/bin/cat /inputs/control/identity)" ]\n    [ "$(/usr/bin/stat -c \'%u:%g:%a\' /scratch)" = "$uid:$gid:700" ]\n    [ "$(/usr/bin/readlink /proc/self/ns/pid)" = "$(/usr/bin/readlink /proc/1/ns/pid)" ]\n    [ "$(/usr/bin/readlink /proc/self/ns/pid)" != "$(/usr/bin/cat /inputs/control/host-pidns)" ]\n    /usr/bin/mawk \'\n        /^Seccomp:/ {sec=($2==2)}\n        /^NoNewPrivs:/ {nnp=($2==1)}\n        /^(CapEff|CapPrm|CapBnd):/ {if ($2 !~ /^0+$/) bad=1; caps++}\n        END {exit !(sec && nnp && caps==3 && !bad)}\n    \' /proc/self/status\n    set -- /sys/class/net/*\n    [ "$#" -eq 1 ] && [ "$1" = /sys/class/net/lo ] || return 74\n    /usr/bin/mawk \'NR>1 && $1!="lo" {bad=1} END {exit bad}\' /proc/net/route\n    /usr/bin/mawk \'NF && $NF!="lo" {bad=1} END {exit bad}\' /proc/net/ipv6_route\n    /usr/bin/mawk \'\n        function opt(opts, word) {return index("," opts ",", "," word ",")>0}\n        {\n            path=$5; mode=$6\n            fs=""\n            for (i=7; i<NF; i++) if ($i=="-") {fs=$(i+1); break}\n            if (path=="/") {root++; if (!opt(mode,"ro")) bad=1; next}\n            if (path=="/inputs") {input++; if (!opt(mode,"ro")) bad=1; next}\n            if (path=="/scratch") {\n                scratch++\n                if (fs!="tmpfs" || !opt(mode,"rw") || !opt(mode,"nosuid") ||\n                    !opt(mode,"nodev") || !opt(mode,"noexec")) bad=1\n                next\n            }\n            if (!opt(mode,"rw")) next\n            # Kernel pseudo-filesystems on the normal stock container. Writable\n            # ordinary mounts, including any /etc bind, still fail closed.\n            if ((path=="/proc" && fs=="proc") ||\n                (path=="/dev" && fs=="tmpfs") ||\n                (path=="/dev/pts" && fs=="devpts") ||\n                (path=="/dev/mqueue" && fs=="mqueue")) next\n            bad=1\n        }\n        END {exit !(root==1 && input==1 && scratch==1 && !bad)}\n    \' /proc/self/mountinfo\n    /usr/bin/df -B1 --output=size /scratch |\n        /usr/bin/mawk \'NR==2 && $1==805306368 {ok=1} END {exit !ok}\'\n}\n\n# POSIX functions used by the reviewed worker. Paths in the caller are fixed.\nemit_fixed_files() {\n    root=$1\n    header=$2\n    shift 2\n    # Validate the whole census before making any bytes visible.\n    for row do\n        file=${row%:*}\n        size=${row##*:}\n        f=$root/$file\n        [ -f "$f" ] && [ ! -L "$f" ] || return 71\n        [ "$(/usr/bin/readlink -f -- "$f")" = "$f" ] || return 71\n        [ "$(/usr/bin/stat -c %s -- "$f")" = "$size" ] || return 72\n    done\n    /usr/bin/cat -- "$header" || return 73\n    for row do\n        /usr/bin/cat -- "$root/${row%:*}" || return 73\n    done\n}\n\ncheck_worker\ncd /inputs\n/usr/bin/sha256sum --strict -c control/checks.sha256 >/dev/null\n\n/usr/bin/mkdir -m 700 /scratch/artifacts\n/usr/bin/cp -- /inputs/control/fixture /scratch/artifacts/shell-fixture\nemit_fixed_files /scratch/artifacts /inputs/control/header shell-fixture:17\n'
+          WORKER_SHA = 'e2d7426a87b267347b4f7c583f704f1dff01a32d4f6a754f02a5b6498e02cd5a'
+          raise SystemExit(run(os.environ))
+          PY
+      - name: Verify the stock hosted worker
+        if: ${{ !cancelled() && steps.witness.outputs.host != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.host }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify the exact Noble image
+        if: ${{ !cancelled() && steps.witness.outputs.image != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.image }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify post-staging capacity
+        if: ${{ !cancelled() && steps.witness.outputs.capacity != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.capacity }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify the created container scope
+        if: ${{ !cancelled() && steps.witness.outputs.isolation != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.isolation }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify the 102-byte frame and EOF
+        if: ${{ !cancelled() && steps.witness.outputs.frame != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.frame }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify exact container retirement
+        if: ${{ !cancelled() && steps.witness.outputs.container != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.container }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify sealed scratch retirement
+        if: ${{ !cancelled() && steps.witness.outputs.scratch != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.scratch }}
+        run: |
+          [[ "$VERDICT" == pass ]]
