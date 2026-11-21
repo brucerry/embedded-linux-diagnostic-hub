@@ -1,0 +1,857 @@
+name: Web stock stage preflight
+on:
+  push:
+    branches: ['ci/v060-web-stage-stock-20261121']
+    paths: ['.github/workflows/web-stock-stage-preflight.yml']
+permissions: {}
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+jobs:
+  stock:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-web-stage-stock-20261121' &&
+      github.event_name == 'push' &&
+      github.event.created == true &&
+      github.event.deleted == false &&
+      github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Confirm standard Ubuntu x64 runner and nonroot identity
+        id: host
+        run: |
+          /usr/bin/python3 -I -B - host <<'PY'
+          """Read stock venue facts and retire a bounded, synthetic disk reservation."""
+
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import stat
+          import sys
+          import tempfile
+
+          REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
+          BRANCH = "ci/v060-web-stage-stock-20261121"
+          NODE_SHA = "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52"
+          NODE_SIZE = 126_881_248
+          BASE_LOADER_SHA = "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"
+          GIB = 1024**3
+          MIB = 1024**2
+          DISK_MODEL = 512 * MIB
+          FREE_REQUIRED = 6 * GIB + (448 + 64) * MIB
+
+
+          def need(condition, fixed_label):
+              if not condition:
+                  raise RuntimeError(fixed_label)
+
+
+          def verify_host(environment):
+              fixed = {
+                  "GITHUB_REPOSITORY": REPOSITORY,
+                  "GITHUB_REF": "refs/heads/" + BRANCH,
+                  "GITHUB_EVENT_NAME": "push",
+                  "GITHUB_JOB": "stock",
+                  "GITHUB_RUN_ATTEMPT": "1",
+                  "RUNNER_ENVIRONMENT": "github-hosted",
+                  "RUNNER_OS": "Linux",
+                  "RUNNER_ARCH": "X64",
+              }
+              need(all(environment.get(k) == v for k, v in fixed.items()), "runner-context")
+              need(platform.machine() == "x86_64" and platform.freedesktop_os_release()["VERSION_ID"] == "24.04",
+                   "runner-platform")
+              need(os.getuid() == os.geteuid() != 0, "runner-owner")
+
+
+          def stage_root(value):
+              root = Path(value)
+              need(root.is_absolute() and root.resolve(strict=True) == root, "scratch-path")
+              info = root.stat()
+              need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                   and not (stat.S_IMODE(info.st_mode) & 0o022), "scratch-owner")
+              return root
+
+
+          def free(fd):
+              info = os.fstatvfs(fd)
+              need(not (info.f_flag & os.ST_RDONLY) and info.f_frsize > 0, "scratch-backing")
+              return info.f_bavail * info.f_frsize
+
+
+          def file_identity(info):
+              return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+          def nofollow(path, flags, mode=0o600, *, dir_fd=None):
+              return os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=dir_fd)
+
+
+          def synthetic_capacity_worker(base_fd, leaf, model, floor):
+              scratch_fd = nofollow(leaf, os.O_RDONLY | os.O_DIRECTORY, dir_fd=base_fd)
+              with os.fdopen(nofollow("staging-budget", os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                                     dir_fd=scratch_fd), "r+b") as staged:
+                  reservation = os.fstat(staged.fileno())
+                  try:
+                      need(reservation.st_uid == os.geteuid() and stat.S_IMODE(reservation.st_mode) == 0o600
+                           and stat.S_ISREG(reservation.st_mode) and reservation.st_nlink == 1
+                           and reservation.st_dev == os.fstat(scratch_fd).st_dev == os.fstat(base_fd).st_dev,
+                           "scratch-reservation-identity")
+                      need(free(scratch_fd) >= floor + model, "pre-staging-capacity")
+                      os.posix_fallocate(staged.fileno(), 0, model)
+                      after = os.fstat(staged.fileno())
+                      need(after.st_size == model and after.st_blocks * 512 >= model, "allocated-staging-size")
+                      return free(scratch_fd) >= floor
+                  finally:
+                      try:
+                          actual = os.stat("staging-budget", dir_fd=scratch_fd, follow_symlinks=False)
+                          need(file_identity(actual) == file_identity(reservation), "scratch-retirement-identity")
+                          os.unlink("staging-budget", dir_fd=scratch_fd)
+                      finally:
+                          os.close(scratch_fd)
+
+
+          def synthetic_capacity(root, model=DISK_MODEL, floor=FREE_REQUIRED):
+              root = stage_root(root)
+              base_fd = nofollow(root, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  path = Path(tempfile.mkdtemp(prefix="hub-web-stage-", dir=root))
+                  initial = path.lstat()
+                  need(initial.st_uid == os.geteuid() and stat.S_IMODE(initial.st_mode) == 0o700
+                       and stat.S_ISDIR(initial.st_mode) and initial.st_dev == os.fstat(base_fd).st_dev,
+                       "scratch-leaf")
+                  try:
+                      return synthetic_capacity_worker(base_fd, path.name, model, floor)
+                  finally:
+                      actual = os.stat(path.name, dir_fd=base_fd, follow_symlinks=False)
+                      need(file_identity(actual) == file_identity(initial), "scratch-leaf-retirement")
+                      os.rmdir(path.name, dir_fd=base_fd)
+              finally:
+                  os.close(base_fd)
+
+
+          def measure_tool(path, cap, expected_length=None):
+              need(path.is_absolute() and path.resolve(strict=True) == path, "tool-path")
+              for parent in path.parents:
+                  info = parent.lstat()
+                  need(stat.S_ISDIR(info.st_mode) and info.st_uid in {0, os.geteuid()}
+                       and not (stat.S_IMODE(info.st_mode) & 0o022), "tool-ancestor")
+              with os.fdopen(nofollow(path, os.O_RDONLY), "rb") as stream:
+                  before = os.fstat(stream.fileno())
+                  need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 < before.st_size <= cap
+                       and before.st_uid in {0, os.geteuid()} and not (stat.S_IMODE(before.st_mode) & 0o7022)
+                       and before.st_mode & 0o111, "tool-shape")
+                  need(expected_length is None or before.st_size == expected_length, "tool-size")
+                  def snap(info):
+                      return file_identity(info), info.st_size, info.st_ctime_ns, info.st_mtime_ns
+                  content = stream.read(before.st_size + 1)
+                  need(len(content) == before.st_size
+                       and snap(before) == snap(os.fstat(stream.fileno())) == snap(path.lstat()), "tool-changed")
+              need(content[:6] == b"\x7fELF\x02\x01" and content[18:20] == b"\x3e\x00", "tool-elf")
+              return hashlib.sha256(content).hexdigest()
+
+
+          def main(phase):
+              verify_host(os.environ)
+              if phase == "host":
+                  return
+              if phase == "capacity":
+                  observed = synthetic_capacity(os.environ["RUNNER_TEMP"])
+                  need(observed, "post-reservation-capacity")
+                  return
+              if phase == "git":
+                  measure_tool(Path("/usr/bin/git"), 16 * MIB)
+                  return
+              if phase == "node":
+                  node = Path("/opt/hostedtoolcache/node/24.22.2/x64/bin/node")
+                  digest = measure_tool(node, NODE_SIZE, NODE_SIZE)
+                  need(digest == NODE_SHA, "exact-node-digest")
+                  return
+              if phase == "loader":
+                  loader = Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+                  need(measure_tool(loader, MIB) == BASE_LOADER_SHA, "exact-loader-digest")
+                  return
+              raise RuntimeError("unexpected-phase")
+
+
+          if __name__ == "__main__":
+              try:
+                  main(sys.argv[1])
+              except RuntimeError as exc:
+                  print("refused-" + str(exc), file=sys.stderr)
+                  sys.exit(1)
+              except (OSError, KeyError, IndexError, ValueError):
+                  print("refused-stock-readback", file=sys.stderr)
+                  sys.exit(1)
+          PY
+      - name: Reserve Web staging model and confirm free space and scratch retirement
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - capacity <<'PY'
+          """Read stock venue facts and retire a bounded, synthetic disk reservation."""
+
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import stat
+          import sys
+          import tempfile
+
+          REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
+          BRANCH = "ci/v060-web-stage-stock-20261121"
+          NODE_SHA = "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52"
+          NODE_SIZE = 126_881_248
+          BASE_LOADER_SHA = "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"
+          GIB = 1024**3
+          MIB = 1024**2
+          DISK_MODEL = 512 * MIB
+          FREE_REQUIRED = 6 * GIB + (448 + 64) * MIB
+
+
+          def need(condition, fixed_label):
+              if not condition:
+                  raise RuntimeError(fixed_label)
+
+
+          def verify_host(environment):
+              fixed = {
+                  "GITHUB_REPOSITORY": REPOSITORY,
+                  "GITHUB_REF": "refs/heads/" + BRANCH,
+                  "GITHUB_EVENT_NAME": "push",
+                  "GITHUB_JOB": "stock",
+                  "GITHUB_RUN_ATTEMPT": "1",
+                  "RUNNER_ENVIRONMENT": "github-hosted",
+                  "RUNNER_OS": "Linux",
+                  "RUNNER_ARCH": "X64",
+              }
+              need(all(environment.get(k) == v for k, v in fixed.items()), "runner-context")
+              need(platform.machine() == "x86_64" and platform.freedesktop_os_release()["VERSION_ID"] == "24.04",
+                   "runner-platform")
+              need(os.getuid() == os.geteuid() != 0, "runner-owner")
+
+
+          def stage_root(value):
+              root = Path(value)
+              need(root.is_absolute() and root.resolve(strict=True) == root, "scratch-path")
+              info = root.stat()
+              need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                   and not (stat.S_IMODE(info.st_mode) & 0o022), "scratch-owner")
+              return root
+
+
+          def free(fd):
+              info = os.fstatvfs(fd)
+              need(not (info.f_flag & os.ST_RDONLY) and info.f_frsize > 0, "scratch-backing")
+              return info.f_bavail * info.f_frsize
+
+
+          def file_identity(info):
+              return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+          def nofollow(path, flags, mode=0o600, *, dir_fd=None):
+              return os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=dir_fd)
+
+
+          def synthetic_capacity_worker(base_fd, leaf, model, floor):
+              scratch_fd = nofollow(leaf, os.O_RDONLY | os.O_DIRECTORY, dir_fd=base_fd)
+              with os.fdopen(nofollow("staging-budget", os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                                     dir_fd=scratch_fd), "r+b") as staged:
+                  reservation = os.fstat(staged.fileno())
+                  try:
+                      need(reservation.st_uid == os.geteuid() and stat.S_IMODE(reservation.st_mode) == 0o600
+                           and stat.S_ISREG(reservation.st_mode) and reservation.st_nlink == 1
+                           and reservation.st_dev == os.fstat(scratch_fd).st_dev == os.fstat(base_fd).st_dev,
+                           "scratch-reservation-identity")
+                      need(free(scratch_fd) >= floor + model, "pre-staging-capacity")
+                      os.posix_fallocate(staged.fileno(), 0, model)
+                      after = os.fstat(staged.fileno())
+                      need(after.st_size == model and after.st_blocks * 512 >= model, "allocated-staging-size")
+                      return free(scratch_fd) >= floor
+                  finally:
+                      try:
+                          actual = os.stat("staging-budget", dir_fd=scratch_fd, follow_symlinks=False)
+                          need(file_identity(actual) == file_identity(reservation), "scratch-retirement-identity")
+                          os.unlink("staging-budget", dir_fd=scratch_fd)
+                      finally:
+                          os.close(scratch_fd)
+
+
+          def synthetic_capacity(root, model=DISK_MODEL, floor=FREE_REQUIRED):
+              root = stage_root(root)
+              base_fd = nofollow(root, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  path = Path(tempfile.mkdtemp(prefix="hub-web-stage-", dir=root))
+                  initial = path.lstat()
+                  need(initial.st_uid == os.geteuid() and stat.S_IMODE(initial.st_mode) == 0o700
+                       and stat.S_ISDIR(initial.st_mode) and initial.st_dev == os.fstat(base_fd).st_dev,
+                       "scratch-leaf")
+                  try:
+                      return synthetic_capacity_worker(base_fd, path.name, model, floor)
+                  finally:
+                      actual = os.stat(path.name, dir_fd=base_fd, follow_symlinks=False)
+                      need(file_identity(actual) == file_identity(initial), "scratch-leaf-retirement")
+                      os.rmdir(path.name, dir_fd=base_fd)
+              finally:
+                  os.close(base_fd)
+
+
+          def measure_tool(path, cap, expected_length=None):
+              need(path.is_absolute() and path.resolve(strict=True) == path, "tool-path")
+              for parent in path.parents:
+                  info = parent.lstat()
+                  need(stat.S_ISDIR(info.st_mode) and info.st_uid in {0, os.geteuid()}
+                       and not (stat.S_IMODE(info.st_mode) & 0o022), "tool-ancestor")
+              with os.fdopen(nofollow(path, os.O_RDONLY), "rb") as stream:
+                  before = os.fstat(stream.fileno())
+                  need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 < before.st_size <= cap
+                       and before.st_uid in {0, os.geteuid()} and not (stat.S_IMODE(before.st_mode) & 0o7022)
+                       and before.st_mode & 0o111, "tool-shape")
+                  need(expected_length is None or before.st_size == expected_length, "tool-size")
+                  def snap(info):
+                      return file_identity(info), info.st_size, info.st_ctime_ns, info.st_mtime_ns
+                  content = stream.read(before.st_size + 1)
+                  need(len(content) == before.st_size
+                       and snap(before) == snap(os.fstat(stream.fileno())) == snap(path.lstat()), "tool-changed")
+              need(content[:6] == b"\x7fELF\x02\x01" and content[18:20] == b"\x3e\x00", "tool-elf")
+              return hashlib.sha256(content).hexdigest()
+
+
+          def main(phase):
+              verify_host(os.environ)
+              if phase == "host":
+                  return
+              if phase == "capacity":
+                  observed = synthetic_capacity(os.environ["RUNNER_TEMP"])
+                  need(observed, "post-reservation-capacity")
+                  return
+              if phase == "git":
+                  measure_tool(Path("/usr/bin/git"), 16 * MIB)
+                  return
+              if phase == "node":
+                  node = Path("/opt/hostedtoolcache/node/24.22.2/x64/bin/node")
+                  digest = measure_tool(node, NODE_SIZE, NODE_SIZE)
+                  need(digest == NODE_SHA, "exact-node-digest")
+                  return
+              if phase == "loader":
+                  loader = Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+                  need(measure_tool(loader, MIB) == BASE_LOADER_SHA, "exact-loader-digest")
+                  return
+              raise RuntimeError("unexpected-phase")
+
+
+          if __name__ == "__main__":
+              try:
+                  main(sys.argv[1])
+              except RuntimeError as exc:
+                  print("refused-" + str(exc), file=sys.stderr)
+                  sys.exit(1)
+              except (OSError, KeyError, IndexError, ValueError):
+                  print("refused-stock-readback", file=sys.stderr)
+                  sys.exit(1)
+          PY
+      - name: Read stock Git executable identity without invoking it
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - git <<'PY'
+          """Read stock venue facts and retire a bounded, synthetic disk reservation."""
+
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import stat
+          import sys
+          import tempfile
+
+          REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
+          BRANCH = "ci/v060-web-stage-stock-20261121"
+          NODE_SHA = "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52"
+          NODE_SIZE = 126_881_248
+          BASE_LOADER_SHA = "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"
+          GIB = 1024**3
+          MIB = 1024**2
+          DISK_MODEL = 512 * MIB
+          FREE_REQUIRED = 6 * GIB + (448 + 64) * MIB
+
+
+          def need(condition, fixed_label):
+              if not condition:
+                  raise RuntimeError(fixed_label)
+
+
+          def verify_host(environment):
+              fixed = {
+                  "GITHUB_REPOSITORY": REPOSITORY,
+                  "GITHUB_REF": "refs/heads/" + BRANCH,
+                  "GITHUB_EVENT_NAME": "push",
+                  "GITHUB_JOB": "stock",
+                  "GITHUB_RUN_ATTEMPT": "1",
+                  "RUNNER_ENVIRONMENT": "github-hosted",
+                  "RUNNER_OS": "Linux",
+                  "RUNNER_ARCH": "X64",
+              }
+              need(all(environment.get(k) == v for k, v in fixed.items()), "runner-context")
+              need(platform.machine() == "x86_64" and platform.freedesktop_os_release()["VERSION_ID"] == "24.04",
+                   "runner-platform")
+              need(os.getuid() == os.geteuid() != 0, "runner-owner")
+
+
+          def stage_root(value):
+              root = Path(value)
+              need(root.is_absolute() and root.resolve(strict=True) == root, "scratch-path")
+              info = root.stat()
+              need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                   and not (stat.S_IMODE(info.st_mode) & 0o022), "scratch-owner")
+              return root
+
+
+          def free(fd):
+              info = os.fstatvfs(fd)
+              need(not (info.f_flag & os.ST_RDONLY) and info.f_frsize > 0, "scratch-backing")
+              return info.f_bavail * info.f_frsize
+
+
+          def file_identity(info):
+              return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+          def nofollow(path, flags, mode=0o600, *, dir_fd=None):
+              return os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=dir_fd)
+
+
+          def synthetic_capacity_worker(base_fd, leaf, model, floor):
+              scratch_fd = nofollow(leaf, os.O_RDONLY | os.O_DIRECTORY, dir_fd=base_fd)
+              with os.fdopen(nofollow("staging-budget", os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                                     dir_fd=scratch_fd), "r+b") as staged:
+                  reservation = os.fstat(staged.fileno())
+                  try:
+                      need(reservation.st_uid == os.geteuid() and stat.S_IMODE(reservation.st_mode) == 0o600
+                           and stat.S_ISREG(reservation.st_mode) and reservation.st_nlink == 1
+                           and reservation.st_dev == os.fstat(scratch_fd).st_dev == os.fstat(base_fd).st_dev,
+                           "scratch-reservation-identity")
+                      need(free(scratch_fd) >= floor + model, "pre-staging-capacity")
+                      os.posix_fallocate(staged.fileno(), 0, model)
+                      after = os.fstat(staged.fileno())
+                      need(after.st_size == model and after.st_blocks * 512 >= model, "allocated-staging-size")
+                      return free(scratch_fd) >= floor
+                  finally:
+                      try:
+                          actual = os.stat("staging-budget", dir_fd=scratch_fd, follow_symlinks=False)
+                          need(file_identity(actual) == file_identity(reservation), "scratch-retirement-identity")
+                          os.unlink("staging-budget", dir_fd=scratch_fd)
+                      finally:
+                          os.close(scratch_fd)
+
+
+          def synthetic_capacity(root, model=DISK_MODEL, floor=FREE_REQUIRED):
+              root = stage_root(root)
+              base_fd = nofollow(root, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  path = Path(tempfile.mkdtemp(prefix="hub-web-stage-", dir=root))
+                  initial = path.lstat()
+                  need(initial.st_uid == os.geteuid() and stat.S_IMODE(initial.st_mode) == 0o700
+                       and stat.S_ISDIR(initial.st_mode) and initial.st_dev == os.fstat(base_fd).st_dev,
+                       "scratch-leaf")
+                  try:
+                      return synthetic_capacity_worker(base_fd, path.name, model, floor)
+                  finally:
+                      actual = os.stat(path.name, dir_fd=base_fd, follow_symlinks=False)
+                      need(file_identity(actual) == file_identity(initial), "scratch-leaf-retirement")
+                      os.rmdir(path.name, dir_fd=base_fd)
+              finally:
+                  os.close(base_fd)
+
+
+          def measure_tool(path, cap, expected_length=None):
+              need(path.is_absolute() and path.resolve(strict=True) == path, "tool-path")
+              for parent in path.parents:
+                  info = parent.lstat()
+                  need(stat.S_ISDIR(info.st_mode) and info.st_uid in {0, os.geteuid()}
+                       and not (stat.S_IMODE(info.st_mode) & 0o022), "tool-ancestor")
+              with os.fdopen(nofollow(path, os.O_RDONLY), "rb") as stream:
+                  before = os.fstat(stream.fileno())
+                  need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 < before.st_size <= cap
+                       and before.st_uid in {0, os.geteuid()} and not (stat.S_IMODE(before.st_mode) & 0o7022)
+                       and before.st_mode & 0o111, "tool-shape")
+                  need(expected_length is None or before.st_size == expected_length, "tool-size")
+                  def snap(info):
+                      return file_identity(info), info.st_size, info.st_ctime_ns, info.st_mtime_ns
+                  content = stream.read(before.st_size + 1)
+                  need(len(content) == before.st_size
+                       and snap(before) == snap(os.fstat(stream.fileno())) == snap(path.lstat()), "tool-changed")
+              need(content[:6] == b"\x7fELF\x02\x01" and content[18:20] == b"\x3e\x00", "tool-elf")
+              return hashlib.sha256(content).hexdigest()
+
+
+          def main(phase):
+              verify_host(os.environ)
+              if phase == "host":
+                  return
+              if phase == "capacity":
+                  observed = synthetic_capacity(os.environ["RUNNER_TEMP"])
+                  need(observed, "post-reservation-capacity")
+                  return
+              if phase == "git":
+                  measure_tool(Path("/usr/bin/git"), 16 * MIB)
+                  return
+              if phase == "node":
+                  node = Path("/opt/hostedtoolcache/node/24.22.2/x64/bin/node")
+                  digest = measure_tool(node, NODE_SIZE, NODE_SIZE)
+                  need(digest == NODE_SHA, "exact-node-digest")
+                  return
+              if phase == "loader":
+                  loader = Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+                  need(measure_tool(loader, MIB) == BASE_LOADER_SHA, "exact-loader-digest")
+                  return
+              raise RuntimeError("unexpected-phase")
+
+
+          if __name__ == "__main__":
+              try:
+                  main(sys.argv[1])
+              except RuntimeError as exc:
+                  print("refused-" + str(exc), file=sys.stderr)
+                  sys.exit(1)
+              except (OSError, KeyError, IndexError, ValueError):
+                  print("refused-stock-readback", file=sys.stderr)
+                  sys.exit(1)
+          PY
+      - name: Match cached Node 24.22.2 against the official executable pin
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - node <<'PY'
+          """Read stock venue facts and retire a bounded, synthetic disk reservation."""
+
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import stat
+          import sys
+          import tempfile
+
+          REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
+          BRANCH = "ci/v060-web-stage-stock-20261121"
+          NODE_SHA = "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52"
+          NODE_SIZE = 126_881_248
+          BASE_LOADER_SHA = "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"
+          GIB = 1024**3
+          MIB = 1024**2
+          DISK_MODEL = 512 * MIB
+          FREE_REQUIRED = 6 * GIB + (448 + 64) * MIB
+
+
+          def need(condition, fixed_label):
+              if not condition:
+                  raise RuntimeError(fixed_label)
+
+
+          def verify_host(environment):
+              fixed = {
+                  "GITHUB_REPOSITORY": REPOSITORY,
+                  "GITHUB_REF": "refs/heads/" + BRANCH,
+                  "GITHUB_EVENT_NAME": "push",
+                  "GITHUB_JOB": "stock",
+                  "GITHUB_RUN_ATTEMPT": "1",
+                  "RUNNER_ENVIRONMENT": "github-hosted",
+                  "RUNNER_OS": "Linux",
+                  "RUNNER_ARCH": "X64",
+              }
+              need(all(environment.get(k) == v for k, v in fixed.items()), "runner-context")
+              need(platform.machine() == "x86_64" and platform.freedesktop_os_release()["VERSION_ID"] == "24.04",
+                   "runner-platform")
+              need(os.getuid() == os.geteuid() != 0, "runner-owner")
+
+
+          def stage_root(value):
+              root = Path(value)
+              need(root.is_absolute() and root.resolve(strict=True) == root, "scratch-path")
+              info = root.stat()
+              need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                   and not (stat.S_IMODE(info.st_mode) & 0o022), "scratch-owner")
+              return root
+
+
+          def free(fd):
+              info = os.fstatvfs(fd)
+              need(not (info.f_flag & os.ST_RDONLY) and info.f_frsize > 0, "scratch-backing")
+              return info.f_bavail * info.f_frsize
+
+
+          def file_identity(info):
+              return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+          def nofollow(path, flags, mode=0o600, *, dir_fd=None):
+              return os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=dir_fd)
+
+
+          def synthetic_capacity_worker(base_fd, leaf, model, floor):
+              scratch_fd = nofollow(leaf, os.O_RDONLY | os.O_DIRECTORY, dir_fd=base_fd)
+              with os.fdopen(nofollow("staging-budget", os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                                     dir_fd=scratch_fd), "r+b") as staged:
+                  reservation = os.fstat(staged.fileno())
+                  try:
+                      need(reservation.st_uid == os.geteuid() and stat.S_IMODE(reservation.st_mode) == 0o600
+                           and stat.S_ISREG(reservation.st_mode) and reservation.st_nlink == 1
+                           and reservation.st_dev == os.fstat(scratch_fd).st_dev == os.fstat(base_fd).st_dev,
+                           "scratch-reservation-identity")
+                      need(free(scratch_fd) >= floor + model, "pre-staging-capacity")
+                      os.posix_fallocate(staged.fileno(), 0, model)
+                      after = os.fstat(staged.fileno())
+                      need(after.st_size == model and after.st_blocks * 512 >= model, "allocated-staging-size")
+                      return free(scratch_fd) >= floor
+                  finally:
+                      try:
+                          actual = os.stat("staging-budget", dir_fd=scratch_fd, follow_symlinks=False)
+                          need(file_identity(actual) == file_identity(reservation), "scratch-retirement-identity")
+                          os.unlink("staging-budget", dir_fd=scratch_fd)
+                      finally:
+                          os.close(scratch_fd)
+
+
+          def synthetic_capacity(root, model=DISK_MODEL, floor=FREE_REQUIRED):
+              root = stage_root(root)
+              base_fd = nofollow(root, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  path = Path(tempfile.mkdtemp(prefix="hub-web-stage-", dir=root))
+                  initial = path.lstat()
+                  need(initial.st_uid == os.geteuid() and stat.S_IMODE(initial.st_mode) == 0o700
+                       and stat.S_ISDIR(initial.st_mode) and initial.st_dev == os.fstat(base_fd).st_dev,
+                       "scratch-leaf")
+                  try:
+                      return synthetic_capacity_worker(base_fd, path.name, model, floor)
+                  finally:
+                      actual = os.stat(path.name, dir_fd=base_fd, follow_symlinks=False)
+                      need(file_identity(actual) == file_identity(initial), "scratch-leaf-retirement")
+                      os.rmdir(path.name, dir_fd=base_fd)
+              finally:
+                  os.close(base_fd)
+
+
+          def measure_tool(path, cap, expected_length=None):
+              need(path.is_absolute() and path.resolve(strict=True) == path, "tool-path")
+              for parent in path.parents:
+                  info = parent.lstat()
+                  need(stat.S_ISDIR(info.st_mode) and info.st_uid in {0, os.geteuid()}
+                       and not (stat.S_IMODE(info.st_mode) & 0o022), "tool-ancestor")
+              with os.fdopen(nofollow(path, os.O_RDONLY), "rb") as stream:
+                  before = os.fstat(stream.fileno())
+                  need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 < before.st_size <= cap
+                       and before.st_uid in {0, os.geteuid()} and not (stat.S_IMODE(before.st_mode) & 0o7022)
+                       and before.st_mode & 0o111, "tool-shape")
+                  need(expected_length is None or before.st_size == expected_length, "tool-size")
+                  def snap(info):
+                      return file_identity(info), info.st_size, info.st_ctime_ns, info.st_mtime_ns
+                  content = stream.read(before.st_size + 1)
+                  need(len(content) == before.st_size
+                       and snap(before) == snap(os.fstat(stream.fileno())) == snap(path.lstat()), "tool-changed")
+              need(content[:6] == b"\x7fELF\x02\x01" and content[18:20] == b"\x3e\x00", "tool-elf")
+              return hashlib.sha256(content).hexdigest()
+
+
+          def main(phase):
+              verify_host(os.environ)
+              if phase == "host":
+                  return
+              if phase == "capacity":
+                  observed = synthetic_capacity(os.environ["RUNNER_TEMP"])
+                  need(observed, "post-reservation-capacity")
+                  return
+              if phase == "git":
+                  measure_tool(Path("/usr/bin/git"), 16 * MIB)
+                  return
+              if phase == "node":
+                  node = Path("/opt/hostedtoolcache/node/24.22.2/x64/bin/node")
+                  digest = measure_tool(node, NODE_SIZE, NODE_SIZE)
+                  need(digest == NODE_SHA, "exact-node-digest")
+                  return
+              if phase == "loader":
+                  loader = Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+                  need(measure_tool(loader, MIB) == BASE_LOADER_SHA, "exact-loader-digest")
+                  return
+              raise RuntimeError("unexpected-phase")
+
+
+          if __name__ == "__main__":
+              try:
+                  main(sys.argv[1])
+              except RuntimeError as exc:
+                  print("refused-" + str(exc), file=sys.stderr)
+                  sys.exit(1)
+              except (OSError, KeyError, IndexError, ValueError):
+                  print("refused-stock-readback", file=sys.stderr)
+                  sys.exit(1)
+          PY
+      - name: Compare stock loader bytes with the retained Noble reference
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - loader <<'PY'
+          """Read stock venue facts and retire a bounded, synthetic disk reservation."""
+
+          import hashlib
+          import os
+          from pathlib import Path
+          import platform
+          import stat
+          import sys
+          import tempfile
+
+          REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
+          BRANCH = "ci/v060-web-stage-stock-20261121"
+          NODE_SHA = "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52"
+          NODE_SIZE = 126_881_248
+          BASE_LOADER_SHA = "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da"
+          GIB = 1024**3
+          MIB = 1024**2
+          DISK_MODEL = 512 * MIB
+          FREE_REQUIRED = 6 * GIB + (448 + 64) * MIB
+
+
+          def need(condition, fixed_label):
+              if not condition:
+                  raise RuntimeError(fixed_label)
+
+
+          def verify_host(environment):
+              fixed = {
+                  "GITHUB_REPOSITORY": REPOSITORY,
+                  "GITHUB_REF": "refs/heads/" + BRANCH,
+                  "GITHUB_EVENT_NAME": "push",
+                  "GITHUB_JOB": "stock",
+                  "GITHUB_RUN_ATTEMPT": "1",
+                  "RUNNER_ENVIRONMENT": "github-hosted",
+                  "RUNNER_OS": "Linux",
+                  "RUNNER_ARCH": "X64",
+              }
+              need(all(environment.get(k) == v for k, v in fixed.items()), "runner-context")
+              need(platform.machine() == "x86_64" and platform.freedesktop_os_release()["VERSION_ID"] == "24.04",
+                   "runner-platform")
+              need(os.getuid() == os.geteuid() != 0, "runner-owner")
+
+
+          def stage_root(value):
+              root = Path(value)
+              need(root.is_absolute() and root.resolve(strict=True) == root, "scratch-path")
+              info = root.stat()
+              need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                   and not (stat.S_IMODE(info.st_mode) & 0o022), "scratch-owner")
+              return root
+
+
+          def free(fd):
+              info = os.fstatvfs(fd)
+              need(not (info.f_flag & os.ST_RDONLY) and info.f_frsize > 0, "scratch-backing")
+              return info.f_bavail * info.f_frsize
+
+
+          def file_identity(info):
+              return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+          def nofollow(path, flags, mode=0o600, *, dir_fd=None):
+              return os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=dir_fd)
+
+
+          def synthetic_capacity_worker(base_fd, leaf, model, floor):
+              scratch_fd = nofollow(leaf, os.O_RDONLY | os.O_DIRECTORY, dir_fd=base_fd)
+              with os.fdopen(nofollow("staging-budget", os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                                     dir_fd=scratch_fd), "r+b") as staged:
+                  reservation = os.fstat(staged.fileno())
+                  try:
+                      need(reservation.st_uid == os.geteuid() and stat.S_IMODE(reservation.st_mode) == 0o600
+                           and stat.S_ISREG(reservation.st_mode) and reservation.st_nlink == 1
+                           and reservation.st_dev == os.fstat(scratch_fd).st_dev == os.fstat(base_fd).st_dev,
+                           "scratch-reservation-identity")
+                      need(free(scratch_fd) >= floor + model, "pre-staging-capacity")
+                      os.posix_fallocate(staged.fileno(), 0, model)
+                      after = os.fstat(staged.fileno())
+                      need(after.st_size == model and after.st_blocks * 512 >= model, "allocated-staging-size")
+                      return free(scratch_fd) >= floor
+                  finally:
+                      try:
+                          actual = os.stat("staging-budget", dir_fd=scratch_fd, follow_symlinks=False)
+                          need(file_identity(actual) == file_identity(reservation), "scratch-retirement-identity")
+                          os.unlink("staging-budget", dir_fd=scratch_fd)
+                      finally:
+                          os.close(scratch_fd)
+
+
+          def synthetic_capacity(root, model=DISK_MODEL, floor=FREE_REQUIRED):
+              root = stage_root(root)
+              base_fd = nofollow(root, os.O_RDONLY | os.O_DIRECTORY)
+              try:
+                  path = Path(tempfile.mkdtemp(prefix="hub-web-stage-", dir=root))
+                  initial = path.lstat()
+                  need(initial.st_uid == os.geteuid() and stat.S_IMODE(initial.st_mode) == 0o700
+                       and stat.S_ISDIR(initial.st_mode) and initial.st_dev == os.fstat(base_fd).st_dev,
+                       "scratch-leaf")
+                  try:
+                      return synthetic_capacity_worker(base_fd, path.name, model, floor)
+                  finally:
+                      actual = os.stat(path.name, dir_fd=base_fd, follow_symlinks=False)
+                      need(file_identity(actual) == file_identity(initial), "scratch-leaf-retirement")
+                      os.rmdir(path.name, dir_fd=base_fd)
+              finally:
+                  os.close(base_fd)
+
+
+          def measure_tool(path, cap, expected_length=None):
+              need(path.is_absolute() and path.resolve(strict=True) == path, "tool-path")
+              for parent in path.parents:
+                  info = parent.lstat()
+                  need(stat.S_ISDIR(info.st_mode) and info.st_uid in {0, os.geteuid()}
+                       and not (stat.S_IMODE(info.st_mode) & 0o022), "tool-ancestor")
+              with os.fdopen(nofollow(path, os.O_RDONLY), "rb") as stream:
+                  before = os.fstat(stream.fileno())
+                  need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and 0 < before.st_size <= cap
+                       and before.st_uid in {0, os.geteuid()} and not (stat.S_IMODE(before.st_mode) & 0o7022)
+                       and before.st_mode & 0o111, "tool-shape")
+                  need(expected_length is None or before.st_size == expected_length, "tool-size")
+                  def snap(info):
+                      return file_identity(info), info.st_size, info.st_ctime_ns, info.st_mtime_ns
+                  content = stream.read(before.st_size + 1)
+                  need(len(content) == before.st_size
+                       and snap(before) == snap(os.fstat(stream.fileno())) == snap(path.lstat()), "tool-changed")
+              need(content[:6] == b"\x7fELF\x02\x01" and content[18:20] == b"\x3e\x00", "tool-elf")
+              return hashlib.sha256(content).hexdigest()
+
+
+          def main(phase):
+              verify_host(os.environ)
+              if phase == "host":
+                  return
+              if phase == "capacity":
+                  observed = synthetic_capacity(os.environ["RUNNER_TEMP"])
+                  need(observed, "post-reservation-capacity")
+                  return
+              if phase == "git":
+                  measure_tool(Path("/usr/bin/git"), 16 * MIB)
+                  return
+              if phase == "node":
+                  node = Path("/opt/hostedtoolcache/node/24.22.2/x64/bin/node")
+                  digest = measure_tool(node, NODE_SIZE, NODE_SIZE)
+                  need(digest == NODE_SHA, "exact-node-digest")
+                  return
+              if phase == "loader":
+                  loader = Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+                  need(measure_tool(loader, MIB) == BASE_LOADER_SHA, "exact-loader-digest")
+                  return
+              raise RuntimeError("unexpected-phase")
+
+
+          if __name__ == "__main__":
+              try:
+                  main(sys.argv[1])
+              except RuntimeError as exc:
+                  print("refused-" + str(exc), file=sys.stderr)
+                  sys.exit(1)
+              except (OSError, KeyError, IndexError, ValueError):
+                  print("refused-stock-readback", file=sys.stderr)
+                  sys.exit(1)
+          PY
