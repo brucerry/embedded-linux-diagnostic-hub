@@ -1,0 +1,250 @@
+name: Windows SDK installed-byte comparison
+on:
+  push:
+    branches: [ci/v060-windows-sdk-installed-readback-20261121]
+    paths: [.github/workflows/windows-sdk-installed-readback.yml]
+permissions: {}
+jobs:
+  sdk_readback:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-windows-sdk-installed-readback-20261121' &&
+      github.event_name == 'push' &&
+      github.event.created == true &&
+      github.event.deleted == false &&
+      github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 5
+    steps:
+      - name: Compare exact Windows SDK media and installed files
+        shell: pwsh
+        run: |
+          # Reviewed, disabled Windows-only evidence collection.
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+
+          $packageUrl = 'https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x64/10.0.26100.9457/microsoft.windows.sdk.cpp.x64.10.0.26100.9457.nupkg'
+          $packageBytes = 52996057
+          $packageSha512 = 'fe318b5604abb4dc331604f9e7914fdd8b8849892bfac3288f92a43b0c1393e56549cf53968128a2c6270b13c2de3ec671f4b2545dd60ce193449737573e901a'
+          $signatureSha256 = 'e696f180e6648025cbb142d288bc8ab94bd013cf02db789f632dfd7e7cc6512b'
+          $authorFingerprint = '9a1b131bee0605433056a4ea3815478a8e177961a968c6c0027c1093d1feb630'
+          $rcFingerprint = 'f2540c63525e9566ffbbe630b860674a115ce2ce14dd8399ed53c376c920912f'
+          $kit = 'C:\Program Files (x86)\Windows Kits\10'
+          $dotnet = 'C:\Program Files\dotnet\dotnet.exe'
+          $productVersion = '10.1.26100.9457'
+          $sdk = '10.0.404'
+
+          $libraries = @(
+              @{
+                  Label = 'Kernel32.lib'
+                  Installed = 'Lib\10.0.26100.0\um\x64\Kernel32.lib'
+                  Member = 'c/um/x64/kernel32.Lib'
+                  Bytes = 311908
+                  Sha256 = '842f5ce7ad8cf5aab7491b791e7968d2be510ae93f4019d3311797289399d221'
+                  Product = '{48A8BEA1-B0C5-B648-A765-E767AEC8C881}'
+              },
+              @{
+                  Label = 'libucrt.lib'
+                  Installed = 'Lib\10.0.26100.0\ucrt\x64\libucrt.lib'
+                  Member = 'c/ucrt/x64/libucrt.lib'
+                  Bytes = 43370172
+                  Sha256 = 'c3a20426b5142bfd0848468a3b95c47440759f0391ef2764e5020672811803cb'
+                  Product = '{ECC668B0-7BAD-63A1-2F07-9BFB2422285E}'
+              }
+          )
+          $rcProduct = '{CCA39F48-DBB2-132A-7992-A452AA75EE5B}'
+          $rcDigest = '9e2ee68da28b3318f50a9f1008d64567a9b402bda384a007a9b71a3f16bd011b'
+          $hashAlgorithm = [Security.Cryptography.HashAlgorithmName]::SHA256
+
+          function Assert-PlainPath([string]$Path, [bool]$LeafFile) {
+              $item = Get-Item -LiteralPath $Path -Force
+              if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+                  $item.PSIsContainer -eq $LeafFile) { throw 'Unsupported file identity.' }
+              $node = if ($LeafFile) { $item.Directory } else { $item.Parent }
+              while ($null -ne $node) {
+                  if ($node.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Aliased ancestor.' }
+                  $node = $node.Parent
+              }
+          }
+
+          function Read-BoundedDigest([IO.Stream]$Stream, [long]$Length) {
+              $digest = [Security.Cryptography.IncrementalHash]::CreateHash($hashAlgorithm)
+              $buffer = [byte[]]::new(131072)
+              $total = [long]0
+              try {
+                  while (($got = $Stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                      $total += $got
+                      if ($total -gt $Length) { throw 'Unexpected member length.' }
+                      $digest.AppendData($buffer, 0, $got)
+                  }
+                  if ($total -ne $Length) { throw 'Short member.' }
+                  return [Convert]::ToHexString($digest.GetHashAndReset()).ToLowerInvariant()
+              } finally { $digest.Dispose() }
+          }
+
+          function Get-MicrosoftSignature([string]$Path) {
+              $signature = Get-AuthenticodeSignature -LiteralPath $Path
+              if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
+                  $signature.SignerCertificate.GetNameInfo('SimpleName', $false) -cne 'Microsoft Corporation') {
+                  throw 'Stock Microsoft Authenticode policy did not pass.'
+              }
+              return $signature
+          }
+
+          function Assert-InstalledProduct($Installer, [string]$Product) {
+              $type = $Installer.GetType()
+              $state = $type.InvokeMember('ProductState', 'GetProperty', $null, $Installer, @($Product))
+              $version = $type.InvokeMember('ProductInfo', 'GetProperty', $null, $Installer, @($Product, 'VersionString'))
+              if ($state -ne 5 -or $version -cne $productVersion) { throw 'Exact installed SDK component unavailable.' }
+          }
+
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows' -or
+              $env:RUNNER_ARCH -cne 'X64' -or $env:GITHUB_RUN_ATTEMPT -cne '1' -or
+              $env:ImageVersion -cne '20261116.315.1' -or
+              [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -ne 'X64') {
+              throw 'Exact hosted Windows context unavailable.'
+          }
+          $os = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          if ($os.CurrentBuildNumber -ne '26100' -or $os.UBR -ne 33828) { throw 'Reviewed Windows build unavailable.' }
+          foreach ($key in 'DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_SHARED_STORE', 'DOTNET_ROLL_FORWARD', 'NUGET_CERT_REVOCATION_MODE') {
+              if ([Environment]::GetEnvironmentVariable($key)) { throw 'Unexpected verifier environment.' }
+          }
+          Assert-PlainPath $kit $false
+          Assert-PlainPath $dotnet $true
+          Assert-PlainPath "C:\Program Files\dotnet\sdk\$sdk\dotnet.dll" $true
+          $null = Get-MicrosoftSignature $dotnet
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          try {
+              foreach ($lib in $libraries) { Assert-InstalledProduct $installer $lib.Product }
+              Assert-InstalledProduct $installer $rcProduct
+          } finally { $null = [Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer) }
+          Write-Host 'PASS exact installed SDK products and stock verifier launcher'
+
+          Assert-PlainPath $env:RUNNER_TEMP $false
+          $scratch = Join-Path $env:RUNNER_TEMP ('sdk-readback-' + [Guid]::NewGuid().ToString('N'))
+          $null = New-Item -Path $scratch -ItemType Directory
+          $locationPushed = $false
+          try {
+              Assert-PlainPath $scratch $false
+              $package = Join-Path $scratch 'microsoft.windows.sdk.cpp.x64.10.0.26100.9457.nupkg'
+              $handler = [Net.Http.HttpClientHandler]::new()
+              $handler.AllowAutoRedirect = $false
+              $handler.AutomaticDecompression = [Net.DecompressionMethods]::None
+              $client = [Net.Http.HttpClient]::new($handler)
+              $cancel = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(90))
+              try {
+                  $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Get, $packageUrl)
+                  $request.Headers.AcceptEncoding.ParseAdd('identity')
+                  try {
+                      $response = $client.Send($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cancel.Token)
+                      try {
+                          if ($response.StatusCode -ne [Net.HttpStatusCode]::OK -or
+                              $response.Content.Headers.ContentLength -ne $packageBytes -or
+                              $response.Content.Headers.ContentEncoding.Count -ne 0 -or
+                              $response.RequestMessage.RequestUri.AbsoluteUri -cne $packageUrl) {
+                              throw 'Unexpected NuGet transfer identity.'
+                          }
+                          $source = $response.Content.ReadAsStream($cancel.Token)
+                          $target = [IO.File]::Open($package, 'CreateNew', 'Write', 'None')
+                          try {
+                              $buffer = [byte[]]::new(131072)
+                              $received = [long]0
+                              while (($count = $source.ReadAsync($buffer, 0, $buffer.Length, $cancel.Token).GetAwaiter().GetResult()) -gt 0) {
+                                  $received += $count
+                                  if ($received -gt $packageBytes) { throw 'NuGet transfer overrun.' }
+                                  $target.Write($buffer, 0, $count)
+                              }
+                              if ($received -ne $packageBytes) { throw 'NuGet transfer truncated.' }
+                          } finally { $target.Dispose(); $source.Dispose() }
+                      } finally { $response.Dispose() }
+                  } finally { $request.Dispose() }
+              } finally { $cancel.Dispose(); $client.Dispose() }
+
+              $packageHandle = [IO.File]::Open($package, 'Open', 'Read', 'Read')
+              try {
+                  if ($packageHandle.Length -ne $packageBytes -or
+                      [Convert]::ToHexString([Security.Cryptography.SHA512]::HashData($packageHandle)).ToLowerInvariant() -cne $packageSha512) {
+                      throw 'Official package SHA-512 mismatch.'
+                  }
+                  $packageHandle.Position = 0
+                  Write-Host 'PASS official NuGet archive size and SHA-512'
+
+                  $env:DOTNET_NOLOGO = '1'
+                  $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+                  $env:DOTNET_CLI_HOME = $scratch
+                  $env:DOTNET_CLI_UI_LANGUAGE = 'en-US'
+                  $env:NUGET_PACKAGES = Join-Path $scratch 'nuget-packages'
+                  @{ sdk = @{ version = $sdk; rollForward = 'disable' } } | ConvertTo-Json -Compress |
+                      Set-Content -LiteralPath (Join-Path $scratch 'global.json') -Encoding ascii
+                  Push-Location -LiteralPath $scratch
+                  $locationPushed = $true
+                  $version = & $dotnet --version
+                  if ($LASTEXITCODE -ne 0 -or ($version -join '') -cne $sdk) { throw 'Exact admitted stock verifier missing.' }
+                  $verdict = & $dotnet nuget verify $package --all --verbosity normal 2>&1
+                  if ($LASTEXITCODE -ne 0 -or ($verdict -join "`n") -match '(?i)\b(?:warn(?:ing)?|error|NU\d{4})\b' -or
+                      ($verdict -join "`n") -notmatch '(?i)Signature type:\s*Author' -or
+                      ($verdict -join "`n") -notmatch $authorFingerprint) {
+                      throw 'Exact Microsoft author trust did not pass without warnings.'
+                  }
+                  Write-Host 'PASS Microsoft NuGet author signature and timestamp trust'
+
+                  $zip = [IO.Compression.ZipArchive]::new($packageHandle, 'Read', $true)
+                  try {
+                      $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                      foreach ($entry in $zip.Entries) {
+                          if (-not $seen.Add($entry.FullName) -or $seen.Count -gt 20000) { throw 'Ambiguous NuGet member inventory.' }
+                      }
+                      $sig = $zip.GetEntry('.signature.p7s')
+                      if ($null -eq $sig -or $sig.Length -ne 25989) { throw 'NuGet signature member missing.' }
+                      $raw = $sig.Open()
+                      try {
+                          if ((Read-BoundedDigest $raw 25989) -cne $signatureSha256) { throw 'NuGet signature member mismatch.' }
+                      } finally { $raw.Dispose() }
+                      foreach ($lib in $libraries) {
+                          $entry = $zip.GetEntry($lib.Member)
+                          if ($null -eq $entry -or $entry.FullName -cne $lib.Member -or $entry.Length -ne $lib.Bytes) {
+                              throw 'Exact signed NuGet library member missing.'
+                          }
+                          $member = $entry.Open()
+                          try {
+                              $memberDigest = Read-BoundedDigest $member $lib.Bytes
+                          } finally { $member.Dispose() }
+                          $installed = Join-Path $kit $lib.Installed
+                          Assert-PlainPath $installed $true
+                          $installedFile = [IO.File]::Open($installed, 'Open', 'Read', 'Read')
+                          try {
+                              if ($memberDigest -cne $lib.Sha256 -or $installedFile.Length -ne $lib.Bytes -or
+                                  (Read-BoundedDigest $installedFile $lib.Bytes) -cne $memberDigest) {
+                                  throw ('Installed library identity mismatch: ' + $lib.Label)
+                              }
+                          } finally { $installedFile.Dispose() }
+                          Write-Host ('PASS installed ' + $lib.Label + ' matches CAB and Microsoft-authored package')
+                      }
+                  } finally { $zip.Dispose() }
+              } finally { $packageHandle.Dispose() }
+
+              $rc = Join-Path $kit 'Bin\10.0.26100.0\x64\rc.exe'
+              Assert-PlainPath $rc $true
+              $rcFile = [IO.File]::Open($rc, 'Open', 'Read', 'Read')
+              try {
+                  if ($rcFile.Length -ne 55736 -or (Read-BoundedDigest $rcFile 55736) -cne $rcDigest) {
+                      throw 'Installed rc.exe differs from the exact source CAB member.'
+                  }
+                  $signature = Get-MicrosoftSignature $rc
+                  if ($null -eq $signature.TimeStamperCertificate -or
+                      $signature.SignerCertificate.GetCertHashString($hashAlgorithm).ToLowerInvariant() -cne $rcFingerprint) {
+                      throw 'Installed rc.exe signer or timestamp differs.'
+                  }
+              } finally { $rcFile.Dispose() }
+              Write-Host 'PASS installed rc.exe matches CAB and Windows publisher trust'
+          } finally {
+              if ($locationPushed) { Pop-Location }
+              Assert-PlainPath $scratch $false
+              if (Get-ChildItem -LiteralPath $scratch -Force -Recurse -Attributes ReparsePoint | Select-Object -First 1) {
+                  throw 'Scratch retirement requires separate ownership review.'
+              }
+              Remove-Item -LiteralPath $scratch -Force -Recurse
+              if (Test-Path -LiteralPath $scratch) { throw 'Private scratch retirement failed.' }
+          }
