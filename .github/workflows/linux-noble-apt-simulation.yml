@@ -1,142 +1,101 @@
-name: Noble inert worker capacity and isolation
+name: Approved isolated Noble toolchain provisioning
 on:
   push:
     branches: [ci/v060-noble-apt-runtime-observations-20261120]
     paths: [.github/workflows/linux-noble-apt-simulation.yml]
 permissions: {}
 jobs:
-  worker-venue:
-    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.ref == 'refs/heads/ci/v060-noble-apt-runtime-observations-20261120' && github.run_attempt == 1 }}
+  noble-apt-provisioning:
+    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.ref == 'refs/heads/ci/v060-noble-apt-runtime-observations-20261120' && github.actor == 'brucerry' && github.event.sender.login == 'brucerry' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 22
     steps:
-      - name: Observe pinned inert worker and retire it
-        id: probe
+      - name: Execute the one reviewed disposable transaction and independent reader
+        id: provision
         shell: bash
         run: |
           /usr/bin/python3 -I -B - <<'PY'
-          import json, os, platform, re, stat, subprocess, tempfile
+          import hashlib, os, re, subprocess, tempfile
           from pathlib import Path
-
-          image = 'docker.io/library/ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec'
-          config = 'sha256:7da97f743f397971f35dd21cd2d19a7da070a150e0cfa3eda559e71891ec7533'
-          layers = ['sha256:21210938f5a37a9887b2d0a20428917b923a636ca6efe038c3c7d9cd9f1f9b61']
-          uid, gid = os.getuid(), os.getgid()
-          assert 0 < uid == os.geteuid() and 0 < gid == os.getegid()
-          assert (os.environ['RUNNER_ENVIRONMENT'], os.environ['RUNNER_OS'], os.environ['RUNNER_ARCH']) == ('github-hosted', 'Linux', 'X64')
-          assert platform.machine() == 'x86_64'
-          for path, kind in [('/usr/bin/docker', stat.S_ISREG), ('/var/run/docker.sock', stat.S_ISSOCK)]:
-              st = os.stat(path)
-              assert kind(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o002
-
-          def mark(label):
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-                  out.write(label + '=pass\n')
-
-          def available(path):
-              fs = os.statvfs(path)
-              return fs.f_bavail * fs.f_frsize
-
-          worker = r'''
-          test "$$" = 1
-          test "$(id -u)" = "$EXPECTED_UID"
-          test "$(id -g)" = "$EXPECTED_GID"
-          test "$(awk 'NR>2 {gsub(":","",$1); print $1}' /proc/net/dev)" = lo
-          awk 'NR>1 && ($1!="lo" || $2=="00000000") {exit 1}' /proc/net/route
-          awk '$10!="lo" || ($1 ~ /^0+$/ && $2=="00" && substr($9,length($9)-2,1) !~ /[2367abef]/) {exit 1}' /proc/net/ipv6_route
-          awk '$1=="NoNewPrivs:" && $2==1 {n=1} $1=="Seccomp:" && $2==2 {s=1} $1=="CapEff:" && $2 ~ /^0+$/ {c=1} END {exit !(n&&s&&c)}' /proc/self/status
-          awk '$5=="/" && $6 ~ /^ro(,|$)/ {root=1} $5=="/staged" && $6 ~ /^ro(,|$)/ {stage=1} END {exit !(root&&stage)}' /proc/self/mountinfo
-          test "$(stat -c %s /staged/reserve)" = 138412032
-          test "$(stat -c '%a %u %g' /scratch)" = "700 $EXPECTED_UID $EXPECTED_GID"
-          printf '%s\n' inert > /scratch/owned
-          /usr/bin/sleep 0.2 & child=$!
-          kill -0 "$child"
-          wait "$child"
-          if kill -0 "$child" 2>/dev/null; then exit 1; fi
-          rm /scratch/owned
-          printf '%s\n' inert-worker-pass
-          '''
-
-          with tempfile.TemporaryDirectory(prefix='hub-inert-', dir=os.environ['RUNNER_TEMP']) as tmp:
-              root = Path(tmp).resolve(strict=True)
-              assert root.stat().st_uid == uid and root.stat().st_mode & 0o777 == 0o700
-              (root / 'config').mkdir(mode=0o700)
-              stage = root / 'stage'
-              stage.mkdir(mode=0o700)
-              env = {'PATH': '/usr/bin:/bin', 'HOME': str(root), 'DOCKER_CONFIG': str(root/'config'), 'LANG': 'C.UTF-8'}
-              def docker(*args, timeout=8):
-                  result = subprocess.run(['/usr/bin/docker', '--host=unix:///var/run/docker.sock', *args],
-                      env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
-                  assert result.returncode == 0 and len(result.stdout) <= 65536
-                  return result.stdout
-              def inspect(kind, key):
-                  rows = json.loads(docker(kind, 'inspect', key))
-                  assert len(rows) == 1
-                  return rows[0]
-              docker('image', 'pull', '--platform=linux/amd64', '--quiet', image, timeout=55)
-              img = inspect('image', image)
-              assert (img['Id'], img['Os'], img['Architecture'], img['RootFS']['Layers']) == (config, 'linux', 'amd64', layers)
-              mark('image')
-              graph_name, driver, os_type, *security = docker('info', '--format',
-                  '{{.DockerRootDir}}\n{{.Driver}}\n{{.OSType}}{{range .SecurityOptions}}\n{{.}}{{end}}').decode().splitlines()
-              graph = Path(graph_name)
-              assert graph == Path('/var/lib/docker') and graph.resolve(strict=True) == graph
-              assert driver in ('overlay2','overlayfs','vfs') and os_type == 'linux'
-              assert 'name=seccomp,profile=builtin' in security
-              assert available(graph) >= 4 * 1024**3 and available(stage) >= 4 * 1024**3 + 138412032
-              with (stage / 'reserve').open('xb') as f:
-                  os.posix_fallocate(f.fileno(), 0, 138412032)
-                  assert os.fstat(f.fileno()).st_blocks * 512 >= 138412032
-              cid = docker('container','create','--pull=never','--network=none','--read-only','--cap-drop=ALL',
-                  '--security-opt=no-new-privileges','--user',f'{uid}:{gid}','--pids-limit=16','--memory=128m',
-                  '--log-driver=none','--mount',f'type=bind,src={stage},dst=/staged,readonly',
-                  '--tmpfs',f'/scratch:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid={uid},gid={gid}',
-                  '--env',f'EXPECTED_UID={uid}','--env',f'EXPECTED_GID={gid}',
-                  '--entrypoint=/bin/sh',image,'-eu','-c',worker).decode().strip()
-              assert re.fullmatch(r'[a-f0-9]{64}', cid)
-              try:
-                  row = inspect('container', cid)
-                  host = row['HostConfig']
-                  assert row['Id'] == cid and row['Image'] == config and row['Config']['User'] == f'{uid}:{gid}'
-                  assert host['ReadonlyRootfs'] and not host['Privileged'] and host['NetworkMode'] == 'none'
-                  assert host['PidMode'] in ('', 'private') and not host['PortBindings']
-                  assert host['CapDrop'] == ['ALL'] and not host['CapAdd']
-                  assert host['SecurityOpt'] in (['no-new-privileges'], ['no-new-privileges:true'])
-                  assert not host['Devices'] and not host['DeviceRequests']
-                  mounts = [m for m in row['Mounts'] if m['Type']=='bind']
-                  assert len(mounts) == 1 and mounts[0]['Source'] == str(stage) and mounts[0]['Destination'] == '/staged' and not mounts[0]['RW']
-                  assert available(graph) >= 4 * 1024**3 and available(stage) >= 4 * 1024**3
-                  mark('capacity')
-                  assert docker('container','start','--attach',cid,timeout=18) == b'inert-worker-pass\n'
-                  mark('isolation')
-                  final = inspect('container',cid)
-                  state = final['State']
-                  assert final['Id'] == cid and state['Status']=='exited' and state['Pid']==0 and state['ExitCode']==0
-              finally:
-                  state = inspect('container',cid)['State']
-                  if state['Running']:
-                      docker('container','stop','--time=2',cid)
-                  assert docker('container','rm',cid).decode().strip() == cid
-                  assert docker('container','ls','--all','--quiet','--filter','id='+cid) == b''
-              mark('closure')
+          approved = [
+              ('intake.py', 19626, 'ffe99877181e3368b21f631b21b2f69c5531aa280e76c9fb176ae34887a1eaca'),
+              ('pins.json', 511199, '6e685c54df1fceef365c0dd28cd763e65468cf7194601e2450f54de6fef8e4b9'),
+              ('reader.sh', 2601, 'b0c445372342e134c570edb31ce54ecdc069022c69ead646b40d80279eb5340b'),
+              ('signed-policy.json', 17429, '8e0b11b057d980fffedb179f47a06e951b58ee842b3629e54742a5a8ccea5387'),
+              ('transaction.py', 23420, 'c5e061e170034b5785be582401af2154c998a2848330073804a50232b03e9028'),
+              ('writer.sh', 3061, 'c184fa92790ba4406f0faad40c1b1de03703546f539c00fa7e6d59601ae796e3'),
+          ]
+          sha = os.environ['GITHUB_SHA']
+          assert re.fullmatch('[a-f0-9]{40}', sha)
+          assert os.environ['GITHUB_WORKFLOW_SHA'] == sha
+          assert 0 < os.getuid() == os.geteuid()
+          root = Path(os.environ['RUNNER_TEMP'])
+          assert root.resolve(strict=True) == root and root.stat().st_uid == os.getuid()
+          prefix = 'https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/' + sha + '/scripts/ci/noble-provision/'
+          os.umask(0o077)
+          with tempfile.TemporaryDirectory(prefix='hub-noble-job-code-', dir=root) as td:
+              launcher = Path(td)
+              for name, size, digest in approved:
+                  result = subprocess.run(['/usr/bin/curl', '--disable', '--silent', '--fail', '--max-time', '12',
+                      '--connect-timeout', '5', '--max-filesize', str(size), '--proto', '=https',
+                      '--write-out', '%{http_code}', prefix + name],
+                      stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
+                      env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8'})
+                  body = result.stdout
+                  assert result.returncode == 0 and body[-3:] == b'200' and not result.stderr
+                  assert len(body) == size + 3 and hashlib.sha256(body[:-3]).hexdigest() == digest
+                  with (launcher / name).open('xb') as output:
+                      output.write(body[:-3])
+              assert subprocess.run(['/usr/bin/python3', '-I', '-B', launcher / 'transaction.py'],
+                                    stdin=subprocess.DEVNULL, timeout=1230).returncode == 0
           PY
-      - name: Pinned Noble image identity
+      - name: Pinned stock Noble OCI and pre-staging backing-store census
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.probe.outputs.image }}
+          OBSERVED: ${{ steps.provision.outputs['oci'] }}
         run: test "$OBSERVED" = pass
-      - name: Four GiB free on worker and Docker backing stores after staging and create
+      - name: Canonical snapshot signatures, 39 verified DEBs, and private immutable stages
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.probe.outputs.capacity }}
+          OBSERVED: ${{ steps.provision.outputs['intake'] }}
         run: test "$OBSERVED" = pass
-      - name: Non-root read-only worker with loopback-only network
+      - name: Approved disposable writer and exact post-staging backing-store capacity
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.probe.outputs.isolation }}
+          OBSERVED: ${{ steps.provision.outputs['writer-admitted'] }}
         run: test "$OBSERVED" = pass
-      - name: Inert child reaped and exact container stopped and absent
+      - name: Default unprivileged APT user read all 39 exact inputs
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.probe.outputs.closure }}
+          OBSERVED: ${{ steps.provision.outputs['apt-readable'] }}
+        run: test "$OBSERVED" = pass
+      - name: Reached the single real offline APT invocation
+        if: ${{ always() }}
+        env:
+          OBSERVED: ${{ steps.provision.outputs['transaction-invoked'] }}
+        run: test "$OBSERVED" = pass
+      - name: Exact 37 additions, two glibc upgrades, zero removals, and clean 129-package database
+        if: ${{ always() }}
+        env:
+          OBSERVED: ${{ steps.provision.outputs['transaction'] }}
+        run: test "$OBSERVED" = pass
+      - name: Only declared payload and reviewed generated paths changed
+        if: ${{ always() }}
+        env:
+          OBSERVED: ${{ steps.provision.outputs['delta'] }}
+        run: test "$OBSERVED" = pass
+      - name: Nonroot compiler, linker, headers, loader cache and package database readback
+        if: ${{ always() }}
+        env:
+          OBSERVED: ${{ steps.provision.outputs['reader'] }}
+        run: test "$OBSERVED" = pass
+      - name: Exact owned containers and any derived image retired
+        if: ${{ always() }}
+        env:
+          OBSERVED: ${{ steps.provision.outputs['container-cleanup'] }}
+        run: test "$OBSERVED" = pass
+      - name: Exact private work directory retired
+        if: ${{ always() }}
+        env:
+          OBSERVED: ${{ steps.provision.outputs['scratch-cleanup'] }}
         run: test "$OBSERVED" = pass
