@@ -1,0 +1,260 @@
+name: Inert Intel ICNS roundtrip
+on:
+  push:
+    branches: [ci/v060-intel-icns-inert-20261121]
+    paths: [.github/workflows/intel-icns-inert.yml]
+permissions: {}
+jobs:
+  iconutil:
+    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.repository_id == '1405501450' && github.ref == 'refs/heads/ci/v060-intel-icns-inert-20261121' && github.event.created && github.run_attempt == 1 }}
+    runs-on: macos-15-intel
+    timeout-minutes: 4
+    defaults:
+      run:
+        shell: bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - name: Confirm Intel hosted macOS and sealed system volume
+        run: |
+          test "$RUNNER_ENVIRONMENT/$RUNNER_OS/$RUNNER_ARCH" = github-hosted/macOS/X64
+          test "$(/usr/bin/uname -s)" = Darwin
+          test "$(/usr/bin/uname -m)" = x86_64
+          [[ "$(/usr/bin/sw_vers -productVersion)" == 15.* ]]
+          test "$(/usr/bin/id -u)" -ne 0
+          mount_line="$(/sbin/mount | /usr/bin/awk '$2=="on" && $3=="/" {print; count++} END { if (count!=1) exit 1 }')"
+          [[ "$mount_line" == *apfs* && "$mount_line" == *sealed* && "$mount_line" == *read-only* ]]
+      - name: Admit stock Apple iconutil and fixture interpreter
+        run: |
+          for tool in /usr/bin/iconutil /usr/bin/perl; do
+            test -f "$tool" && test ! -L "$tool"
+            read -r owner mode links <<< "$(/usr/bin/stat -f '%u %Lp %l' "$tool")"
+            test "$owner" = 0 && test "$links" -ge 1
+            [[ "$mode" =~ ^[0-7]{3,4}$ ]]
+            (( (8#$mode & 022) == 0 ))
+            [[ "$(/usr/bin/file -b "$tool")" == Mach-O*x86_64* ]]
+            /usr/bin/codesign --verify --strict --all-architectures -R='anchor apple' "$tool" >/dev/null 2>&1
+          done
+          /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl -MCompress::Zlib -MCompress::Raw::Zlib -MDigest::SHA -MFile::Path -e ''
+          tool_hash="$(/usr/bin/shasum -a 256 /usr/bin/iconutil | /usr/bin/cut -d ' ' -f 1)"
+          [[ "$tool_hash" =~ ^[0-9a-f]{64}$ ]]
+          printf 'HUB_ICONUTIL_SHA=%s\n' "$tool_hash" >> "$GITHUB_ENV"
+      - name: Generate and read back ten inert RGBA frames
+        run: |
+          umask 077
+          parent="$(cd -P -- "$RUNNER_TEMP" && /bin/pwd -P)"
+          [[ "$parent" =~ ^/[-A-Za-z0-9_./]+$ ]]
+          test "$(/usr/bin/stat -f %u "$parent")" = "$(/usr/bin/id -u)"
+          root="$(/usr/bin/mktemp -d "$parent/hub-icns-inert.XXXXXXXX")"
+          test "$(/usr/bin/stat -f %Lp "$root")" = 700
+          printf 'HUB_ICNS_ROOT=%s\nHUB_ICNS_PARENT=%s\n' "$root" "$parent" >> "$GITHUB_ENV"
+          /bin/mkdir "$root/Probe.iconset" "$root/home"
+          /bin/cat > "$root/fixture.pl" <<'INERT_PERL'
+          use strict;
+          use warnings;
+          use Compress::Zlib qw(compress crc32);
+          use Compress::Raw::Zlib qw(MAX_WBITS Z_OK Z_STREAM_END Z_BUF_ERROR);
+          use Digest::SHA qw(sha256_hex);
+          use File::Path qw(remove_tree);
+          use Cwd qw(abs_path);
+          use Fcntl qw(S_ISREG);
+
+          sub demand { die "$_[1]\n" unless $_[0]; }
+          my %frames = map { ("icon_${_}x${_}.png" => $_, "icon_${_}x${_}\@2x.png" => 2 * $_) } (16, 32, 128, 256, 512);
+
+          sub expected_row {
+              my ($n, $y) = @_;
+              return "\0" x (4 * $n) if $y < $n/4 || $y >= 3*$n/4;
+              return ("\0" x $n) . (pack("C4", 44, 172, 201, 255) x ($n/2)) . ("\0" x $n);
+          }
+
+          sub png_chunk {
+              my ($tag, $value) = @_;
+              return pack("N", length($value)) . $tag . $value . pack("N", crc32($tag . $value));
+          }
+
+          sub png_make {
+              my ($n) = @_;
+              my $pixels = join('', map { "\0" . expected_row($n, $_) } 0..$n-1);
+              return "\x89PNG\r\n\x1a\n" . png_chunk("IHDR", pack("NNCCCCC", $n, $n, 8, 6, 0, 0, 0)) .
+                  png_chunk("IDAT", compress($pixels)) . png_chunk("IEND", "");
+          }
+
+          sub read_bounded {
+              my ($path, $max) = @_;
+              my @status = lstat($path);
+              demand(@status && S_ISREG($status[2]) && $status[3] == 1 && $status[7] > 0 &&
+                     $status[7] <= $max && abs_path($path) eq $path, "nonregular or unbounded fixture file");
+              open my $handle, "<:raw", $path or die "fixture read\n";
+              my $got = read($handle, my $value, $max+1);
+              close $handle or die "fixture close\n";
+              demand(defined($got) && $got == $status[7], "fixture readback changed");
+              return $value;
+          }
+
+          sub decode_bounded {
+              my ($in, $expected) = @_;
+              my ($decoder, $new) = Compress::Raw::Zlib::Inflate->new(-WindowBits=>MAX_WBITS,
+                -LimitOutput=>1, -Bufsize=>16384, -ConsumeInput=>1);
+              demand($new == Z_OK, "PNG inflate init");
+              my $raw = "";
+              for (1..512) {
+                  my $before = length($in);
+                  my $status = $decoder->inflate($in, my $block);
+                  $raw .= $block;
+                  demand(length($raw) <= $expected, "PNG inflate exceeded expected RGBA size");
+                  if ($status == Z_STREAM_END) {
+                      demand(!length($in) && length($raw) == $expected, "PNG inflate end or size");
+                      return $raw;
+                  }
+                  demand(($status == Z_OK || $status == Z_BUF_ERROR) &&
+                         (length($block) || length($in) < $before), "PNG inflate error");
+              }
+              die "PNG inflate progress limit\n";
+          }
+
+          sub paeth {
+              my ($a, $b, $c) = @_;
+              my $p = $a + $b - $c;
+              my ($da, $db, $dc) = (abs($p - $a), abs($p - $b), abs($p - $c));
+              return $a if $da <= $db && $da <= $dc;
+              return $b if $db <= $dc;
+              return $c;
+          }
+
+          sub png_validate {
+              my ($png, $n) = @_;
+              demand(substr($png, 0, 8, '') eq "\x89PNG\r\n\x1a\n", "PNG magic");
+              my ($compressed, $header, $end, $chunks) = ("", 0, 0, 0);
+              while (length($png)) {
+                  demand(++$chunks <= 128 && length($png) >= 12, "PNG chunk bound");
+                  my ($size, $type) = unpack("Na4", substr($png, 0, 8, ''));
+                  demand($size <= length($png)-4 && $type =~ /\A[A-Za-z]{4}\z/, "PNG chunk length");
+                  my $body = substr($png, 0, $size, '');
+                  demand(unpack("N",substr($png, 0, 4, '')) == crc32($type . $body), "PNG CRC");
+                  demand($header || $type eq 'IHDR', "PNG missing first header");
+                  if ($type eq 'IHDR') {
+                      demand(!$header && $body eq pack("NNCCCCC", $n,$n,8,6,0,0,0), "PNG dimensions or RGBA type");
+                      $header=1;
+                  } elsif ($type eq 'IDAT') {
+                      $compressed .= $body;
+                      demand(length($compressed) <= 2*1024*1024, "PNG compressed bytes bound");
+                  } elsif ($type eq 'IEND') {
+                      demand(!length($body) && !length($png), "PNG terminal chunk");
+                      $end=1;
+                  } else {
+                      # Optional display metadata has no effect on the compared decoded RGBA bytes.
+                      demand(substr($type,0,1) =~ /[a-z]/, "unrecognized critical PNG chunk");
+                  }
+              }
+              demand($header && $end && length($compressed), "incomplete PNG");
+              my $stride = $n * 4;
+              my $bytes = decode_bounded($compressed, $n * ($stride + 1));
+              my @prior = (0) x $stride;
+              for my $y (0..$n-1) {
+                  my $kind = ord(substr($bytes, $y * ($stride + 1), 1));
+                  demand($kind <= 4, "PNG row filter");
+                  my @row = unpack("C*", substr($bytes, $y*($stride+1)+1, $stride));
+                  if ($kind) {
+                      for my $x (0..$#row) {
+                          my $left = $x >= 4 ? $row[$x-4] : 0;
+                          my $above = $prior[$x];
+                          my $aboveleft = $x >= 4 ? $prior[$x-4] : 0;
+                          my $filter = $kind == 1 ? $left : $kind == 2 ? $above :
+                                       $kind == 3 ? int(($left+$above)/2) : paeth($left,$above,$aboveleft);
+                          $row[$x] = ($row[$x]+$filter) & 255;
+                      }
+                  }
+                  demand(pack("C*",@row) eq expected_row($n,$y), "RGBA fixture changed on roundtrip");
+                  @prior = @row;
+              }
+          }
+
+          sub frames_at {
+              my ($dir, $make) = @_;
+              demand(-d $dir && abs_path($dir) eq $dir, "fixture iconset directory");
+              if ($make) {
+                  for my $name (sort keys %frames) {
+                      demand(!-e "$dir/$name" && !-l "$dir/$name", "existing fixture frame");
+                      open my $handle, ">:raw", "$dir/$name" or die "fixture frame write\n";
+                      print {$handle} png_make($frames{$name});
+                      close $handle or die "fixture frame close\n";
+                  }
+              }
+              opendir my $directory, $dir or die "fixture census\n";
+              my @actual = sort grep { $_ ne "." && $_ ne ".." } readdir $directory;
+              closedir $directory or die "fixture directory close\n";
+              demand(join("\n",@actual) eq join("\n",sort keys %frames), "missing or extra iconset frame");
+              for my $name (@actual) { png_validate(read_bounded("$dir/$name", 2*1024*1024),$frames{$name}); }
+          }
+
+          sub check_icns {
+              my ($file) = @_;
+              my $raw = read_bounded($file, 4*1024*1024);
+              demand(length($raw)>16 && substr($raw,0,4) eq 'icns' && unpack("N",substr($raw,4,4))==length($raw),
+                     "ICNS header or length");
+              my ($at,$chunks)=(8,0);
+              while ($at < length($raw)) {
+                  demand(++$chunks <= 128 && $at+8 <= length($raw), "ICNS chunk bound");
+                  my ($kind,$length)=unpack("a4N",substr($raw,$at,8));
+                  demand($kind =~ /\A[ -~]{4}\z/ && $length > 8 && $length <= length($raw)-$at, "ICNS chunk");
+                  $at += $length;
+              }
+              print sha256_hex($raw),"\n";
+          }
+
+          sub cleanup {
+              my ($root, $parent) = @_;
+              demand(defined($parent) && abs_path($parent) eq $parent &&
+                     $root =~ /\A\Q$parent\E\/hub-icns-inert\.[A-Za-z0-9]+\z/ && abs_path($root) eq $root,
+                     "fixture cleanup scope");
+              my @st=lstat($root);
+              demand(@st && -d _ && $st[4] == $< && ($st[2] & 0777) == 0700,"fixture cleanup owner");
+              remove_tree($root,{safe=>1});
+              demand(!-e $root && !-l $root, "fixture cleanup incomplete");
+          }
+
+          my ($command, $target, $extra) = @ARGV;
+          if ($command eq 'make' || $command eq 'check') {
+              frames_at($target, $command eq 'make');
+          } elsif ($command eq 'icns') {
+              check_icns($target);
+          } elsif ($command eq 'release-scratch') {
+              cleanup($target, $extra);
+          } else {
+              die "unrecognized inert fixture action\n";
+          }
+          INERT_PERL
+          test "$(/usr/bin/shasum -a 256 "$root/fixture.pl" | /usr/bin/cut -d ' ' -f 1)" = 21f57ca89735355d030b962ef294970126747d1c7e4ccf248a02086f8707982a
+          /usr/bin/env -i HOME="$root/home" TMPDIR="$root/home" PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl "$root/fixture.pl" make "$root/Probe.iconset"
+      - name: Convert source iconset to ICNS
+        run: |
+          test "$(/usr/bin/shasum -a 256 /usr/bin/iconutil | /usr/bin/cut -d ' ' -f 1)" = "$HUB_ICONUTIL_SHA"
+          test ! -e "$HUB_ICNS_ROOT/Probe.icns" && test ! -L "$HUB_ICNS_ROOT/Probe.icns"
+          /usr/bin/env -i HOME="$HUB_ICNS_ROOT/home" TMPDIR="$HUB_ICNS_ROOT/home" PATH=/usr/bin:/bin LC_ALL=C /usr/bin/iconutil -c icns -o "$HUB_ICNS_ROOT/Probe.icns" "$HUB_ICNS_ROOT/Probe.iconset" >/dev/null 2>&1
+      - name: Verify ICNS header and bounded chunks
+        run: |
+          test "$(/usr/bin/shasum -a 256 "$HUB_ICNS_ROOT/fixture.pl" | /usr/bin/cut -d ' ' -f 1)" = 21f57ca89735355d030b962ef294970126747d1c7e4ccf248a02086f8707982a
+          /usr/bin/env -i HOME="$HUB_ICNS_ROOT/home" TMPDIR="$HUB_ICNS_ROOT/home" PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl "$HUB_ICNS_ROOT/fixture.pl" icns "$HUB_ICNS_ROOT/Probe.icns" > "$HUB_ICNS_ROOT/icns.sha256"
+      - name: Reopen ICNS using the same Apple tool
+        run: |
+          test "$(/usr/bin/shasum -a 256 /usr/bin/iconutil | /usr/bin/cut -d ' ' -f 1)" = "$HUB_ICONUTIL_SHA"
+          test ! -e "$HUB_ICNS_ROOT/Reopened.iconset" && test ! -L "$HUB_ICNS_ROOT/Reopened.iconset"
+          /usr/bin/env -i HOME="$HUB_ICNS_ROOT/home" TMPDIR="$HUB_ICNS_ROOT/home" PATH=/usr/bin:/bin LC_ALL=C /usr/bin/iconutil -c iconset -o "$HUB_ICNS_ROOT/Reopened.iconset" "$HUB_ICNS_ROOT/Probe.icns" >/dev/null 2>&1
+      - name: Verify decoded pixels and unchanged source and converter
+        run: |
+          root="$HUB_ICNS_ROOT"
+          test "$(/usr/bin/shasum -a 256 "$root/fixture.pl" | /usr/bin/cut -d ' ' -f 1)" = 21f57ca89735355d030b962ef294970126747d1c7e4ccf248a02086f8707982a
+          test "$(/usr/bin/shasum -a 256 /usr/bin/iconutil | /usr/bin/cut -d ' ' -f 1)" = "$HUB_ICONUTIL_SHA"
+          for path in "$root/Probe.iconset" "$root/Reopened.iconset"; do
+            /usr/bin/env -i HOME="$root/home" TMPDIR="$root/home" PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl "$root/fixture.pl" check "$path"
+          done
+          actual="$(/usr/bin/env -i HOME="$root/home" TMPDIR="$root/home" PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl "$root/fixture.pl" icns "$root/Probe.icns")"
+          test "$actual" = "$(/bin/cat "$root/icns.sha256")"
+      - name: Retire owned synthetic scratch
+        if: ${{ always() }}
+        run: |
+          if test -z "${HUB_ICNS_ROOT:-}"; then
+            printf '%s\n' 'No fixture scratch reached.'
+            exit 0
+          fi
+          test "$(/usr/bin/shasum -a 256 "$HUB_ICNS_ROOT/fixture.pl" | /usr/bin/cut -d ' ' -f 1)" = 21f57ca89735355d030b962ef294970126747d1c7e4ccf248a02086f8707982a
+          /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl "$HUB_ICNS_ROOT/fixture.pl" release-scratch "$HUB_ICNS_ROOT" "$HUB_ICNS_PARENT"
