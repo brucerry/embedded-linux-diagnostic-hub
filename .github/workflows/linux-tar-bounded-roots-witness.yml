@@ -1,0 +1,789 @@
+name: Noble bounded roots inert witness
+on:
+  push:
+    branches: [ci/v060-linux-tar-bounded-roots-witness-20261121]
+    paths: [.github/workflows/linux-tar-bounded-roots-witness.yml]
+permissions: {}
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+jobs:
+  bounded-roots:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-linux-tar-bounded-roots-witness-20261121' &&
+      github.event_name == 'push' && github.event.created == true &&
+      github.event.deleted == false && github.event.forced == false && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Run one synthetic Docker boundary witness
+        id: witness
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          """Stock host supervisor for one synthetic shell witness."""
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import secrets
+          import selectors
+          import stat
+          import subprocess
+          import time
+          from contextlib import contextmanager
+
+          REPO = 'brucerry/embedded-linux-diagnostic-hub'
+          BRANCH = 'ci/v060-linux-tar-bounded-roots-witness-20261121'
+          REF = 'refs/heads/' + BRANCH
+          WORKFLOW = '.github/workflows/linux-tar-bounded-roots-witness.yml'
+          MANIFEST = 'sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec'
+          CONFIG = 'sha256:7da97f743f397971f35dd21cd2d19a7da070a150e0cfa3eda559e71891ec7533'
+          LAYER = 'sha256:21210938f5a37a9887b2d0a20428917b923a636ca6efe038c3c7d9cd9f1f9b61'
+          IMAGE = 'docker.io/library/ubuntu@' + MANIFEST
+          LABEL = 'org.hub.bounded-witness'
+          FLOOR = 4 * 1024**3
+          PRE_PULL = FLOOR + 256 * 1024**2
+          ENV = {'PATH':'/usr/bin:/bin', 'LC_ALL':'C', 'LANG':'C', 'TZ':'UTC'}
+
+
+          class Refused(Exception):
+              pass
+
+
+          def require(condition, reason=''):
+              if not condition:
+                  raise Refused(reason)
+
+
+          def digest(raw):
+              return hashlib.sha256(raw).hexdigest()
+
+
+          def matches(pattern, text):
+              return isinstance(text, str) and re.fullmatch(pattern, text) is not None
+
+
+          def canonical(path):
+              require(path.is_absolute() and path.resolve(strict=True) == path and ',' not in str(path))
+              return path
+
+
+          def enough(path, minimum):
+              fd = os.open(canonical(path), os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  before = os.fstat(fd)
+                  space = os.fstatvfs(fd)
+                  now = path.lstat()
+                  require((before.st_dev, before.st_ino) == (now.st_dev, now.st_ino)
+                          and space.f_bavail * space.f_frsize >= minimum and not space.f_flag & os.ST_RDONLY)
+                  return before.st_dev
+              finally:
+                  os.close(fd)
+
+
+          def read_file(path, limit):
+              with os.fdopen(os.open(canonical(path), os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), 'rb') as file:
+                  st = os.fstat(file.fileno())
+                  require(stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and st.st_size <= limit)
+                  data = file.read(limit + 1)
+                  identity = lambda s: (s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_ctime_ns,s.st_mtime_ns)
+                  require(len(data) == st.st_size and identity(st) == identity(os.fstat(file.fileno()))
+                          == identity(path.lstat()))
+                  return data
+
+
+          def host_context(e):
+              expect = {'GITHUB_REPOSITORY':REPO, 'GITHUB_REF':REF, 'GITHUB_RUN_ATTEMPT':'1',
+                        'GITHUB_EVENT_NAME':'push', 'GITHUB_JOB':'bounded-roots',
+                        'GITHUB_WORKFLOW_REF':f'{REPO}/{WORKFLOW}@{REF}', 'RUNNER_ENVIRONMENT':'github-hosted',
+                        'RUNNER_OS':'Linux', 'RUNNER_ARCH':'X64', 'ImageOS':'ubuntu24'}
+              require(all(e.get(k) == v for k,v in expect.items()))
+              commit, run = e.get('GITHUB_SHA'), e.get('GITHUB_RUN_ID')
+              require(matches(r'[a-f0-9]{40}',commit) and commit == e.get('GITHUB_WORKFLOW_SHA'))
+              require(matches(r'[1-9][0-9]{0,18}',run))
+              require(os.uname().sysname == 'Linux' and os.uname().machine == 'x86_64')
+              os_release = read_file(Path('/usr/lib/os-release'), 8192).splitlines()
+              require(b'ID=ubuntu' in os_release and any(value in os_release for value in
+                      (b'VERSION_ID="24.04"', b'VERSION_ID=24.04')))
+              uid, gid = os.getuid(), os.getgid()
+              require(uid > 0 and gid > 0 and os.geteuid() == uid and os.getegid() == gid)
+              temp, work = (canonical(Path(e[k])) for k in ('RUNNER_TEMP','GITHUB_WORKSPACE'))
+              require(temp != work and temp.name == '_temp' and work.parent.name == work.name
+                      and work.parent.parent == temp.parent)
+              for path in (temp, work):
+                  info = path.lstat()
+                  require(stat.S_ISDIR(info.st_mode) and info.st_uid == uid and not info.st_mode & 0o022)
+              event = json.loads(read_file(Path(e['GITHUB_EVENT_PATH']), 4 * 1024**2))
+              require(event['repository']['full_name'] == REPO and event['ref'] == REF and event['after'] == commit
+                      and event['before'] == '0'*40 and event['created'] is True
+                      and event['forced'] is False and event['deleted'] is False)
+              return commit, run, uid, gid, temp
+
+
+          def open_output(e):
+              # Verify the runner-owned output descriptor before reporting admission outcomes.
+              temp = canonical(Path(e['RUNNER_TEMP']))
+              owner = temp.stat()
+              require(temp.name == '_temp' and owner.st_uid == os.getuid() and not owner.st_mode & 0o022)
+              output = canonical(Path(e['GITHUB_OUTPUT']))
+              require(output.parent == temp/'_runner_file_commands')
+              before = output.lstat()
+              require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                      and before.st_uid == os.getuid() and not before.st_mode & 0o022)
+              fd = os.open(output, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK)
+              try:
+                  opened = os.fstat(fd)
+                  require(os.path.samestat(before, opened) and opened.st_nlink == 1
+                          and opened.st_uid == before.st_uid and opened.st_mode == before.st_mode)
+              except BaseException:
+                  os.close(fd)
+                  raise
+              return fd
+
+
+          def stock_docker(path):
+              path = canonical(path)
+              info = path.lstat()
+              require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o7022)
+              return path
+
+
+          def stock_socket(path):
+              info = canonical(path).lstat()
+              require(stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o007)
+
+
+          def empty_scope(result):
+              require(good(result) == b'')
+
+
+          def unused_name(result, name):
+              require(absent(result, 'container', name))
+
+
+          def configure_client(scratch):
+              scratch.mkdir(('docker',))
+              # Prevent Docker CLI discovery of ambient credential helpers.
+              scratch.write(('docker', 'config.json'), b'{"auths":{"https://index.docker.io/v1/":{}}}\n')
+              return scratch.path/'docker'
+
+
+          def docker_call(argv, args, seconds=8, out_limit=65536, err_limit=4096):
+              """Capture private bounded bytes and require EOF on both pipes before returning."""
+              end = time.monotonic() + seconds
+              pipes = [bytearray(), bytearray()]
+              with subprocess.Popen([*argv, *args], env=ENV, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                  with selectors.DefaultSelector() as selector:
+                      selector.register(process.stdout, selectors.EVENT_READ, 0)
+                      selector.register(process.stderr, selectors.EVENT_READ, 1)
+                      try:
+                          while selector.get_map():
+                              remaining = end - time.monotonic()
+                              require(remaining > 0)
+                              for key,_ in selector.select(remaining):
+                                  limit = (out_limit, err_limit)[key.data]
+                                  block = os.read(key.fd, min(8192, limit + 1 - len(pipes[key.data])))
+                                  if not block:
+                                      selector.unregister(key.fileobj)
+                                  else:
+                                      pipes[key.data].extend(block)
+                                      require(len(pipes[key.data]) <= limit)
+                          status = process.wait(timeout=max(0.01, end-time.monotonic()))
+                      except BaseException:
+                          if process.poll() is None:
+                              process.kill()
+                              process.wait(timeout=3)
+                          raise
+              return status, bytes(pipes[0]), bytes(pipes[1])
+
+
+          def good(result):
+              status, body, errors = result
+              require(status == 0 and not errors)
+              return body
+
+
+          def absent(result, kind, name):
+              code, out, err = result
+              # The stock CLI's formatted inspector flushes one LF when it has no rows.
+              return code == 1 and out in (b'', b'\n') and err in {
+                  f'{prefix}No such {kind}: {name}{ending}'.encode()
+                  for prefix in ('Error: ', 'Error response from daemon: ')
+                  for ending in ('', '\n')
+              }
+
+
+          def runtime_info(version, info):
+              for part in ('Client', 'Server'):
+                  require(version[part]['Version'] == '28.0.4'
+                          and version[part]['Os'] == 'linux' and version[part]['Arch'] == 'amd64')
+              require(info['OSType'] == 'linux' and info['Architecture'] == 'x86_64'
+                      and info['ServerVersion'] == '28.0.4'
+                      and info['DefaultRuntime'] == 'runc' and info['Driver'] == 'overlay2'
+                      and info['DockerRootDir'] == '/var/lib/docker')
+              require(not info['RegistryConfig'].get('Mirrors')
+                      and not info.get('HTTPProxy') and not info.get('HTTPSProxy'))
+              options = info['SecurityOptions']
+              require('name=seccomp,profile=builtin' in options
+                      and all(o in ('name=apparmor', 'name=seccomp,profile=builtin', 'name=cgroupns') for o in options))
+              return canonical(Path('/var/lib/docker'))
+
+
+          def storage(scratch, graph, minimum):
+              require(enough(scratch.path, minimum) == enough(graph, minimum))
+              with open('/proc/meminfo', 'rb') as stream:
+                  body = stream.read(8193)
+              require(0 < len(body) <= 8192)
+              fields = body.splitlines()
+              observed = [line.split()[1:] for line in fields if line.startswith(b'MemAvailable:')]
+              require(len(observed) == 1 and len(observed[0]) == 2 and observed[0][1] == b'kB'
+                      and int(observed[0][0]) >= 128 * 1024)
+
+
+          def scratch_option(uid, gid, size):
+              return f'rw,nosuid,nodev,noexec,size={size}m,mode=0700,uid={uid},gid={gid}'
+
+
+          def caps(uid, gid):
+              return {path: scratch_option(uid, gid, size) for path, size in (('/scratch', 16), ('/tmp', 8))}
+
+
+          def create_args(name, inputs, run, uid, gid, namespace):
+              command = ['container','create','--pull=never','--platform=linux/amd64','--name',name,
+                         '--label',f'{LABEL}={run}','--network=none','--read-only','--ipc=none',
+                         '--cap-drop=ALL','--security-opt=no-new-privileges','--user',f'{uid}:{gid}',
+                         '--pids-limit=32','--memory=128m','--cpus=1','--log-driver=none','--no-healthcheck',
+                         '--mount',f'type=bind,src={inputs},dst=/inputs,readonly',
+                         '--workdir=/scratch','--env','PATH=/usr/bin:/bin',
+                         '--env','HOME=/scratch','--env','TMPDIR=/tmp','--env','LC_ALL=C']
+              for path, options in caps(uid, gid).items():
+                  command.extend(('--tmpfs', f'{path}:{options}'))
+              return command + ['--entrypoint=/bin/sh',IMAGE,'/inputs/bounded_roots_worker.sh',
+                                str(uid),str(gid),namespace]
+
+
+          def owns(row,cid,name,run):
+              require(row['Id'] == cid and row['Name'] == '/'+name and row['Image'] == CONFIG
+                      and row['Config']['Labels'] == {LABEL:run, 'org.opencontainers.image.version':'24.04'})
+
+
+          def isolation(row,cid,name,inputs,run,uid,gid,namespace):
+              owns(row,cid,name,run)
+              h, c = row['HostConfig'], row['Config']
+              state = row['State']
+              allowed_env = {'PATH=/usr/bin:/bin','HOME=/scratch','TMPDIR=/tmp','LC_ALL=C'}
+              require(state['Status']=='created' and not state['Running'] and state['Pid']==0)
+              require(c['User']==f'{uid}:{gid}' and c['Entrypoint']==['/bin/sh']
+                      and c['Cmd']==['/inputs/bounded_roots_worker.sh',str(uid),str(gid),namespace]
+                      and c['WorkingDir']=='/scratch' and len(c['Env'])==len(allowed_env)
+                      and set(c['Env'])==allowed_env and not c.get('Tty') and not c.get('OpenStdin')
+                      and not c.get('Volumes') and c.get('Healthcheck') in (None,{'Test':['NONE']}))
+              require(h['NetworkMode']=='none' and h['IpcMode']=='none' and h.get('PidMode','') in ('','private')
+                      and h['ReadonlyRootfs'] is True and h['Privileged'] is False and h['CapDrop']==['ALL']
+                      and h['SecurityOpt'] in (['no-new-privileges'], ['no-new-privileges:true'])
+                      and h['PidsLimit']==32 and h['Memory']==128*1024**2 and h['NanoCpus']==1_000_000_000
+                      and h['LogConfig']['Type']=='none' and h['RestartPolicy']['Name']=='no'
+                      and h['AutoRemove'] is False and not h.get('PublishAllPorts')
+                      and not any(h.get(k) for k in ('CapAdd','Devices','DeviceRequests','PortBindings',
+                                                     'VolumesFrom','Binds','GroupAdd','ExtraHosts','Sysctls'))
+                      and set(row['NetworkSettings']['Networks']) in (set(),{'none'})
+                      and h['Tmpfs']==caps(uid,gid) and h.get('Runtime')=='runc')
+              file_masks = {f'/proc/{name}' for name in ('interrupts','kcore','keys','latency_stats',
+                                                          'timer_list','timer_stats','sched_debug')}
+              dirs = {'/proc/acpi','/proc/asound','/proc/scsi','/sys/firmware','/sys/devices/virtual/powercap'}
+              mask = h['MaskedPaths']
+              require(len(mask) == len(set(mask)) and ('/proc/keys' in mask)
+                      and all(p in file_masks | dirs or re.fullmatch(r'/sys/devices/system/cpu/cpu[0-9]+/thermal_throttle', p)
+                              for p in mask))
+              require(set(h['ReadonlyPaths']) == {'/proc/bus','/proc/fs','/proc/irq','/proc/sys','/proc/sysrq-trigger'})
+              binds = [m for m in row['Mounts'] if m['Type']=='bind']
+              require(len(binds)==1 and len(row['Mounts'])<=3
+                      and (binds[0]['Source'],binds[0]['Destination'],binds[0]['RW'],binds[0]['Propagation'])
+                      ==(str(inputs),'/inputs',False,'rprivate')
+                      and all(m['Type']=='bind' or (m['Type']=='tmpfs' and m['Destination'] in caps(uid,gid))
+                              for m in row['Mounts']))
+              requested = h.get('Mounts') or []
+              require(len(requested)==1 and
+                      (requested[0]['Type'],requested[0]['Source'],requested[0]['Target'],requested[0]['ReadOnly'])
+                      ==('bind',str(inputs),'/inputs',True))
+
+
+          class Scratch:
+              """Track only task-created entries and retire them with descriptor-relative calls."""
+
+              directories = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+              readers = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+
+              def __init__(self, parent, uid, gid):
+                  self.parent, self.uid, self.gid = parent, uid, gid
+                  self.path = self.parent_fd = self.root_fd = self.parent_identity = None
+                  self.seals = {}
+
+              @staticmethod
+              def identity(info):
+                  return info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode
+
+              def directory_identity(self, fd):
+                  info = os.fstat(fd)
+                  require(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+                          and (info.st_uid, info.st_gid) == (self.uid, self.gid))
+                  return self.identity(info)
+
+              def allocate(self):
+                  self.parent_fd = os.open(canonical(self.parent), self.directories)
+                  info = os.fstat(self.parent_fd)
+                  require(os.path.samestat(info, self.parent.lstat()) and info.st_uid == self.uid
+                          and not info.st_mode & 0o022)
+                  self.parent_identity = self.identity(info)
+                  name = 'hub-tar-witness-' + secrets.token_hex(16)
+                  os.mkdir(name, mode=0o700, dir_fd=self.parent_fd)
+                  self.path = self.parent / name
+                  self.root_fd = os.open(name, self.directories, dir_fd=self.parent_fd)
+                  identity = self.directory_identity(self.root_fd)
+                  require(identity == self.identity(os.stat(name, dir_fd=self.parent_fd, follow_symlinks=False))
+                          and identity[0] == info.st_dev and not os.listdir(self.root_fd))
+                  self.seals[()] = identity, None
+
+              def close(self):
+                  for fd in (self.root_fd, self.parent_fd):
+                      if fd is not None:
+                          os.close(fd)
+
+              @contextmanager
+              def directory(self, key):
+                  if not key:
+                      require(() in self.seals and self.directory_identity(self.root_fd) == self.seals[()][0])
+                      yield self.root_fd
+                      return
+                  with self.directory(key[:-1]) as parent:
+                      fd = os.open(key[-1], self.directories, dir_fd=parent)
+                      try:
+                          require(self.directory_identity(fd) == self.seals[key][0])
+                          yield fd
+                      finally:
+                          os.close(fd)
+
+              def mkdir(self, key):
+                  require(key not in self.seals)
+                  with self.directory(key[:-1]) as parent:
+                      os.mkdir(key[-1], mode=0o700, dir_fd=parent)
+                      fd = os.open(key[-1], self.directories, dir_fd=parent)
+                      try:
+                          identity = self.directory_identity(fd)
+                          require(identity == self.identity(os.stat(key[-1], dir_fd=parent, follow_symlinks=False))
+                                  and identity[0] == self.seals[()][0][0] and not os.listdir(fd))
+                          self.seals[key] = identity, None
+                      finally:
+                          os.close(fd)
+
+              def file_seal(self, fd, data):
+                  info = os.fstat(fd)
+                  require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600
+                          and info.st_nlink == 1 and info.st_size == len(data)
+                          and (info.st_uid, info.st_gid) == (self.uid, self.gid)
+                          and info.st_dev == self.seals[()][0][0])
+                  return self.identity(info), info.st_ctime_ns, info.st_mtime_ns, len(data), digest(data)
+
+              def write(self, key, data):
+                  require(key not in self.seals and 0 < len(data) <= 8192)
+                  with self.directory(key[:-1]) as parent:
+                      fd = os.open(key[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                   0o600, dir_fd=parent)
+                      with os.fdopen(fd, 'wb') as file:
+                          require(file.write(data) == len(data))
+                          file.flush()
+                          seal = self.file_seal(file.fileno(), data)
+                      self.seals[key] = seal[0], seal[1:]
+
+              def root_matches(self):
+                  canonical(self.path)
+                  require(self.identity(os.fstat(self.parent_fd)) == self.parent_identity
+                          == self.identity(self.parent.lstat()))
+                  require(self.identity(os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False))
+                          == self.seals[()][0])
+
+              def check_file(self, parent, name, identity, seal):
+                  with os.fdopen(os.open(name, self.readers, dir_fd=parent), 'rb') as file:
+                      info = os.fstat(file.fileno())
+                      require((self.identity(info), info.st_ctime_ns, info.st_mtime_ns, info.st_size)
+                              == (identity, *seal[:3]))
+                      data = file.read(seal[2] + 1)
+                      require(self.file_seal(file.fileno(), data) == (identity, *seal))
+                  info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                  require((self.identity(info), info.st_ctime_ns, info.st_mtime_ns, info.st_size)
+                          == (identity, *seal[:3]))
+
+              def walk(self, key, remove=False):
+                  children = {p[-1]: p for p in self.seals if len(p) == len(key) + 1 and p[:-1] == key}
+                  with self.directory(key) as fd:
+                      require(set(os.listdir(fd)) == children.keys())
+                      for name, child in sorted(children.items()):
+                          identity, seal = self.seals[child]
+                          if seal is None:
+                              self.walk(child, remove)
+                              if remove:
+                                  require(self.identity(os.stat(name, dir_fd=fd, follow_symlinks=False)) == identity)
+                                  os.rmdir(name, dir_fd=fd)
+                          else:
+                              self.check_file(fd, name, identity, seal)
+                              if remove:
+                                  os.unlink(name, dir_fd=fd)
+
+              def verify(self):
+                  self.root_matches()
+                  self.walk(())
+
+              def retire(self, worker_retired):
+                  require(worker_retired is True and () in self.seals)
+                  self.verify()
+                  self.walk((), remove=True)
+                  self.root_matches()
+                  os.rmdir(self.path.name, dir_fd=self.parent_fd)
+                  try:
+                      os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False)
+                  except FileNotFoundError:
+                      return
+                  raise Refused
+
+
+          def stage(scratch):
+              require(digest(WORKER) == WORKER_SHA and digest(CONTROL) == CONTROL_SHA)
+              scratch.mkdir(('inputs',))
+              scratch.write(('inputs', 'bounded_roots_worker.sh'), WORKER)
+              scratch.write(('inputs', 'control.txt'), CONTROL)
+              namespace = os.readlink('/proc/self/ns/pid')
+              require(matches(r'pid:\[[1-9][0-9]{0,19}\]', namespace))
+              return scratch.path/'inputs', namespace
+
+
+          def terminal_frame(result, state):
+              expected = b'TAR BOUNDED ROOTS INERT OK\n'
+              require(len(expected)==27 and good(result)==expected and state['Status']=='exited'
+                      and not state['Running'] and state['Pid']==0 and state['ExitCode']==0
+                      and state['OOMKilled'] is False)
+
+
+          def run(e):
+              stage_name = 'output'
+              output_fd = scratch = cid = None
+              reached = set()
+              create_attempted = pull_attempted = pulled = False
+              succeeded = scratch_removed = False
+              old_umask = os.umask(0o077)
+              end = time.monotonic() + 235
+
+              def verdict(name, passed):
+                  if name not in reached and output_fd is not None:
+                      message = f'{name}={"pass" if passed else "fail"}\n'.encode()
+                      require(os.write(output_fd, message) == len(message))
+                      reached.add(name)
+
+              try:
+                  output_fd = open_output(e)
+                  verdict('output', True)
+                  stage_name = 'context'
+                  _, run_id, uid, gid, temp = host_context(e)
+                  verdict('context', True)
+                  stage_name = 'docker_client'
+                  docker = stock_docker(Path('/usr/bin/docker'))
+                  stock_socket(Path('/run/docker.sock'))
+                  verdict('docker_client', True)
+                  stage_name = 'scratch_seal'
+                  scratch = Scratch(temp, uid, gid)
+                  scratch.allocate()
+                  config_dir = configure_client(scratch)
+                  argv = [str(docker), '--config', str(config_dir), '--host', 'unix:///run/docker.sock']
+                  cleaning = False
+
+                  def call(*args, seconds=8, **kw):
+                      return docker_call(argv, args, seconds=seconds if cleaning else min(seconds,end-time.monotonic()), **kw)
+
+                  inspect_c = ('container', 'inspect', '--format', '{{json .}}')
+                  inspect_i = ('image', 'inspect')
+                  scope = lambda: call('container','ls','--all','--no-trunc','--quiet','--filter',f'label={LABEL}={run_id}')
+                  name = f'hub-tar-capped-{run_id}-1'
+                  inputs, namespace = stage(scratch)
+                  scratch.verify()
+                  verdict('scratch_seal', True)
+
+                  stage_name = 'runtime'
+                  graph = runtime_info(json.loads(good(call('version','--format','{{json .}}'))),
+                                       json.loads(good(call('info','--format','{{json .}}'))))
+                  empty_scope(scope())
+                  unused_name(call(*inspect_c,name), name)
+                  verdict('runtime', True)
+                  stage_name = 'official_pin'
+                  expected_config = verify_registry(OFFICIAL_MANIFEST, OFFICIAL_CONFIG)
+                  lookup = lambda key: inspect_result(call(*inspect_i,key),key)
+                  before, by_id = lookup(REF_IMAGE), lookup(CONFIG)
+                  require(before is None and by_id is None)
+                  verdict('official_pin', True)
+                  stage_name = 'pre_capacity'
+                  storage(scratch, graph, PRE_PULL)
+                  verdict('pre_capacity', True)
+                  stage_name = 'public_pull'
+                  pull_attempted = True
+                  good(call('image','pull','--platform=linux/amd64',REF_IMAGE,seconds=75))
+                  pulled = True
+                  verdict('public_pull', True)
+                  stage_name = 'cache_readback'
+                  for code in (REF_IMAGE, CONFIG):
+                      verify_local(lookup(code), expected_config)
+                  verdict('cache_readback', True)
+                  stage_name = 'post_capacity'
+                  scratch.verify()
+                  storage(scratch, graph, FLOOR)
+                  verdict('post_capacity', True)
+
+                  stage_name = 'isolation'
+                  create_attempted = True
+                  raw = good(call(*create_args(name,inputs,run_id,uid,gid,namespace))).decode().strip()
+                  require(matches(r'[a-f0-9]{64}', raw))
+                  cid = raw
+                  inspect = lambda: json.loads(good(call(*inspect_c,cid)))
+                  isolation(inspect(),cid,name,inputs,run_id,uid,gid,namespace)
+                  verdict('isolation', True)
+
+                  stage_name = 'frame'
+                  result = call('container','start','--attach',cid,seconds=15,out_limit=27,err_limit=0)
+                  row = inspect()
+                  owns(row,cid,name,run_id)
+                  terminal_frame(result,row['State'])
+                  verdict('frame', True)
+                  succeeded = True
+              except Exception:
+                  verdict(stage_name, False)
+                  print('witness-refused-' + stage_name)
+              finally:
+                  cleaning = True
+                  worker_retired = not create_attempted
+                  if cid is not None:
+                      try:
+                          row = inspect()
+                          owns(row,cid,name,run_id)
+                          if row['State']['Running'] is True:
+                              # Only for an abnormal stop, never counted as normal fixture completion.
+                              output = good(call('container','stop','--time=3',cid,seconds=8)).decode().strip()
+                              require(output == cid)
+                              row = inspect()
+                              owns(row,cid,name,run_id)
+                          state = row['State']
+                          require(state['Status'] in ('created','exited') and not state['Running'] and state['Pid']==0)
+                          require(good(call('container','rm',cid)).decode().strip()==cid)
+                          require(absent(call(*inspect_c,cid),'container',cid))
+                          empty_scope(scope())
+                          worker_retired = True
+                      except Exception:
+                          pass
+                  image_retired = not pull_attempted
+                  if pulled and worker_retired:
+                      try:
+                          row = lookup(REF_IMAGE)
+                          verify_local(row, expected_config)
+                          require(row.get('RepoTags') in (None,[]) and len(row['RepoDigests'])==1)
+                          require(lookup(CONFIG) == row)
+                          good(call('image','rm','--no-prune',REF_IMAGE))
+                          require(lookup(REF_IMAGE) is None and lookup(CONFIG) is None)
+                          image_retired = True
+                      except Exception:
+                          pass
+                  try:
+                      if scratch is not None:
+                          try:
+                              if scratch.path is not None:
+                                  scratch.retire(worker_retired)
+                                  scratch_removed = True
+                          except Exception:
+                              pass
+                          finally:
+                              scratch.close()
+                      if create_attempted:
+                          verdict('container_retired', worker_retired)
+                      if pull_attempted:
+                          verdict('image_retired', image_retired)
+                      if scratch is not None and scratch.path is not None:
+                          verdict('scratch_retired', scratch_removed)
+                  finally:
+                      os.umask(old_umask)
+                      if output_fd is not None:
+                          os.close(output_fd)
+              return 0 if succeeded and worker_retired and image_retired and scratch_removed else 1
+
+          OFFICIAL_MANIFEST = b'{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json", "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "size": 2051, "digest": "sha256:7da97f743f397971f35dd21cd2d19a7da070a150e0cfa3eda559e71891ec7533"}, "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "size": 29793223, "digest": "sha256:26538842dfbfed820e62531e047bc6cfd3359a7e0a52f59c1a951ccc6ca787fe"}]}'
+
+          OFFICIAL_CONFIG = b'{"architecture": "amd64", "config": {"Hostname": "", "Domainname": "", "User": "", "AttachStdin": false, "AttachStdout": false, "AttachStderr": false, "Tty": false, "OpenStdin": false, "StdinOnce": false, "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"], "Cmd": ["/bin/bash"], "Image": "sha256:c3a52ba69d86100ebb3144eafc7dd72b69291848a5b128f61ccfbfa497a85ae0", "Volumes": null, "WorkingDir": "", "Entrypoint": null, "OnBuild": null, "Labels": {"org.opencontainers.image.version": "24.04"}}, "container": "ed7f9f4997c790eb7273f4284415f15ed6c1584b6df13b29917a04ad578ad0f6", "container_config": {"Hostname": "ed7f9f4997c7", "Domainname": "", "User": "", "AttachStdin": false, "AttachStdout": false, "AttachStderr": false, "Tty": false, "OpenStdin": false, "StdinOnce": false, "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"], "Cmd": ["/bin/sh", "-c", "#(nop) ", "CMD [\\"/bin/bash\\"]"], "Image": "sha256:c3a52ba69d86100ebb3144eafc7dd72b69291848a5b128f61ccfbfa497a85ae0", "Volumes": null, "WorkingDir": "", "Entrypoint": null, "OnBuild": null, "Labels": {"org.opencontainers.image.version": "24.04"}}, "created": "2026-11-10T08:36:35.098007755Z", "docker_version": "26.1.3", "history": [{"created": "2026-11-10T08:36:30.089187849Z", "created_by": "/bin/sh -c #(nop)  ARG RELEASE", "empty_layer": true}, {"created": "2026-11-10T08:36:30.118560043Z", "created_by": "/bin/sh -c #(nop)  ARG LAUNCHPAD_BUILD_ARCH", "empty_layer": true}, {"created": "2026-11-10T08:36:30.16114408Z", "created_by": "/bin/sh -c #(nop)  LABEL org.opencontainers.image.version=24.04", "empty_layer": true}, {"created": "2026-11-10T08:36:34.672149163Z", "created_by": "/bin/sh -c #(nop) ADD file:3c41cdb0a333e30d2a3c4a90a152da473ef44ae84245fd34a49167a6b8f26cc6 in / "}, {"created": "2026-11-10T08:36:35.098007755Z", "created_by": "/bin/sh -c #(nop)  CMD [\\"/bin/bash\\"]", "empty_layer": true}], "os": "linux", "rootfs": {"type": "layers", "diff_ids": ["sha256:21210938f5a37a9887b2d0a20428917b923a636ca6efe038c3c7d9cd9f1f9b61"]}}'
+
+          WORKER = b'#!/bin/sh\n# Held fixture only. The host must independently authorize and inspect the venue first.\nset -eu\n[ "$#" -eq 3 ] || exit 64\nexpected_uid="$1"\nexpected_gid="$2"\nhost_pidns="$3"\n[ "$expected_uid" -gt 0 ] && [ "$expected_gid" -gt 0 ] || exit 64\n[ "$(/usr/bin/id -u)" = "$expected_uid" ] && [ "$(/usr/bin/id -ru)" = "$expected_uid" ] || exit 64\n[ "$(/usr/bin/id -g)" = "$expected_gid" ] && [ "$(/usr/bin/id -rg)" = "$expected_gid" ] || exit 64\n[ "$(/usr/bin/readlink /proc/self/ns/pid)" = "$(/usr/bin/readlink /proc/1/ns/pid)" ]\n[ "$(/usr/bin/readlink /proc/self/ns/pid)" != "$host_pidns" ]\n/usr/bin/mawk \'\n    /^Seccomp:/ {sec=($2==2)}\n    /^NoNewPrivs:/ {nnp=($2==1)}\n    /^(CapEff|CapPrm|CapBnd):/ {if ($2 !~ /^0+$/) bad=1; caps++}\n    END {exit !(sec && nnp && caps==3 && !bad)}\n\' /proc/self/status\nset -- /sys/class/net/*\n[ "$#" -eq 1 ] && [ "$1" = /sys/class/net/lo ] || exit 64\n/usr/bin/mawk \'NR>1 && $1!="lo" {bad=1} END {exit bad}\' /proc/net/route\n/usr/bin/mawk \'NF && $NF!="lo" {bad=1} END {exit bad}\' /proc/net/ipv6_route\n\n# runc masks existing proc files by binding the container\'s own /dev/null.\n# Check both the mount source and its device inode. No other rw mount is allowed.\nmasked=$(/usr/bin/mawk \'\n    function flag(options, word) {return index("," options ",", "," word ",")>0}\n    BEGIN {\n        n=split("/proc/interrupts /proc/kcore /proc/keys /proc/latency_stats /proc/timer_list /proc/timer_stats /proc/sched_debug", paths, " ")\n        for (i=1; i<=n; i++) mask[paths[i]]=1\n    }\n    {\n        path=$5; mode=$6; fs=""\n        for (i=7; i<NF; i++) if ($i=="-") {fs=$(i+1); break}\n        if (path=="/" || path=="/inputs") {\n            count[path]++\n            if (!flag(mode,"ro")) bad=1\n            next\n        }\n        if (path=="/scratch" || path=="/tmp") {\n            count[path]++\n            if (fs!="tmpfs" || !flag(mode,"rw") || !flag(mode,"nodev") ||\n                !flag(mode,"nosuid") || !flag(mode,"noexec")) bad=1\n            next\n        }\n        if (path=="/dev" && fs=="tmpfs" && $4=="/" && flag(mode,"rw")) {\n            count[path]++; dev=$3\n            next\n        }\n        if (path in mask) {\n            count[path]++\n            if (fs!="tmpfs" || $4!="/null" || (!flag(mode,"rw") && !flag(mode,"ro"))) bad=1\n            source[path]=$3\n            next\n        }\n        if (!flag(mode,"rw")) next\n        if ((path=="/proc" && fs=="proc") || (path=="/dev/pts" && fs=="devpts") ||\n            (path=="/dev/mqueue" && fs=="mqueue")) next\n        bad=1\n    }\n    END {\n        if (bad || count["/"]!=1 || count["/inputs"]!=1 || count["/scratch"]!=1 ||\n            count["/tmp"]!=1 || count["/dev"]!=1 || count["/proc/keys"]!=1) exit 1\n        for (i=1; i<=n; i++) {\n            path=paths[i]\n            if (count[path] && (count[path]!=1 || source[path]!=dev)) exit 1\n        }\n        for (i=1; i<=n; i++) if (count[paths[i]]==1) print paths[i]\n    }\n\' /proc/self/mountinfo)\nnull_identity=$(/usr/bin/stat -c \'%F:%t:%T:%d:%i\' -- /dev/null)\ncase "$null_identity" in\n    \'character special file:1:3:\'*) ;;\n    *) exit 64 ;;\nesac\nfor path in /proc/interrupts /proc/kcore /proc/keys /proc/latency_stats /proc/timer_list /proc/timer_stats /proc/sched_debug; do\n    case "\n$masked\n" in\n        *"\n$path\n"*)\n            [ "$(/usr/bin/stat -c \'%F:%t:%T:%d:%i\' -- "$path")" = "$null_identity" ] || exit 64 ;;\n        *)\n            [ ! -e "$path" ] && [ ! -L "$path" ] || exit 64 ;;\n    esac\ndone\n[ "$(/usr/bin/stat -c \'%u:%g:%a\' /scratch)" = "$expected_uid:$expected_gid:700" ]\n[ "$(/usr/bin/stat -c \'%u:%g:%a\' /tmp)" = "$expected_uid:$expected_gid:700" ]\n/usr/bin/df -B1 --output=size /scratch |\n    /usr/bin/mawk \'NR==2 && $1==16777216 {ok=1} END {exit !(NR==2 && ok)}\'\n/usr/bin/df -B1 --output=size /tmp |\n    /usr/bin/mawk \'NR==2 && $1==8388608 {ok=1} END {exit !(NR==2 && ok)}\'\n[ "$(/usr/bin/cat /inputs/control.txt)" = "read-only fixture" ]\nif ( printf \'changed\\n\' > /inputs/control.txt ) 2>/dev/null; then exit 65; fi\n[ "$(/usr/bin/cat /inputs/control.txt)" = "read-only fixture" ]\n# Only write inert fixtures. Both files are owned by this run.\nprintf \'first\\n\' > /scratch/fixture\n( printf \'second\\n\' > /tmp/fixture ) &\nchild=$!\nwait "$child"\n[ "$(/usr/bin/cat /scratch/fixture)" = first ]\n[ "$(/usr/bin/cat /tmp/fixture)" = second ]\nprintf \'TAR BOUNDED ROOTS INERT OK\\n\'\n'
+
+          WORKER_SHA = '0b4711caa1911b59bd7ab461379e4c4e73a9758e205fe8aa6bd24324fa7ab688'
+
+          CONTROL = b'read-only fixture\n'
+
+          CONTROL_SHA = 'ea4fe9203c480c0c0e5ad5552cafdf866473b173665c5ef7647655367eb12f8e'
+
+          REF_IMAGE = 'docker.io/library/ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec'
+
+          ALIASES = ('docker.io/library/ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec', 'library/ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec', 'ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec')
+
+          OCI = 'application/vnd.oci.image.'
+
+          COMPRESSED_BYTES = 29793223
+
+          DIFF, LAYER = 'sha256:21210938f5a37a9887b2d0a20428917b923a636ca6efe038c3c7d9cd9f1f9b61', 'sha256:26538842dfbfed820e62531e047bc6cfd3359a7e0a52f59c1a951ccc6ca787fe'
+
+          ALIASES = frozenset(ALIASES)
+
+          sha256 = hashlib.sha256
+
+          def sha(data):
+              return "sha256:" + sha256(data).hexdigest()
+
+          def verify_registry(manifest, config):
+              """Check raw bytes independently of the cache / Docker inspect observation."""
+              require(len(manifest) == 424 and sha(manifest) == MANIFEST, "official-manifest")
+              require(len(config) == 2051 and sha(config) == CONFIG, "official-config")
+              image = json.loads(manifest)
+              config_data = json.loads(config)
+              require(image["schemaVersion"] == 2 and image["mediaType"] == OCI + "manifest.v1+json"
+                      and image["config"] == {"size": len(config), "digest": CONFIG, "mediaType": OCI + "config.v1+json"}
+                      and image["layers"] == [{"size": COMPRESSED_BYTES, "digest": LAYER,
+                                                "mediaType": OCI + "layer.v1.tar+gzip"}], "official-descriptors")
+              require(config_data["os"] == "linux" and config_data["architecture"] == "amd64"
+                      and not config_data.get("variant")
+                      and config_data["rootfs"] == {"type": "layers", "diff_ids": [DIFF]},
+                      "official-platform")
+              config_fields = config_data["config"]
+              require(not any(config_fields.get(key) for key in
+                              ("Volumes", "Healthcheck", "OnBuild", "Entrypoint")), "official-profile")
+              return config_fields
+
+          def exact_absence(status, stdout, stderr, identifier):
+              return status == 1 and stdout == b"[]\n" and stderr in {
+                  f"{prefix}No such image: {identifier}{tail}".encode()
+                  for prefix in ("Error: ", "Error response from daemon: ")
+                  for tail in ("", "\n")
+              }
+
+          def inspect_result(result, identifier):
+              """Docker 28.0/API 1.48 may only inspect the digest without --platform."""
+              code, stdout, stderr = result
+              if exact_absence(code, stdout, stderr, identifier):
+                  return None
+              require(code == 0 and stderr == b"" and 0 < len(stdout) <= 65536, "daemon-inspect")
+              try:
+                  rows = json.loads(stdout)
+              except (UnicodeDecodeError, ValueError):
+                  raise Refused("daemon-inspect-format") from None
+              require(isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict),
+                      "daemon-image-count")
+              return rows[0]
+
+          def verify_local(row, expected_config):
+              require(row is not None and row.get("Id") == CONFIG and row.get("Os") == "linux"
+                      and row.get("Architecture") == "amd64" and not row.get("Variant"),
+                      "local-config-or-platform")
+              require(row.get("RootFS") == {"Type": "layers", "Layers": [DIFF]}, "local-diffid")
+              digests = row.get("RepoDigests")
+              require(isinstance(digests, list) and all(isinstance(item, str) for item in digests)
+                      and bool(set(digests) & ALIASES), "local-repo-digest")
+              config = row.get("Config")
+              require(isinstance(config, dict) and not any(config.get(field) for field in
+                      ("Volumes", "Healthcheck", "Entrypoint", "OnBuild")), "local-profile")
+              require(config.get("Env") == expected_config["Env"] and config.get("Cmd") == expected_config["Cmd"],
+                      "local-launch-defaults")
+
+          raise SystemExit(run(os.environ))
+          PY
+      - name: Verify runner result channel
+        if: ${{ !cancelled() && steps.witness.outcome != 'skipped' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.output }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify exact Ubuntu and push context
+        if: ${{ !cancelled() && steps.witness.outputs.context != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.context }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify stock Docker client and socket
+        if: ${{ !cancelled() && steps.witness.outputs.docker_client != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.docker_client }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Seal anonymous configuration and inert inputs
+        if: ${{ !cancelled() && steps.witness.outputs.scratch_seal != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.scratch_seal }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify stock daemon and unused run scope
+        if: ${{ !cancelled() && steps.witness.outputs.runtime != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.runtime }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify official image pins and initial absence
+        if: ${{ !cancelled() && steps.witness.outputs.official_pin != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.official_pin }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify shared backing has 4.25 GiB before pull
+        if: ${{ !cancelled() && steps.witness.outputs.pre_capacity != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.pre_capacity }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Pull exact published Ubuntu digest anonymously
+        if: ${{ !cancelled() && steps.witness.outputs.public_pull != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.public_pull }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify exact image config and filesystem layer
+        if: ${{ !cancelled() && steps.witness.outputs.cache_readback != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.cache_readback }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify shared backing has 4 GiB after pull
+        if: ${{ !cancelled() && steps.witness.outputs.post_capacity != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.post_capacity }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify created container profile without a pull
+        if: ${{ !cancelled() && steps.witness.outputs.isolation != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.isolation }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify effective mounts, 27-byte frame and EOF
+        if: ${{ !cancelled() && steps.witness.outputs.frame != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.frame }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify exact container retirement
+        if: ${{ !cancelled() && steps.witness.outputs.container_retired != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.container_retired }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify only the new image reference retired
+        if: ${{ !cancelled() && steps.witness.outputs.image_retired != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.image_retired }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Verify sealed scratch retirement
+        if: ${{ !cancelled() && steps.witness.outputs.scratch_retired != '' }}
+        env:
+          VERDICT: ${{ steps.witness.outputs.scratch_retired }}
+        run: |
+          [[ "$VERDICT" == pass ]]
