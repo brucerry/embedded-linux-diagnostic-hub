@@ -1,0 +1,206 @@
+name: Windows stock compiler venue preflight
+on:
+  push:
+    branches: [ci/v060-windows-stock-compiler-preflight-20261121]
+    paths: [.github/workflows/windows-stock-compiler-preflight.yml]
+permissions: {}
+
+jobs:
+  inspect-stock-tools:
+    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' &&
+      github.ref == 'refs/heads/ci/v060-windows-stock-compiler-preflight-20261121' && github.event.created && github.run_attempt == 1 }}
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: pwsh -NoProfile -NonInteractive -File {0}
+    env:
+      HUB_VS_ROOT: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise'
+      HUB_SDK_ROOT: 'C:\Program Files (x86)\Windows Kits\10'
+      HUB_SDK_VERSION: '10.0.26100.0'
+    steps:
+      - name: Require reviewed Windows stock image
+        id: host
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:RUNNER_OS -cne 'Windows' -or
+              $env:RUNNER_ARCH -cne 'X64' -or $env:ImageVersion -cne '20261116.315.1' -or
+              [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64' -or
+              [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -ne 'X64') {
+            throw 'Reviewed stock x64 image identity differs.'
+          }
+          $os = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          if ($os.CurrentBuildNumber -ne '26100' -or $os.UBR -ne 33828) { throw 'Windows build differs.' }
+
+      - name: Read available capacity on workspace and temporary volumes
+        id: capacity
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $paths = @{ workspace=$env:GITHUB_WORKSPACE; temporary=$env:RUNNER_TEMP }
+          foreach ($label in @('workspace', 'temporary')) {
+            $path = $paths[$label]
+            if ($path -cnotmatch '^[A-Za-z]:\\') { throw 'Expected a local job drive path.' }
+            $item = Get-Item -LiteralPath $path -Force
+            if (-not $item.PSIsContainer) { throw 'Expected an existing job directory.' }
+            for ($ancestor = $item; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
+              if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected capacity path.' }
+            }
+            $root = [IO.Path]::GetPathRoot($item.FullName)
+            $drive = [IO.DriveInfo]::new($root)
+            if (-not $drive.IsReady -or $drive.DriveType -ne [IO.DriveType]::Fixed) {
+              throw 'Job volume is unavailable or is not a local fixed drive.'
+            }
+            $free = $drive.AvailableFreeSpace
+            if ($free -le 0 -or $free -gt $drive.TotalSize) { throw 'Capacity readback is unavailable.' }
+            "${label}_free_bytes=$free" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Read unambiguous installed MSVC x64 tools and digests
+        id: msvc
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function PlainItem([string] $path) {
+            $item = Get-Item -LiteralPath $path -Force
+            for ($ancestor = $item; $null -ne $ancestor;) {
+              if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected tool path.' }
+              if ($ancestor.PSIsContainer) { $ancestor = $ancestor.Parent } else { $ancestor = $ancestor.Directory }
+            }
+            return $item
+          }
+          $base = Join-Path $env:HUB_VS_ROOT 'VC\Tools\MSVC'
+          $tools = @(Get-ChildItem -LiteralPath (PlainItem $base).FullName -Directory -Force |
+              Where-Object { $_.Name -cmatch '^14\.44\.[0-9]{5}$' })
+          if ($tools.Count -ne 1) { throw 'MSVC 14.44 servicing version is missing or ambiguous.' }
+          $tool = (PlainItem $tools[0].FullName).Name
+          $bin = Join-Path $base "$tool\bin\Hostx64\x64"
+          "version=$tool" >> $env:GITHUB_OUTPUT
+          foreach ($leaf in @('cl', 'link', 'lib')) {
+            $file = PlainItem (Join-Path $bin "$leaf.exe")
+            if ($file.PSIsContainer -or $file.Length -lt 64 -or -not $file.VersionInfo.FileVersion) {
+              throw 'Tool file or version metadata missing.'
+            }
+            $stream = [IO.File]::Open($file.FullName, 'Open', 'Read', 'Read')
+            try {
+              $reader = [IO.BinaryReader]::new($stream)
+              try {
+                if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Tool has no DOS header.' }
+                $stream.Position = 60
+                $pe = $reader.ReadUInt32()
+                if ($pe -lt 64 -or $pe -gt ($stream.Length - 6)) { throw 'Tool PE offset invalid.' }
+                $stream.Position = $pe
+                if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) {
+                  throw 'Tool is not a native x64 PE.'
+                }
+              } finally { $reader.Dispose() }
+            } finally { $stream.Dispose() }
+            $digest = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            "${leaf}_digest=$digest" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Verify Microsoft publisher trust for the observed MSVC files
+        id: msvc-trust
+        if: ${{ !cancelled() && steps.msvc.outcome == 'success' }}
+        env:
+          OBSERVED_VCTOOLS: ${{ steps.msvc.outputs.version }}
+          CL_DIGEST: ${{ steps.msvc.outputs.cl_digest }}
+          LINK_DIGEST: ${{ steps.msvc.outputs.link_digest }}
+          LIB_DIGEST: ${{ steps.msvc.outputs.lib_digest }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:OBSERVED_VCTOOLS -cnotmatch '^14\.44\.[0-9]{5}$') { throw 'Toolset identity missing.' }
+          $bin = Join-Path $env:HUB_VS_ROOT "VC\Tools\MSVC\$($env:OBSERVED_VCTOOLS)\bin\Hostx64\x64"
+          $pins = @{ cl=$env:CL_DIGEST; link=$env:LINK_DIGEST; lib=$env:LIB_DIGEST }
+          foreach ($leaf in @('cl', 'link', 'lib')) {
+            $file = Join-Path $bin "$leaf.exe"
+            if ($pins[$leaf] -cnotmatch '^[A-F0-9]{64}$' -or
+                (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -cne $pins[$leaf]) {
+              throw 'Installed tool changed before Microsoft trust readback.'
+            }
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
+              throw 'Stock Microsoft signature verification did not pass.'
+            }
+            $signer = $signature.SignerCertificate.GetNameInfo('SimpleName', $false)
+            if ($signer -cne 'Microsoft Corporation') { throw 'Unexpected MSVC publisher.' }
+            if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -cne $pins[$leaf]) {
+              throw 'Installed tool changed during trust readback.'
+            }
+          }
+
+      - name: Check MSVC x64 static CRT and delay-load library locations
+        id: msvc-libraries
+        if: ${{ !cancelled() && steps.msvc.outcome == 'success' }}
+        env:
+          OBSERVED_VCTOOLS: ${{ steps.msvc.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:OBSERVED_VCTOOLS -cnotmatch '^14\.44\.[0-9]{5}$') { throw 'Toolset identity missing.' }
+          $base = Join-Path $env:HUB_VS_ROOT "VC\Tools\MSVC\$($env:OBSERVED_VCTOOLS)\lib\x64"
+          foreach ($leaf in @('delayimp.lib', 'libcmt.lib', 'libvcruntime.lib')) {
+            $item = Get-Item -LiteralPath (Join-Path $base $leaf) -Force
+            if ($item.PSIsContainer -or $item.Length -le 0) { throw 'Required VC library missing.' }
+            for ($ancestor = $item; $null -ne $ancestor;) {
+              if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected VC library.' }
+              if ($ancestor.PSIsContainer) { $ancestor = $ancestor.Parent } else { $ancestor = $ancestor.Directory }
+            }
+          }
+
+      - name: Check exact SDK x64 headers and import-library locations
+        id: sdk
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = $env:HUB_SDK_VERSION
+          $requirements = @("Lib\$sdk\um\x64\Kernel32.lib", "Lib\$sdk\ucrt\x64\libucrt.lib",
+              "Include\$sdk\um\Windows.h", "Include\$sdk\ucrt\corecrt.h", "Bin\$sdk\x64\rc.exe")
+          foreach ($relative in $requirements) {
+            $item = Get-Item -LiteralPath (Join-Path $env:HUB_SDK_ROOT $relative) -Force
+            if ($item.PSIsContainer -or $item.Length -le 0) { throw 'Required SDK file missing.' }
+            for ($ancestor = $item; $null -ne $ancestor;) {
+              if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected SDK path.' }
+              if ($ancestor.PSIsContainer) { $ancestor = $ancestor.Parent } else { $ancestor = $ancestor.Directory }
+            }
+          }
+
+      - name: Verify SDK executable and import-library publisher trust
+        id: sdk-trust
+        if: ${{ !cancelled() && steps.sdk.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = $env:HUB_SDK_VERSION
+          $requirements = @("Lib\$sdk\um\x64\Kernel32.lib", "Lib\$sdk\ucrt\x64\libucrt.lib", "Bin\$sdk\x64\rc.exe")
+          foreach ($relative in $requirements) {
+            $file = Join-Path $env:HUB_SDK_ROOT $relative
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
+              throw 'SDK signature or catalogue trust unresolved.'
+            }
+            $signer = $signature.SignerCertificate.GetNameInfo('SimpleName', $false)
+            if ($signer -cnotin @('Microsoft Corporation', 'Microsoft Windows')) { throw 'Unexpected SDK publisher.' }
+            if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -cne $hash) { throw 'SDK file changed.' }
+          }
+
+      - name: Check exact Rust toolchain file presence without invocation
+        id: rust
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $homePath = Join-Path $env:USERPROFILE '.rustup'
+          if ($env:RUSTUP_HOME -and [IO.Path]::GetFullPath($env:RUSTUP_HOME) -ine $homePath) {
+            throw 'Rustup tool location differs from the reviewed stock layout.'
+          }
+          $tool = Join-Path $homePath 'toolchains\1.92.0-x86_64-pc-windows-msvc'
+          foreach ($relative in @('bin\rustc.exe', 'bin\cargo.exe', 'lib\rustlib\x86_64-pc-windows-msvc\lib')) {
+            $item = Get-Item -LiteralPath (Join-Path $tool $relative) -Force
+            if ($relative.EndsWith('.exe') -and ($item.PSIsContainer -or $item.Length -le 0)) {
+              throw 'Rust compiler file missing or wrong type.'
+            }
+            if ($relative.EndsWith('\lib') -and -not $item.PSIsContainer) { throw 'Rust library path wrong type.' }
+            for ($ancestor = $item; $null -ne $ancestor;) {
+              if ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Redirected Rust tool path.' }
+              if ($ancestor.PSIsContainer) { $ancestor = $ancestor.Parent } else { $ancestor = $ancestor.Directory }
+            }
+          }
