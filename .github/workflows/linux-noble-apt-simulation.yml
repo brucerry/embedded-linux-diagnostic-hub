@@ -1,39 +1,40 @@
-name: Approved isolated Noble toolchain provisioning
+name: Held Noble Gateway startup diagnostic
 on:
   push:
     branches: [ci/v060-noble-apt-runtime-observations-20261120]
     paths: [.github/workflows/linux-noble-apt-simulation.yml]
 permissions: {}
 jobs:
-  noble-apt-provisioning:
-    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.ref == 'refs/heads/ci/v060-noble-apt-runtime-observations-20261120' && github.actor == 'brucerry' && github.event.sender.login == 'brucerry' && github.run_attempt == 1 }}
+  gateway-diagnostic:
+    if: ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.ref == 'refs/heads/ci/v060-noble-apt-runtime-observations-20261120' && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    timeout-minutes: 16
     steps:
-      - name: Execute the one reviewed disposable transaction and independent reader
-        id: provision
+      - name: Admit exact assembly and observe one bounded Gateway startup and teardown
+        id: diagnostic
         shell: bash
         run: |
           /usr/bin/python3 -I -B - <<'PY'
           import hashlib, os, re, subprocess, tempfile
           from pathlib import Path
           approved = [
-              ('intake.py', 19626, 'ffe99877181e3368b21f631b21b2f69c5531aa280e76c9fb176ae34887a1eaca'),
-              ('pins.json', 511199, '6e685c54df1fceef365c0dd28cd763e65468cf7194601e2450f54de6fef8e4b9'),
-              ('reader.sh', 2601, 'b0c445372342e134c570edb31ce54ecdc069022c69ead646b40d80279eb5340b'),
-              ('signed-policy.json', 17429, '8e0b11b057d980fffedb179f47a06e951b58ee842b3629e54742a5a8ccea5387'),
-              ('transaction.py', 23420, 'c5e061e170034b5785be582401af2154c998a2848330073804a50232b03e9028'),
-              ('writer.sh', 3061, 'c184fa92790ba4406f0faad40c1b1de03703546f539c00fa7e6d59601ae796e3'),
+              ('assemble.py', 9856, '35a1e21bf689c145ad7f4a941071a86b15ef00109145222796317b9c728e548c'),
+              ('job.py', 7368, '38b21f649aa1ae9e6882ff601acf4f5a66e7eeb61255ede2384f9e0329d398e2'),
+              ('package-lock.json', 2212, '08d8f01de2007ae609c93fafbb571ec012d8b864772ce5b8b0627b58a211056c'),
+              ('package.json', 252, 'b8f8fa57a9504ea7299f935e14283bc5879b450af63b11f38c0224d4807d8a9b'),
+              ('pins.json', 30791, '6b409fa18f5ee76e1bb25f4dc98efde510666bea6b5a01d3bc61d84f23d24046'),
+              ('startup.cjs', 6272, 'b87d59e700e1143a11f28746c386dbae1f62a92f87cc090b92416cde118af052'),
+              ('worker.sh', 1498, '131f9c5ce82c05d9893c57fb1982c6ffe300fccf36ce7139e719ed7472212260'),
           ]
           sha = os.environ['GITHUB_SHA']
           assert re.fullmatch('[a-f0-9]{40}', sha)
           assert os.environ['GITHUB_WORKFLOW_SHA'] == sha
-          assert 0 < os.getuid() == os.geteuid()
+          assert os.getuid() == os.geteuid() > 0
           root = Path(os.environ['RUNNER_TEMP'])
           assert root.resolve(strict=True) == root and root.stat().st_uid == os.getuid()
-          prefix = 'https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/' + sha + '/scripts/ci/noble-provision/'
+          prefix = 'https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/' + sha + '/scripts/ci/gateway-diagnostic/'
           os.umask(0o077)
-          with tempfile.TemporaryDirectory(prefix='hub-noble-job-code-', dir=root) as td:
+          with tempfile.TemporaryDirectory(prefix='hub-worker-code-', dir=root) as td:
               launcher = Path(td)
               for name, size, digest in approved:
                   result = subprocess.run(['/usr/bin/curl', '--disable', '--silent', '--fail', '--max-time', '12',
@@ -46,56 +47,26 @@ jobs:
                   assert len(body) == size + 3 and hashlib.sha256(body[:-3]).hexdigest() == digest
                   with (launcher / name).open('xb') as output:
                       output.write(body[:-3])
-              assert subprocess.run(['/usr/bin/python3', '-I', '-B', launcher / 'transaction.py'],
-                                    stdin=subprocess.DEVNULL, timeout=1230).returncode == 0
+              assert subprocess.run(['/usr/bin/python3', '-I', '-B', launcher / 'job.py'],
+                                    stdin=subprocess.DEVNULL, timeout=860).returncode == 0
           PY
-      - name: Pinned stock Noble OCI and pre-staging backing-store census
+      - name: Pinned Noble image identity
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.provision.outputs['oci'] }}
+          OBSERVED: ${{ steps.diagnostic.outputs.image }}
         run: test "$OBSERVED" = pass
-      - name: Canonical snapshot signatures, 39 verified DEBs, and private immutable stages
+      - name: Same-job exact Node, Gateway bundle, and runtime closure
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.provision.outputs['intake'] }}
+          OBSERVED: ${{ steps.diagnostic.outputs.assembly }}
         run: test "$OBSERVED" = pass
-      - name: Approved disposable writer and exact post-staging backing-store capacity
+      - name: Exact container configuration and four GiB post-staging at both paths
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.provision.outputs['writer-admitted'] }}
+          OBSERVED: ${{ steps.diagnostic.outputs.venue }}
         run: test "$OBSERVED" = pass
-      - name: Default unprivileged APT user read all 39 exact inputs
+      - name: Health and owned teardown, then successful removal and byte readback
         if: ${{ always() }}
         env:
-          OBSERVED: ${{ steps.provision.outputs['apt-readable'] }}
-        run: test "$OBSERVED" = pass
-      - name: Reached the single real offline APT invocation
-        if: ${{ always() }}
-        env:
-          OBSERVED: ${{ steps.provision.outputs['transaction-invoked'] }}
-        run: test "$OBSERVED" = pass
-      - name: Exact 37 additions, two glibc upgrades, zero removals, and clean 129-package database
-        if: ${{ always() }}
-        env:
-          OBSERVED: ${{ steps.provision.outputs['transaction'] }}
-        run: test "$OBSERVED" = pass
-      - name: Only declared payload and reviewed generated paths changed
-        if: ${{ always() }}
-        env:
-          OBSERVED: ${{ steps.provision.outputs['delta'] }}
-        run: test "$OBSERVED" = pass
-      - name: Nonroot compiler, linker, headers, loader cache and package database readback
-        if: ${{ always() }}
-        env:
-          OBSERVED: ${{ steps.provision.outputs['reader'] }}
-        run: test "$OBSERVED" = pass
-      - name: Exact owned containers and any derived image retired
-        if: ${{ always() }}
-        env:
-          OBSERVED: ${{ steps.provision.outputs['container-cleanup'] }}
-        run: test "$OBSERVED" = pass
-      - name: Exact private work directory retired
-        if: ${{ always() }}
-        env:
-          OBSERVED: ${{ steps.provision.outputs['scratch-cleanup'] }}
+          OBSERVED: ${{ steps.diagnostic.outputs.closure }}
         run: test "$OBSERVED" = pass

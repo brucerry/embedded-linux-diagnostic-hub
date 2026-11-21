@@ -1,0 +1,796 @@
+{
+  "status": "data-only-verified-diagnostic-profile",
+  "releaseAcceptance": false,
+  "hubSource": {
+    "commit": "5e3c66f4a62e3606abdd650972e0f76b71ff5c54",
+    "tree": "5af9dbea99de92cc3ae3b4c44bed42ae60219e7e",
+    "originalLockSHA256": "19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3"
+  },
+  "diagnosticLockSHA256": "08d8f01de2007ae609c93fafbb571ec012d8b864772ce5b8b0627b58a211056c",
+  "dependencyArchiveParserSHA256": "1de8cb90366f9fcbfe40d0e7d182a2f250a87591b45e865de544dd1e92af0feb",
+  "packages": {
+    "asn1": {
+      "version": "0.2.6",
+      "resolved": "https://registry.npmjs.org/asn1/-/asn1-0.2.6.tgz",
+      "integrity": "sha512-ix/FxPn0MDjeyJ7i/yoHGFt/EX6LyNbxSEhPPXODPL+KB0VPk86UYfL0lMdy+KCnv+fmvIzySwaK5COwqVbWTQ==",
+      "bytes": 5977,
+      "sha256": "17ca6fff19e3f681ae310bda39262b9968b57bee3771a730818772d83a8fe250",
+      "dependencies": {
+        "safer-buffer": "~2.1.0"
+      },
+      "files": {
+        "Jenkinsfile": {
+          "size": 1715,
+          "sha256": "53d887b9847a68726f6e753be54a7b91f31e20767102b14b27073b15d77eb14d"
+        },
+        "LICENSE": {
+          "size": 1076,
+          "sha256": "f4b6bd1a9437d0f66ff46d8f4dca185c31a069ba11e437f3b8506ec4424be9cf"
+        },
+        "README.md": {
+          "size": 1201,
+          "sha256": "1f964fb2873218cc81366ef235e99182f0ea8474228c1e4eedcc92cc71ce4d4b"
+        },
+        "lib/ber/errors.js": {
+          "size": 240,
+          "sha256": "9408a1b48a19eb728cf9ed781b90bc03ddd111d88156d5b5913ce9b837487164"
+        },
+        "lib/ber/index.js": {
+          "size": 469,
+          "sha256": "8da323efc9ac8f5bb3b5fb4f067ca272796b31610c015f36762933551f04594b"
+        },
+        "lib/ber/reader.js": {
+          "size": 5650,
+          "sha256": "5d0d7ec2de73921f0bff71872610488b30936b8cc4c98997966224c463046bbc"
+        },
+        "lib/ber/types.js": {
+          "size": 638,
+          "sha256": "87c9fbe37ac7a2c83726a952881efd6829dc3a9dc7a1e9e485a9201cd7714c13"
+        },
+        "lib/ber/writer.js": {
+          "size": 7666,
+          "sha256": "839731c9473b8c4faf09db9411a6d149bc365a6bde239c80e5993ed63a134878"
+        },
+        "lib/index.js": {
+          "size": 320,
+          "sha256": "4db109c1c247a751645717e696e04eab975eef06bdf4713a16e81efc63575d87"
+        },
+        "package.json": {
+          "size": 782,
+          "sha256": "9931ef8d2e8857b7be3cc1fb13af4c943165046fe66337a8d7fec50fee8a5764"
+        }
+      },
+      "directories": [],
+      "notices": {
+        "LICENSE": "f4b6bd1a9437d0f66ff46d8f4dca185c31a069ba11e437f3b8506ec4424be9cf"
+      },
+      "license": "MIT"
+    },
+    "bcrypt-pbkdf": {
+      "version": "1.0.2",
+      "resolved": "https://registry.npmjs.org/bcrypt-pbkdf/-/bcrypt-pbkdf-1.0.2.tgz",
+      "integrity": "sha512-qeFIXtP4MSoi6NLqO12WfqARWWuCKi2Rn/9hJLEmtB5yTNr9DqFWkJRCf2qShWzPeAMRnOgCrq0sg/KLv5ES9w==",
+      "bytes": 11109,
+      "sha256": "e13e9e9f5d438223a02a906e6b77dfc97985a4ccf469ddb65261012973f07826",
+      "dependencies": {
+        "tweetnacl": "^0.14.3"
+      },
+      "files": {
+        "CONTRIBUTING.md": {
+          "size": 547,
+          "sha256": "c917b9f83eaacd96a019958017dd11a4d9a7b5e985d8b542069fd168652913b2"
+        },
+        "LICENSE": {
+          "size": 3195,
+          "sha256": "b5f71fac3ae50115c65ee70551bdbaeed89b4f7a76ac36dc8c576e3036bcd604"
+        },
+        "README.md": {
+          "size": 1669,
+          "sha256": "499c20327ec3eb313a97b5b057e863c3f035ae97fcfb0f36056f59e9bd507193"
+        },
+        "index.js": {
+          "size": 23230,
+          "sha256": "e1589c001f45f4cd8bf569b92a585b48f73e8b85b97302a6e56dfcddb38ce17d"
+        },
+        "package.json": {
+          "size": 353,
+          "sha256": "06fc161a503054580e1e975c384436da3901ee5c6cbd9a29454947c669fe8890"
+        }
+      },
+      "directories": [],
+      "notices": {
+        "LICENSE": "b5f71fac3ae50115c65ee70551bdbaeed89b4f7a76ac36dc8c576e3036bcd604"
+      },
+      "license": "BSD-3-Clause"
+    },
+    "safer-buffer": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+      "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==",
+      "bytes": 12035,
+      "sha256": "78812f65ae3b98071ce1c9bacbe0666f4220d0b2753c2a11530eb27df440a3b3",
+      "dependencies": {},
+      "files": {
+        "LICENSE": {
+          "size": 1094,
+          "sha256": "4bc935e71be198c67ddf3c2b5fddb195f6edc182bfc155a96a6db61b44b494b9"
+        },
+        "Porting-Buffer.md": {
+          "size": 12794,
+          "sha256": "134523d05b39e177135c2a2070a426eb319657dfc77589e38ef7cf13cd50e730"
+        },
+        "Readme.md": {
+          "size": 8261,
+          "sha256": "d4331b7c5af9c02161150daf9451ee6bc7a73ece3ec0312603fae09f46a817d8"
+        },
+        "dangerous.js": {
+          "size": 1483,
+          "sha256": "1dc2900bcc8ffc375af0d2fc99a03ecad2dcbb85d278fbf26982e87707bea53f"
+        },
+        "package.json": {
+          "size": 822,
+          "sha256": "4247a3a63c45a6a7ced1557fe4dd9d2a163af4915d594b95e5867b69a53edb52"
+        },
+        "safer.js": {
+          "size": 2110,
+          "sha256": "37f9716144105051ab302f6a0c30a52ff5de7269b9e1173ac22be798fc11ccad"
+        },
+        "tests.js": {
+          "size": 15735,
+          "sha256": "511906fdf6a233c84a9216065d1701dbfd84f380fbd495ae1cf5a002370b9885"
+        }
+      },
+      "directories": [],
+      "notices": {
+        "LICENSE": "4bc935e71be198c67ddf3c2b5fddb195f6edc182bfc155a96a6db61b44b494b9"
+      },
+      "license": "MIT"
+    },
+    "ssh2": {
+      "version": "1.17.0",
+      "resolved": "file:vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz",
+      "integrity": "sha512-n3z4W9hcQzDqVdZ8wLeXBs6J7vQ4DnSZJnx1bTHU54pDhVRU5lrMW4WjwESIy4Q9LZwefQR4RkuHl0hIXH83Pw==",
+      "bytes": 140991,
+      "sha256": "6d98e9e9300044d644a2cf617f405295cb3f01df41d877caf849f7afdcaf8c37",
+      "dependencies": {
+        "asn1": "^0.2.6",
+        "bcrypt-pbkdf": "^1.0.2"
+      },
+      "files": {
+        "LICENSE": {
+          "size": 1067,
+          "sha256": "d06b5d27bbbbe22c36b1fd88406b1208876e2d37d795f5b8eaed951a459a3111"
+        },
+        "README.md": {
+          "size": 71292,
+          "sha256": "34038366db735162d2c3138a3d636d3d631bb2de370db468877dbd96ba6f56f5"
+        },
+        "SFTP.md": {
+          "size": 21322,
+          "sha256": "9648b6c7da1b011b5cf2c4505e6bceb09ee11716a61941ae5d7bffa40f4ab95f"
+        },
+        "lib/Channel.js": {
+          "size": 7132,
+          "sha256": "53e92988a025009b192b72be110bd240b5653f88dbdec93e515e3e401e7f94aa"
+        },
+        "lib/agent.js": {
+          "size": 32130,
+          "sha256": "cc6987488bf45f73e0ac5d8bbe59912b70a144cd73b53c83919f188f4cc3f2be"
+        },
+        "lib/client.js": {
+          "size": 64168,
+          "sha256": "edd3484daa9d942bc5a6412edc9cf11f85df40b2db10b07877bbfe694beac7f4"
+        },
+        "lib/http-agents.js": {
+          "size": 2323,
+          "sha256": "477d34701116572f2af06ac545994f3e2d2f14b26c5ae76bff2b13de2289339d"
+        },
+        "lib/index.js": {
+          "size": 767,
+          "sha256": "27e942aba52a13d7b72a846a4b3fd98d69b65431725b651e7523b74499a2ed26"
+        },
+        "lib/keygen.js": {
+          "size": 18252,
+          "sha256": "03d0be43e78ca4f82d4c96d084a39c0242f9c56f343da17a819f8bd0d873f06c"
+        },
+        "lib/protocol/Protocol.js": {
+          "size": 65576,
+          "sha256": "c1104b49087de7a91cd3ffaac8807c05eebf49f61effd084d0b0caf29fde6af4"
+        },
+        "lib/protocol/SFTP.js": {
+          "size": 114059,
+          "sha256": "615871028340d9be98eb564ab6bdd021fe8ae44a4a25df928038e14e3bc5c201"
+        },
+        "lib/protocol/constants.js": {
+          "size": 11808,
+          "sha256": "a3894fdd8e294109b55f06fbda69e467741f15a250801b744b6b0487bbf32529"
+        },
+        "lib/protocol/crypto.js": {
+          "size": 47530,
+          "sha256": "a729d2064e787e2a4589c25a284444fe54a58b7434a4e6e5e8e9c73c6d91e28e"
+        },
+        "lib/protocol/crypto/poly1305.js": {
+          "size": 22812,
+          "sha256": "55a579ed6a30022054fd1dd822b1b49e2fc51bfbdfa933bfe441de8b7e4dce40"
+        },
+        "lib/protocol/handlers.js": {
+          "size": 423,
+          "sha256": "b15f990134a4f69b7492d0b875d80d8c28228907045619b01ec30871ac711df9"
+        },
+        "lib/protocol/handlers.misc.js": {
+          "size": 39158,
+          "sha256": "8927c504c3c338187f36f0304a3452d6396ec9fc907af3db2be46a5f175c36a1"
+        },
+        "lib/protocol/kex.js": {
+          "size": 60351,
+          "sha256": "054ba4b81801596350f0e2e939746d2966297cffd4303b342c25b2fd5d295755"
+        },
+        "lib/protocol/keyParser.js": {
+          "size": 47776,
+          "sha256": "ba4f40a5a9edef15ff49a38226e2be2e66f75aa2673840dd18b807bb7943eca9"
+        },
+        "lib/protocol/node-fs-compat.js": {
+          "size": 3647,
+          "sha256": "d46a25cc158456c4a82b686ceed9a8267dc7d1bb69b6fd1d1f9b09d467951b4d"
+        },
+        "lib/protocol/utils.js": {
+          "size": 10257,
+          "sha256": "402b39e75ede9e3dc99af5e8af008602546f35aa1472bd4232c06f606987f053"
+        },
+        "lib/protocol/zlib.js": {
+          "size": 6122,
+          "sha256": "8cd9f4c1825cbc394ddf9cf076a5ba9195ec255db9e904182ae9c25a1036e2d6"
+        },
+        "lib/server.js": {
+          "size": 41705,
+          "sha256": "128b58ee54cf97a5ae17e18836ff4472de4a5e4e591f2862a5c9ec7f148befe5"
+        },
+        "lib/utils.js": {
+          "size": 9773,
+          "sha256": "bbae8286bc64b049499ce353e8dc4eefbbedefca8f50591432c1057276097aee"
+        },
+        "package.json": {
+          "size": 711,
+          "sha256": "997b91342ddebed8897c0d87063ec1a8b2120bf0990e4156e568ce839622cd2b"
+        }
+      },
+      "directories": [],
+      "notices": {
+        "LICENSE": "d06b5d27bbbbe22c36b1fd88406b1208876e2d37d795f5b8eaed951a459a3111"
+      },
+      "license": "MIT"
+    },
+    "tweetnacl": {
+      "version": "0.14.5",
+      "resolved": "https://registry.npmjs.org/tweetnacl/-/tweetnacl-0.14.5.tgz",
+      "integrity": "sha512-KXXFFdAbFXY4geFIwoyNK+f5Z1b7swfXABfL7HXCmoIWMKU3dmS26672A4EeQtDzLKy7SXmfBu51JolvEKwtGA==",
+      "bytes": 49663,
+      "sha256": "6cea33d67a9bd83f8bd250655c78a2c89ea912bcc6be91c8e65807ce69cfdfd6",
+      "dependencies": {},
+      "files": {
+        ".npmignore": {
+          "size": 38,
+          "sha256": "fcba86d1ea23147ce7cf18a6db42bbb5b662dac471b39f2085ccb88fbccb36a6"
+        },
+        "AUTHORS.md": {
+          "size": 875,
+          "sha256": "8feb6d2a264181d5c3ec1fd41cd5d70052bb319f7a0dcaf71bd7305eba61c635"
+        },
+        "CHANGELOG.md": {
+          "size": 5904,
+          "sha256": "f1eb453cf7365a0cdfe340a93f26d9200336f08e40fe2dbf784d6351a6100d9f"
+        },
+        "LICENSE": {
+          "size": 1210,
+          "sha256": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd"
+        },
+        "PULL_REQUEST_TEMPLATE.md": {
+          "size": 1040,
+          "sha256": "65fe41cbd990b3dd0f7062a6052b8876e221b29e1ed12eac186bf87436e244cb"
+        },
+        "README.md": {
+          "size": 13166,
+          "sha256": "b6ca7b2414a48f030af21b9a91503a7be310b9b6d9816701c6d986837409df79"
+        },
+        "nacl-fast.js": {
+          "size": 62257,
+          "sha256": "432333a18cef679d16c71328fcc18cc547e58d7d1c2b880a581b2d7ee4248027"
+        },
+        "nacl-fast.min.js": {
+          "size": 32621,
+          "sha256": "0811a2e109217daf3bede7d6d38a55718b214c6ba047645a419bea0d79694553"
+        },
+        "nacl.d.ts": {
+          "size": 3076,
+          "sha256": "775da466a05294cc4662acb973858f2c2526456da00139f242df99a75de2b702"
+        },
+        "nacl.js": {
+          "size": 32948,
+          "sha256": "f15290381b06a1156f3e9aedcb25d252531f0ff36324e3f56ced190935cb051c"
+        },
+        "nacl.min.js": {
+          "size": 19089,
+          "sha256": "a19ca28cbbd3cf50f21d02d699141d66b9c96a11359f4f8b376ca79b44301640"
+        },
+        "package.json": {
+          "size": 1822,
+          "sha256": "4d4e7122e483ab7bed48c884bb0de1471d3cb3753e1a334e3aafa3c32c22923e"
+        }
+      },
+      "directories": [],
+      "notices": {
+        "LICENSE": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd"
+      },
+      "license": "Unlicense"
+    }
+  },
+  "derivedSsh2": {
+    "repo": "mscdex/ssh2",
+    "tag": "v1.17.0",
+    "tagObject": "5c506eb0989fd00147ae97833bcb2cd13ac4f515",
+    "commit": "844f1edfc41589737671f96a4f4e76afdf46abd4",
+    "tree": "034ef339f3e90ea65e558bcf96f1c374cc013b6f",
+    "githubCommitVerification": "valid",
+    "sourceArchiveSHA256": "683f3524f4b1800c6a77116eabc366ff636fe720a136a2078dd3141c28e2b779"
+  },
+  "node": {
+    "version": "24.22.2",
+    "bytes": 126881248,
+    "sha256": "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52"
+  },
+  "retainedBundle": {
+    "archiveSHA256": "4e1b24c3757a91f1f1bacabc5de6964dbcdddf11d7bd0188819d950d245cc1a3",
+    "originalEmbeddedLockSHA256": "3713046260d1792b54c720e0757eb10da01f0cc186aff8f3d8e45e8728ab99cc",
+    "entry": "dist-gateway/main.cjs",
+    "bytes": 193722,
+    "sha256": "06c088709a0495de3381f5eb63adb194237a1b26f38d7f2d536f34d7834e5d1c"
+  },
+  "materializedInstalledTree": false,
+  "gatewayLaunched": false,
+  "manifestSHA256": "b8f8fa57a9504ea7299f935e14283bc5879b450af63b11f38c0224d4807d8a9b",
+  "nodeLoader": {
+    "/lib64/ld-linux-x86-64.so.2": {
+      "bytes": 236616,
+      "file": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "mode": "0o755",
+      "sha256": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da",
+      "symlinks": {
+        "lib64": "usr/lib64",
+        "usr/lib64/ld-linux-x86-64.so.2": "../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+      "bytes": 236616,
+      "file": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "mode": "0o755",
+      "sha256": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da",
+      "symlinks": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+      "bytes": 2129424,
+      "file": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "mode": "0o755",
+      "sha256": "3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf",
+      "symlinks": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libdl.so.2": {
+      "bytes": 14408,
+      "file": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+      "mode": "0o644",
+      "sha256": "c2994527172cc23b7fb0f7d611b71e00a37da27af12c2e5e9e0dc1a742886c96",
+      "symlinks": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1": {
+      "bytes": 183024,
+      "file": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "mode": "0o644",
+      "sha256": "d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb",
+      "symlinks": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libm.so.6": {
+      "bytes": 952616,
+      "file": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "mode": "0o644",
+      "sha256": "fce00b6f25f459cf4ae0b7fae4257909a1a8a86f9149e7c029a5d617baf1ccd0",
+      "symlinks": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libpthread.so.0": {
+      "bytes": 14408,
+      "file": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+      "mode": "0o644",
+      "sha256": "90491a21ce44efcf3bd4b65ec82501c091d7ebe7f8d9b341dd01d721001d9ecd",
+      "symlinks": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libstdc++.so.6": {
+      "bytes": 2592224,
+      "file": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33",
+      "mode": "0o644",
+      "sha256": "1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11",
+      "symlinks": {
+        "usr/lib/x86_64-linux-gnu/libstdc++.so.6": "libstdc++.so.6.0.33"
+      }
+    }
+  },
+  "ssh2SourceMembers": {
+    "LICENSE": {
+      "gitBlob": "290762e94f4e2f2b52cc13ae4f2b63ac0269bfd1",
+      "sha256": "d06b5d27bbbbe22c36b1fd88406b1208876e2d37d795f5b8eaed951a459a3111",
+      "bytes": 1067
+    },
+    "README.md": {
+      "gitBlob": "e08c929ef7ad5cc9833103a16ab63eb79fb2f476",
+      "sha256": "34038366db735162d2c3138a3d636d3d631bb2de370db468877dbd96ba6f56f5",
+      "bytes": 71292
+    },
+    "SFTP.md": {
+      "gitBlob": "9353ae8029305acea2987059986ffe06f148feef",
+      "sha256": "9648b6c7da1b011b5cf2c4505e6bceb09ee11716a61941ae5d7bffa40f4ab95f",
+      "bytes": 21322
+    },
+    "lib/Channel.js": {
+      "gitBlob": "0120779be7f5d04b97cec31a7127e480b3040704",
+      "sha256": "53e92988a025009b192b72be110bd240b5653f88dbdec93e515e3e401e7f94aa",
+      "bytes": 7132
+    },
+    "lib/agent.js": {
+      "gitBlob": "bb495d1b191433c1be51929bb551bba1a8b03c1f",
+      "sha256": "cc6987488bf45f73e0ac5d8bbe59912b70a144cd73b53c83919f188f4cc3f2be",
+      "bytes": 32130
+    },
+    "lib/client.js": {
+      "gitBlob": "7291c2ce0b8489975c964ac82f688b59847985e0",
+      "sha256": "edd3484daa9d942bc5a6412edc9cf11f85df40b2db10b07877bbfe694beac7f4",
+      "bytes": 64168
+    },
+    "lib/http-agents.js": {
+      "gitBlob": "770a0e633c1cb151643c17b3230e37900a5c2f6a",
+      "sha256": "477d34701116572f2af06ac545994f3e2d2f14b26c5ae76bff2b13de2289339d",
+      "bytes": 2323
+    },
+    "lib/index.js": {
+      "gitBlob": "82c2c936b13a7893ca0e6d01f07fb72c217832b8",
+      "sha256": "27e942aba52a13d7b72a846a4b3fd98d69b65431725b651e7523b74499a2ed26",
+      "bytes": 767
+    },
+    "lib/keygen.js": {
+      "gitBlob": "570c90eef1ef6f572863bcf147f82749da4c5beb",
+      "sha256": "03d0be43e78ca4f82d4c96d084a39c0242f9c56f343da17a819f8bd0d873f06c",
+      "bytes": 18252
+    },
+    "lib/protocol/Protocol.js": {
+      "gitBlob": "7302488102161b5b627f6f089d502caa6df0f356",
+      "sha256": "c1104b49087de7a91cd3ffaac8807c05eebf49f61effd084d0b0caf29fde6af4",
+      "bytes": 65576
+    },
+    "lib/protocol/SFTP.js": {
+      "gitBlob": "9f33c0213040ad226f6ca4d18656fe902464952d",
+      "sha256": "615871028340d9be98eb564ab6bdd021fe8ae44a4a25df928038e14e3bc5c201",
+      "bytes": 114059
+    },
+    "lib/protocol/constants.js": {
+      "gitBlob": "ad7759257d6bdbcafa353dec8946258d64c14eb0",
+      "sha256": "a3894fdd8e294109b55f06fbda69e467741f15a250801b744b6b0487bbf32529",
+      "bytes": 11808
+    },
+    "lib/protocol/crypto.js": {
+      "gitBlob": "851cc73817537c1eace3442c792bc1e5e5289cd2",
+      "sha256": "a729d2064e787e2a4589c25a284444fe54a58b7434a4e6e5e8e9c73c6d91e28e",
+      "bytes": 47530
+    },
+    "lib/protocol/crypto/poly1305.js": {
+      "gitBlob": "a6953fec630ad47acff72b0facbf5ef1e1c9a2e7",
+      "sha256": "55a579ed6a30022054fd1dd822b1b49e2fc51bfbdfa933bfe441de8b7e4dce40",
+      "bytes": 22812
+    },
+    "lib/protocol/handlers.js": {
+      "gitBlob": "35fb9f28b3a2f979bdaff2bc52a05d55d748966b",
+      "sha256": "b15f990134a4f69b7492d0b875d80d8c28228907045619b01ec30871ac711df9",
+      "bytes": 423
+    },
+    "lib/protocol/handlers.misc.js": {
+      "gitBlob": "24580bec58cc4be58b14cfd64a43a49b17a12f56",
+      "sha256": "8927c504c3c338187f36f0304a3452d6396ec9fc907af3db2be46a5f175c36a1",
+      "bytes": 39158
+    },
+    "lib/protocol/kex.js": {
+      "gitBlob": "811e631b8ab78d32776e540919d25aae56d628f7",
+      "sha256": "054ba4b81801596350f0e2e939746d2966297cffd4303b342c25b2fd5d295755",
+      "bytes": 60351
+    },
+    "lib/protocol/keyParser.js": {
+      "gitBlob": "a276c1aed3dca46469b0c566ad12f989c65e92e5",
+      "sha256": "ba4f40a5a9edef15ff49a38226e2be2e66f75aa2673840dd18b807bb7943eca9",
+      "bytes": 47776
+    },
+    "lib/protocol/node-fs-compat.js": {
+      "gitBlob": "80ed71fcd4432d903ab0b1284369aa1bba263243",
+      "sha256": "d46a25cc158456c4a82b686ceed9a8267dc7d1bb69b6fd1d1f9b09d467951b4d",
+      "bytes": 3647
+    },
+    "lib/protocol/utils.js": {
+      "gitBlob": "26f4cab6de85953ccc7f9e7af35c4fa0905e8ca0",
+      "sha256": "402b39e75ede9e3dc99af5e8af008602546f35aa1472bd4232c06f606987f053",
+      "bytes": 10257
+    },
+    "lib/protocol/zlib.js": {
+      "gitBlob": "f68319a1460a54de0a07e98bafc20371b4f35125",
+      "sha256": "8cd9f4c1825cbc394ddf9cf076a5ba9195ec255db9e904182ae9c25a1036e2d6",
+      "bytes": 6122
+    },
+    "lib/server.js": {
+      "gitBlob": "306d6584c2514fd5238136049f02725fce09f91e",
+      "sha256": "128b58ee54cf97a5ae17e18836ff4472de4a5e4e591f2862a5c9ec7f148befe5",
+      "bytes": 41705
+    },
+    "lib/utils.js": {
+      "gitBlob": "d9ca6aef96de0b13a2e911cab3c966faf6e192e1",
+      "sha256": "bbae8286bc64b049499ce353e8dc4eefbbedefca8f50591432c1057276097aee",
+      "bytes": 9773
+    },
+    "package.json": {
+      "gitBlob": "2e170c3e1be3353c642044f7d0e635b8dc10a6a9",
+      "sha256": "e6fd4e4c3e69e4ad185c87cb5ee1df631e3f4cbd43cf89470f83c1e5d1a76dfb",
+      "bytes": 1101
+    }
+  },
+  "ssh2ProviderRecipe": {
+    "bytes": 140991,
+    "file": "vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz",
+    "localRetainedMemberReassembly": "gzip.compress-mtime-zero",
+    "lockIntegrity": "sha512-n3z4W9hcQzDqVdZ8wLeXBs6J7vQ4DnSZJnx1bTHU54pDhVRU5lrMW4WjwESIy4Q9LZwefQR4RkuHl0hIXH83Pw==",
+    "memberCount": 24,
+    "recipe": "js-source-selection",
+    "sha256": "6d98e9e9300044d644a2cf617f405295cb3f01df41d877caf849f7afdcaf8c37",
+    "sourceCommit": "844f1edfc41589737671f96a4f4e76afdf46abd4",
+    "sourceRepository": "https://github.com/mscdex/ssh2",
+    "sourceTree": "034ef339f3e90ea65e558bcf96f1c374cc013b6f",
+    "tarBytes": 727040,
+    "tarSHA256": "806998af8d11e68b82e956a5e0a7be6b276831854863ac8cee25d795b4f99bf7",
+    "version": "1.17.0"
+  },
+  "hubBundleInputs": {
+    "gateway/main.ts": {
+      "bytes": 1368,
+      "sha256": "d43b253f1def86e05b6c40a243859f50dfb73ee313f63082156607ef576af86f"
+    },
+    "gateway/server.ts": {
+      "bytes": 36398,
+      "sha256": "059ef8c6f5a29457a1473ab0a304f256188c43b9c2180b33eb12fd28a7f6be21"
+    },
+    "shared/connection.ts": {
+      "bytes": 2202,
+      "sha256": "1c1fc88b4397b230f705175d5f9ac0f160667c8e42b15c45f5e8a2fda85f2524"
+    },
+    "gateway/terminal.ts": {
+      "bytes": 5584,
+      "sha256": "5ae15b5b325dd74e720841f8d628467ff57101643dcc70fd832d27ea9d1c40f9"
+    },
+    "shared/terminal.ts": {
+      "bytes": 3139,
+      "sha256": "5dce5ecced813f9954d37c8540d15748192bc3d1944f4e493d84af8ec3283bcb"
+    },
+    "backend/ssh/session.ts": {
+      "bytes": 34921,
+      "sha256": "8cae1798cf782af8e6afe95c111d8dd177f69d525bacdd09df70c62b9460520f"
+    },
+    "backend/ssh/terminal.ts": {
+      "bytes": 10494,
+      "sha256": "28372e3bdf133fac94fcc04431c0a626e9871dc9d5ac1fefeddd76d3833748b4"
+    },
+    "shared/diagnostics/device-clock.ts": {
+      "bytes": 6195,
+      "sha256": "a8dbe52537d1115638036745405f8ec31f4be5d69a1266a61ac2fc2fc6b20fed"
+    },
+    "shared/types.ts": {
+      "bytes": 6104,
+      "sha256": "328efdf99cab0f818c8cb7e0b568340fa8a8684ab20afd76fd1d1b0f9a058be9"
+    },
+    "shared/installation.ts": {
+      "bytes": 10093,
+      "sha256": "0959e80f9916ed08c2ff6f2c54f750bdc2a1e19c2dc988b9a83b4c567d166a7d"
+    },
+    "shared/report-export.ts": {
+      "bytes": 1703,
+      "sha256": "41c209bf8b7259a47643babad4fcb968aea123c50a01b493bc19b9a2f17b458c"
+    },
+    "shared/diagnostics/network/evidence.ts": {
+      "bytes": 5980,
+      "sha256": "9791c9cc25cd426b5b30eec0cc599e4ccf3dd24a11d8c019373a93a6c40594ef"
+    },
+    "shared/report-time.ts": {
+      "bytes": 1395,
+      "sha256": "403a00732905855b85b0f8fb23f6126d7eaed966c59044b77f2e6d66350fcb50"
+    },
+    "shared/console-archive-rpc.ts": {
+      "bytes": 3717,
+      "sha256": "2e78223655aed50b5755b881370805985f0a2353a25f6a4ad7120f909bfce8cd"
+    },
+    "shared/capture-report.ts": {
+      "bytes": 22815,
+      "sha256": "68689b44dd4f7077dcd1054553026004aad48e1ee3f516bbf68e28c1b4d6f4bb"
+    },
+    "shared/capture-store.ts": {
+      "bytes": 23015,
+      "sha256": "5cc2fe2ac3027d9c87b4d06d12d14a342f4c160f92961abd43502f3249ff8568"
+    },
+    "shared/automation-result.ts": {
+      "bytes": 6102,
+      "sha256": "7299b32a5232ac8d145ef7dfd2aceeca49c1e1e2996281b150357ae86ad71d17"
+    },
+    "shared/automation-time.ts": {
+      "bytes": 6068,
+      "sha256": "30c10d81a5b9561bb7542fd70ef9742a8f9ae8a80e95280e110a17b1ef13ab6f"
+    },
+    "shared/automation.ts": {
+      "bytes": 21120,
+      "sha256": "5175878105f4ae0d9e0eabc6ded2525a734beba21d726b681d17444c02617de4"
+    },
+    "shared/console-rpc.ts": {
+      "bytes": 6448,
+      "sha256": "b24c43ddd12bea7d73591d45d6e9ad764c42284051d84ebd17f82170fd75c843"
+    },
+    "shared/console-storage.ts": {
+      "bytes": 17578,
+      "sha256": "8f4c67a9f6b934e4c2e7981fa4a3334e553b4de32671edb504847100a7b84788"
+    },
+    "shared/console-journal.ts": {
+      "bytes": 20723,
+      "sha256": "e07f9d57c27478eda40b9818d0a04b8b17ab6068747ff988b1e4d53565c8cbf9"
+    },
+    "shared/ssh-console.ts": {
+      "bytes": 5505,
+      "sha256": "59a78da3e3d3942cdd0d044d2208436d50a6e7cff8f07e58f3c0871bebaa0e9c"
+    },
+    "shared/ssh-stream-rpc.ts": {
+      "bytes": 7983,
+      "sha256": "f67bd4fd653fefea35bfec32452c7de92cbba37ed732eee5b6e366b4cb0e97d2"
+    },
+    "shared/automation-stream.ts": {
+      "bytes": 1917,
+      "sha256": "ec7f5d5817e6ce1ab75f584adf91d023cc0118bb06b5fcafc8ebd96c7430269f"
+    },
+    "shared/capture-query.ts": {
+      "bytes": 10774,
+      "sha256": "29794803b3712b4c11d5532de8d901c44021bfcc03e905f19aec363fffbbab10"
+    },
+    "shared/capture-search.ts": {
+      "bytes": 2852,
+      "sha256": "3a368e6634ef05d0acf8dc0f354b78b16d94a53e8a3350e424855f7e44a7b425"
+    },
+    "shared/capture-export.ts": {
+      "bytes": 2752,
+      "sha256": "67940983c706225bc3f5f58348dab37b0a1d8e03f0a9df64594aaaae982c86a8"
+    },
+    "shared/console-report.ts": {
+      "bytes": 20273,
+      "sha256": "3c5facca0bef1676cdadae5c802587c5bba8b69998a0e0d01093131d22504742"
+    },
+    "shared/console-query.ts": {
+      "bytes": 5279,
+      "sha256": "4f36610b86eb6eab459b40dd22e6bd5db689e5ee4c3291d082473d094769ae6c"
+    },
+    "shared/capture-rpc.ts": {
+      "bytes": 19741,
+      "sha256": "255f7434b7bbadda2401f3245902fe2ac40add0dab610f7d154363e655fe9949"
+    },
+    "shared/serial.ts": {
+      "bytes": 2427,
+      "sha256": "1512e509359ccddc3d304294b332bd0ffde3e6f1f1f46497635960ab707921f6"
+    },
+    "shared/diagnostics/probes.ts": {
+      "bytes": 16930,
+      "sha256": "45ee9fc12d98bcde7f2a4cedb3b64921399e71928f02eb6ce9331bac6cce156b"
+    },
+    "shared/diagnostics/processes.ts": {
+      "bytes": 6446,
+      "sha256": "65dde4a9c134983a88fbac5c7e977e0463b67a315a0e5e3508223b2704690eb4"
+    },
+    "shared/diagnostics/evidence.ts": {
+      "bytes": 22391,
+      "sha256": "d18657740d72648d517183bace620ee470fe8f27f70db701f1c124ebee17257d"
+    },
+    "shared/diagnostics/metrics.ts": {
+      "bytes": 6900,
+      "sha256": "544868dcae2cf2cde81cfc3d4c032aeb3f24ccacb560540ed53ac4d5b4b85ed3"
+    },
+    "backend/ssh/console-host.ts": {
+      "bytes": 17934,
+      "sha256": "c0c91b1eb09d41792f57335859d32bccc5b997dfb38db537c57d69baad3c7ce9"
+    },
+    "backend/ssh/gateway-console-repository.ts": {
+      "bytes": 1286,
+      "sha256": "ed6b95b854317084af2102b783bbfc7ca05e5371c166c56a0790dba74f5487c3"
+    },
+    "backend/ssh/console-port.ts": {
+      "bytes": 4858,
+      "sha256": "e35c7380bbdb03fd06f99ce493f2afc6c6a5800fd143628ac8cc1072b1c7445b"
+    },
+    "backend/ssh/persistent-console.ts": {
+      "bytes": 26620,
+      "sha256": "208ae29b6419d248553ffee82079880b1cef8bec976f85b3c02add1c99fc5003"
+    },
+    "src/features/automation/serial-completion.ts": {
+      "bytes": 4094,
+      "sha256": "8fb33ca76ec356aa4cfd5cb22ebd87ab43ee0e03c6aaa4272bb412c0ee8afcfb"
+    },
+    "backend/ssh/stream-host.ts": {
+      "bytes": 12503,
+      "sha256": "224f9914811347f2b01de205b7c8d2664fdb5596a2524a38047109d1f7043e5c"
+    },
+    "backend/ssh/automation-stream.ts": {
+      "bytes": 6446,
+      "sha256": "f94e6af2a467500fc415372e8fe7aeb621eabea4111d5d7a36bcf138c564cf31"
+    },
+    "backend/ssh/automation.ts": {
+      "bytes": 5303,
+      "sha256": "8707acd757c415c85993179f7c2b720e60a5a13007641a6cd016747bca650f96"
+    },
+    "backend/ssh/owned-client.ts": {
+      "bytes": 5435,
+      "sha256": "92faf08cd984cefc118132c162ff7e12349fdc2f40c82b81cf29f562e261fd37"
+    },
+    "backend/ssh/network.ts": {
+      "bytes": 12196,
+      "sha256": "ece263fbe5683acf7f31eeefc76b57a278c7ef4c2d637c8ecdf7937e55eaea39"
+    },
+    "shared/diagnostics/network/json.ts": {
+      "bytes": 2641,
+      "sha256": "cdc23f2e02cba517032f64f42c208853c30843f9e066100683b66bf17c9a1dd0"
+    },
+    "backend/ssh/exec-budget.ts": {
+      "bytes": 2075,
+      "sha256": "57fdf1f9120e3a5ac05574d4103313f70a7ded5ae3f3cd736281bd2039b5aec3"
+    },
+    "shared/quit-cleanup.ts": {
+      "bytes": 6337,
+      "sha256": "dbf1db597252f0cdea41a41ace50d7922180195bdd377e96e3ce6e7f2ee3b17d"
+    },
+    "shared/project.ts": {
+      "bytes": 313,
+      "sha256": "68ba5fcb24d8dd6675d7525001642d75acef3f79fe72b1946dcc627a7198d110"
+    },
+    "package.json": {
+      "bytes": 7873,
+      "sha256": "67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116"
+    },
+    "package-lock.json": {
+      "bytes": 231692,
+      "sha256": "19b9794c0da10a71bb3ecdb4cc03019706e3f4c45a070bc3fcdf07b9a53c2ec3"
+    },
+    "tsconfig.json": {
+      "bytes": 653,
+      "sha256": "1a4ed966a6cad13f8664f4a46958fbe57d99e01a376fa2eac16c206892aeaa9a"
+    }
+  },
+  "helperInputs": {
+    "prepare-gateway-source-esbuild.py": {
+      "url": "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/2cc8c02b0f517fd9b81db7b94b51b238c99492a5/scripts/ci/prepare-gateway-source-esbuild.py",
+      "bytes": 15240,
+      "sha256": "7e81a1ba6e8e36aa3e00f0f46865a4c4276d7e6aee60166dec77f36ca629db74"
+    },
+    "prepare-gateway-publisher-node.py": {
+      "url": "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/2cc8c02b0f517fd9b81db7b94b51b238c99492a5/scripts/ci/prepare-gateway-publisher-node.py",
+      "bytes": 10482,
+      "sha256": "c46a686ca55212ec873551679f5a66cd8a967c82c6c8fa67c213d46a61e9930f"
+    },
+    "prepare-gateway-four-tools.py": {
+      "url": "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/2cc8c02b0f517fd9b81db7b94b51b238c99492a5/scripts/ci/prepare-gateway-four-tools.py",
+      "bytes": 20141,
+      "sha256": "3dffac63167ea567d2abcb2465b0df514f5d4b5e24bd6dc54b4aa1800bdc1213"
+    },
+    "gateway-four-tool-inputs.json": {
+      "url": "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/2cc8c02b0f517fd9b81db7b94b51b238c99492a5/scripts/ci/gateway-four-tool-inputs.json",
+      "bytes": 2932,
+      "sha256": "e43cca15568d4aeba7f8eb783ced1e9345e624a7a8f0bf18d6cd8e82db976ef2"
+    },
+    "prepare-gateway-runtime-inputs.py": {
+      "url": "https://raw.githubusercontent.com/brucerry/embedded-linux-diagnostic-hub/5e3c66f4a62e3606abdd650972e0f76b71ff5c54/scripts/ci/prepare-gateway-runtime-inputs.py",
+      "bytes": 19377,
+      "sha256": "1de8cb90366f9fcbfe40d0e7d182a2f250a87591b45e865de544dd1e92af0feb"
+    }
+  },
+  "buildOnlySemver": {
+    "sha256": "d85045d4300d7d57c891336b95df532e73f34c22ffcd222452b6d08b9d127d5d",
+    "bytes": 29399
+  }
+}
