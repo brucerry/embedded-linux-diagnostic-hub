@@ -1,0 +1,122 @@
+name: Web stock host tool identity witness
+on:
+  push:
+    branches: [ci/v060-web-host-tool-witness-20261121]
+    paths: [.github/workflows/web-host-tool-witness.yml]
+permissions: {}
+defaults:
+  run:
+    shell: /usr/bin/bash --noprofile --norc -euo pipefail {0}
+jobs:
+  host_identity:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-web-host-tool-witness-20261121' &&
+      github.event_name == 'push' &&
+      github.event.created == true &&
+      github.event.deleted == false &&
+      github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Verify one-shot workflow context
+        id: context
+        run: |
+          [[ "${GITHUB_REPOSITORY:-}" == 'brucerry/embedded-linux-diagnostic-hub' ]]
+          [[ "${GITHUB_REF:-}" == 'refs/heads/ci/v060-web-host-tool-witness-20261121' ]]
+          [[ "${GITHUB_WORKFLOW_REF:-}" == 'brucerry/embedded-linux-diagnostic-hub/.github/workflows/web-host-tool-witness.yml@refs/heads/ci/v060-web-host-tool-witness-20261121' ]]
+          [[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_JOB:-}" == host_identity ]]
+          [[ "${GITHUB_RUN_ATTEMPT:-}" == 1 && "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ && "${GITHUB_WORKFLOW_SHA:-}" == "$GITHUB_SHA" ]]
+      - name: Verify Ubuntu 24.04 x64 image 20261116.376.1
+        id: image
+        run: |
+          [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted && "${RUNNER_OS:-}" == Linux ]]
+          [[ "${RUNNER_ARCH:-}" == X64 && "${ImageOS:-}" == ubuntu24 ]]
+          [[ "${ImageVersion:-}" == '20261116.376.1' ]]
+      - name: Python 3.12 executable identity
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        run: |
+          path='/usr/bin/python3.12'
+          bytes='8020928'
+          expected='e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f'
+          [[ "$(/usr/bin/readlink -e -- "$path")" == "$path" && -f "$path" && ! -L "$path" ]]
+          exec {file_fd}<"$path"
+          format='%d:%i:%u:%g:%a:%s:%y:%z'
+          before=$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")
+          [[ "$before" == "$(/usr/bin/stat --printf="$format" -- "$path")" ]]
+          [[ "$(/usr/bin/stat -L --printf='%u:%g:%a:%s' "/proc/$$/fd/$file_fd")" == "0:0:755:$bytes" ]]
+          result=$(/usr/bin/sha256sum <&"$file_fd")
+          [[ "${result%% *}" == "$expected" ]]
+          [[ "$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")" == "$before" ]]
+          [[ "$(/usr/bin/stat --printf="$format" -- "$path")" == "$before" ]]
+          exec {file_fd}<&-
+      - name: Docker CLI executable identity
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        run: |
+          path='/usr/bin/docker'
+          bytes='43134496'
+          expected='6435ff9214bf8e0931078fb0980809728cac0a54a526d4f28a26d3e48132b58d'
+          [[ "$(/usr/bin/readlink -e -- "$path")" == "$path" && -f "$path" && ! -L "$path" ]]
+          exec {file_fd}<"$path"
+          format='%d:%i:%u:%g:%a:%s:%y:%z'
+          before=$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")
+          [[ "$before" == "$(/usr/bin/stat --printf="$format" -- "$path")" ]]
+          [[ "$(/usr/bin/stat -L --printf='%u:%g:%a:%s' "/proc/$$/fd/$file_fd")" == "0:0:755:$bytes" ]]
+          result=$(/usr/bin/sha256sum <&"$file_fd")
+          [[ "${result%% *}" == "$expected" ]]
+          [[ "$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")" == "$before" ]]
+          [[ "$(/usr/bin/stat --printf="$format" -- "$path")" == "$before" ]]
+          exec {file_fd}<&-
+      - name: GPG executable identity
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        run: |
+          path='/usr/bin/gpg'
+          bytes='1147800'
+          expected='403e04c779ad9fab3895c405f8c53d35ab59fa8e3b8bbe3437f61bc41f468dd4'
+          [[ "$(/usr/bin/readlink -e -- "$path")" == "$path" && -f "$path" && ! -L "$path" ]]
+          exec {file_fd}<"$path"
+          format='%d:%i:%u:%g:%a:%s:%y:%z'
+          before=$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")
+          [[ "$before" == "$(/usr/bin/stat --printf="$format" -- "$path")" ]]
+          [[ "$(/usr/bin/stat -L --printf='%u:%g:%a:%s' "/proc/$$/fd/$file_fd")" == "0:0:755:$bytes" ]]
+          result=$(/usr/bin/sha256sum <&"$file_fd")
+          [[ "${result%% *}" == "$expected" ]]
+          [[ "$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")" == "$before" ]]
+          [[ "$(/usr/bin/stat --printf="$format" -- "$path")" == "$before" ]]
+          exec {file_fd}<&-
+      - name: dpkg-deb executable identity
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        run: |
+          path='/usr/bin/dpkg-deb'
+          bytes='146000'
+          expected='fc9dde782ca8309b65ab92e61d13318bf463cd1aa71daa8967b87b81b48b63d2'
+          [[ "$(/usr/bin/readlink -e -- "$path")" == "$path" && -f "$path" && ! -L "$path" ]]
+          exec {file_fd}<"$path"
+          format='%d:%i:%u:%g:%a:%s:%y:%z'
+          before=$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")
+          [[ "$before" == "$(/usr/bin/stat --printf="$format" -- "$path")" ]]
+          [[ "$(/usr/bin/stat -L --printf='%u:%g:%a:%s' "/proc/$$/fd/$file_fd")" == "0:0:755:$bytes" ]]
+          result=$(/usr/bin/sha256sum <&"$file_fd")
+          [[ "${result%% *}" == "$expected" ]]
+          [[ "$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")" == "$before" ]]
+          [[ "$(/usr/bin/stat --printf="$format" -- "$path")" == "$before" ]]
+          exec {file_fd}<&-
+      - name: curl executable identity
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        run: |
+          path='/usr/bin/curl'
+          bytes='297288'
+          expected='1ccbd3dae948374ba8eef1ebda26c64b783ede50b463196e53666e0880bdac60'
+          [[ "$(/usr/bin/readlink -e -- "$path")" == "$path" && -f "$path" && ! -L "$path" ]]
+          exec {file_fd}<"$path"
+          format='%d:%i:%u:%g:%a:%s:%y:%z'
+          before=$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")
+          [[ "$before" == "$(/usr/bin/stat --printf="$format" -- "$path")" ]]
+          [[ "$(/usr/bin/stat -L --printf='%u:%g:%a:%s' "/proc/$$/fd/$file_fd")" == "0:0:755:$bytes" ]]
+          result=$(/usr/bin/sha256sum <&"$file_fd")
+          [[ "${result%% *}" == "$expected" ]]
+          [[ "$(/usr/bin/stat -L --printf="$format" "/proc/$$/fd/$file_fd")" == "$before" ]]
+          [[ "$(/usr/bin/stat --printf="$format" -- "$path")" == "$before" ]]
+          exec {file_fd}<&-
