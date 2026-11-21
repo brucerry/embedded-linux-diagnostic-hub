@@ -1,0 +1,101 @@
+name: Hub Linux successor stock data
+on:
+  push:
+    branches: [ci/v060-linux-provider-stock-data-20261121]
+    paths: [.github/workflows/linux-provider-stock-data.yml]
+permissions: {}
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+jobs:
+  stock-data:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-linux-provider-stock-data-20261121' &&
+      github.event_name == 'push' && github.event.created == true &&
+      github.event.deleted == false && github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Observe assigned Ubuntu x64 hosted worker and nonroot UID
+        id: host
+        run: |
+          [[ "$RUNNER_ENVIRONMENT" == github-hosted && "$RUNNER_OS" == Linux && "$RUNNER_ARCH" == X64 ]]
+          [[ "${ImageOS:-}" == ubuntu24 && "${ImageVersion:-}" =~ ^[0-9]{8}\.[0-9]+\.[0-9]+$ ]]
+          /usr/bin/python3 -I -B - <<'PY'
+          import os, platform, re
+          from pathlib import Path
+          raw = Path('/etc/os-release').read_text()
+          assert platform.machine() == 'x86_64' and 0 < os.getuid() == os.geteuid()
+          assert re.search(r'^ID=ubuntu$', raw, re.M) and re.search(r'^VERSION_ID="24\.04"$', raw, re.M)
+          PY
+      - name: Check real workspace and temp ownership and pre-staging free space
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          import os, stat
+          from pathlib import Path
+          uid = os.getuid()
+          for key in ('GITHUB_WORKSPACE', 'RUNNER_TEMP'):
+              p = Path(os.environ[key])
+              assert p.is_absolute() and p.resolve(strict=True) == p
+              assert p.stat().st_uid == uid
+              for directory in (p, *p.parents):
+                  s = directory.lstat()
+                  assert stat.S_ISDIR(s.st_mode) and s.st_uid in (0, uid) and not s.st_mode & 0o022
+              fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+              try:
+                  s = os.fstat(fd)
+                  assert (s.st_dev, s.st_ino) == (p.lstat().st_dev, p.lstat().st_ino)
+                  v = os.fstatvfs(fd)
+                  assert v.f_bavail * v.f_frsize >= 4 * 1024**3
+              finally:
+                  os.close(fd)
+          PY
+      - name: Compare stock compiler entry to the exact signed Ubuntu reference
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          import hashlib, os, stat
+          from pathlib import Path
+          p = Path('/usr/bin/x86_64-linux-gnu-gcc-13')
+          cc = Path('/usr/bin/cc')
+          assert cc.resolve(strict=True) == p and cc.lstat().st_uid == 0
+          with os.fdopen(os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as f:
+              s = os.fstat(f.fileno())
+              assert stat.S_ISREG(s.st_mode) and (s.st_uid, s.st_gid, s.st_nlink) == (0, 0, 1)
+              assert s.st_mode & 0o7777 == 0o755 and s.st_size == 1023032
+              assert hashlib.file_digest(f, 'sha256').hexdigest() == '1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26'
+              end = p.lstat()
+              assert (end.st_ino, end.st_dev, end.st_ctime_ns) == (s.st_ino, s.st_dev, s.st_ctime_ns)
+          PY
+      - name: Compare stock SquashFS reader to the exact signed Ubuntu reference
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          import hashlib, os, stat
+          from pathlib import Path
+          p = Path('/usr/bin/unsquashfs')
+          with os.fdopen(os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as f:
+              s = os.fstat(f.fileno())
+              assert stat.S_ISREG(s.st_mode) and (s.st_uid, s.st_gid, s.st_nlink) == (0, 0, 1)
+              assert s.st_mode & 0o7777 == 0o755 and s.st_size == 151448
+              assert hashlib.file_digest(f, 'sha256').hexdigest() == 'b305985eb764b6d0ef757571e3e44044ebf71c827c4263efe576e9e14b4abcfb'
+              end = p.lstat()
+              assert (end.st_ino, end.st_dev, end.st_ctime_ns) == (s.st_ino, s.st_dev, s.st_ctime_ns)
+          PY
+      - name: Observe stock Docker client and local socket as file data
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        run: |
+          /usr/bin/python3 -I -B - <<'PY'
+          import os, stat
+          from pathlib import Path
+          client = Path('/usr/bin/docker')
+          s = client.lstat()
+          assert stat.S_ISREG(s.st_mode) and s.st_uid == 0 and not s.st_mode & 0o022
+          sock = Path('/var/run/docker.sock')
+          info = sock.lstat()
+          assert stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o002
+          assert os.access(sock, os.R_OK | os.W_OK)
+          PY
