@@ -1,0 +1,590 @@
+name: Hub Linux provider public data
+on:
+  push:
+    branches: [ci/v060-linux-provider-public-intake-20261121]
+    paths: [.github/workflows/linux-provider-public-intake.yml]
+permissions: {}
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+jobs:
+  public-source-intake:
+    if: >-
+      github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+      github.ref == 'refs/heads/ci/v060-linux-provider-public-intake-20261121' &&
+      github.event_name == 'push' && github.event.created == true &&
+      github.event.deleted == false && github.event.forced == false &&
+      github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Verify hosted Ubuntu x64, owned paths and pre-staging space
+        id: host
+        run: |
+          /usr/bin/python3 -I -B - "$GITHUB_WORKSPACE" "$RUNNER_TEMP" <<'PY'
+          """Read-only host observations. They never certify a future worker."""
+
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import re
+          import stat
+          import sys
+
+
+          def small_text(path, cap):
+              with open(path, 'rb') as f:
+                  data = f.read(cap + 1)
+              if len(data) > cap:
+                  raise ValueError('host-record-cap')
+              return data.decode('ascii')
+
+
+          def path_observation(path):
+              p = Path(path)
+              initially_canonical = p.is_absolute() and str(p) == path and p.resolve(strict=True) == p
+              uid = os.getuid()
+              rows = [entry.lstat() for entry in (p, *p.parents)]
+              filesystem = os.statvfs(p)
+              return {
+                  'canonical': initially_canonical,
+                  'owned': rows[0].st_uid == uid,
+                  'safeAncestry': all(stat.S_ISDIR(s.st_mode) and s.st_uid in (0, uid) and not s.st_mode & 0o7022
+                                      for s in rows),
+                  'freeBytes': filesystem.f_bavail * filesystem.f_frsize,
+              }
+
+
+          def own_network():
+              with os.scandir('/sys/class/net') as entries:
+                  interfaces = set()
+                  for entry in entries:
+                      if len(interfaces) == 64:
+                          raise ValueError('host-interface-cap')
+                      interfaces.add(entry.name)
+              v4 = [row.split() for row in small_text('/proc/net/route', 65536).splitlines()[1:]]
+              v6 = [row.split() for row in small_text('/proc/net/ipv6_route', 65536).splitlines()]
+              return {
+                  'loopbackOnly': interfaces == {'lo'},
+                  'nonLoopbackIPv4Rows': sum(row[0] != 'lo' for row in v4 if row),
+                  'nonLoopbackIPv6Rows': sum(row[-1] != 'lo' for row in v6 if row),
+              }
+
+
+          def own_kernel_status():
+              raw = small_text('/proc/self/status', 16384)
+              return {
+                  'seccomp': int(re.search(r'^Seccomp:\s+([0-2])$', raw, re.M).group(1)),
+                  'noNewPrivs': int(re.search(r'^NoNewPrivs:\s+([01])$', raw, re.M).group(1)),
+                  'effectiveCapabilitiesZero': int(re.search(r'^CapEff:\s+([a-f0-9]+)$', raw, re.M).group(1), 16) == 0,
+                  'cgroupV2ControllersPresent': Path('/sys/fs/cgroup/cgroup.controllers').is_file(),
+              }
+
+
+          def optional_observation(read):
+              try:
+                  return read()
+              except (OSError, ValueError, AttributeError, IndexError):
+                  return None
+
+
+          def observe(workspace, temp):
+              return {
+                  'linuxX64': platform.system() == 'Linux' and platform.machine() == 'x86_64',
+                  'nonRoot': 0 < os.getuid() == os.geteuid() and 0 < os.getgid() == os.getegid(),
+                  'workspace': path_observation(workspace),
+                  'temp': path_observation(temp),
+                  'ownNetwork': optional_observation(own_network),
+                  'ownKernelStatus': optional_observation(own_kernel_status),
+                  'futureWorkerIsolationProven': False,
+              }
+
+
+          def host_diagnostic(workspace, temp):
+              try:
+                  raw = small_text('/etc/os-release', 16384)
+                  if not (os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
+                          and os.environ.get('RUNNER_OS') == 'Linux' and os.environ.get('RUNNER_ARCH') == 'X64'
+                          and os.environ.get('ImageOS') == 'ubuntu24'
+                          and re.fullmatch(r'[0-9]{8}\.[0-9]+\.[0-9]+', os.environ.get('ImageVersion', ''))
+                          and re.search(r'^ID=ubuntu$', raw, re.M)
+                          and re.search(r'^VERSION_ID="24\.04"$', raw, re.M)):
+                      print('stock-host-identity-refused')
+                      return 1
+                  result = observe(workspace, temp)
+              except (OSError, ValueError, AttributeError, IndexError):
+                  print('stock-host-observation-refused')
+                  return 1
+              print(json.dumps(result, sort_keys=True))
+              if not result['linuxX64'] or not result['nonRoot']:
+                  return 1
+              return int(not all(
+                  all(result[path][key] for key in ('canonical', 'owned', 'safeAncestry'))
+                  and result[path]['freeBytes'] >= 4 * 1024**3
+                  for path in ('workspace', 'temp')
+              ))
+
+
+          if __name__ == '__main__':
+              sys.exit(host_diagnostic(*sys.argv[1:]))
+          PY
+      - name: Verify exact public data in private scratch
+        id: reader
+        run: |
+          /usr/bin/python3 -I -B -  <<'PY'
+          """Bounded data intake for a Linux provider rehearsal. No package or worker execution."""
+
+          from contextlib import contextmanager
+          from dataclasses import dataclass
+          import hashlib
+          import http.client
+          import json
+          import os
+          import re
+          import secrets
+          import signal
+          import ssl
+          import stat
+          from urllib.parse import urlsplit
+
+
+          FLOOR = 4 * 1024**3
+          BLOCK = 64 * 1024
+          MAX_OBJECTS = 64
+          MAX_INPUT_BYTES = 8 * 1024**2
+          DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+          READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+          SHA256 = re.compile(r'[0-9a-f]{64}')
+          SHA1 = re.compile(r'[0-9a-f]{40}')
+          COMPONENT = re.compile(r'[A-Za-z0-9_.-]{1,120}')
+          GROUPS = {
+              'esbuild': ('evanw/esbuild', '609683d892977362a0f99026cb74b96263d728a9'),
+              'filelist': ('mde/filelist', '7032f94d04ad905b4f32b92d2278785859e1d55f'),
+              'ssh2': ('mscdex/ssh2', '844f1edfc41589737671f96a4f4e76afdf46abd4'),
+              'builder': ('electron-userland/electron-builder', '512a57ec9bcda593d3e0970bd2b9a33a63beeb57'),
+              'agent-base': ('TooTallNate/proxy-agents', 'b923f5363875d8fd56477094d5ffc562840a4b76'),
+              'http-proxy-agent': ('TooTallNate/proxy-agents', 'b5f94e3222c0aaa3bc56218ff125e2c56417c86e'),
+              'https-proxy-agent': ('TooTallNate/proxy-agents', '7cf0b795e05218d9e49047d5c93de77d2f606510'),
+          }
+          MODULE = 'golang.org/x/sys/@v/v0.0.0-20220715151400-c0bba94af5f8'
+          BLOCKED_ENV = {'http_proxy', 'https_proxy', 'all_proxy', 'ssl_cert_file', 'ssl_cert_dir', 'sslkeylogfile'}
+
+
+          class Refused(ValueError):
+              """Fixed diagnostic label with no transport, path or environment data."""
+
+
+          def need(condition, label):
+              if not condition:
+                  raise Refused(label)
+
+
+          def components(path):
+              pieces = path.split('/')
+              need(all(COMPONENT.fullmatch(x) and x not in {'.', '..', '.git'} for x in pieces), 'path-shape')
+              return pieces
+
+
+          @dataclass(frozen=True)
+          class Pin:
+              name: str
+              group: str
+              url: str
+              size: int
+              sha256: str
+              git_blob: str | None = None
+
+              def address(self):
+                  u = urlsplit(self.url)
+                  need(self.url.isascii() and len(self.url) <= 400 and self.url == u.geturl() and
+                       u.scheme == 'https' and not u.query and not u.fragment, 'public-url')
+                  if self.group == 'x-sys':
+                      need(u.netloc == 'proxy.golang.org' and u.path in {f'/{MODULE}.{x}' for x in ('zip', 'mod', 'info')}
+                           and self.git_blob is None, 'module-address')
+                  elif self.group == 'esbuild':
+                      repo, commit = GROUPS['esbuild']
+                      need(u.netloc == 'codeload.github.com' and u.path == f'/{repo}/tar.gz/{commit}' and
+                           self.git_blob is None, 'esbuild-address')
+                  else:
+                      need(self.group in GROUPS, 'source-group')
+                      repo, commit = GROUPS[self.group]
+                      prefix = f'/{repo}/{commit}/'
+                      need(u.netloc == 'raw.githubusercontent.com' and u.path.startswith(prefix) and
+                           isinstance(self.git_blob, str) and SHA1.fullmatch(self.git_blob), 'source-address')
+                      components(u.path[len(prefix):])
+                  return u
+
+
+          def pins_from_bytes(data, expected):
+              need(len(data) <= 64 * 1024 and hashlib.sha256(data).hexdigest() == expected, 'manifest-sha')
+              raw = json.loads(data)
+              need(isinstance(raw, list) and 0 < len(raw) <= MAX_OBJECTS, 'manifest-count')
+              pins = [Pin(*row) for row in raw]
+              for p in pins:
+                  need(isinstance(p.name, str) and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,45}', p.name)
+                       and type(p.size) is int and 0 < p.size <= MAX_INPUT_BYTES
+                       and isinstance(p.sha256, str) and SHA256.fullmatch(p.sha256), 'manifest-pin')
+                  p.address()
+              need(len({p.name for p in pins}) == len({p.url for p in pins}) == len(pins), 'manifest-duplicate')
+              need(sum(p.size for p in pins) <= MAX_INPUT_BYTES, 'manifest-byte-cap')
+              return pins
+
+
+          @contextmanager
+          def deadline(seconds):
+              def expired(_sig, _frame):
+                  raise Refused('intake-deadline')
+
+              need(signal.getitimer(signal.ITIMER_REAL) == (0, 0), 'existing-timer')
+              previous = signal.signal(signal.SIGALRM, expired)
+              signal.setitimer(signal.ITIMER_REAL, seconds)
+              try:
+                  yield
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+                  signal.signal(signal.SIGALRM, previous)
+
+
+          @contextmanager
+          def public_bytes(pin):
+              need(not any(value and name.lower() in BLOCKED_ENV for name, value in os.environ.items()),
+                   'ambient-proxy-or-trust-override')
+              target = pin.address()
+              connection = http.client.HTTPSConnection(target.hostname, timeout=6, context=ssl.create_default_context())
+              try:
+                  try:
+                      connection.request('GET', target.path, headers={'Accept-Encoding': 'identity', 'Connection': 'close'})
+                      response = connection.getresponse()
+                  except (OSError, http.client.HTTPException) as exc:
+                      raise Refused('official-transport') from exc
+                  with response:
+                      need(response.status == 200, 'official-http-status')
+                      lengths = response.headers.get_all('Content-Length', [])
+                      encoding = response.headers.get_all('Content-Encoding', [])
+                      framing = response.headers.get_all('Transfer-Encoding', [])
+                      need(lengths in ([], [str(pin.size)]) and encoding in ([], ['identity'])
+                           and framing in ([], ['chunked']) and not (lengths and framing), 'official-http-framing')
+                      yield response
+              finally:
+                  connection.close()
+
+
+          def verified_body(source, pin, destination=None):
+              content = hashlib.sha256()
+              git = hashlib.sha1(f'blob {pin.size}\0'.encode()) if pin.git_blob is not None else None
+              remaining = pin.size
+              while remaining:
+                  block = source.read(min(remaining, BLOCK))
+                  need(isinstance(block, bytes) and 0 < len(block) <= remaining, 'object-size')
+                  remaining -= len(block)
+                  content.update(block)
+                  if git is not None:
+                      git.update(block)
+                  if destination is not None:
+                      destination.write(block)
+              need(source.read(1) == b'', 'object-size')
+              need(content.hexdigest() == pin.sha256 and (git is None or git.hexdigest() == pin.git_blob), 'object-digest')
+
+
+          def inode(row):
+              return row.st_dev, row.st_ino
+
+
+          def available(fd):
+              space = os.fstatvfs(fd)
+              return space.f_bavail * space.f_frsize
+
+
+          def ancestor(row, uid):
+              return stat.S_ISDIR(row.st_mode) and row.st_uid in (0, uid) and not row.st_mode & 0o7022
+
+
+          @dataclass
+          class Checkpoints:
+              data: str = 'unreached'
+              capacity: str = 'unreached'
+              retirement: str = 'unreached'
+
+
+          @contextmanager
+          def owned_parent(path):
+              uid = os.getuid()
+              need(0 < uid == os.geteuid(), 'nonroot')
+              need(isinstance(path, str) and path.startswith('/') and len(path) <= 512, 'parent-path')
+              names = components(path[1:])
+              fd = os.open('/', DIR_FLAGS)
+              try:
+                  need(ancestor(os.fstat(fd), uid), 'ancestor-owner-or-mode')
+                  for name in names:
+                      child = os.open(name, DIR_FLAGS, dir_fd=fd)
+                      os.close(fd)
+                      fd = child
+                      need(ancestor(os.fstat(fd), uid), 'ancestor-owner-or-mode')
+                  need(os.fstat(fd).st_uid == uid, 'parent-owner')
+                  yield fd
+              finally:
+                  os.close(fd)
+
+
+          class Stage:
+              def __init__(self, parent_fd, name, stage_fd):
+                  self.parent_fd = parent_fd
+                  self.name = name
+                  self.fd = stage_fd
+                  self.files = {}
+
+              def directory(self):
+                  row = os.fstat(self.fd)
+                  linked = os.stat(self.name, dir_fd=self.parent_fd, follow_symlinks=False)
+                  need(inode(row) == inode(linked) and stat.S_ISDIR(linked.st_mode)
+                       and (row.st_uid, row.st_gid) == (os.getuid(), os.getegid())
+                       and stat.S_IMODE(row.st_mode) == 0o700, 'stage-identity')
+                  return row
+
+              def file(self, row, name):
+                  need(inode(row) == self.files[name] and stat.S_ISREG(row.st_mode)
+                       and row.st_uid == os.getuid() and row.st_nlink == 1
+                       and stat.S_IMODE(row.st_mode) == 0o600, 'stage-file-identity')
+
+              def check_census(self):
+                  self.directory()
+                  observed = set()
+                  with os.scandir(self.fd) as entries:
+                      for entry in entries:
+                          need(entry.name in self.files, 'stage-foreign-entry')
+                          self.file(entry.stat(follow_symlinks=False), entry.name)
+                          observed.add(entry.name)
+                  need(observed == set(self.files), 'stage-missing-entry')
+
+              def stage(self, pin, reader):
+                  self.directory()
+                  fd = os.open(pin.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                               0o600, dir_fd=self.fd)
+                  with os.fdopen(fd, 'wb') as output:
+                      row = os.fstat(output.fileno())
+                      self.files[pin.name] = inode(row)
+                      self.file(row, pin.name)
+                      with reader(pin) as stream:
+                          verified_body(stream, pin, output)
+
+              def readback(self, pins):
+                  self.check_census()
+                  for pin in pins:
+                      fd = os.open(pin.name, READ_FLAGS, dir_fd=self.fd)
+                      with os.fdopen(fd, 'rb') as stream:
+                          before = os.fstat(fd)
+                          self.file(before, pin.name)
+                          need(before.st_size == pin.size, 'readback-size')
+                          verified_body(stream, pin)
+                          linked = os.stat(pin.name, dir_fd=self.fd, follow_symlinks=False)
+                          self.file(linked, pin.name)
+                          need(linked.st_ctime_ns == os.fstat(fd).st_ctime_ns == before.st_ctime_ns, 'readback-change')
+
+              def retire(self):
+                  self.check_census()
+                  for name in self.files:
+                      self.directory()
+                      self.file(os.stat(name, dir_fd=self.fd, follow_symlinks=False), name)
+                      os.unlink(name, dir_fd=self.fd)
+                  self.directory()
+                  os.rmdir(self.name, dir_fd=self.parent_fd)
+                  try:
+                      os.stat(self.name, dir_fd=self.parent_fd, follow_symlinks=False)
+                  except FileNotFoundError:
+                      return
+                  raise Refused('stage-retirement')
+
+
+          def run_intake(pins, parent, reader=public_bytes, *, checkpoints=None):
+              # No output is handed to another process. Return a receipt only after retirement.
+              checkpoints = checkpoints if checkpoints is not None else Checkpoints()
+              checkpoints.data = 'fail'
+              with owned_parent(parent) as parent_fd:
+                  fs = os.fstatvfs(parent_fd)
+                  block = max(4096, fs.f_frsize)
+                  reserve = sum(((p.size + block - 1) // block) * block for p in pins) + BLOCK
+                  need(available(parent_fd) >= FLOOR + reserve, 'pre-staging-capacity')
+                  name = 'hub-source-' + secrets.token_hex(12)
+                  os.mkdir(name, 0o700, dir_fd=parent_fd)
+                  checkpoints.retirement = 'fail'
+                  try:
+                      fd = os.open(name, DIR_FLAGS, dir_fd=parent_fd)
+                  except OSError as exc:
+                      raise Refused('scratch-retirement-unverified') from exc
+                  stage = Stage(parent_fd, name, fd)
+                  try:
+                      with deadline(160):
+                          for pin in pins:
+                              stage.stage(pin, reader)
+                          stage.readback(pins)
+                          checkpoints.data = 'pass'
+                          checkpoints.capacity = 'fail'
+                          with owned_parent(parent) as real_parent:
+                              need(inode(os.fstat(parent_fd)) == inode(os.fstat(real_parent)), 'parent-readback')
+                              stage.directory()
+                              need(os.fstat(fd).st_dev == os.fstat(real_parent).st_dev, 'stage-backing-store')
+                              post = available(fd)
+                              need(post >= FLOOR, 'post-staging-capacity')
+                              checkpoints.capacity = 'pass'
+                  finally:
+                      try:
+                          stage.retire()
+                          checkpoints.retirement = 'pass'
+                      except (OSError, Refused) as exc:
+                          raise Refused('scratch-retirement-unverified') from exc
+                      finally:
+                          os.close(fd)
+              return {'objects': len(pins), 'bytes': sum(pin.size for pin in pins), 'stageFreeBytes': post,
+                      'postStaging': True, 'canonicalReadback': True, 'retired': True}
+
+          PLAN = b'''[
+            ["esbuild-source","esbuild","https://codeload.github.com/evanw/esbuild/tar.gz/609683d892977362a0f99026cb74b96263d728a9",2011018,"04cb2d38fb6af093577aa8bf174add7286099b65ef7854480cbbb8ff061cef1f",null],
+            ["x-sys-info","x-sys","https://proxy.golang.org/golang.org/x/sys/@v/v0.0.0-20220715151400-c0bba94af5f8.info",78,"af73b8ff9188b41ddc2f426a0c066203fb4907b91e77d29a9164e9cf37d572dc",null],
+            ["x-sys-mod","x-sys","https://proxy.golang.org/golang.org/x/sys/@v/v0.0.0-20220715151400-c0bba94af5f8.mod",33,"f033333096fe198f3151deed93f2deba74e50bbfe7739134045bc3b7ce4a5024",null],
+            ["x-sys-zip","x-sys","https://proxy.golang.org/golang.org/x/sys/@v/v0.0.0-20220715151400-c0bba94af5f8.zip",1798284,"3b180937216e93559f16b6076d09baf54a5707378f11b867b6eb914c56b09b91",null],
+            ["filelist-01","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/LICENSE",11358,"cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30","d645695673349e3947e8e5ae42332d0ac3164cd7"],
+            ["filelist-02","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/README.md",2131,"4ec7db87d94c125389a343bfa8f3e6f4af24c4f798f3a7acf16e15104b693457","b52ebe7c5a7069864565b774426d021ec65e5fe2"],
+            ["filelist-03","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/index.d.ts",2348,"1dc71b39adc041aceb71063d416eff431845f3b0d5dc3742471972274ef0f1b4","a6addf28ca0b05e613a4ee0c34adf4131ed3b46b"],
+            ["filelist-04","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/index.js",13233,"cae1deb98621f487d8da5fd2f77c4cdd2f0312ecd3ee9c7ff2021defec89c9af","34ca389745f6b1548d2f4a8102aa6bf0fc843eab"],
+            ["filelist-05","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/jakefile.js",238,"39a40898fe386a6586937ce2a52b5afd0d410d151794be81ba5709323cad1481","18d4d7df09a3cdf3d4c428331369a1f274025053"],
+            ["filelist-06","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/package.json",637,"eac5bb1401d225696f74ade3e216b771f458690b0bb82de68eac8880f4272a75","940b57db80048daaa25cf0500e8edd6d074ef2ee"],
+            ["filelist-07","filelist","https://raw.githubusercontent.com/mde/filelist/7032f94d04ad905b4f32b92d2278785859e1d55f/test/filelist.js",1393,"9401854f06264053029ff1e3b374f17a120403f23bbc56cefc743e92bbbe86ff","e278f0d9bcd6f67274ce94b09fb73a10fed19f11"],
+            ["ssh2-01","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/LICENSE",1067,"d06b5d27bbbbe22c36b1fd88406b1208876e2d37d795f5b8eaed951a459a3111","290762e94f4e2f2b52cc13ae4f2b63ac0269bfd1"],
+            ["ssh2-02","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/README.md",71292,"34038366db735162d2c3138a3d636d3d631bb2de370db468877dbd96ba6f56f5","e08c929ef7ad5cc9833103a16ab63eb79fb2f476"],
+            ["ssh2-03","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/SFTP.md",21322,"9648b6c7da1b011b5cf2c4505e6bceb09ee11716a61941ae5d7bffa40f4ab95f","9353ae8029305acea2987059986ffe06f148feef"],
+            ["ssh2-04","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/Channel.js",7132,"53e92988a025009b192b72be110bd240b5653f88dbdec93e515e3e401e7f94aa","0120779be7f5d04b97cec31a7127e480b3040704"],
+            ["ssh2-05","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/agent.js",32130,"cc6987488bf45f73e0ac5d8bbe59912b70a144cd73b53c83919f188f4cc3f2be","bb495d1b191433c1be51929bb551bba1a8b03c1f"],
+            ["ssh2-06","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/client.js",64168,"edd3484daa9d942bc5a6412edc9cf11f85df40b2db10b07877bbfe694beac7f4","7291c2ce0b8489975c964ac82f688b59847985e0"],
+            ["ssh2-07","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/http-agents.js",2323,"477d34701116572f2af06ac545994f3e2d2f14b26c5ae76bff2b13de2289339d","770a0e633c1cb151643c17b3230e37900a5c2f6a"],
+            ["ssh2-08","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/index.js",767,"27e942aba52a13d7b72a846a4b3fd98d69b65431725b651e7523b74499a2ed26","82c2c936b13a7893ca0e6d01f07fb72c217832b8"],
+            ["ssh2-09","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/keygen.js",18252,"03d0be43e78ca4f82d4c96d084a39c0242f9c56f343da17a819f8bd0d873f06c","570c90eef1ef6f572863bcf147f82749da4c5beb"],
+            ["ssh2-10","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/Protocol.js",65576,"c1104b49087de7a91cd3ffaac8807c05eebf49f61effd084d0b0caf29fde6af4","7302488102161b5b627f6f089d502caa6df0f356"],
+            ["ssh2-11","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/SFTP.js",114059,"615871028340d9be98eb564ab6bdd021fe8ae44a4a25df928038e14e3bc5c201","9f33c0213040ad226f6ca4d18656fe902464952d"],
+            ["ssh2-12","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/constants.js",11808,"a3894fdd8e294109b55f06fbda69e467741f15a250801b744b6b0487bbf32529","ad7759257d6bdbcafa353dec8946258d64c14eb0"],
+            ["ssh2-13","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/crypto.js",47530,"a729d2064e787e2a4589c25a284444fe54a58b7434a4e6e5e8e9c73c6d91e28e","851cc73817537c1eace3442c792bc1e5e5289cd2"],
+            ["ssh2-14","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/crypto/poly1305.js",22812,"55a579ed6a30022054fd1dd822b1b49e2fc51bfbdfa933bfe441de8b7e4dce40","a6953fec630ad47acff72b0facbf5ef1e1c9a2e7"],
+            ["ssh2-15","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/handlers.js",423,"b15f990134a4f69b7492d0b875d80d8c28228907045619b01ec30871ac711df9","35fb9f28b3a2f979bdaff2bc52a05d55d748966b"],
+            ["ssh2-16","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/handlers.misc.js",39158,"8927c504c3c338187f36f0304a3452d6396ec9fc907af3db2be46a5f175c36a1","24580bec58cc4be58b14cfd64a43a49b17a12f56"],
+            ["ssh2-17","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/kex.js",60351,"054ba4b81801596350f0e2e939746d2966297cffd4303b342c25b2fd5d295755","811e631b8ab78d32776e540919d25aae56d628f7"],
+            ["ssh2-18","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/keyParser.js",47776,"ba4f40a5a9edef15ff49a38226e2be2e66f75aa2673840dd18b807bb7943eca9","a276c1aed3dca46469b0c566ad12f989c65e92e5"],
+            ["ssh2-19","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/node-fs-compat.js",3647,"d46a25cc158456c4a82b686ceed9a8267dc7d1bb69b6fd1d1f9b09d467951b4d","80ed71fcd4432d903ab0b1284369aa1bba263243"],
+            ["ssh2-20","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/utils.js",10257,"402b39e75ede9e3dc99af5e8af008602546f35aa1472bd4232c06f606987f053","26f4cab6de85953ccc7f9e7af35c4fa0905e8ca0"],
+            ["ssh2-21","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/protocol/zlib.js",6122,"8cd9f4c1825cbc394ddf9cf076a5ba9195ec255db9e904182ae9c25a1036e2d6","f68319a1460a54de0a07e98bafc20371b4f35125"],
+            ["ssh2-22","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/server.js",41705,"128b58ee54cf97a5ae17e18836ff4472de4a5e4e591f2862a5c9ec7f148befe5","306d6584c2514fd5238136049f02725fce09f91e"],
+            ["ssh2-23","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/lib/utils.js",9773,"bbae8286bc64b049499ce353e8dc4eefbbedefca8f50591432c1057276097aee","d9ca6aef96de0b13a2e911cab3c966faf6e192e1"],
+            ["ssh2-24","ssh2","https://raw.githubusercontent.com/mscdex/ssh2/844f1edfc41589737671f96a4f4e76afdf46abd4/package.json",1101,"e6fd4e4c3e69e4ad185c87cb5ee1df631e3f4cbd43cf89470f83c1e5d1a76dfb","2e170c3e1be3353c642044f7d0e635b8dc10a6a9"],
+            ["builder-01","builder","https://raw.githubusercontent.com/electron-userland/electron-builder/512a57ec9bcda593d3e0970bd2b9a33a63beeb57/packages/app-builder-lib/src/fileMatcher.ts",12809,"a7d096e25565e07f8c7f93e0224c25370fa054d70601b8c9cccb47af28221a8b","e1703c0b33497943adcb05f5f6c209fe9517de32"],
+            ["agent-base-01","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/agent-base/LICENSE",1101,"8d8c55319c7729d57be811c747452636688d54f19701ee0752b6b15ad3771d9a","008728cb51847dcff9c68cf1d9c30d76b9323457"],
+            ["agent-base-02","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/agent-base/package.json",1066,"8a3c528e263a4cddedcbac4bcbad815f1a992d538471840357c0141f91c1fded","9e3520d55ac75d731fd8cb6f68076c82a6894c43"],
+            ["agent-base-03","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/agent-base/src/helpers.ts",1271,"24dcc72e1c850a8fe591062466afdd60c219bdbd70e393a4b899e3f4f55445a2","b683171da4efe720d038006217e537c32af3916b"],
+            ["agent-base-04","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/agent-base/src/index.ts",6147,"5b26374dd3b82d54d8d5097e5e49de261fe477923bf4c3f19c11ff20cbea60aa","302dbc5cec50d4c3142d93df02f207c5ab816e9d"],
+            ["agent-base-05","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/agent-base/tsconfig.json",140,"741f333a995c9c697e2e18b5587125d63ccddad9697cab215201dc6ebb88835f","c6a3e46a3c2029f2cba7422e3486efe27f4d3834"],
+            ["agent-base-06","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/tsconfig/base.json",562,"91fd8d74b814d00782fd4d5b9d98590bbd7a0b86e226f5001fd8627d5fbe9ed9","1881d1bff6c9ac877ace40a08e7a9c3f38c4b890"],
+            ["agent-base-07","agent-base","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b923f5363875d8fd56477094d5ffc562840a4b76/packages/tsconfig/package.json",86,"5c2a2b708339e4e3d053f65600f8d8b9c8dd06b6c0353159974b39915732c1dd","70219b6fe6d7e536cb8cc9dd3e33b92393ef27ff"],
+            ["http-proxy-agent-01","http-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b5f94e3222c0aaa3bc56218ff125e2c56417c86e/packages/http-proxy-agent/LICENSE",1102,"71368fd0f5b4129191e9afcd1e1ef2dc89a9090d3e4d80bbab92dafd032b3bef","7ddd1e9bdb4507ae6499ae0d872305fd436dc97a"],
+            ["http-proxy-agent-02","http-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b5f94e3222c0aaa3bc56218ff125e2c56417c86e/packages/http-proxy-agent/package.json",1097,"21958102bb3e89513ac6815fb59904947fc5a64b5b9d66f6b05c2c5de3ca1cec","03b59d3ceadb1b76b13c96a47cbd454243850328"],
+            ["http-proxy-agent-03","http-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b5f94e3222c0aaa3bc56218ff125e2c56417c86e/packages/http-proxy-agent/src/index.ts",5454,"a0c2d4f83b4a0e5d1f524f3694995598b2e02d78f31ec663950461e4ec9c9f7f","47b9d660fa9c5973c074fc3c36d1eaa7d21c5494"],
+            ["http-proxy-agent-04","http-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b5f94e3222c0aaa3bc56218ff125e2c56417c86e/packages/http-proxy-agent/tsconfig.json",141,"37906feec7059dca87c686f460f55547b3d916bddf2f7734b05e1da81717a9bd","24b6cf7e8807a7936c341f320ad5722b9ab19cd3"],
+            ["http-proxy-agent-05","http-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b5f94e3222c0aaa3bc56218ff125e2c56417c86e/packages/tsconfig/base.json",561,"82bce8f8b1e8448b5fd28d749b179348e4679f1a667c513c803da14626ce3d86","b28bb6074ec7871720de18532398474ced696201"],
+            ["http-proxy-agent-06","http-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/b5f94e3222c0aaa3bc56218ff125e2c56417c86e/packages/tsconfig/package.json",86,"5c2a2b708339e4e3d053f65600f8d8b9c8dd06b6c0353159974b39915732c1dd","70219b6fe6d7e536cb8cc9dd3e33b92393ef27ff"],
+            ["https-proxy-agent-01","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/https-proxy-agent/LICENSE",1101,"8d8c55319c7729d57be811c747452636688d54f19701ee0752b6b15ad3771d9a","008728cb51847dcff9c68cf1d9c30d76b9323457"],
+            ["https-proxy-agent-02","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/https-proxy-agent/package.json",1236,"660e4e55e4b3e074518c122cf596cc792ee50ba3533e11eb26ca8a0746ac11d4","0d1b8920778983d2dd1d28eb9040edbd1574e0dd"],
+            ["https-proxy-agent-03","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/https-proxy-agent/src/index.ts",6452,"921b6b19836996a55102eb70da5316b82757b940096bf0acc80eefe188bef1e8","30cb5f2c6d0acf8b3a5700c18dfb3ee0cd4862f7"],
+            ["https-proxy-agent-04","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/https-proxy-agent/src/parse-proxy-response.ts",3027,"bd35c6f751a5d2b87f74deee740238ffa09cbaafdeb7180a08edb08fc438fb11","a7877b3472b5477ba4bb5d1d42342dc76044a2d8"],
+            ["https-proxy-agent-05","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/https-proxy-agent/tsconfig.json",140,"741f333a995c9c697e2e18b5587125d63ccddad9697cab215201dc6ebb88835f","c6a3e46a3c2029f2cba7422e3486efe27f4d3834"],
+            ["https-proxy-agent-06","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/tsconfig/base.json",562,"91fd8d74b814d00782fd4d5b9d98590bbd7a0b86e226f5001fd8627d5fbe9ed9","1881d1bff6c9ac877ace40a08e7a9c3f38c4b890"],
+            ["https-proxy-agent-07","https-proxy-agent","https://raw.githubusercontent.com/TooTallNate/proxy-agents/7cf0b795e05218d9e49047d5c93de77d2f606510/packages/tsconfig/package.json",86,"5c2a2b708339e4e3d053f65600f8d8b9c8dd06b6c0353159974b39915732c1dd","70219b6fe6d7e536cb8cc9dd3e33b92393ef27ff"]
+          ]
+          '''
+          # Appended to the reviewed adapter and the literal, hash-pinned source plan.
+
+          PLAN_SHA = '157ecf28a1930af4076ca428a2985fb5f720b50960b9c07d2a34a3e6b8a18f5b'
+          EXPECTED_REF = 'refs/heads/ci/v060-linux-provider-public-intake-20261121'
+          REPO = 'brucerry/embedded-linux-diagnostic-hub'
+          EXPECTED_WORKFLOW = '.github/workflows/linux-provider-public-intake.yml'
+          OUTPUT_NAME = re.compile(r'set_output_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+
+
+          @contextmanager
+          def output_file(parent, path):
+              # The hosted runner creates this per-step file. Only allow fixed check
+              # verdicts. Sources, scratch paths and response data stay out of outputs.
+              prefix = parent + '/_runner_file_commands/'
+              need(isinstance(path, str) and path.startswith(prefix), 'runner-output-path')
+              name = path[len(prefix):]
+              need(OUTPUT_NAME.fullmatch(name), 'runner-output-name')
+              with owned_parent(parent) as parent_fd:
+                  commands = os.open('_runner_file_commands', DIR_FLAGS, dir_fd=parent_fd)
+                  try:
+                      row = os.fstat(commands)
+                      need(row.st_uid == os.getuid() and ancestor(row, os.getuid()), 'runner-output-directory')
+                      fd = os.open(name, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                                   dir_fd=commands)
+                      with os.fdopen(fd, 'w', encoding='ascii') as target:
+                          row = os.fstat(fd)
+                          current = os.stat(name, dir_fd=commands, follow_symlinks=False)
+                          need(stat.S_ISREG(row.st_mode) and row.st_uid == os.getuid()
+                               and row.st_nlink == 1 and row.st_size == 0 and not row.st_mode & 0o7022
+                               and inode(row) == inode(current), 'runner-output-identity')
+                          yield target
+                  finally:
+                      os.close(commands)
+
+
+          def data_check():
+              checkpoints = Checkpoints()
+              try:
+                  env = os.environ
+                  need(env.get('GITHUB_REPOSITORY') == REPO
+                       and env.get('GITHUB_REF') == EXPECTED_REF
+                       and env.get('GITHUB_WORKFLOW_REF') == REPO + '/' + EXPECTED_WORKFLOW + '@' + EXPECTED_REF
+                       and env.get('GITHUB_EVENT_NAME') == 'push'
+                       and env.get('GITHUB_JOB') == 'public-source-intake'
+                       and env.get('GITHUB_RUN_ATTEMPT') == '1'
+                       and SHA1.fullmatch(env.get('GITHUB_SHA', ''))
+                       and env.get('GITHUB_WORKFLOW_SHA') == env['GITHUB_SHA']
+                       and re.fullmatch(r'[1-9][0-9]{0,18}', env.get('GITHUB_RUN_ID', '')), 'job-identity')
+                  pins = pins_from_bytes(PLAN, PLAN_SHA)
+                  need(len(pins) == 56 and sum(pin.size for pin in pins) == 4585529, 'exact-intake-census')
+                  parent = env.get('RUNNER_TEMP')
+                  need(isinstance(parent, str), 'runner-temp')
+                  with output_file(parent, env.get('GITHUB_OUTPUT')) as output:
+                      try:
+                          receipt = run_intake(pins, parent, checkpoints=checkpoints)
+                      finally:
+                          for key in ('data', 'capacity', 'retirement'):
+                              verdict = getattr(checkpoints, key)
+                              need(verdict in ('pass', 'fail', 'unreached'), 'checkpoint-value')
+                              output.write(f'{key}={verdict}\n')
+              except Refused as error:
+                  print('intake-refused-' + str(error))
+                  return 1
+              except (OSError, EOFError, http.client.HTTPException):
+                  print('intake-stock-reader-or-filesystem-unavailable')
+                  return 1
+              receipt['planSHA256'] = PLAN_SHA
+              print(json.dumps(receipt, sort_keys=True))
+              return 0
+
+
+          raise SystemExit(data_check())
+          PY
+      - name: Require 56 official source identities and file readback
+        if: ${{ !cancelled() && steps.host.outcome == 'success' }}
+        env:
+          VERDICT: ${{ steps.reader.outputs.data }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Require at least four GiB free after staging
+        if: ${{ !cancelled() && steps.host.outcome == 'success' && steps.reader.outputs.data == 'pass' }}
+        env:
+          VERDICT: ${{ steps.reader.outputs.capacity }}
+        run: |
+          [[ "$VERDICT" == pass ]]
+      - name: Require exact owned scratch retirement
+        if: ${{ !cancelled() && steps.host.outcome == 'success' && steps.reader.outputs.retirement != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.reader.outputs.retirement }}
+        run: |
+          [[ "$VERDICT" == pass ]]
