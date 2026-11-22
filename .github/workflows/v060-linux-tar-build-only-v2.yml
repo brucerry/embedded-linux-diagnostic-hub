@@ -1,0 +1,95 @@
+name: v0.6.0 Linux tar.gz build-only with verified retirement
+
+on:
+  push:
+    branches: [ci/v060-linux-tar-buildonly-retirement-v2-20261122]
+    paths: [.github/workflows/v060-linux-tar-build-only-v2.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  tar-only:
+    if: ${{ github.event.created && !github.event.deleted && !github.event.forced && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - name: Read exact first-attempt controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Build and independently read back tar.gz with verified retirement
+        id: producer
+        run: /usr/bin/python3 -B -E scripts/ci/linux-tar-verified/host.py
+      - name: Exact first-attempt runner context
+        if: ${{ always() && steps.producer.outputs.context != '' && steps.producer.outputs.context != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.context }}
+        run: test "$VERDICT" = pass
+      - name: Host backing and pre-staging space
+        if: ${{ always() && steps.producer.outputs.host_space != '' && steps.producer.outputs.host_space != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.host_space }}
+        run: test "$VERDICT" = pass
+      - name: Exact public source and dependency intake
+        if: ${{ always() && steps.producer.outputs.inputs != '' && steps.producer.outputs.inputs != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.inputs }}
+        run: test "$VERDICT" = pass
+      - name: Pinned build image and post-staging space
+        if: ${{ always() && steps.producer.outputs.image_space != '' && steps.producer.outputs.image_space != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.image_space }}
+        run: test "$VERDICT" = pass
+      - name: Owned worker creation
+        if: ${{ always() && steps.producer.outputs.created != '' && steps.producer.outputs.created != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.created }}
+        run: test "$VERDICT" = pass
+      - name: Outer worker isolation
+        if: ${{ always() && steps.producer.outputs.isolation != '' && steps.producer.outputs.isolation != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.isolation }}
+        run: test "$VERDICT" = pass
+      - name: Effective worker and compiler identity
+        if: ${{ always() && steps.producer.outputs.runtime != '' && steps.producer.outputs.runtime != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime }}
+        run: test "$VERDICT" = pass
+      - name: Eight provider archive digests
+        if: ${{ always() && steps.producer.outputs.providers != '' && steps.producer.outputs.providers != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.providers }}
+        run: test "$VERDICT" = pass
+      - name: Offline lock and installed byte readback
+        if: ${{ always() && steps.producer.outputs.installed != '' && steps.producer.outputs.installed != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.installed }}
+        run: test "$VERDICT" = pass
+      - name: Aggregate build, native compile and tar.gz producer
+        if: ${{ always() && steps.producer.outputs.build != '' && steps.producer.outputs.build != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.build }}
+        run: test "$VERDICT" = pass
+      - name: Archive checksum and four original member modes
+        if: ${{ always() && steps.producer.outputs.archive != '' && steps.producer.outputs.archive != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.archive }}
+        run: test "$VERDICT" = pass
+      - name: Bounded worker result and exit
+        if: ${{ always() && steps.producer.outputs.attach != '' && steps.producer.outputs.attach != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.attach }}
+        run: test "$VERDICT" = pass
+      - name: Worker retirement
+        if: ${{ always() && steps.producer.outputs.worker_retired != '' && steps.producer.outputs.worker_retired != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.worker_retired }}
+        run: test "$VERDICT" = pass
+      - name: Scratch retirement
+        if: ${{ always() && steps.producer.outputs.scratch_retired != '' && steps.producer.outputs.scratch_retired != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.scratch_retired }}
+        run: test "$VERDICT" = pass
