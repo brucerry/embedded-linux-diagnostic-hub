@@ -12,16 +12,18 @@ import stat
 import subprocess
 import tempfile
 
-from worker_protocol import IDENTITY_STAGES, LOADER_FAILURES, LOADER_TARGETS
+from worker_protocol import (
+    IDENTITY_STAGES, LOADER_FAILURES, LOADER_PRECHECK_FAILURES, LOADER_TARGETS, MOUNT_FAILURES,
+)
 
 
 CONTROL = Path(__file__).resolve().parent
 BASE = '5e3c66f4a62e3606abdd650972e0f76b71ff5c54'
 IMAGE = 'docker.io/library/buildpack-deps@sha256:e7fdb09e2aacd2a32875a44be9caa1c18f3098b88620ac6a4bde84c0732c9f87'
 CONFIG = 'sha256:f96221e29033048b6f577864f7718af5626d209f80345dde518058c29b6ce2cd'
-BRANCH = 'refs/heads/ci/v060-linux-worker-identity-only-20261122'
+BRANCH = 'refs/heads/ci/v060-linux-worker-mount-loader-20261122'
 REPO = 'brucerry/embedded-linux-diagnostic-hub'
-WORKFLOW = '.github/workflows/v060-linux-worker-identity-only.yml'
+WORKFLOW = '.github/workflows/v060-linux-worker-mount-loader-20261122.yml'
 FLOOR = 4 * 1024**3
 JOB_DISK = 10 * 1024**3
 PROVIDER_DISK = 768 * 1024**2
@@ -287,6 +289,20 @@ def inactive(state):
             and state['Running'] is False and state['Paused'] is False and state['Restarting'] is False)
 
 
+def loader_failure_frame(row):
+    precheck = re.fullmatch(rb'HUB_IDENTITY_LOADER_PRECHECK_FAILURE ([a-z_]+)\n', row)
+    if precheck is not None:
+        kind = precheck[1].decode('ascii')
+        return {'loader_precheck':kind} if kind in LOADER_PRECHECK_FAILURES else None
+    detail = re.fullmatch(rb'HUB_IDENTITY_LOADER_FAILURE ([1-6]) ([a-z_]+)\n', row)
+    if detail is None:
+        return None
+    index, kind = (part.decode('ascii') for part in detail.groups())
+    if int(index) > len(LOADER_TARGETS) or kind not in LOADER_FAILURES:
+        return None
+    return {'loader_index':index, 'loader_kind':kind}
+
+
 def worker_frame(stdout, bound, verdicts):
     rows = stdout.splitlines(keepends=True)
     updates = {}
@@ -299,16 +315,23 @@ def worker_frame(stdout, bound, verdicts):
             return False
         updates[name] = match[1].decode('ascii')
         if updates[name] == 'fail':
-            if rows:
-                if name != 'compiler_loader_trace' or len(rows) != 1:
+            if name == 'compiler_loader_trace':
+                if len(rows) != 1:
                     return False
-                detail = re.fullmatch(rb'HUB_IDENTITY_LOADER_FAILURE ([1-6]) (command|framing|map)\n', rows[0])
+                loader = loader_failure_frame(rows[0])
+                if loader is None:
+                    return False
+                verdicts.update(loader)
+            elif rows:
+                if name != 'runtime_mounts' or len(rows) != 1:
+                    return False
+                detail = re.fullmatch(rb'HUB_IDENTITY_MOUNT_FAILURE ([a-z_]+) (0|[1-9]|1[0-6])\n', rows[0])
                 if detail is None:
                     return False
-                index, kind = (part.decode('ascii') for part in detail.groups())
-                if not 1 <= int(index) <= len(LOADER_TARGETS) or kind not in LOADER_FAILURES:
+                clause, target = (part.decode('ascii') for part in detail.groups())
+                if int(target) not in MOUNT_FAILURES.get(clause, ()):
                     return False
-                verdicts.update(loader_index=index, loader_kind=kind)
+                verdicts.update(mount_clause=clause, mount_target=target)
             verdicts.update({later: updates.get(later, 'unreached') for later in IDENTITY_STAGES})
             return False
     if rows != [b'HUB_IDENTITY_ONLY_OK ' + bound.encode() + b'\n']:
@@ -380,7 +403,7 @@ def main(verdicts):
 
 def entry():
     verdicts = dict.fromkeys(STAGES, 'unreached')
-    verdicts.update(loader_index='', loader_kind='')
+    verdicts.update(loader_index='', loader_kind='', loader_precheck='', mount_clause='', mount_target='')
     try:
         main(verdicts)
     except (Exception, KeyboardInterrupt):

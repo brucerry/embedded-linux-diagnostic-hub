@@ -1,9 +1,9 @@
-name: v0.6.0 Linux worker identity-only
+name: v0.6.0 Linux worker mount and loader identity only
 
 on:
   push:
-    branches: [ci/v060-linux-worker-identity-only-20261122]
-    paths: [.github/workflows/v060-linux-worker-identity-only.yml]
+    branches: [ci/v060-linux-worker-mount-loader-20261122]
+    paths: [.github/workflows/v060-linux-worker-mount-loader-20261122.yml]
 
 permissions:
   contents: read
@@ -128,6 +128,93 @@ jobs:
         env:
           VERDICT: ${{ steps.producer.outputs.runtime_subreaper }}
         run: test "$VERDICT" = pass
+      - name: Mount table read failed
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'read' }}
+        run: 'true'
+      - name: Mount table framing refused
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'frame' }}
+        run: 'true'
+      - name: Duplicate mount destination
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'duplicate' }}
+        run: 'true'
+      - name: Stock proc mask form refused
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'mask_form' }}
+        run: 'true'
+      - name: Private tmpfs options refused
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'tmpfs_options' }}
+        run: 'true'
+      - name: Unexpected writable mount
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'unexpected_write' }}
+        run: 'true'
+      - name: Reference null device unverified
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'null_device' }}
+        run: 'true'
+      - name: Proc mask stat failed
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'mask_stat' }}
+        run: 'true'
+      - name: Proc mask device or inode differs
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'mask_identity' }}
+        run: 'true'
+      - name: Protected read-only mount missing or writable
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'read_only' }}
+        run: 'true'
+      - name: Existing proc target without verified mask
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'mask_uncovered' }}
+        run: 'true'
+      - name: Proc mask absence could not be established
+        if: ${{ always() && steps.producer.outputs.mount_clause == 'mask_absence_stat' }}
+        run: 'true'
+      - name: Mount target 0 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '0' }}
+        run: 'true'
+      - name: Mount target 1 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '1' }}
+        run: 'true'
+      - name: Mount target 2 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '2' }}
+        run: 'true'
+      - name: Mount target 3 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '3' }}
+        run: 'true'
+      - name: Mount target 4 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '4' }}
+        run: 'true'
+      - name: Mount target 5 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '5' }}
+        run: 'true'
+      - name: Mount target 6 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '6' }}
+        run: 'true'
+      - name: Mount target 7 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '7' }}
+        run: 'true'
+      - name: Mount target 8 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '8' }}
+        run: 'true'
+      - name: Mount target 9 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '9' }}
+        run: 'true'
+      - name: Mount target 10 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '10' }}
+        run: 'true'
+      - name: Mount target 11 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '11' }}
+        run: 'true'
+      - name: Mount target 12 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '12' }}
+        run: 'true'
+      - name: Mount target 13 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '13' }}
+        run: 'true'
+      - name: Mount target 14 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '14' }}
+        run: 'true'
+      - name: Mount target 15 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '15' }}
+        run: 'true'
+      - name: Mount target 16 selected
+        if: ${{ always() && steps.producer.outputs.mount_target == '16' }}
+        run: 'true'
       - name: Loader target 1 selected
         if: ${{ always() && steps.producer.outputs.loader_index == '1' }}
         run: 'true'
@@ -154,6 +241,18 @@ jobs:
         run: 'true'
       - name: Loader map refusal recorded
         if: ${{ always() && steps.producer.outputs.loader_kind == 'map' }}
+        run: 'true'
+      - name: Loader dependency plan refused
+        if: ${{ always() && steps.producer.outputs.loader_kind == 'dependency_plan' }}
+        run: 'true'
+      - name: Loader precheck target roster refused
+        if: ${{ always() && steps.producer.outputs.loader_precheck == 'target_roster' }}
+        run: 'true'
+      - name: Loader precheck linker plugin readback refused
+        if: ${{ always() && steps.producer.outputs.loader_precheck == 'plugin_readback' }}
+        run: 'true'
+      - name: Loader precheck linker plugin ELF refused
+        if: ${{ always() && steps.producer.outputs.loader_precheck == 'plugin_elf' }}
         run: 'true'
       - name: Bounded worker result and exit
         if: ${{ always() && steps.producer.outputs.attach != '' && steps.producer.outputs.attach != 'unreached' }}
