@@ -1,0 +1,172 @@
+name: v0.6.0 Linux worker identity-only
+
+on:
+  push:
+    branches: [ci/v060-linux-worker-identity-only-20261122]
+    paths: [.github/workflows/v060-linux-worker-identity-only.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  identity-only:
+    if: ${{ github.event.created && !github.event.deleted && !github.event.forced && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Read exact first-attempt controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Observe worker identities and retire the owned worker
+        id: producer
+        run: /usr/bin/python3 -B -E scripts/ci/linux-tar-verified/host.py
+      - name: Exact first-attempt runner context
+        if: ${{ always() && steps.producer.outputs.context != '' && steps.producer.outputs.context != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.context }}
+        run: test "$VERDICT" = pass
+      - name: Host backing and pre-staging space
+        if: ${{ always() && steps.producer.outputs.host_space != '' && steps.producer.outputs.host_space != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.host_space }}
+        run: test "$VERDICT" = pass
+      - name: Empty read-only input staging
+        if: ${{ always() && steps.producer.outputs.inputs != '' && steps.producer.outputs.inputs != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.inputs }}
+        run: test "$VERDICT" = pass
+      - name: Pinned build image and post-staging space
+        if: ${{ always() && steps.producer.outputs.image_space != '' && steps.producer.outputs.image_space != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.image_space }}
+        run: test "$VERDICT" = pass
+      - name: Owned worker creation
+        if: ${{ always() && steps.producer.outputs.created != '' && steps.producer.outputs.created != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.created }}
+        run: test "$VERDICT" = pass
+      - name: Outer worker isolation
+        if: ${{ always() && steps.producer.outputs.isolation != '' && steps.producer.outputs.isolation != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.isolation }}
+        run: test "$VERDICT" = pass
+      - name: Worker non-root account and architecture
+        if: ${{ always() && steps.producer.outputs.runtime_account != '' && steps.producer.outputs.runtime_account != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_account }}
+        run: test "$VERDICT" = pass
+      - name: Effective capabilities seccomp and no-new-privileges
+        if: ${{ always() && steps.producer.outputs.runtime_sandbox != '' && steps.producer.outputs.runtime_sandbox != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_sandbox }}
+        run: test "$VERDICT" = pass
+      - name: Loopback interface and routes
+        if: ${{ always() && steps.producer.outputs.runtime_network != '' && steps.producer.outputs.runtime_network != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_network }}
+        run: test "$VERDICT" = pass
+      - name: Mount layout and stock masks
+        if: ${{ always() && steps.producer.outputs.runtime_mounts != '' && steps.producer.outputs.runtime_mounts != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_mounts }}
+        run: test "$VERDICT" = pass
+      - name: Private tmpfs ownership and exact caps
+        if: ${{ always() && steps.producer.outputs.runtime_write_caps != '' && steps.producer.outputs.runtime_write_caps != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_write_caps }}
+        run: test "$VERDICT" = pass
+      - name: Private PID namespace
+        if: ${{ always() && steps.producer.outputs.runtime_pid != '' && steps.producer.outputs.runtime_pid != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_pid }}
+        run: test "$VERDICT" = pass
+      - name: Pinned control manifests
+        if: ${{ always() && steps.producer.outputs.runtime_manifests != '' && steps.producer.outputs.runtime_manifests != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_manifests }}
+        run: test "$VERDICT" = pass
+      - name: Installed signed package versions
+        if: ${{ always() && steps.producer.outputs.compiler_packages != '' && steps.producer.outputs.compiler_packages != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_packages }}
+        run: test "$VERDICT" = pass
+      - name: Signed package files and aliases
+        if: ${{ always() && steps.producer.outputs.compiler_package_members != '' && steps.producer.outputs.compiler_package_members != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_package_members }}
+        run: test "$VERDICT" = pass
+      - name: Compiler plan and stock cc alias
+        if: ${{ always() && steps.producer.outputs.compiler_plan != '' && steps.producer.outputs.compiler_plan != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_plan }}
+        run: test "$VERDICT" = pass
+      - name: Compiler and loader alias chain
+        if: ${{ always() && steps.producer.outputs.compiler_aliases != '' && steps.producer.outputs.compiler_aliases != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_aliases }}
+        run: test "$VERDICT" = pass
+      - name: Pinned ELF roles plugin and link inputs
+        if: ${{ always() && steps.producer.outputs.compiler_elf_members != '' && steps.producer.outputs.compiler_elf_members != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_elf_members }}
+        run: test "$VERDICT" = pass
+      - name: No dynamic loader preload
+        if: ${{ always() && steps.producer.outputs.compiler_no_preload != '' && steps.producer.outputs.compiler_no_preload != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_no_preload }}
+        run: test "$VERDICT" = pass
+      - name: Exact live loader dependency maps
+        if: ${{ always() && steps.producer.outputs.compiler_loader_trace != '' && steps.producer.outputs.compiler_loader_trace != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.compiler_loader_trace }}
+        run: test "$VERDICT" = pass
+      - name: Worker child subreaper
+        if: ${{ always() && steps.producer.outputs.runtime_subreaper != '' && steps.producer.outputs.runtime_subreaper != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime_subreaper }}
+        run: test "$VERDICT" = pass
+      - name: Loader target 1 selected
+        if: ${{ always() && steps.producer.outputs.loader_index == '1' }}
+        run: 'true'
+      - name: Loader target 2 selected
+        if: ${{ always() && steps.producer.outputs.loader_index == '2' }}
+        run: 'true'
+      - name: Loader target 3 selected
+        if: ${{ always() && steps.producer.outputs.loader_index == '3' }}
+        run: 'true'
+      - name: Loader target 4 selected
+        if: ${{ always() && steps.producer.outputs.loader_index == '4' }}
+        run: 'true'
+      - name: Loader target 5 selected
+        if: ${{ always() && steps.producer.outputs.loader_index == '5' }}
+        run: 'true'
+      - name: Loader target 6 selected
+        if: ${{ always() && steps.producer.outputs.loader_index == '6' }}
+        run: 'true'
+      - name: Loader command refusal recorded
+        if: ${{ always() && steps.producer.outputs.loader_kind == 'command' }}
+        run: 'true'
+      - name: Loader framing refusal recorded
+        if: ${{ always() && steps.producer.outputs.loader_kind == 'framing' }}
+        run: 'true'
+      - name: Loader map refusal recorded
+        if: ${{ always() && steps.producer.outputs.loader_kind == 'map' }}
+        run: 'true'
+      - name: Bounded worker result and exit
+        if: ${{ always() && steps.producer.outputs.attach != '' && steps.producer.outputs.attach != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.attach }}
+        run: test "$VERDICT" = pass
+      - name: Worker retirement
+        if: ${{ always() && steps.producer.outputs.worker_retired != '' && steps.producer.outputs.worker_retired != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.worker_retired }}
+        run: test "$VERDICT" = pass
+      - name: Scratch retirement
+        if: ${{ always() && steps.producer.outputs.scratch_retired != '' && steps.producer.outputs.scratch_retired != 'unreached' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.scratch_retired }}
+        run: test "$VERDICT" = pass
