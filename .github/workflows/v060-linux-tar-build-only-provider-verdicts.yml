@@ -1,0 +1,195 @@
+name: v0.6.0 Linux tar.gz build-only with named provider verdicts
+
+on:
+  push:
+    branches: [ci/v060-linux-tar-buildonly-provider-verdicts-20261122]
+    paths: [.github/workflows/v060-linux-tar-build-only-provider-verdicts.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  tar-only:
+    if: ${{ github.event.created && !github.event.deleted && !github.event.forced && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - name: Read exact first-attempt controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Build and independently read back tar.gz with named provider verdicts
+        id: producer
+        run: /usr/bin/python3 -B -E scripts/ci/linux-tar-verified/host.py
+      - name: Exact first-attempt runner context
+        if: ${{ always() && steps.producer.outputs.context != '' && steps.producer.outputs.context != 'unreached' && steps.producer.outputs.context != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.context }}
+        run: test "$VERDICT" = pass
+      - name: Host backing and pre-staging space
+        if: ${{ always() && steps.producer.outputs.host_space != '' && steps.producer.outputs.host_space != 'unreached' && steps.producer.outputs.host_space != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.host_space }}
+        run: test "$VERDICT" = pass
+      - name: Exact public source and dependency intake
+        if: ${{ always() && steps.producer.outputs.inputs != '' && steps.producer.outputs.inputs != 'unreached' && steps.producer.outputs.inputs != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.inputs }}
+        run: test "$VERDICT" = pass
+      - name: Pinned build image and post-staging space
+        if: ${{ always() && steps.producer.outputs.image_space != '' && steps.producer.outputs.image_space != 'unreached' && steps.producer.outputs.image_space != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.image_space }}
+        run: test "$VERDICT" = pass
+      - name: Owned worker creation
+        if: ${{ always() && steps.producer.outputs.created != '' && steps.producer.outputs.created != 'unreached' && steps.producer.outputs.created != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.created }}
+        run: test "$VERDICT" = pass
+      - name: Outer worker isolation
+        if: ${{ always() && steps.producer.outputs.isolation != '' && steps.producer.outputs.isolation != 'unreached' && steps.producer.outputs.isolation != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.isolation }}
+        run: test "$VERDICT" = pass
+      - name: Effective worker and compiler identity
+        if: ${{ always() && steps.producer.outputs.runtime != '' && steps.producer.outputs.runtime != 'unreached' && steps.producer.outputs.runtime != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.runtime }}
+        run: test "$VERDICT" = pass
+      - name: Reserve provider blocks across both private roots
+        if: ${{ always() && steps.producer.outputs.provider_layout != '' && steps.producer.outputs.provider_layout != 'unreached' && steps.producer.outputs.provider_layout != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_layout }}
+        run: test "$VERDICT" = pass
+      - name: Provider input archive and source readback
+        if: ${{ always() && steps.producer.outputs.provider_inputs != '' && steps.producer.outputs.provider_inputs != 'unreached' && steps.producer.outputs.provider_inputs != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_inputs }}
+        run: test "$VERDICT" = pass
+      - name: Provider Node executable identity and placement
+        if: ${{ always() && steps.producer.outputs.provider_node != '' && steps.producer.outputs.provider_node != 'unreached' && steps.producer.outputs.provider_node != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_node }}
+        run: test "$VERDICT" = pass
+      - name: Provider recipe and output plan identity
+        if: ${{ always() && steps.producer.outputs.provider_plan != '' && steps.producer.outputs.provider_plan != 'unreached' && steps.producer.outputs.provider_plan != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_plan }}
+        run: test "$VERDICT" = pass
+      - name: filelist and JavaScript-only ssh2 archive identities
+        if: ${{ always() && steps.producer.outputs.provider_filelist_ssh2 != '' && steps.producer.outputs.provider_filelist_ssh2 != 'unreached' && steps.producer.outputs.provider_filelist_ssh2 != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_filelist_ssh2 }}
+        run: test "$VERDICT" = pass
+      - name: Builder matcher emitter and archive identity
+        if: ${{ always() && steps.producer.outputs.provider_builder_matcher != '' && steps.producer.outputs.provider_builder_matcher != 'unreached' && steps.producer.outputs.provider_builder_matcher != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_builder_matcher }}
+        run: test "$VERDICT" = pass
+      - name: Go toolchain placement and pinned source staging
+        if: ${{ always() && steps.producer.outputs.provider_go_toolchain != '' && steps.producer.outputs.provider_go_toolchain != 'unreached' && steps.producer.outputs.provider_go_toolchain != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_go_toolchain }}
+        run: test "$VERDICT" = pass
+      - name: Go private telemetry mode off
+        if: ${{ always() && steps.producer.outputs.provider_go_telemetry != '' && steps.producer.outputs.provider_go_telemetry != 'unreached' && steps.producer.outputs.provider_go_telemetry != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_go_telemetry }}
+        run: test "$VERDICT" = pass
+      - name: Go version and architecture
+        if: ${{ always() && steps.producer.outputs.provider_go_version != '' && steps.producer.outputs.provider_go_version != 'unreached' && steps.producer.outputs.provider_go_version != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_go_version }}
+        run: test "$VERDICT" = pass
+      - name: Go local module checksums and verification
+        if: ${{ always() && steps.producer.outputs.provider_go_modules != '' && steps.producer.outputs.provider_go_modules != 'unreached' && steps.producer.outputs.provider_go_modules != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_go_modules }}
+        run: test "$VERDICT" = pass
+      - name: esbuild compile to noexec scratch
+        if: ${{ always() && steps.producer.outputs.provider_esbuild_compile != '' && steps.producer.outputs.provider_esbuild_compile != 'unreached' && steps.producer.outputs.provider_esbuild_compile != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_esbuild_compile }}
+        run: test "$VERDICT" = pass
+      - name: esbuild ELF and build info with verified work placement
+        if: ${{ always() && steps.producer.outputs.provider_esbuild_identity != '' && steps.producer.outputs.provider_esbuild_identity != 'unreached' && steps.producer.outputs.provider_esbuild_identity != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_esbuild_identity }}
+        run: test "$VERDICT" = pass
+      - name: esbuild wrappers and both provider archive identities
+        if: ${{ always() && steps.producer.outputs.provider_esbuild_wrappers != '' && steps.producer.outputs.provider_esbuild_wrappers != 'unreached' && steps.producer.outputs.provider_esbuild_wrappers != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_esbuild_wrappers }}
+        run: test "$VERDICT" = pass
+      - name: Proxy compiler and declaration input readback
+        if: ${{ always() && steps.producer.outputs.provider_proxy_compilers != '' && steps.producer.outputs.provider_proxy_compilers != 'unreached' && steps.producer.outputs.provider_proxy_compilers != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_proxy_compilers }}
+        run: test "$VERDICT" = pass
+      - name: agent-base provider archive identity
+        if: ${{ always() && steps.producer.outputs.provider_agent_base != '' && steps.producer.outputs.provider_agent_base != 'unreached' && steps.producer.outputs.provider_agent_base != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_agent_base }}
+        run: test "$VERDICT" = pass
+      - name: http-proxy-agent provider archive identity
+        if: ${{ always() && steps.producer.outputs.provider_http_proxy_agent != '' && steps.producer.outputs.provider_http_proxy_agent != 'unreached' && steps.producer.outputs.provider_http_proxy_agent != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_http_proxy_agent }}
+        run: test "$VERDICT" = pass
+      - name: https-proxy-agent provider archive identity
+        if: ${{ always() && steps.producer.outputs.provider_https_proxy_agent != '' && steps.producer.outputs.provider_https_proxy_agent != 'unreached' && steps.producer.outputs.provider_https_proxy_agent != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_https_proxy_agent }}
+        run: test "$VERDICT" = pass
+      - name: Builder gzip emitter and archive identity
+        if: ${{ always() && steps.producer.outputs.provider_gzip_builder != '' && steps.producer.outputs.provider_gzip_builder != 'unreached' && steps.producer.outputs.provider_gzip_builder != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_gzip_builder }}
+        run: test "$VERDICT" = pass
+      - name: Eight closed provider archive digests
+        if: ${{ always() && steps.producer.outputs.provider_archive_digests != '' && steps.producer.outputs.provider_archive_digests != 'unreached' && steps.producer.outputs.provider_archive_digests != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_archive_digests }}
+        run: test "$VERDICT" = pass
+      - name: Strict provider process closure
+        if: ${{ always() && steps.producer.outputs.provider_process_closure != '' && steps.producer.outputs.provider_process_closure != 'unreached' && steps.producer.outputs.provider_process_closure != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.provider_process_closure }}
+        run: test "$VERDICT" = pass
+      - name: Provider block readback and private tool retirement
+        if: ${{ always() && steps.producer.outputs.providers != '' && steps.producer.outputs.providers != 'unreached' && steps.producer.outputs.providers != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.providers }}
+        run: test "$VERDICT" = pass
+      - name: Offline lock and installed byte readback
+        if: ${{ always() && steps.producer.outputs.installed != '' && steps.producer.outputs.installed != 'unreached' && steps.producer.outputs.installed != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.installed }}
+        run: test "$VERDICT" = pass
+      - name: Aggregate build, native compile and tar.gz producer
+        if: ${{ always() && steps.producer.outputs.build != '' && steps.producer.outputs.build != 'unreached' && steps.producer.outputs.build != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.build }}
+        run: test "$VERDICT" = pass
+      - name: Archive checksum and four original member modes
+        if: ${{ always() && steps.producer.outputs.archive != '' && steps.producer.outputs.archive != 'unreached' && steps.producer.outputs.archive != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.archive }}
+        run: test "$VERDICT" = pass
+      - name: Bounded worker result and exit
+        if: ${{ always() && steps.producer.outputs.attach != '' && steps.producer.outputs.attach != 'unreached' && steps.producer.outputs.attach != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.attach }}
+        run: test "$VERDICT" = pass
+      - name: Worker retirement
+        if: ${{ always() && steps.producer.outputs.worker_retired != '' && steps.producer.outputs.worker_retired != 'unreached' && steps.producer.outputs.worker_retired != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.worker_retired }}
+        run: test "$VERDICT" = pass
+      - name: Scratch retirement
+        if: ${{ always() && steps.producer.outputs.scratch_retired != '' && steps.producer.outputs.scratch_retired != 'unreached' && steps.producer.outputs.scratch_retired != 'unobserved' }}
+        env:
+          VERDICT: ${{ steps.producer.outputs.scratch_retired }}
+        run: test "$VERDICT" = pass
