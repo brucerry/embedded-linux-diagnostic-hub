@@ -1,0 +1,72 @@
+{
+  "availableWorkspaceBytes": 770457600,
+  "ciTriggered": false,
+  "exactSourceAnd314PlacementByteReadbackPassed": true,
+  "hostedCustodyProven": false,
+  "installedOrBuilt": false,
+  "localCustodyGuard": "PATH_ANCESTRY",
+  "localRootOwner": 65534,
+  "localStageRegistryArchives": 299,
+  "lockSHA256": "6eda133d8af11aae5e896876515130792e781f2054d071e2f68a9bcc4272b64c",
+  "officialMediaReadback": {
+    "appImage": {
+      "bytes": 11979282,
+      "sha256": "84021a78ee214ae6fd33a2d62a92ba25542dd10bc86bf117a9b2d0bba44e7665",
+      "target": "appimage-tools-runtime-20251108.tar.gz",
+      "url": "https://github.com/electron-userland/electron-builder-binaries/releases/download/appimage%401.0.3/appimage-tools-runtime-20251108.tar.gz"
+    },
+    "electron": {
+      "bytes": 122932200,
+      "sha256": "5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5",
+      "target": "electron-v44.5.1-linux-x64.zip",
+      "url": "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-linux-x64.zip"
+    },
+    "node": {
+      "bytes": 58299872,
+      "sha256": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9",
+      "target": "node-v24.22.2-linux-x64.tar.gz",
+      "url": "https://nodejs.org/download/release/v24.22.2/node-v24.22.2-linux-x64.tar.gz"
+    }
+  },
+  "providerReadback": {
+    "anyProviderExecuted": false,
+    "builderChangedMembers": [
+      "out/targets/ArchiveTarget.js",
+      "out/targets/ArchiveTarget.js.map",
+      "out/targets/archive.js",
+      "out/targets/archive.js.map"
+    ],
+    "builderIdenticalToActualSuccessor": true,
+    "builderOldNewMemberCount": 487,
+    "builderSHA256": "9f2b5691607c437c6b75fa384870aa42298766a89f53e2cb93d07686d0b9609c",
+    "esbuildPublisherArchiveSRI": "sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==",
+    "esbuildPublisherELFSHA256": "e1698a3d5c6c0798fee4fd3b5cc816651f460c63d390a7a26ea4beb0b1884100",
+    "esbuildSuccessorArchiveSHA256": "fa8fc7bb43870bc0c3c541c3b945b895c05292ff8fcaaa0f8f5730abf828005e",
+    "esbuildSuccessorArchiveSRI": "sha512-hQxogTCYTC+aEyvKe763JyNxanjaFnOiALdKB/fFCk5hSLOa62fsckonqWZT0qXr/Ev6SngGZN7RLvGhx0oiBQ==",
+    "esbuildSuccessorELFSHA256": "ed59354772a53bc6aa5b7c4219338e1522fb73a8e5fff3f6fc2d036ad8726494",
+    "localReplay": [
+      "filelist",
+      "ssh2",
+      "app-builder-lib"
+    ]
+  },
+  "registryArchiveBytes": 40712262,
+  "sourceOverlay": {
+    "additionalFilesRequired": [
+      ".linux-package-inputs/electron.d.ts",
+      "vendor/agent-base-7.1.4-official-source-981bc1c33458.tgz",
+      "vendor/app-builder-lib-linux-x64-node-gzip-9f2b5691607c.tgz",
+      "vendor/esbuild-0.28.2-source-609683d89297.tgz",
+      "vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
+      "vendor/filelist-1.0.6-source-derived-df765ed95a03.tgz",
+      "vendor/http-proxy-agent-7.0.2-official-source-657847db4b64.tgz",
+      "vendor/https-proxy-agent-7.0.6-official-source-8a7e12d4f216.tgz",
+      "vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz"
+    ],
+    "archiveBytesEmbedded": false,
+    "intermediateTree": "502caca5bac9c9c3ac8beb70d7b21aa3041f15f7",
+    "sha256": "028ddb7b909b9425ee0ce0a10fc4b7b204133240d14b4d585137b3d3d9a67630"
+  },
+  "successorTree": "30182b73211d809a7b2ef57f3ffe0ee9d87a5c33",
+  "usedCredentials": false
+}
