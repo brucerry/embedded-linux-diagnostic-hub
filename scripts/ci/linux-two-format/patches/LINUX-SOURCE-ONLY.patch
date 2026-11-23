@@ -1,0 +1,2041 @@
+diff --git a/package-lock.json b/package-lock.json
+index e061b37af70c556cdcc1a8b5d75478ae0aa74ca2..770304a3d5339350fb16743fa6100f00fa61ecb5 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -15,7 +15,7 @@
+                 "react": "^19.3.0",
+                 "react-dom": "^19.3.0",
+                 "semver": "^7.8.5",
+-                "ssh2": "^1.17.0"
++                "ssh2": "file:vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz"
+             },
+             "devDependencies": {
+                 "@playwright/test": "^1.58.2",
+@@ -26,30 +26,24 @@
+                 "@types/ssh2": "^1.15.5",
+                 "@vitejs/plugin-react": "^6.0.0",
+                 "concurrently": "^9.2.1",
+-                "electron": "44.5.1",
+                 "electron-builder": "^26.15.3",
+-                "esbuild": "^0.28.2",
++                "esbuild": "file:vendor/esbuild-0.28.2-source-609683d89297.tgz",
+                 "fflate": "0.8.3",
+                 "prettier": "3.9.9",
+                 "tsx": "^4.21.0",
+                 "typescript": "^5.9.3",
+                 "vite": "^8.3.2",
+-                "wait-on": "^9.0.0"
++                "wait-on": "^9.0.0",
++                "@esbuild/linux-x64": "file:vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
++                "app-builder-lib": "file:vendor/app-builder-lib-linux-x64-node-gzip-9f2b5691607c.tgz",
++                "http-proxy-agent": "file:vendor/http-proxy-agent-7.0.2-official-source-657847db4b64.tgz",
++                "https-proxy-agent": "file:vendor/https-proxy-agent-7.0.6-official-source-8a7e12d4f216.tgz",
++                "agent-base": "file:vendor/agent-base-7.1.4-official-source-981bc1c33458.tgz"
+             },
+             "engines": {
+                 "node": ">=24 <25"
+             }
+         },
+-        "node_modules/@electron-internal/extract-zip": {
+-            "version": "1.0.5",
+-            "resolved": "https://registry.npmjs.org/@electron-internal/extract-zip/-/extract-zip-1.0.5.tgz",
+-            "integrity": "sha512-+bqFCP98pLI0Tt0XQo1TmlXtwjWchISndDOxCkEcIuUgXWpBnLyRI+2DU+mesvnMMX6L1XDqYNA0lXNDHd/yiA==",
+-            "dev": true,
+-            "license": "BSD-2-Clause",
+-            "engines": {
+-                "node": ">=22.12.0"
+-            }
+-        },
+         "node_modules/@electron/asar": {
+             "version": "3.4.1",
+             "resolved": "https://registry.npmjs.org/@electron/asar/-/asar-3.4.1.tgz",
+@@ -130,27 +124,6 @@
+                 "node": ">=10"
+             }
+         },
+-        "node_modules/@electron/get": {
+-            "version": "5.1.0",
+-            "resolved": "https://registry.npmjs.org/@electron/get/-/get-5.1.0.tgz",
+-            "integrity": "sha512-3kSBtG8ObcTVfXanm5vVJ6UnBLEVmVsRk1M+vGqCuMBV+XLCbJYuWQful+yIy0GQDsSlK0kHEriEHn7SPk4EnA==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "debug": "^4.1.1",
+-                "env-paths": "^3.0.0",
+-                "graceful-fs": "^4.2.11",
+-                "progress": "^2.0.3",
+-                "semver": "^7.6.3",
+-                "sumchecker": "^3.0.1"
+-            },
+-            "engines": {
+-                "node": ">=22.12.0"
+-            },
+-            "optionalDependencies": {
+-                "undici": "^7.24.4"
+-            }
+-        },
+         "node_modules/@electron/notarize": {
+             "version": "2.5.0",
+             "resolved": "https://registry.npmjs.org/@electron/notarize/-/notarize-2.5.0.tgz",
+@@ -214,573 +187,41 @@
+                 "node": ">= 8.0.0"
+             },
+             "funding": {
+-                "url": "https://github.com/sponsors/gjtorikian/"
+-            }
+-        },
+-        "node_modules/@electron/rebuild": {
+-            "version": "4.2.0",
+-            "resolved": "https://registry.npmjs.org/@electron/rebuild/-/rebuild-4.2.0.tgz",
+-            "integrity": "sha512-RKL/O+jGoXJMxrx/5771y1n0xTKmFuOYGO3gMmwypBM6rsH0kou0mswwdXA2JrhIkE4xyC7v9vGk0n6NPzgOxQ==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "@malept/cross-spawn-promise": "^2.0.0",
+-                "debug": "^4.1.1",
+-                "node-abi": "^4.2.0",
+-                "node-api-version": "^0.2.1",
+-                "node-gyp": "^12.2.0",
+-                "read-binary-file-arch": "^1.0.6"
+-            },
+-            "bin": {
+-                "electron-rebuild": "lib/cli.js"
+-            },
+-            "engines": {
+-                "node": ">=22.12.0"
+-            }
+-        },
+-        "node_modules/@electron/universal": {
+-            "version": "2.0.3",
+-            "resolved": "https://registry.npmjs.org/@electron/universal/-/universal-2.0.3.tgz",
+-            "integrity": "sha512-Wn9sPYIVFRFl5HmwMJkARCCf7rqK/EurkfQ/rJZ14mHP3iYTjZSIOSVonEAnhWeAXwtw7zOekGRlc6yTtZ0t+g==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "@electron/asar": "^3.3.1",
+-                "@malept/cross-spawn-promise": "^2.0.0",
+-                "debug": "^4.3.1",
+-                "dir-compare": "^4.2.0",
+-                "fs-extra": "^11.1.1",
+-                "minimatch": "^9.0.3",
+-                "plist": "^3.1.0"
+-            },
+-            "engines": {
+-                "node": ">=16.4"
+-            }
+-        },
+-        "node_modules/@electron/universal/node_modules/balanced-match": {
+-            "version": "1.0.2",
+-            "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz",
+-            "integrity": "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==",
+-            "dev": true,
+-            "license": "MIT"
+-        },
+-        "node_modules/@electron/universal/node_modules/brace-expansion": {
+-            "version": "2.1.7",
+-            "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.1.7.tgz",
+-            "integrity": "sha512-uZbew1NqdmPDTMJ8ah1y+b+9QEJrfkXFk3RcTQw3X0jW/xRUvFKsg1CfQdSYGdTbXZWExtU3J3ccxtnfw1Fi0g==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "balanced-match": "^1.0.0"
+-            }
+-        },
+-        "node_modules/@electron/universal/node_modules/fs-extra": {
+-            "version": "11.4.1",
+-            "resolved": "https://registry.npmjs.org/fs-extra/-/fs-extra-11.4.1.tgz",
+-            "integrity": "sha512-KYAb4c9BJQI6QqGKthV68OHe0badztdXJWKo0WtBA9IuCFPTKvE5ZdUBglP833aMjhaSPNO4A5j/EkzZtGlKjA==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "graceful-fs": "^4.2.0",
+-                "jsonfile": "^6.0.1",
+-                "universalify": "^2.0.0"
+-            },
+-            "engines": {
+-                "node": ">=14.14"
+-            }
+-        },
+-        "node_modules/@electron/universal/node_modules/minimatch": {
+-            "version": "9.0.9",
+-            "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-9.0.9.tgz",
+-            "integrity": "sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg==",
+-            "dev": true,
+-            "license": "ISC",
+-            "dependencies": {
+-                "brace-expansion": "^2.0.2"
+-            },
+-            "engines": {
+-                "node": ">=16 || 14 >=14.17"
+-            },
+-            "funding": {
+-                "url": "https://github.com/sponsors/isaacs"
+-            }
+-        },
+-        "node_modules/@electron/windows-sign": {
+-            "version": "1.2.2",
+-            "resolved": "https://registry.npmjs.org/@electron/windows-sign/-/windows-sign-1.2.2.tgz",
+-            "integrity": "sha512-dfZeox66AvdPtb2lD8OsIIQh12Tp0GNCRUDfBHIKGpbmopZto2/A8nSpYYLoedPIHpqkeblZ/k8OV0Gy7PYuyQ==",
+-            "dev": true,
+-            "license": "BSD-2-Clause",
+-            "optional": true,
+-            "peer": true,
+-            "dependencies": {
+-                "cross-dirname": "^0.1.0",
+-                "debug": "^4.3.4",
+-                "fs-extra": "^11.1.1",
+-                "minimist": "^1.2.8",
+-                "postject": "^1.0.0-alpha.6"
+-            },
+-            "bin": {
+-                "electron-windows-sign": "bin/electron-windows-sign.js"
+-            },
+-            "engines": {
+-                "node": ">=14.14"
+-            }
+-        },
+-        "node_modules/@electron/windows-sign/node_modules/fs-extra": {
+-            "version": "11.4.1",
+-            "resolved": "https://registry.npmjs.org/fs-extra/-/fs-extra-11.4.1.tgz",
+-            "integrity": "sha512-KYAb4c9BJQI6QqGKthV68OHe0badztdXJWKo0WtBA9IuCFPTKvE5ZdUBglP833aMjhaSPNO4A5j/EkzZtGlKjA==",
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "peer": true,
+-            "dependencies": {
+-                "graceful-fs": "^4.2.0",
+-                "jsonfile": "^6.0.1",
+-                "universalify": "^2.0.0"
+-            },
+-            "engines": {
+-                "node": ">=14.14"
+-            }
+-        },
+-        "node_modules/@esbuild/aix-ppc64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.2.tgz",
+-            "integrity": "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ==",
+-            "cpu": [
+-                "ppc64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "aix"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/android-arm": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.2.tgz",
+-            "integrity": "sha512-kXXoiPVVGQcnIYGOeaovwOURpniDBpSq4A03qkQ+BMQqtGG6HYap3xne9C1O1yo4TR3qxlCX5IqqmX6fFo2Lqg==",
+-            "cpu": [
+-                "arm"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "android"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/android-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.2.tgz",
+-            "integrity": "sha512-5YfKeeI8qWfBZIX+u2xZC3Zlb3Os/gLS2sbEKM+I4ZOcsWmHS2WLysCcQZDAFRslDUU5Oiq44gf6PYN1vGwG5A==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "android"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/android-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.2.tgz",
+-            "integrity": "sha512-O387ite7SzUyCcy3JQX4P4bLtEA7bLLkx+esve5JHnyYfNTxcVpXZo9jhdB0lTKN44gztELTdU7nS8Nr16Fs1Q==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "android"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/darwin-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.2.tgz",
+-            "integrity": "sha512-n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "darwin"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/darwin-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.2.tgz",
+-            "integrity": "sha512-uq6suIWYP37qzGddBKPw5QEQPi6HiLGsO7UmkpfyaYNQ3D+rN6w6WfwH+nuqcGXWvawGwxOEroO4YGnFh95azw==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "darwin"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/freebsd-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.2.tgz",
+-            "integrity": "sha512-n+I0BTSRIoy+d6RPKnEVwql5UwBJolytvY4mAOIEJorKlqgPII8ix6slVVrfZ5Tnj7glIZvloylbB/EJPMWEXw==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "freebsd"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/freebsd-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.2.tgz",
+-            "integrity": "sha512-78XJTJkvPs0kz2w61301PJjXl4g7q3JqiYMZ/M/yVI73EHBrCRTgkhu9oqG7vPqq+a/yadEW8aD+agKlk5xrmg==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "freebsd"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-arm": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.28.2.tgz",
+-            "integrity": "sha512-XlDnu2q5yoqems+xay6wSAcg9DDD7K9RLKZEBOMZm3ckNpJBvOX20tSfby8KfrrhINDyv9V2YVZKY/SpoGJI8w==",
+-            "cpu": [
+-                "arm"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.28.2.tgz",
+-            "integrity": "sha512-pW4AC0P3it8c7do9MVM4p51FzHzdM/TZrerurgRcHJ2WTa1VQ1CIq18xncfpBJw4ojkiZZrKW2yIBWBP92j6Ug==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-ia32": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.28.2.tgz",
+-            "integrity": "sha512-CYbnj78HsIeA+DhgUKgFCfvNsTHFhMMrinUrMZpDXJXKN8T3XViTZ/+wtHeVxEWY8ewSzTFN+nRmSwO2tZaLUQ==",
+-            "cpu": [
+-                "ia32"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-loong64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.28.2.tgz",
+-            "integrity": "sha512-buwkd8nsph4R+ajRvw0qM5Hja/TXQow3ptzWO2EbG/cqcIkHloRrdlBtQlshyYGTNFvfkfJ5tpPLVkY4DtsPfQ==",
+-            "cpu": [
+-                "loong64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-mips64el": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.28.2.tgz",
+-            "integrity": "sha512-ZVykbDyk7519VwiNb9Lcj9m8XM6v5V9uKPvrEMkkEedVewf+0itkhahp4HDpgERXhwLRpWFypsGbG/J8s0QjJA==",
+-            "cpu": [
+-                "mips64el"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-ppc64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.28.2.tgz",
+-            "integrity": "sha512-CAXl+Dtd9UUuJd8pKKdwh6MLm3MUMiqMPmhZ3tTSXPqfyQ3vDl6R5hZdZ/kYojK4ofXtdfSv1tFq8XzWx3heNQ==",
+-            "cpu": [
+-                "ppc64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-riscv64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.28.2.tgz",
+-            "integrity": "sha512-GeXCej4IQtU1B+QlDV8W/RRvbzI3O/Stss+/bCXv4lZls5WGRtu2a+3JkA3i4qIUlMXpcHebWpF8AkJhATowuA==",
+-            "cpu": [
+-                "riscv64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-s390x": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.28.2.tgz",
+-            "integrity": "sha512-3H1weTYZPxt/WOhByszQZybS9w5lKzUn1FDMsgEChbHWQwHYQQRfBxgCcZvPhjHfKyJjIievvMmEUawJrdY9Dg==",
+-            "cpu": [
+-                "s390x"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/linux-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.28.2.tgz",
+-            "integrity": "sha512-4xTZr1FUmSoQW4XIWmit3tzQrUTZM+N3P0XV8xROKYF50XfI7xeO90+1bZvNwxIufQ9hDQVRJH5YhgPVF8A/HQ==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "linux"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/netbsd-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/netbsd-arm64/-/netbsd-arm64-0.28.2.tgz",
+-            "integrity": "sha512-sSATRjPeDBg3pdgHoQfoYBob11Kk1FGa9lui5RIHZCoCkJa9QKlvl3/vKz2usCmYYjs7ymJR/2Nnsqe+Hjt5nw==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "netbsd"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/netbsd-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.28.2.tgz",
+-            "integrity": "sha512-lqnzCV+mM0gIADaKihiCg6ifgfU2L3h5E33rNQBN1Y4MaVGnzryzmvvf7UHxprpQdE8hpqLolJ9Rl+SkIRDpyw==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "netbsd"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/openbsd-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/openbsd-arm64/-/openbsd-arm64-0.28.2.tgz",
+-            "integrity": "sha512-AL2qJILH7lNjrDmCQDvdxMfAUIv8KMNZOvrwAQ8i8//ntL9FflhOyMJ8OZSMBb8/AWXe3/5v5S20y3zCoZWKoQ==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "openbsd"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/openbsd-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.28.2.tgz",
+-            "integrity": "sha512-QtiuPytchRyC4rwUKhexJdQKvDuZ6hWloi3igqPQNUJCS1/v9EiO3UTOXR6A3FoMo4fnAKbWJdqaIwhOzh8qEw==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "openbsd"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/openharmony-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/openharmony-arm64/-/openharmony-arm64-0.28.2.tgz",
+-            "integrity": "sha512-WkhYDmpTjLvGlScA1rwjRUmhl4k8oXR3cIbtqWmELgU/dFeHHlEllxDvdWcNJV9rbzCexB5vz8gtNewWLgCT7Q==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "openharmony"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/sunos-x64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.28.2.tgz",
+-            "integrity": "sha512-GPMSkTOtMnv2U2F8gxe4Io6qmVs+YKyp832Etqqxr0hFngmXQ3rzwytelm3GIn7T4VviRUlf3sOgBOiTdvaf7g==",
+-            "cpu": [
+-                "x64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "sunos"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/win32-arm64": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.28.2.tgz",
+-            "integrity": "sha512-PIhhEkE9uPBleRBrQEJpUn7MBnibZzbGzYWPmY3x+YoVg/95zbjB4CxPPOQ8l5tYYM4mMaCthF8/1DIfBQQyWQ==",
+-            "cpu": [
+-                "arm64"
+-            ],
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "win32"
+-            ],
+-            "engines": {
+-                "node": ">=18"
+-            }
+-        },
+-        "node_modules/@esbuild/win32-ia32": {
+-            "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.28.2.tgz",
+-            "integrity": "sha512-YmJbfTlvU7Sdn9BB+4PRES4oB6pxgS37MAONj+hBr/cpXS1aBPKXxNnDbu+QCWPj0o9dgyxeq79g6c5P8KeuYA==",
+-            "cpu": [
+-                "ia32"
+-            ],
++                "url": "https://github.com/sponsors/gjtorikian/"
++            }
++        },
++        "node_modules/@electron/rebuild": {
++            "version": "4.2.0",
++            "resolved": "https://registry.npmjs.org/@electron/rebuild/-/rebuild-4.2.0.tgz",
++            "integrity": "sha512-RKL/O+jGoXJMxrx/5771y1n0xTKmFuOYGO3gMmwypBM6rsH0kou0mswwdXA2JrhIkE4xyC7v9vGk0n6NPzgOxQ==",
+             "dev": true,
+             "license": "MIT",
+-            "optional": true,
+-            "os": [
+-                "win32"
+-            ],
++            "dependencies": {
++                "@malept/cross-spawn-promise": "^2.0.0",
++                "debug": "^4.1.1",
++                "node-abi": "^4.2.0",
++                "node-api-version": "^0.2.1",
++                "node-gyp": "^12.2.0",
++                "read-binary-file-arch": "^1.0.6"
++            },
++            "bin": {
++                "electron-rebuild": "lib/cli.js"
++            },
+             "engines": {
+-                "node": ">=18"
++                "node": ">=22.12.0"
+             }
+         },
+-        "node_modules/@esbuild/win32-x64": {
++        "node_modules/@esbuild/linux-x64": {
+             "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.28.2.tgz",
+-            "integrity": "sha512-5ebpxr3nWMzrL/rnUI755Jkuee0bHL/Gq0WTF9lvcpv73wAp5eu8MfBUgWK9bhWvZjj7yX8etf/8tI8Ney695g==",
++            "resolved": "file:vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
++            "integrity": "sha512-hQxogTCYTC+aEyvKe763JyNxanjaFnOiALdKB/fFCk5hSLOa62fsckonqWZT0qXr/Ev6SngGZN7RLvGhx0oiBQ==",
+             "cpu": [
+                 "x64"
+             ],
+             "dev": true,
+             "license": "MIT",
+-            "optional": true,
+             "os": [
+-                "win32"
++                "linux"
+             ],
+             "engines": {
+                 "node": ">=18"
+@@ -1833,8 +1274,8 @@
+         },
+         "node_modules/agent-base": {
+             "version": "7.1.4",
+-            "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
+-            "integrity": "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==",
++            "resolved": "file:vendor/agent-base-7.1.4-official-source-981bc1c33458.tgz",
++            "integrity": "sha512-RoHRhg8WZhNp8VuoNbN5RD/GwKx+/9XIp/7t6hKLOTw3hILjh/NgSk6Ow20wS7VOtGW7Lrvp6ObqGgb2vNecPg==",
+             "dev": true,
+             "license": "MIT",
+             "engines": {
+@@ -1886,8 +1327,8 @@
+         },
+         "node_modules/app-builder-lib": {
+             "version": "26.15.3",
+-            "resolved": "https://registry.npmjs.org/app-builder-lib/-/app-builder-lib-26.15.3.tgz",
+-            "integrity": "sha512-2VnyWkqsP5v5XbBhL3tD5Syx8iNPBYsoU7kY4S2fz7wg8Rj/nztWKCUzGKaFRTv0Xwf3/H058CR1Kvtd/3lRow==",
++            "resolved": "file:vendor/app-builder-lib-linux-x64-node-gzip-9f2b5691607c.tgz",
++            "integrity": "sha512-JgPkt891TgQpDBMhtKM208MGuNXO/VlHaIbPJd32jowKVW3v6iDMm9huf6vdDxlCOs7gsQWo8/+8L5PubeMS1w==",
+             "dev": true,
+             "license": "MIT",
+             "dependencies": {
+@@ -1897,7 +1338,6 @@
+                 "@electron/notarize": "2.5.0",
+                 "@electron/osx-sign": "1.3.3",
+                 "@electron/rebuild": "^4.0.4",
+-                "@electron/universal": "2.0.3",
+                 "@malept/flatpak-bundler": "^0.4.0",
+                 "@noble/hashes": "^2.2.0",
+                 "@peculiar/webcrypto": "^1.7.1",
+@@ -1905,15 +1345,12 @@
+                 "ajv": "^8.18.0",
+                 "asn1js": "^3.0.10",
+                 "async-exit-hook": "^2.0.1",
+-                "builder-util": "26.15.3",
+-                "builder-util-runtime": "9.7.0",
+                 "chromium-pickle-js": "^0.2.0",
+                 "ci-info": "4.3.1",
+                 "debug": "^4.3.4",
+                 "dotenv": "^16.4.5",
+                 "dotenv-expand": "^11.0.6",
+                 "ejs": "^3.1.8",
+-                "electron-publish": "26.15.3",
+                 "fs-extra": "^10.1.0",
+                 "hosted-git-info": "^4.1.0",
+                 "isbinaryfile": "^5.0.0",
+@@ -1921,7 +1358,7 @@
+                 "js-yaml": "^4.1.0",
+                 "json5": "^2.2.3",
+                 "lazy-val": "^1.0.5",
+-                "minimatch": "^10.2.5",
++                "minimatch": "11.0.9",
+                 "pkijs": "^3.4.0",
+                 "plist": "3.1.0",
+                 "proper-lockfile": "^4.1.2",
+@@ -1931,7 +1368,10 @@
+                 "temp-file": "^3.4.0",
+                 "tiny-async-pool": "1.3.0",
+                 "unzipper": "^0.12.3",
+-                "which": "^5.0.0"
++                "which": "^5.0.0",
++                "builder-util-runtime": "9.7.0",
++                "builder-util": "26.15.3",
++                "electron-publish": "26.15.3"
+             },
+             "engines": {
+                 "node": ">=14.0.0"
+@@ -1939,6 +1379,17 @@
+             "peerDependencies": {
+                 "dmg-builder": "26.15.3",
+                 "electron-builder-squirrel-windows": "26.15.3"
++            },
++            "os": [
++                "linux"
++            ],
++            "cpu": [
++                "x64"
++            ],
++            "peerDependenciesMeta": {
++                "electron-builder-squirrel-windows": {
++                    "optional": true
++                }
+             }
+         },
+         "node_modules/app-builder-lib/node_modules/@electron/get": {
+@@ -2235,15 +1686,6 @@
+             "dev": true,
+             "license": "MIT"
+         },
+-        "node_modules/buildcheck": {
+-            "version": "0.0.7",
+-            "resolved": "https://registry.npmjs.org/buildcheck/-/buildcheck-0.0.7.tgz",
+-            "integrity": "sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==",
+-            "optional": true,
+-            "engines": {
+-                "node": ">=10.0.0"
+-            }
+-        },
+         "node_modules/builder-util": {
+             "version": "26.15.3",
+             "resolved": "https://registry.npmjs.org/builder-util/-/builder-util-26.15.3.tgz",
+@@ -2520,29 +1962,6 @@
+             "dev": true,
+             "license": "MIT"
+         },
+-        "node_modules/cpu-features": {
+-            "version": "0.0.10",
+-            "resolved": "https://registry.npmjs.org/cpu-features/-/cpu-features-0.0.10.tgz",
+-            "integrity": "sha512-9IkYqtX3YHPCzoVg1Py+o9057a3i0fp7S530UWokCSaFVTc7CwXPRiOjRjBQQ18ZCNafx78YfnG+HALxtVmOGA==",
+-            "hasInstallScript": true,
+-            "optional": true,
+-            "dependencies": {
+-                "buildcheck": "~0.0.6",
+-                "nan": "^2.19.0"
+-            },
+-            "engines": {
+-                "node": ">=10.0.0"
+-            }
+-        },
+-        "node_modules/cross-dirname": {
+-            "version": "0.1.0",
+-            "resolved": "https://registry.npmjs.org/cross-dirname/-/cross-dirname-0.1.0.tgz",
+-            "integrity": "sha512-+R08/oI0nl3vfPcqftZRpytksBXDzOUveBq/NBVx0sUp1axwzPQrKinNx5yd5sxPu8j1wIy8AfnVQ+5eFdha6Q==",
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "peer": true
+-        },
+         "node_modules/cross-spawn": {
+             "version": "7.0.6",
+             "resolved": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz",
+@@ -2711,48 +2130,6 @@
+             "license": "MIT",
+             "optional": true
+         },
+-        "node_modules/dir-compare": {
+-            "version": "4.2.0",
+-            "resolved": "https://registry.npmjs.org/dir-compare/-/dir-compare-4.2.0.tgz",
+-            "integrity": "sha512-2xMCmOoMrdQIPHdsTawECdNPwlVFB9zGcz3kuhmBO6U3oU+UQjsue0i8ayLKpgBcm+hcXPMVSGUN9d+pvJ6+VQ==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "minimatch": "^3.0.5",
+-                "p-limit": "^3.1.0 "
+-            }
+-        },
+-        "node_modules/dir-compare/node_modules/balanced-match": {
+-            "version": "1.0.2",
+-            "resolved": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz",
+-            "integrity": "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==",
+-            "dev": true,
+-            "license": "MIT"
+-        },
+-        "node_modules/dir-compare/node_modules/brace-expansion": {
+-            "version": "1.1.21",
+-            "resolved": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
+-            "integrity": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "balanced-match": "^1.0.0",
+-                "concat-map": "0.0.1"
+-            }
+-        },
+-        "node_modules/dir-compare/node_modules/minimatch": {
+-            "version": "3.1.5",
+-            "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-3.1.5.tgz",
+-            "integrity": "sha512-VgjWUsnnT6n+NUk6eZq77zeFdpW2LWDzP6zFGrCbHXiYNul5Dzqk2HHQ5uFH2DNW5Xbp8+jVzaeNt94ssEEl4w==",
+-            "dev": true,
+-            "license": "ISC",
+-            "dependencies": {
+-                "brace-expansion": "^1.1.7"
+-            },
+-            "engines": {
+-                "node": "*"
+-            }
+-        },
+         "node_modules/dmg-builder": {
+             "version": "26.15.3",
+             "resolved": "https://registry.npmjs.org/dmg-builder/-/dmg-builder-26.15.3.tgz",
+@@ -2836,25 +2213,6 @@
+                 "node": ">=0.10.0"
+             }
+         },
+-        "node_modules/electron": {
+-            "version": "44.5.1",
+-            "resolved": "https://registry.npmjs.org/electron/-/electron-44.5.1.tgz",
+-            "integrity": "sha512-lx7AYoFIiyvEvgvpyWO9kOC60xtNPpiPZAth6Fmg9NutzpCAMLwpUlaBY2EXfZyIgUdzEmLMj9KvK0Vrokl1yQ==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "@electron-internal/extract-zip": "^1.0.1",
+-                "@electron/get": "^5.0.0",
+-                "@types/node": "^24.9.0"
+-            },
+-            "bin": {
+-                "electron": "cli.js",
+-                "install-electron": "install.js"
+-            },
+-            "engines": {
+-                "node": ">= 22.12.0"
+-            }
+-        },
+         "node_modules/electron-builder": {
+             "version": "26.15.3",
+             "resolved": "https://registry.npmjs.org/electron-builder/-/electron-builder-26.15.3.tgz",
+@@ -2881,19 +2239,6 @@
+                 "node": ">=14.0.0"
+             }
+         },
+-        "node_modules/electron-builder-squirrel-windows": {
+-            "version": "26.15.3",
+-            "resolved": "https://registry.npmjs.org/electron-builder-squirrel-windows/-/electron-builder-squirrel-windows-26.15.3.tgz",
+-            "integrity": "sha512-Jc19XPV9y9+2bAdZPkXuVNGNIEFBq9poHC61l8Kv6FdK7DRG3+Ic0rerC0DXOaeHNz8yW0fg/JnF8GQROOF5MA==",
+-            "dev": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "dependencies": {
+-                "app-builder-lib": "26.15.3",
+-                "builder-util": "26.15.3",
+-                "electron-winstaller": "5.4.0"
+-            }
+-        },
+         "node_modules/electron-publish": {
+             "version": "26.15.3",
+             "resolved": "https://registry.npmjs.org/electron-publish/-/electron-publish-26.15.3.tgz",
+@@ -2912,66 +2257,6 @@
+                 "mime": "^2.5.2"
+             }
+         },
+-        "node_modules/electron-winstaller": {
+-            "version": "5.4.0",
+-            "resolved": "https://registry.npmjs.org/electron-winstaller/-/electron-winstaller-5.4.0.tgz",
+-            "integrity": "sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==",
+-            "dev": true,
+-            "hasInstallScript": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "dependencies": {
+-                "@electron/asar": "^3.2.1",
+-                "debug": "^4.1.1",
+-                "fs-extra": "^7.0.1",
+-                "lodash": "^4.17.21",
+-                "temp": "^0.9.0"
+-            },
+-            "engines": {
+-                "node": ">=8.0.0"
+-            },
+-            "optionalDependencies": {
+-                "@electron/windows-sign": "^1.1.2"
+-            }
+-        },
+-        "node_modules/electron-winstaller/node_modules/fs-extra": {
+-            "version": "7.0.1",
+-            "resolved": "https://registry.npmjs.org/fs-extra/-/fs-extra-7.0.1.tgz",
+-            "integrity": "sha512-YJDaCJZEnBmcbw13fvdAM9AwNOJwOzrE4pqMqBq5nFiEqXUqHwlK4B+3pUw6JNvfSPtX05xFHtYy/1ni01eGCw==",
+-            "dev": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "dependencies": {
+-                "graceful-fs": "^4.1.2",
+-                "jsonfile": "^4.0.0",
+-                "universalify": "^0.1.0"
+-            },
+-            "engines": {
+-                "node": ">=6 <7 || >=8"
+-            }
+-        },
+-        "node_modules/electron-winstaller/node_modules/jsonfile": {
+-            "version": "4.0.0",
+-            "resolved": "https://registry.npmjs.org/jsonfile/-/jsonfile-4.0.0.tgz",
+-            "integrity": "sha512-m6F1R3z8jjlf2imQHS2Qez5sjKWQzbuuhuJ/FKYFRZvPE3PuHcSMVZzfsLhGVOkfd20obL5SWEBew5ShlquNxg==",
+-            "dev": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "optionalDependencies": {
+-                "graceful-fs": "^4.1.6"
+-            }
+-        },
+-        "node_modules/electron-winstaller/node_modules/universalify": {
+-            "version": "0.1.2",
+-            "resolved": "https://registry.npmjs.org/universalify/-/universalify-0.1.2.tgz",
+-            "integrity": "sha512-rBJeI5CXAlmy1pV+617WB9J63U6XcazHHF2f2dbJix4XzpUF0RS3Zbj0FGIOCAva5P/d/GBOYaACQ1w+0azUkg==",
+-            "dev": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "engines": {
+-                "node": ">= 4.0.0"
+-            }
+-        },
+         "node_modules/emoji-regex": {
+             "version": "8.0.0",
+             "resolved": "https://registry.npmjs.org/emoji-regex/-/emoji-regex-8.0.0.tgz",
+@@ -2989,19 +2274,6 @@
+                 "once": "^1.4.0"
+             }
+         },
+-        "node_modules/env-paths": {
+-            "version": "3.0.0",
+-            "resolved": "https://registry.npmjs.org/env-paths/-/env-paths-3.0.0.tgz",
+-            "integrity": "sha512-dtJUTepzMW3Lm/NPxRf3wP4642UWhjL2sQxc+ym2YMj1m/H2zDNQOlezafzkHwn6sMstjHTwG6iQQsctDW/b1A==",
+-            "dev": true,
+-            "license": "MIT",
+-            "engines": {
+-                "node": "^12.20.0 || ^14.13.1 || >=16.0.0"
+-            },
+-            "funding": {
+-                "url": "https://github.com/sponsors/sindresorhus"
+-            }
+-        },
+         "node_modules/err-code": {
+             "version": "2.0.3",
+             "resolved": "https://registry.npmjs.org/err-code/-/err-code-2.0.3.tgz",
+@@ -3068,44 +2340,24 @@
+         },
+         "node_modules/esbuild": {
+             "version": "0.28.2",
+-            "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.28.2.tgz",
+-            "integrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA==",
++            "resolved": "file:vendor/esbuild-0.28.2-source-609683d89297.tgz",
++            "integrity": "sha512-VpG3doyzIdeiiPb53zNI26zSzLSeDmrPyxh2Ptj6nWNPV8cZAOT0EGiyylz/etup7fX/QF/9U1aFCKkvsPy2ZQ==",
++            "cpu": [
++                "x64"
++            ],
+             "dev": true,
+-            "hasInstallScript": true,
+             "license": "MIT",
++            "os": [
++                "linux"
++            ],
++            "dependencies": {
++                "@esbuild/linux-x64": "0.28.2"
++            },
+             "bin": {
+                 "esbuild": "bin/esbuild"
+             },
+             "engines": {
+                 "node": ">=18"
+-            },
+-            "optionalDependencies": {
+-                "@esbuild/aix-ppc64": "0.28.2",
+-                "@esbuild/android-arm": "0.28.2",
+-                "@esbuild/android-arm64": "0.28.2",
+-                "@esbuild/android-x64": "0.28.2",
+-                "@esbuild/darwin-arm64": "0.28.2",
+-                "@esbuild/darwin-x64": "0.28.2",
+-                "@esbuild/freebsd-arm64": "0.28.2",
+-                "@esbuild/freebsd-x64": "0.28.2",
+-                "@esbuild/linux-arm": "0.28.2",
+-                "@esbuild/linux-arm64": "0.28.2",
+-                "@esbuild/linux-ia32": "0.28.2",
+-                "@esbuild/linux-loong64": "0.28.2",
+-                "@esbuild/linux-mips64el": "0.28.2",
+-                "@esbuild/linux-ppc64": "0.28.2",
+-                "@esbuild/linux-riscv64": "0.28.2",
+-                "@esbuild/linux-s390x": "0.28.2",
+-                "@esbuild/linux-x64": "0.28.2",
+-                "@esbuild/netbsd-arm64": "0.28.2",
+-                "@esbuild/netbsd-x64": "0.28.2",
+-                "@esbuild/openbsd-arm64": "0.28.2",
+-                "@esbuild/openbsd-x64": "0.28.2",
+-                "@esbuild/openharmony-arm64": "0.28.2",
+-                "@esbuild/sunos-x64": "0.28.2",
+-                "@esbuild/win32-arm64": "0.28.2",
+-                "@esbuild/win32-ia32": "0.28.2",
+-                "@esbuild/win32-x64": "0.28.2"
+             }
+         },
+         "node_modules/escalade": {
+@@ -3147,9 +2399,9 @@
+             "license": "MIT"
+         },
+         "node_modules/fast-uri": {
+-            "version": "3.1.8",
+-            "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.8.tgz",
+-            "integrity": "sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==",
++            "version": "3.1.9",
++            "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.9.tgz",
++            "integrity": "sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==",
+             "dev": true,
+             "funding": [
+                 {
+@@ -3190,8 +2442,8 @@
+         },
+         "node_modules/filelist": {
+             "version": "1.0.6",
+-            "resolved": "https://registry.npmjs.org/filelist/-/filelist-1.0.6.tgz",
+-            "integrity": "sha512-5giy2PkLYY1cP39p17Ech+2xlpTRL9HLspOfEgm0L6CwBXBTgsK5ou0JtzYuepxkaQ/tvhCFIJ5uXo0OrM2DxA==",
++            "resolved": "file:vendor/filelist-1.0.6-source-derived-df765ed95a03.tgz",
++            "integrity": "sha512-zsFTEJpUjrXMrNmmDHzD6C+74TwmIbRiOWClhkr8R1fL5X0+ZImQghY91UfqAzlU8vYNH4IKuVShe2Qz5gCIKQ==",
+             "dev": true,
+             "license": "Apache-2.0",
+             "dependencies": {
+@@ -3602,8 +2854,8 @@
+         },
+         "node_modules/http-proxy-agent": {
+             "version": "7.0.2",
+-            "resolved": "https://registry.npmjs.org/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz",
+-            "integrity": "sha512-T1gkAiYYDWYx3V5Bmyu7HcfcvL7mUrTWiM6yOfa3PIphViJ/gFPbvidQ+veqSOHci/PxBcDabeUNCzpOODJZig==",
++            "resolved": "file:vendor/http-proxy-agent-7.0.2-official-source-657847db4b64.tgz",
++            "integrity": "sha512-KM3c2zMOS/rUmAlElwBFMLvrDisZ5cVO/i0vlJydpZczCG2BAk6fidiP+gq02ccaEWT+EtycGa/KHG9YbjFWUA==",
+             "dev": true,
+             "license": "MIT",
+             "dependencies": {
+@@ -3630,8 +2882,8 @@
+         },
+         "node_modules/https-proxy-agent": {
+             "version": "7.0.6",
+-            "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
+-            "integrity": "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==",
++            "resolved": "file:vendor/https-proxy-agent-7.0.6-official-source-8a7e12d4f216.tgz",
++            "integrity": "sha512-0OAlpiRLdaYVrGIDtbKLDtq+rd7CZr4TgxTVjZhPhetIEamzgyzXiuLYAJs1bTEvgtOluOg3NfJJSnjOs5+fkQ==",
+             "dev": true,
+             "license": "MIT",
+             "dependencies": {
+@@ -4219,20 +3471,21 @@
+             }
+         },
+         "node_modules/minimatch": {
+-            "version": "10.2.6",
+-            "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-10.2.6.tgz",
+-            "integrity": "sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==",
+-            "dev": true,
+-            "license": "BlueOak-1.0.0",
+             "dependencies": {
+-                "brace-expansion": "^5.0.8"
++                "@isaacs/nonrecursive-glob-match": "^1.1.0",
++                "brace-expansion": "^5.0.12"
+             },
++            "dev": true,
+             "engines": {
+-                "node": "18 || 20 || >=22"
++                "node": "20 || >=22"
+             },
+             "funding": {
+                 "url": "https://github.com/sponsors/isaacs"
+-            }
++            },
++            "integrity": "sha512-KCFkfyjqerNlSstjlhIGNXIKZGA/6O4V4RlhZ+Dsr621SPPw0mzlypE9D9ZOoPiVefHID+j7/XuMMlqfD/F60Q==",
++            "license": "BlueOak-1.0.0",
++            "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-11.0.9.tgz",
++            "version": "11.0.9"
+         },
+         "node_modules/minimist": {
+             "version": "1.2.8",
+@@ -4267,20 +3520,6 @@
+                 "node": ">= 18"
+             }
+         },
+-        "node_modules/mkdirp": {
+-            "version": "0.5.6",
+-            "resolved": "https://registry.npmjs.org/mkdirp/-/mkdirp-0.5.6.tgz",
+-            "integrity": "sha512-FP+p8RB8OWpF3YZBCrP5gtADmtXApB5AMLn+vdyA+PyxCjrCs00mjyUozssO33cwDeT3wNGdLxJ5M//YqtHAJw==",
+-            "dev": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "dependencies": {
+-                "minimist": "^1.2.6"
+-            },
+-            "bin": {
+-                "mkdirp": "bin/cmd.js"
+-            }
+-        },
+         "node_modules/ms": {
+             "version": "2.1.3",
+             "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+@@ -4288,13 +3527,6 @@
+             "dev": true,
+             "license": "MIT"
+         },
+-        "node_modules/nan": {
+-            "version": "2.29.0",
+-            "resolved": "https://registry.npmjs.org/nan/-/nan-2.29.0.tgz",
+-            "integrity": "sha512-GlGk3HIvitbvs+LT3g6XUP1kpirKNvmDFwF/bmo6XNWSb/eYEs/O4bfgIEIXCZ+lIOTS5xNwDvSGMw6FJdAhtA==",
+-            "license": "MIT",
+-            "optional": true
+-        },
+         "node_modules/nanoid": {
+             "version": "3.3.19",
+             "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.19.tgz",
+@@ -4475,22 +3707,6 @@
+                 "node": ">=8"
+             }
+         },
+-        "node_modules/p-limit": {
+-            "version": "3.1.0",
+-            "resolved": "https://registry.npmjs.org/p-limit/-/p-limit-3.1.0.tgz",
+-            "integrity": "sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==",
+-            "dev": true,
+-            "license": "MIT",
+-            "dependencies": {
+-                "yocto-queue": "^0.1.0"
+-            },
+-            "engines": {
+-                "node": ">=10"
+-            },
+-            "funding": {
+-                "url": "https://github.com/sponsors/sindresorhus"
+-            }
+-        },
+         "node_modules/path-is-absolute": {
+             "version": "1.0.1",
+             "resolved": "https://registry.npmjs.org/path-is-absolute/-/path-is-absolute-1.0.1.tgz",
+@@ -4653,36 +3869,6 @@
+                 "node": "^10 || ^12 || >=14"
+             }
+         },
+-        "node_modules/postject": {
+-            "version": "1.0.0-alpha.6",
+-            "resolved": "https://registry.npmjs.org/postject/-/postject-1.0.0-alpha.6.tgz",
+-            "integrity": "sha512-b9Eb8h2eVqNE8edvKdwqkrY6O7kAwmI8kcnBv1NScolYJbo59XUF0noFq+lxbC1yN20bmC0WBEbDC5H/7ASb0A==",
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "peer": true,
+-            "dependencies": {
+-                "commander": "^9.4.0"
+-            },
+-            "bin": {
+-                "postject": "dist/cli.js"
+-            },
+-            "engines": {
+-                "node": ">=14.0.0"
+-            }
+-        },
+-        "node_modules/postject/node_modules/commander": {
+-            "version": "9.5.0",
+-            "resolved": "https://registry.npmjs.org/commander/-/commander-9.5.0.tgz",
+-            "integrity": "sha512-KRs7WVDKg86PWiuAqhDrAQnTXZKraVcCc6vFdL14qrZ/DcWwuRo7VoiYXalXO7S5GKpqYiVEwCbgFDfxNHKJBQ==",
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "peer": true,
+-            "engines": {
+-                "node": "^12.20.0 || >=14"
+-            }
+-        },
+         "node_modules/prettier": {
+             "version": "3.9.9",
+             "resolved": "https://registry.npmjs.org/prettier/-/prettier-3.9.9.tgz",
+@@ -4924,21 +4110,6 @@
+                 "node": ">= 4"
+             }
+         },
+-        "node_modules/rimraf": {
+-            "version": "2.6.3",
+-            "resolved": "https://registry.npmjs.org/rimraf/-/rimraf-2.6.3.tgz",
+-            "integrity": "sha512-mwqeW5XsA2qAejG46gYdENaxXjx9onRNCfn7L0duuP4hCuTIi/QO7PDK07KJfp1d+izWPrzEJDcSqBa0OZQriA==",
+-            "deprecated": "Rimraf versions prior to v4 are no longer supported",
+-            "dev": true,
+-            "license": "ISC",
+-            "peer": true,
+-            "dependencies": {
+-                "glob": "^7.1.3"
+-            },
+-            "bin": {
+-                "rimraf": "bin.js"
+-            }
+-        },
+         "node_modules/roarr": {
+             "version": "2.15.4",
+             "resolved": "https://registry.npmjs.org/roarr/-/roarr-2.15.4.tgz",
+@@ -5175,9 +4346,8 @@
+         },
+         "node_modules/ssh2": {
+             "version": "1.17.0",
+-            "resolved": "https://registry.npmjs.org/ssh2/-/ssh2-1.17.0.tgz",
+-            "integrity": "sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ==",
+-            "hasInstallScript": true,
++            "resolved": "file:vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz",
++            "integrity": "sha512-n3z4W9hcQzDqVdZ8wLeXBs6J7vQ4DnSZJnx1bTHU54pDhVRU5lrMW4WjwESIy4Q9LZwefQR4RkuHl0hIXH83Pw==",
+             "dependencies": {
+                 "asn1": "^0.2.6",
+                 "bcrypt-pbkdf": "^1.0.2"
+@@ -5185,10 +4355,12 @@
+             "engines": {
+                 "node": ">=10.16.0"
+             },
+-            "optionalDependencies": {
+-                "cpu-features": "~0.0.10",
+-                "nan": "^2.23.0"
+-            }
++            "cpu": [
++                "x64"
++            ],
++            "os": [
++                "linux"
++            ]
+         },
+         "node_modules/stat-mode": {
+             "version": "1.0.0",
+@@ -5294,21 +4466,6 @@
+                 "node": ">=18"
+             }
+         },
+-        "node_modules/temp": {
+-            "version": "0.9.4",
+-            "resolved": "https://registry.npmjs.org/temp/-/temp-0.9.4.tgz",
+-            "integrity": "sha512-yYrrsWnrXMcdsnu/7YMYAofM1ktpL5By7vZhf15CrXijWWrEYZks5AXBudalfSWJLlnen/QUJUB5aoB0kqZUGA==",
+-            "dev": true,
+-            "license": "MIT",
+-            "peer": true,
+-            "dependencies": {
+-                "mkdirp": "^0.5.1",
+-                "rimraf": "~2.6.2"
+-            },
+-            "engines": {
+-                "node": ">=6.0.0"
+-            }
+-        },
+         "node_modules/temp-file": {
+             "version": "3.4.0",
+             "resolved": "https://registry.npmjs.org/temp-file/-/temp-file-3.4.0.tgz",
+@@ -5457,17 +4614,6 @@
+                 "node": ">=14.17"
+             }
+         },
+-        "node_modules/undici": {
+-            "version": "7.30.0",
+-            "resolved": "https://registry.npmjs.org/undici/-/undici-7.30.0.tgz",
+-            "integrity": "sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==",
+-            "dev": true,
+-            "license": "MIT",
+-            "optional": true,
+-            "engines": {
+-                "node": ">=20.18.1"
+-            }
+-        },
+         "node_modules/undici-types": {
+             "version": "7.24.6",
+             "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
+@@ -5736,18 +4882,12 @@
+                 "node": ">=12"
+             }
+         },
+-        "node_modules/yocto-queue": {
+-            "version": "0.1.0",
+-            "resolved": "https://registry.npmjs.org/yocto-queue/-/yocto-queue-0.1.0.tgz",
+-            "integrity": "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==",
++        "node_modules/@isaacs/nonrecursive-glob-match": {
+             "dev": true,
+-            "license": "MIT",
+-            "engines": {
+-                "node": ">=10"
+-            },
+-            "funding": {
+-                "url": "https://github.com/sponsors/sindresorhus"
+-            }
++            "integrity": "sha512-GPm/Dbvk5RLmhRnxXIa7nTpK0xtl4E0wj0MslsuNiJ1FIROU+2+9lgUC/dgF7Ey4QCWhfEsgxilMRMCdHPfDfw==",
++            "license": "BlueOak-1.0.0",
++            "resolved": "https://registry.npmjs.org/@isaacs/nonrecursive-glob-match/-/nonrecursive-glob-match-1.1.0.tgz",
++            "version": "1.1.0"
+         }
+     }
+ }
+diff --git a/package.json b/package.json
+index 41f53deedab952a989cba09025136aa14a1dd0ee..402d8b2bf48c543d1a651057086d6de6785602db 100644
+--- a/package.json
++++ b/package.json
+@@ -62,7 +62,7 @@
+         "react": "^19.3.0",
+         "react-dom": "^19.3.0",
+         "semver": "^7.8.5",
+-        "ssh2": "^1.17.0"
++        "ssh2": "file:vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz"
+     },
+     "devDependencies": {
+         "@playwright/test": "^1.58.2",
+@@ -73,15 +73,19 @@
+         "@types/ssh2": "^1.15.5",
+         "@vitejs/plugin-react": "^6.0.0",
+         "concurrently": "^9.2.1",
+-        "electron": "44.5.1",
+         "electron-builder": "^26.15.3",
+-        "esbuild": "^0.28.2",
++        "esbuild": "file:vendor/esbuild-0.28.2-source-609683d89297.tgz",
+         "fflate": "0.8.3",
+         "prettier": "3.9.9",
+         "tsx": "^4.21.0",
+         "typescript": "^5.9.3",
+         "vite": "^8.3.2",
+-        "wait-on": "^9.0.0"
++        "wait-on": "^9.0.0",
++        "@esbuild/linux-x64": "file:vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
++        "app-builder-lib": "file:vendor/app-builder-lib-linux-x64-node-gzip-9f2b5691607c.tgz",
++        "http-proxy-agent": "file:vendor/http-proxy-agent-7.0.2-official-source-657847db4b64.tgz",
++        "https-proxy-agent": "file:vendor/https-proxy-agent-7.0.6-official-source-8a7e12d4f216.tgz",
++        "agent-base": "file:vendor/agent-base-7.1.4-official-source-981bc1c33458.tgz"
+     },
+     "build": {
+         "appId": "dev.diagnostichub.desktop",
+@@ -154,9 +158,16 @@
+         "toolsets": {
+             "appimage": "1.0.3"
+         },
+-        "afterPack": "scripts/linux-after-pack.cjs"
++        "afterPack": "scripts/linux-after-pack.cjs",
++        "electronVersion": "44.5.1",
++        "electronDist": ".linux-package-inputs/electron-v44.5.1-linux-x64"
+     },
+     "engines": {
+         "node": ">=24 <25"
++    },
++    "overrides": {
++        "jake": {
++            "filelist": "file:vendor/filelist-1.0.6-source-derived-df765ed95a03.tgz"
++        }
+     }
+ }
+diff --git a/scripts/lib/linux-permanent-member-modes.mjs b/scripts/lib/linux-permanent-member-modes.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d3ac65fdbab216b9f8b262916ee6944fb6c7692
+--- /dev/null
++++ b/scripts/lib/linux-permanent-member-modes.mjs
+@@ -0,0 +1,152 @@
++import assert from 'node:assert/strict';
++import { createHash, randomBytes } from 'node:crypto';
++import { constants } from 'node:fs';
++import { lstat, open } from 'node:fs/promises';
++import path from 'node:path';
++import {
++    LINUX_ARCHIVE_LIMITS,
++    linuxObservationWindow,
++    observeLinuxGzipTar,
++} from './linux-archive-members.mjs';
++import { normalizeLinuxPackagerCensus } from './linux-release-observation.ts';
++
++// The installer planner checks these same original-member modes before making an envelope.
++const required = new Map([
++    ['resources/linux-installed-AppRun', 0o755],
++    ['resources/linux-setup-bootstrap.cjs', 0o644],
++    ['resources/linux-setup-install.cjs', 0o644],
++    ['resources/diagnostic_hub_rename_noreplace.node', 0o644],
++]);
++const octal = (mode) => (Number.isInteger(mode) ? '0' + mode.toString(8) : 'missing mode');
++
++export function assertLinuxPermanentMemberModes(entries) {
++    const failures = [];
++    for (const [name, mode] of required) {
++        const matches = entries.filter((entry) => entry.path === name);
++        if (matches.length !== 1 || matches[0].kind !== 'file')
++            failures.push(name + ' must appear exactly once as a regular file');
++        else if (matches[0].mode !== mode)
++            failures.push(name + ' has ' + octal(matches[0].mode) + ', expected ' + octal(mode));
++    }
++    assert.equal(failures.length, 0, 'LINUX_PERMANENT_MEMBER_MODE: ' + failures.join('; '));
++}
++
++export async function verifyLinuxPermanentDirectoryModes(directory) {
++    assert.ok((await lstat(directory)).isDirectory(), 'Linux package root must be a directory.');
++    assert.ok(
++        (await lstat(path.join(directory, 'resources'))).isDirectory(),
++        'Linux package resources must be a directory.',
++    );
++    const members = [];
++    for (const name of required.keys()) {
++        try {
++            const member = await lstat(path.join(directory, name));
++            members.push({
++                path: name,
++                kind: member.isFile() ? 'file' : 'other',
++                mode: member.mode & 0o7777,
++            });
++        } catch (error) {
++            if (error.code !== 'ENOENT') throw error;
++        }
++    }
++    assertLinuxPermanentMemberModes(members);
++}
++
++const statOptions = { bigint: true };
++const identity = (stat) => [
++    stat.dev,
++    stat.ino,
++    stat.mode,
++    stat.nlink,
++    stat.size,
++    stat.mtimeNs,
++    stat.ctimeNs,
++];
++
++/**
++ * Read the original archive headers, before any extraction can mask their mode.
++ * A supplied expected identity is for callers with independent custody evidence.
++ * During ordinary build verification, a first pass measures the same open file.
++ * The optional consumer receives that descriptor, still at offset zero.
++ * @param {string} file
++ * @param {{expected?: {bytes: number, sha256: string}, consume?: (fd: number, root: string) => void | Promise<void>}} [options]
++ */
++export async function readLinuxTarPermanentMembers(file, { expected, consume } = {}) {
++    const before = await lstat(file, statOptions);
++    assert.ok(
++        before.isFile() &&
++            before.nlink === 1n &&
++            before.size > 0n &&
++            before.size <= BigInt(LINUX_ARCHIVE_LIMITS.compressed),
++        'Invalid Linux archive file.',
++    );
++    const bytes = Number(before.size);
++    const snapshot = identity(before);
++    const handle = await open(
++        file,
++        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
++    );
++    try {
++        assert.deepEqual(
++            identity(await handle.stat(statOptions)),
++            snapshot,
++            'Linux archive changed.',
++        );
++        const startedMs = performance.now();
++        const window = linuxObservationWindow({
++            requestId: randomBytes(16).toString('hex'),
++            startedMs,
++            deadlineMs: startedMs + 120000,
++            now: () => performance.now(),
++        });
++        async function* chunks() {
++            const buffer = Buffer.alloc(LINUX_ARCHIVE_LIMITS.chunk);
++            let at = 0;
++            while (at < bytes) {
++                window.check();
++                const { bytesRead } = await handle.read(
++                    buffer,
++                    0,
++                    Math.min(buffer.length, bytes - at),
++                    at,
++                );
++                window.check();
++                assert.ok(bytesRead > 0, 'Truncated Linux archive.');
++                at += bytesRead;
++                yield buffer.subarray(0, bytesRead);
++            }
++        }
++        if (!expected) {
++            const hash = createHash('sha256');
++            for await (const chunk of chunks()) hash.update(chunk);
++            expected = { bytes, sha256: hash.digest('hex') };
++        }
++        assert.equal(bytes, expected.bytes, 'Linux archive size changed.');
++        const census = await observeLinuxGzipTar(chunks(), expected, window);
++        const mapped = normalizeLinuxPackagerCensus(census, path.basename(file));
++        const entries = mapped.payloadEntries.filter((entry) => required.has(entry.path));
++        assert.deepEqual(
++            identity(await handle.stat(statOptions)),
++            snapshot,
++            'Linux archive changed.',
++        );
++        if (consume) {
++            assertLinuxPermanentMemberModes(entries);
++            await consume(handle.fd, mapped.rootName);
++            assert.deepEqual(
++                identity(await handle.stat(statOptions)),
++                snapshot,
++                'Linux archive changed.',
++            );
++        }
++        assert.deepEqual(
++            identity(await lstat(file, statOptions)),
++            snapshot,
++            'Linux archive path changed.',
++        );
++        return entries;
++    } finally {
++        await handle.close();
++    }
++}
+diff --git a/scripts/lib/linux-review-after-pack.cjs b/scripts/lib/linux-review-after-pack.cjs
+index b57f62c743ece94abe3cfa359a411b02263761d4..85ef4796e6aa51c0655cf287223f128d4f331426 100644
+--- a/scripts/lib/linux-review-after-pack.cjs
++++ b/scripts/lib/linux-review-after-pack.cjs
+@@ -5,6 +5,13 @@ const path = require('node:path');
+ // Concrete build-time writer; never called by module import or the pure tests' default path.
+ const same = (a, b) =>
+     ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'].every((key) => a[key] === b[key]);
++// These are the original members with exact mode requirements in the permanent envelope.
++const exactPermanentMembers = new Set([
++    'linux-installed-AppRun',
++    'linux-setup-bootstrap.cjs',
++    'linux-setup-install.cjs',
++    'diagnostic_hub_rename_noreplace.node',
++]);
+ const disk = {
+     async readBundle(file, limit) {
+         const before = await fs.lstat(file);
+@@ -46,6 +53,7 @@ const disk = {
+         const directory = await fs.lstat(parent);
+         if (!directory.isDirectory() || directory.mode & 0o7022)
+             throw Error('LINUX_REVIEW_OUTPUT_DIRECTORY');
++        const exactMode = exactPermanentMembers.has(path.basename(file));
+         // Exclusive creation. On failure retain this new partial file; no overwrite/unlink fallback.
+         const fd = await fs.open(
+             file,
+@@ -54,10 +62,12 @@ const disk = {
+                 constants.O_EXCL |
+                 constants.O_NOFOLLOW |
+                 constants.O_NONBLOCK,
+-            mode,
++            exactMode ? mode & 0o600 : mode,
+         );
+         try {
+             await fd.writeFile(bytes);
++            // The creator's umask must not change these four archived member modes.
++            if (exactMode) await fd.chmod(mode);
+             await fd.sync();
+             const observed = Buffer.alloc(bytes.length + 1);
+             let count = 0;
+@@ -73,6 +83,7 @@ const disk = {
+                 !held.isFile() ||
+                 held.nlink !== 1 ||
+                 held.size !== bytes.length ||
++                (exactMode && (held.mode & 0o7777) !== mode) ||
+                 !same(held, named) ||
+                 !parentAfter.isDirectory() ||
+                 !['dev', 'ino', 'mode'].every((key) => directory[key] === parentAfter[key]) ||
+diff --git a/scripts/verify-linux-package.mjs b/scripts/verify-linux-package.mjs
+index 089fc7f8128fe07f2e0966a4f862833806b86462..999d50a99af2246849845e828046cfe6fcc541c3 100644
+--- a/scripts/verify-linux-package.mjs
++++ b/scripts/verify-linux-package.mjs
+@@ -1,5 +1,5 @@
+ import assert from 'node:assert/strict';
+-import { readFile, mkdtemp, rm, readdir } from 'node:fs/promises';
++import { readFile, mkdir, mkdtemp, rm, readdir } from 'node:fs/promises';
+ import { spawnSync } from 'node:child_process';
+ import { existsSync } from 'node:fs';
+ import { tmpdir } from 'node:os';
+@@ -8,6 +8,10 @@ import { listPackage, extractFile } from '@electron/asar';
+ import { validateLinuxReviewCapability, reviewBundleHash } from './lib/linux-review-package.mjs';
+ import { LINUX_ASSET, LINUX_ARCHIVE } from './lib/release-assets.mjs';
+ import { verifyDesktopPackageBundles } from './lib/desktop-package-bundles.mjs';
++import {
++    readLinuxTarPermanentMembers,
++    verifyLinuxPermanentDirectoryModes,
++} from './lib/linux-permanent-member-modes.mjs';
+ 
+ const directory = path.resolve(process.argv[2] ?? 'release');
+ const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-linux-package-'));
+@@ -63,7 +67,23 @@ async function verifyBundle(root) {
+     assert.equal(executable.readUInt16LE(18), 62, 'Executable must be x86_64.');
+ }
+ try {
+-    if (existsSync(unpacked)) await verifyBundle(unpacked);
++    if (existsSync(unpacked)) {
++        await verifyLinuxPermanentDirectoryModes(unpacked);
++        await verifyBundle(unpacked);
++    }
++    await readLinuxTarPermanentMembers(path.join(directory, LINUX_ARCHIVE), {
++        async consume(archiveFd, archiveRoot) {
++            const archiveDirectory = path.join(temporary, 'archive');
++            await mkdir(archiveDirectory);
++            const extraction = spawnSync(
++                'tar',
++                ['--no-same-owner', '--no-same-permissions', '-xzf', '-', '-C', archiveDirectory],
++                { stdio: [archiveFd, 'pipe', 'pipe'], encoding: 'utf8' },
++            );
++            assert.equal(extraction.status, 0, extraction.stderr);
++            await verifyBundle(path.join(archiveDirectory, archiveRoot));
++        },
++    });
+     const image = path.join(directory, LINUX_ASSET);
+     const extraction = spawnSync(image, ['--appimage-extract'], {
+         cwd: temporary,
+@@ -75,48 +95,10 @@ try {
+         (await readFile(path.join(appdir, 'AppRun'))).equals(launcher),
+         'AppImage launcher must match the reviewed launcher.',
+     );
++    await verifyLinuxPermanentDirectoryModes(appdir);
+     await verifyBundle(appdir);
+-    const entries = spawnSync('tar', ['-tzf', path.join(directory, LINUX_ARCHIVE)], {
+-        encoding: 'utf8',
+-    });
+-    assert.equal(entries.status, 0, entries.stderr);
+-    for (const entry of entries.stdout.trim().split('\n')) {
+-        assert.ok(
+-            !entry.startsWith('/') && !entry.split('/').includes('..'),
+-            'Unsafe archive path.',
+-        );
+-    }
+-    const archiveDirectory = path.join(temporary, 'archive');
+-    const { mkdir } = await import('node:fs/promises');
+-    await mkdir(archiveDirectory);
+-    const archiveExtraction = spawnSync(
+-        'tar',
+-        [
+-            '--no-same-owner',
+-            '--no-same-permissions',
+-            '-xzf',
+-            path.join(directory, LINUX_ARCHIVE),
+-            '-C',
+-            archiveDirectory,
+-        ],
+-        { encoding: 'utf8' },
+-    );
+-    assert.equal(archiveExtraction.status, 0, archiveExtraction.stderr);
+-    const candidates = [
+-        archiveDirectory,
+-        ...(await readdir(archiveDirectory)).map((file) => path.join(archiveDirectory, file)),
+-    ];
+-    const root = candidates.find((candidate) => {
+-        try {
+-            return Boolean(extractFile(path.join(candidate, 'resources/app.asar'), 'package.json'));
+-        } catch {
+-            return false;
+-        }
+-    });
+-    assert.ok(root, 'Missing application inside Linux archive.');
+-    await verifyBundle(root);
+     console.log(
+-        'Linux AppImage/archive verified: current renderer/backend/icons, ELF64 architecture and sandbox-preserving launcher.',
++        'Linux AppImage/archive verified: current renderer/backend/icons, ELF64 architecture, permanent-installer modes and sandbox-preserving launcher.',
+     );
+ } finally {
+     await rm(temporary, { recursive: true, force: true });
+diff --git a/tests/linux-permanent-member-modes.test.ts b/tests/linux-permanent-member-modes.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..5eeda92d0bd88dbf606f2ff827d2ca7472a37b4c
+--- /dev/null
++++ b/tests/linux-permanent-member-modes.test.ts
+@@ -0,0 +1,308 @@
++import assert from 'node:assert/strict';
++import { spawnSync } from 'node:child_process';
++import { createHash } from 'node:crypto';
++import { readSync } from 'node:fs';
++import {
++    chmod,
++    lstat,
++    mkdir,
++    mkdtemp,
++    rename,
++    rm,
++    symlink,
++    unlink,
++    writeFile,
++} from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import { test, type TestContext } from 'node:test';
++import { gzipSync } from 'node:zlib';
++import {
++    assertLinuxPermanentMemberModes,
++    readLinuxTarPermanentMembers,
++    verifyLinuxPermanentDirectoryModes,
++} from '../scripts/lib/linux-permanent-member-modes.mjs';
++
++const rootName = 'Diagnostic-Hub-linux-x64';
++const archiveName = rootName + '.tar.gz';
++type Member = { path: string; kind: 'file' | 'directory'; mode?: number };
++const linuxOnly = { skip: process.platform !== 'linux' };
++const required = [
++    { path: 'resources/linux-installed-AppRun', kind: 'file', mode: 0o755 },
++    { path: 'resources/linux-setup-bootstrap.cjs', kind: 'file', mode: 0o644 },
++    { path: 'resources/linux-setup-install.cjs', kind: 'file', mode: 0o644 },
++    { path: 'resources/diagnostic_hub_rename_noreplace.node', kind: 'file', mode: 0o644 },
++] satisfies Array<Member & { mode: number }>;
++const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
++
++async function fixture(context: TestContext) {
++    const directory = await mkdtemp(path.join(tmpdir(), 'hub-permanent-mode-fixture-'));
++    context.after(() => rm(directory, { recursive: true, force: true }));
++    return directory;
++}
++
++async function populate(directory: string) {
++    await mkdir(path.join(directory, 'resources'));
++    for (const member of required) {
++        const destination = path.join(directory, member.path);
++        await writeFile(destination, 'inert\n', { flag: 'wx' });
++        await chmod(destination, member.mode);
++    }
++}
++
++function tarEntry(member: Member) {
++    const header = Buffer.alloc(512);
++    const data = member.kind === 'directory' ? Buffer.alloc(0) : Buffer.from('inert\n');
++    const field = (value: string, from: number, width: number) =>
++        header.write(String(value), from, width, 'ascii');
++    const number = (value: number, from: number, width: number) =>
++        field(value.toString(8).padStart(width - 1, '0'), from, width);
++    field(member.path, 0, 100);
++    if (member.mode !== undefined) number(member.mode, 100, 8);
++    number(0, 108, 8);
++    number(0, 116, 8);
++    number(data.length, 124, 12);
++    number(0, 136, 12);
++    header.fill(32, 148, 156);
++    field(member.kind === 'directory' ? '5' : '0', 156, 1);
++    field('ustar\0', 257, 6);
++    field('00', 263, 2);
++    number(
++        header.reduce((sum, byte) => sum + byte, 0),
++        148,
++        8,
++    );
++    return [header, data, Buffer.alloc((512 - (data.length % 512)) % 512)];
++}
++
++async function archive(directory: string, files: Member[], wrapper = rootName) {
++    const entries: Member[] = [
++        { path: wrapper, kind: 'directory', mode: 0o755 },
++        { path: wrapper + '/resources', kind: 'directory', mode: 0o755 },
++        ...files.map((entry) => ({ ...entry, path: wrapper + '/' + entry.path })),
++    ];
++    const raw = gzipSync(Buffer.concat([...entries.flatMap(tarEntry), Buffer.alloc(1024)]));
++    const file = path.join(directory, archiveName);
++    await writeFile(file, raw);
++    return { file, expected: { bytes: raw.length, sha256: hash(raw) } };
++}
++
++const wrongMode = (entry: Member) => (entry.mode === 0o755 ? 0o700 : 0o600);
++
++test('accepts exact modes on a real inert staging tree', linuxOnly, async (context) => {
++    const directory = await fixture(context);
++    await populate(directory);
++    await verifyLinuxPermanentDirectoryModes(directory);
++});
++
++test('refuses the wrong mode on each staged member', linuxOnly, async (context) => {
++    const directory = await fixture(context);
++    await populate(directory);
++    for (const member of required) {
++        const file = path.join(directory, member.path);
++        await chmod(file, wrongMode(member));
++        await assert.rejects(
++            verifyLinuxPermanentDirectoryModes(directory),
++            (error: Error) =>
++                error.message.includes('LINUX_PERMANENT_MEMBER_MODE') &&
++                error.message.includes(member.path),
++        );
++        await chmod(file, member.mode);
++    }
++});
++
++test(
++    'refuses each missing member and refuses a symlink in its place',
++    linuxOnly,
++    async (context) => {
++        const directory = await fixture(context);
++        await populate(directory);
++        for (const member of required) {
++            const file = path.join(directory, member.path);
++            await unlink(file);
++            await assert.rejects(
++                verifyLinuxPermanentDirectoryModes(directory),
++                /must appear exactly once/,
++            );
++            await symlink(path.join(directory, 'inert-target'), file);
++            await assert.rejects(
++                verifyLinuxPermanentDirectoryModes(directory),
++                /must appear exactly once/,
++            );
++            await unlink(file);
++            await writeFile(file, 'inert\n');
++            await chmod(file, member.mode);
++        }
++    },
++);
++
++test('refuses a linked resources directory', linuxOnly, async (context) => {
++    const directory = await fixture(context);
++    await populate(directory);
++    await rename(path.join(directory, 'resources'), path.join(directory, 'inert-target'));
++    await symlink('inert-target', path.join(directory, 'resources'));
++    await assert.rejects(
++        verifyLinuxPermanentDirectoryModes(directory),
++        /resources must be a directory/,
++    );
++});
++
++test(
++    'accepts original archive modes with an independently supplied digest',
++    linuxOnly,
++    async (context) => {
++        const { file, expected } = await archive(await fixture(context), required);
++        const entries = await readLinuxTarPermanentMembers(file, { expected });
++        assertLinuxPermanentMemberModes(entries);
++        assert.equal(entries.length, required.length);
++    },
++);
++
++test(
++    'ordinary pre-checksum verification hands the same accepted descriptor to its consumer',
++    linuxOnly,
++    async (context) => {
++        const { file } = await archive(await fixture(context), required);
++        let called = false;
++        await readLinuxTarPermanentMembers(file, {
++            consume(fd, wrapper) {
++                const magic = Buffer.alloc(2);
++                assert.equal(readSync(fd, magic, 0, 2, null), 2);
++                assert.equal(magic.toString('hex'), '1f8b');
++                assert.equal(wrapper, rootName);
++                called = true;
++            },
++        });
++        assert.ok(called);
++    },
++);
++
++test(
++    'refuses each original wrong mode and skips extraction callback',
++    linuxOnly,
++    async (context) => {
++        const directory = await fixture(context);
++        for (const member of required) {
++            const { file } = await archive(
++                directory,
++                required.map((item) =>
++                    item.path === member.path ? { ...item, mode: wrongMode(item) } : item,
++                ),
++            );
++            await assert.rejects(
++                readLinuxTarPermanentMembers(file, {
++                    consume: () => assert.fail('unexpected consumer'),
++                }),
++                (error: Error) =>
++                    error.message.includes(member.path) && error.message.includes('expected'),
++            );
++        }
++    },
++);
++
++test('refuses each absent archive member before extraction', linuxOnly, async (context) => {
++    const directory = await fixture(context);
++    for (const member of required) {
++        const { file } = await archive(
++            directory,
++            required.filter((item) => item.path !== member.path),
++        );
++        await assert.rejects(
++            readLinuxTarPermanentMembers(file, {
++                consume: () => assert.fail('unexpected consumer'),
++            }),
++            (error: Error) =>
++                error.message.includes(member.path) &&
++                error.message.includes('must appear exactly once'),
++        );
++    }
++});
++
++test('refuses an archive header whose mode field is empty', linuxOnly, async (context) => {
++    const directory = await fixture(context);
++    const { file } = await archive(directory, [
++        { ...required[0], mode: undefined },
++        ...required.slice(1),
++    ]);
++    await assert.rejects(
++        readLinuxTarPermanentMembers(file, { consume: () => assert.fail('unexpected consumer') }),
++        /ARCHIVE_LAYOUT_INVALID/,
++    );
++});
++
++test('refuses duplicate entries and a wrong root', linuxOnly, async (context) => {
++    const directory = await fixture(context);
++    const { file } = await archive(directory, [...required, required[0]]);
++    await assert.rejects(readLinuxTarPermanentMembers(file), /ARCHIVE_LAYOUT_INVALID/);
++    await archive(directory, required, 'Inert-Wrong-Root');
++    await assert.rejects(readLinuxTarPermanentMembers(file), /LINUX_ARCHIVE_WRAPPER/);
++});
++
++test('refuses a wrong supplied archive hash or size', linuxOnly, async (context) => {
++    const { file, expected } = await archive(await fixture(context), required);
++    await assert.rejects(
++        readLinuxTarPermanentMembers(file, {
++            expected: { ...expected, sha256: '0'.repeat(64) },
++        }),
++        /ARCHIVE_FINAL_INVALID/,
++    );
++    await assert.rejects(
++        readLinuxTarPermanentMembers(file, {
++            expected: { ...expected, bytes: expected.bytes + 1 },
++        }),
++        /Linux archive size changed/,
++    );
++});
++
++test('refuses a path replacement during consumption', linuxOnly, async (context) => {
++    const { file } = await archive(await fixture(context), required);
++    await assert.rejects(
++        readLinuxTarPermanentMembers(file, {
++            async consume() {
++                await rename(file, file + '.old');
++                await writeFile(file, 'replacement', { flag: 'wx' });
++            },
++        }),
++        /Linux archive (path )?changed/,
++    );
++});
++
++test(
++    'the install producer preserves declared modes for the permanent members under umask 0077',
++    linuxOnly,
++    async (context) => {
++        const directory = await fixture(context);
++        await mkdir(path.join(directory, 'resources'));
++        const inputs: Record<string, string> = {};
++        for (const key of ['entry', 'bootstrap', 'native', 'launcher', 'installedLauncher']) {
++            const file = path.join(directory, key);
++            await writeFile(file, 'inert\n', { mode: 0o600, flag: 'wx' });
++            inputs[key] = file;
++        }
++        const producer = new URL('../scripts/lib/linux-review-after-pack.cjs', import.meta.url);
++        const child = spawnSync(
++            process.execPath,
++            [
++                '--input-type=module',
++                '-e',
++                `import assert from 'node:assert/strict';
++            process.umask(0o077);
++            const { default: producer } = await import(process.argv[1]);
++            await producer.createInstallPackager()(JSON.parse(process.argv[2]));
++            assert.equal(process.umask(), 0o077);`,
++                producer.href,
++                JSON.stringify({ appOutDir: directory, ...inputs }),
++            ],
++            { encoding: 'utf8', timeout: 10000 },
++        );
++        assert.ifError(child.error);
++        assert.equal(child.status, 0, child.stderr);
++        await verifyLinuxPermanentDirectoryModes(directory);
++        assert.equal(
++            (await lstat(path.join(directory, 'resources/linux-setup-install.sh'))).mode & 0o7777,
++            0o700,
++        );
++        for (const file of Object.values(inputs))
++            assert.equal((await lstat(file)).mode & 0o7777, 0o600);
++    },
++);
+diff --git a/tsconfig.json b/tsconfig.json
+index 60decebb3e04158cacf75f29ba0cfeb40fc1431c..a1d543bd61ab87dba6b716cb12f227a9f9e1021c 100644
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -1,7 +1,12 @@
+ {
+     "compilerOptions": {
+         "target": "ES2022",
+-        "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
++        "lib": [
++            "ES2022",
++            "DOM",
++            "DOM.Iterable",
++            "DOM.AsyncIterable"
++        ],
+         "module": "ESNext",
+         "moduleResolution": "Bundler",
+         "allowImportingTsExtensions": true,
+@@ -10,7 +15,9 @@
+         "noEmit": true,
+         "esModuleInterop": true,
+         "skipLibCheck": true,
+-        "types": ["node"],
++        "types": [
++            "node"
++        ],
+         "allowJs": true,
+         "resolveJsonModule": true
+     },
+@@ -24,5 +31,8 @@
+         "tests",
+         "*.ts",
+         "*.mts"
++    ],
++    "files": [
++        ".linux-package-inputs/electron.d.ts"
+     ]
+ }

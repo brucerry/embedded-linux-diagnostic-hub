@@ -1,0 +1,219 @@
+{
+  "distinctArchives": 14,
+  "guestMediaTransportImplemented": false,
+  "lifecycleHooks": false,
+  "packages": {
+    "node_modules/@electron/asar": {
+      "archiveBytes": 25591,
+      "archiveSHA256": "c4e6ce52ade617c57913382f04512e9f4084dd2b3fde5f32639d8bcf42796102",
+      "dependencies": {
+        "commander": "node_modules/commander",
+        "glob": "node_modules/glob",
+        "minimatch": "node_modules/@electron/asar/node_modules/minimatch"
+      },
+      "sri": "sha512-i4/rNPRS84t0vSRa2HorerGRXWyF4vThfHesw0dmcWHp+cspK743UanA0suA5Q5y8kzY2y6YKrvbIUn69BCAiA==",
+      "url": "https://registry.npmjs.org/@electron/asar/-/asar-3.4.1.tgz",
+      "version": "3.4.1"
+    },
+    "node_modules/@electron/asar/node_modules/balanced-match": {
+      "archiveBytes": 2668,
+      "archiveSHA256": "d854f7abdd0c7a8120cf381e0ad5f972cbd0255f5d987424bd672c8c4fcebcc1",
+      "dependencies": {},
+      "sri": "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==",
+      "url": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz",
+      "version": "1.0.2"
+    },
+    "node_modules/@electron/asar/node_modules/brace-expansion": {
+      "archiveBytes": 7924,
+      "archiveSHA256": "d56cc19743e0521ebe46964412a5a4b247749036de7af3a9f78dd384f58fdb56",
+      "dependencies": {
+        "balanced-match": "node_modules/@electron/asar/node_modules/balanced-match",
+        "concat-map": "node_modules/concat-map"
+      },
+      "sri": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+      "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
+      "version": "1.1.21"
+    },
+    "node_modules/@electron/asar/node_modules/minimatch": {
+      "archiveBytes": 12860,
+      "archiveSHA256": "d81817ecf72de3c8c5d3724407752d943c9e1a42af5c437d9cb923be8a72c648",
+      "dependencies": {
+        "brace-expansion": "node_modules/@electron/asar/node_modules/brace-expansion"
+      },
+      "sri": "sha512-VgjWUsnnT6n+NUk6eZq77zeFdpW2LWDzP6zFGrCbHXiYNul5Dzqk2HHQ5uFH2DNW5Xbp8+jVzaeNt94ssEEl4w==",
+      "url": "https://registry.npmjs.org/minimatch/-/minimatch-3.1.5.tgz",
+      "version": "3.1.5"
+    },
+    "node_modules/commander": {
+      "archiveBytes": 28908,
+      "archiveSHA256": "c2e7c6dc8c54e4159bf2e65b314f595d1c7ee98f7529b4b6ef1d0979b4834564",
+      "dependencies": {},
+      "sri": "sha512-P0CysNDQ7rtVw4QIQtm+MRxV66vKFSvlsQvGYXZWR3qFU0jlMKHZZZgw8e+8DSah4UDKMqnknRDQz+xuQXQ/Zg==",
+      "url": "https://registry.npmjs.org/commander/-/commander-5.1.0.tgz",
+      "version": "5.1.0"
+    },
+    "node_modules/concat-map": {
+      "archiveBytes": 2263,
+      "archiveSHA256": "35902dd620cf0058c49ea614120f18a889d984269a90381b7622e79c2cfe4261",
+      "dependencies": {},
+      "sri": "sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==",
+      "url": "https://registry.npmjs.org/concat-map/-/concat-map-0.0.1.tgz",
+      "version": "0.0.1"
+    },
+    "node_modules/fs.realpath": {
+      "archiveBytes": 4434,
+      "archiveSHA256": "9e80cb8713125aa53df81a29626f7b81f26a9be1cd41840b3ccdcae4d52e8f9c",
+      "dependencies": {},
+      "sri": "sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==",
+      "url": "https://registry.npmjs.org/fs.realpath/-/fs.realpath-1.0.0.tgz",
+      "version": "1.0.0"
+    },
+    "node_modules/glob": {
+      "archiveBytes": 15444,
+      "archiveSHA256": "f0a38eb1318c06cb55dc28f3f32d2df7379e155cefc6a1e5ecc7a0ddad194381",
+      "dependencies": {
+        "fs.realpath": "node_modules/fs.realpath",
+        "inflight": "node_modules/inflight",
+        "inherits": "node_modules/inherits",
+        "minimatch": "node_modules/glob/node_modules/minimatch",
+        "once": "node_modules/once",
+        "path-is-absolute": "node_modules/path-is-absolute"
+      },
+      "sri": "sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==",
+      "url": "https://registry.npmjs.org/glob/-/glob-7.2.3.tgz",
+      "version": "7.2.3"
+    },
+    "node_modules/glob/node_modules/balanced-match": {
+      "archiveBytes": 2668,
+      "archiveSHA256": "d854f7abdd0c7a8120cf381e0ad5f972cbd0255f5d987424bd672c8c4fcebcc1",
+      "dependencies": {},
+      "sri": "sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==",
+      "url": "https://registry.npmjs.org/balanced-match/-/balanced-match-1.0.2.tgz",
+      "version": "1.0.2"
+    },
+    "node_modules/glob/node_modules/brace-expansion": {
+      "archiveBytes": 7924,
+      "archiveSHA256": "d56cc19743e0521ebe46964412a5a4b247749036de7af3a9f78dd384f58fdb56",
+      "dependencies": {
+        "balanced-match": "node_modules/glob/node_modules/balanced-match",
+        "concat-map": "node_modules/concat-map"
+      },
+      "sri": "sha512-9zeA+KLZNNzglF2TPKRQEDyx6Yby7daAkuy8MiPzpXPsYDWi/DRM8jmwUDxokQjYqBpv5DgPiwD4h4ZZSy1Ujw==",
+      "url": "https://registry.npmjs.org/brace-expansion/-/brace-expansion-1.1.21.tgz",
+      "version": "1.1.21"
+    },
+    "node_modules/glob/node_modules/minimatch": {
+      "archiveBytes": 12860,
+      "archiveSHA256": "d81817ecf72de3c8c5d3724407752d943c9e1a42af5c437d9cb923be8a72c648",
+      "dependencies": {
+        "brace-expansion": "node_modules/glob/node_modules/brace-expansion"
+      },
+      "sri": "sha512-VgjWUsnnT6n+NUk6eZq77zeFdpW2LWDzP6zFGrCbHXiYNul5Dzqk2HHQ5uFH2DNW5Xbp8+jVzaeNt94ssEEl4w==",
+      "url": "https://registry.npmjs.org/minimatch/-/minimatch-3.1.5.tgz",
+      "version": "3.1.5"
+    },
+    "node_modules/inflight": {
+      "archiveBytes": 2041,
+      "archiveSHA256": "5a9fdcf59874af6ad3b413b6815d5afaaea34939a3bee20e1e50f7830031889b",
+      "dependencies": {
+        "once": "node_modules/once",
+        "wrappy": "node_modules/wrappy"
+      },
+      "sri": "sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==",
+      "url": "https://registry.npmjs.org/inflight/-/inflight-1.0.6.tgz",
+      "version": "1.0.6"
+    },
+    "node_modules/inherits": {
+      "archiveBytes": 2030,
+      "archiveSHA256": "d94dbc6c1bb3c5ac0fb12a73ade187108fc60de273a1b754f55044eb5e24afaf",
+      "dependencies": {},
+      "sri": "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==",
+      "url": "https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz",
+      "version": "2.0.4"
+    },
+    "node_modules/once": {
+      "archiveBytes": 1979,
+      "archiveSHA256": "cf51460ba370c698f68b976e514d113497339ba018b6003e8e8eb569c6fccfcf",
+      "dependencies": {
+        "wrappy": "node_modules/wrappy"
+      },
+      "sri": "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==",
+      "url": "https://registry.npmjs.org/once/-/once-1.4.0.tgz",
+      "version": "1.4.0"
+    },
+    "node_modules/path-is-absolute": {
+      "archiveBytes": 1882,
+      "archiveSHA256": "6e6d709f1a56942514e4e2c2709b30c7b1ffa46fbed70e714904a3d63b01f75c",
+      "dependencies": {},
+      "sri": "sha512-AVbw3UJ2e9bq64vSaS9Am0fje1Pa8pbGqTTsmXfaIiMpnr5DlDhfJOuLj9Sf95ZPVDAUerDfEk88MPmPe7UCQg==",
+      "url": "https://registry.npmjs.org/path-is-absolute/-/path-is-absolute-1.0.1.tgz",
+      "version": "1.0.1"
+    },
+    "node_modules/semver": {
+      "archiveBytes": 29399,
+      "archiveSHA256": "d85045d4300d7d57c891336b95df532e73f34c22ffcd222452b6d08b9d127d5d",
+      "dependencies": {},
+      "sri": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
+      "url": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+      "version": "7.8.5"
+    },
+    "node_modules/wrappy": {
+      "archiveBytes": 1676,
+      "archiveSHA256": "aff3730d91b7b1e143822956d14608f563163cf11b9d0ae602df1fe1e430fdfb",
+      "dependencies": {},
+      "sri": "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==",
+      "url": "https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz",
+      "version": "1.0.2"
+    }
+  },
+  "placements": 17,
+  "profileLinuxLockSHA256": "6eda133d8af11aae5e896876515130792e781f2054d071e2f68a9bcc4272b64c",
+  "profileSourceManifestSHA256": "e9678eef7ba7cf35f0c24db231ec6a99e39a5966274c0807ce57f30c456da8e4",
+  "rawRegistryArchiveUpperBytes": 162551,
+  "source": {
+    "folder-envelope.mjs": {
+      "bytes": 4280,
+      "sha256": "a7eb7ac62363015c8ef9ba7e3d6555fb230b635c458e20afaa8810f53e45c3c8"
+    },
+    "package.json": {
+      "bytes": 8664,
+      "sha256": "5b64dcf2466f4da2da7d790f2312959c9f53f7aa9274091268faba5ac0362285"
+    },
+    "scripts/lib/linux-archive-members.mjs": {
+      "bytes": 15516,
+      "gitBlob": "a951148723b59ce66ce4579fcb8c643a860e8749",
+      "sha256": "2fe87a75f393db9e35642f34831aac6180009448c0f0487465b7342d12bbcc1d"
+    },
+    "scripts/lib/linux-build-record.mjs": {
+      "bytes": 7994,
+      "gitBlob": "38c318452f773e574a14fc2740d59e2dcf9f4d2d",
+      "sha256": "be4a7b703744d2d0427174270b985942b5b3fbc7609f4e892d27165dd5ecc589"
+    },
+    "scripts/lib/linux-release-observation.mts": {
+      "bytes": 17533,
+      "gitBlob": "426cc65561d6f869cd1c20e5881ce9c41d1c09d6",
+      "sha256": "e906341ba6cf75d0aedb9ec83a2d48000059ea39019e9346ba800c824d4db54f"
+    },
+    "scripts/lib/linux-review-package.mjs": {
+      "bytes": 4481,
+      "gitBlob": "e65b2a1f9f8ac8a02f16c571a082df71da629937",
+      "sha256": "d4c50b7c92b68870ed91d2fd4f117dfed3d92828478a1fa1beadf88d6aa21563"
+    },
+    "scripts/lib/linux-setup-envelope-disk.mjs": {
+      "bytes": 32318,
+      "gitBlob": "c09f0a76274bd5e6f7379dfa95d8f1dacd4495f4",
+      "sha256": "120bf599269136d69575d63fa237e8e52c9f27752b6da2db47b5569f2edafdc9"
+    },
+    "scripts/lib/linux-setup-envelope.ts": {
+      "bytes": 13837,
+      "gitBlob": "70cf2bbcf68fd0e8c8308fe4a64d161d4afcc9d7",
+      "sha256": "7afbdaf57a822edfbe8b8044732928553c4c77d4529f037571f3f41e71a9e3b8"
+    },
+    "shared/installation.ts": {
+      "bytes": 10093,
+      "gitBlob": "3b08df0fe8ef3b1a230c014c07a48099b98926bd",
+      "sha256": "0959e80f9916ed08c2ff6f2c54f750bdc2a1e19c2dc988b9a83b4c567d166a7d"
+    }
+  },
+  "sourceFilesRead": 9
+}
