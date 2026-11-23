@@ -2,15 +2,16 @@
 import json
 import re
 
-from actor_wire import STAGES as ACTOR_STAGES, complete, relayed
+from actor_wire import INSTALL_BOUNDARY, STAGES as ACTOR_STAGES, complete, relayed
 from transition_seed import boot_evidence, seed as provisioning_seed
 from wire import EXTRA, PHASES
 
 STAGES = ('guest_identity','readonly_media','guest_product_capacity',
           'guest_account','realized_helpers','native_install_removal')
 OBSERVATIONS = ('boot_exec','guest_kernel','guest_nocloud','guest_sentinel',
-                'guest_loopback','guest_poweroff',*PHASES,*STAGES,*ACTOR_STAGES,*EXTRA)
-REQUIRED = tuple(key for key in OBSERVATIONS if key not in EXTRA and key not in ACTOR_STAGES)
+                'guest_loopback','guest_poweroff',*PHASES,*STAGES,*ACTOR_STAGES,*EXTRA,INSTALL_BOUNDARY)
+REQUIRED = tuple(key for key in OBSERVATIONS if key not in EXTRA and key not in ACTOR_STAGES
+                 and key != INSTALL_BOUNDARY)
 PROVISION_PREFIX = b'HUB_NOBLE_PROVISION '
 FOLDER_PREFIX = b'HUB_NOBLE_FOLDER '
 SERIAL_LIMIT = 256 * 1024

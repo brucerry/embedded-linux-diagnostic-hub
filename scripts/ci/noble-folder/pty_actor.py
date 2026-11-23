@@ -1,5 +1,5 @@
 """Two fixed installer operations on a private PTY. Importing never starts a process."""
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import errno
 import os
@@ -11,6 +11,7 @@ import termios
 from time import monotonic
 
 import consent
+from actor_wire import INSTALL_BOUNDARY
 from loader_gate import need
 from filesystem import UUID4
 
@@ -46,11 +47,27 @@ class Receipt:
     pt_eof: bool
 
 
+@contextmanager
+def install_exit_boundary(operation):
+    boundary = 'deadline'
+
+    def observe(value):
+        nonlocal boundary
+        boundary = value
+
+    try:
+        yield observe
+    except Exception as error:
+        if operation == 'install':
+            setattr(error, INSTALL_BOUNDARY, boundary)
+        raise
+
+
 def pump(port, operation, profile, deadline, *, now=monotonic, phase=nullcontext):
     """One positive write after an entire exact prompt. A failed port remains adopted."""
     need(operation in TAIL, 'pty-fixed-operation')
     scope = 'actor_install' if operation == 'install' else 'actor_uninstall'
-    with phase(scope+'_exit'):
+    with phase(scope+'_exit'), install_exit_boundary(operation) as boundary:
         limit = min(deadline, now() + OP_SECONDS)
         prompt = bytearray()
         tail = bytearray()
@@ -60,14 +77,18 @@ def pump(port, operation, profile, deadline, *, now=monotonic, phase=nullcontext
         result = None
         owner = None
         while not (eof and result is not None):
+            boundary('deadline')
             need(now() < limit, 'pty-deadline-retained')
+            boundary('process-observation')
             result = port.poll_exit()
+            boundary('read')
             packet = port.read(eof, min(0.05, limit - now()))
             if packet is None:
                 continue
             if packet == b'':
                 eof = True
                 continue
+            boundary('frame')
             need(type(packet) is bytes and not eof, 'pty-packet')
             if sent:
                 tail.extend(packet)
@@ -77,17 +98,26 @@ def pump(port, operation, profile, deadline, *, now=monotonic, phase=nullcontext
             need(len(prompt) <= PROMPT_CAP, 'pty-prompt-cap')
             if consent.TAIL.encode() not in prompt:
                 continue
+            boundary('prompt')
             word, selected_profile = consent.consent(operation, bytes(prompt), installed_profile=profile)
             need(re.fullmatch(re.escape(consent.PROFILE) + UUID4, selected_profile), 'pty-profile-v4')
+            boundary('child-exited-before-consent' if result is not None else 'deadline')
             need(result is None and now() < limit, 'pty-child-exited-before-consent')
+            boundary('prompt-owner')
             owner = port.assert_prompt_owner(operation)
             need(type(owner) is tuple and len(owner) == 2 and
                  all(type(value) is int and value > 0 for value in owner), 'pty-child-identity')
             sent = True  # A partial/error write can never be retried.
+            boundary('consent-write')
             need(port.write_once(word) == len(word), 'pty-consent-write-retained')
         valid = sent and result == 0 and tail.replace(b'\r\n', b'\n') == TAIL[operation]
         if not valid:
+            boundary('failure-closure')
             port.close_observed(eof,result)
+            if result != 0:
+                boundary('child-signal' if result < 0 else 'child-nonzero')
+            else:
+                boundary('completion-mismatch' if sent else 'prompt-unseen')
             need(False,'pty-exact-completion')
     with phase(scope+'_closure'):
         port.close_observed(eof,result)

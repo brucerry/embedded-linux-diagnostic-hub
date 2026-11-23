@@ -1,7 +1,7 @@
 name: Noble same-attempt folder install qualification
 on:
   push:
-    branches: [ci/v060-linux-noble-qemu-folder-boot-reporting-20261123]
+    branches: [ci/v060-linux-noble-qemu-folder-install-boundary-20261123]
     paths:
       - '.github/workflows/v060-linux-noble-qemu-folder-install.yml'
       - 'scripts/ci/linux-two-format/**'
@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          printf '%s  %s\n' '2752dc41ec41d492063dc1f6f77ca46220665bc6ec9650323e36181a556d125c' scripts/ci/noble-folder/CONTROL-PINS.txt | /usr/bin/sha256sum --check --strict --status
+          printf '%s  %s\n' '92a04c4eebd6600da36ac5fdca5ec6e8e77e90023e28aec87b8614a11319f9a8' scripts/ci/noble-folder/CONTROL-PINS.txt | /usr/bin/sha256sum --check --strict --status
           /usr/bin/sha256sum --check --strict --status scripts/ci/noble-folder/CONTROL-PINS.txt
           /usr/bin/python3 -B -E scripts/ci/noble-folder/folder_job.py
       - name: Context / ${{ steps.folder.outputs.context || 'unreached' }}
@@ -202,6 +202,9 @@ jobs:
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Actor install exit / ${{ steps.folder.outputs.actor_install_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor install failure boundary / ${{ steps.folder.outputs.actor_install_boundary || 'unobserved' }}
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Actor install closure / ${{ steps.folder.outputs.actor_install_closure || 'unreached' }}

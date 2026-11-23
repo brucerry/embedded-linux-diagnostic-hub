@@ -239,12 +239,12 @@ class Guest:
         self.started=True
         argv=['/usr/bin/setpriv','--reuid=1000','--regid=1000','--clear-groups','--no-new-privs',
               '/usr/bin/python3.12','-I','-B',str(BASE/'guest_entry.py'),str(BASE/'attempt.json'),self.bind_sha]
-        from actor_wire import CAP,child,complete
+        from actor_wire import CAP,child,complete,relay_values
         code,out,err=command(argv,self.until,545,cap=CAP)
         verdicts,success=child(out,self.nonce)
         need(not err and ((code==0)==success),'guest-native-actor-result')
         with open('/dev/ttyS0','w') as port:
-            for name,value in verdicts.items():
+            for name,value in relay_values(verdicts):
                 print(f'HUB_NOBLE_ACTOR {self.nonce} {name} {value}',file=port,flush=True)
         need(success and complete(verdicts),'guest-native-actor-result')
         self.network()

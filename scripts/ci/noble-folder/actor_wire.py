@@ -13,6 +13,14 @@ SUCCESS = 'original-custody loader-closure install-pty installed-readback uninst
 CAP = 2048
 CHILD_PREFIX = b'HUB_ACTOR_STAGE '
 RELAY_PREFIX = b'HUB_NOBLE_ACTOR '
+INSTALL_EXIT = 'actor_install_exit'
+INSTALL_BOUNDARY = 'actor_install_boundary'
+INSTALL_REFUSALS = (
+    'deadline', 'process-observation', 'read', 'frame', 'prompt', 'prompt-unseen',
+    'prompt-owner', 'consent-write', 'child-exited-before-consent', 'child-nonzero',
+    'child-signal', 'completion-mismatch', 'failure-closure',
+)
+REFUSAL_WORDS = {b'fail-' + value.encode('ascii'): value for value in INSTALL_REFUSALS}
 
 
 def need(valid, label):
@@ -25,8 +33,13 @@ def stage(name):
     need(name in STAGES, 'actor-stage-name')
     try:
         yield
-    except BaseException:
-        print(f'HUB_ACTOR_STAGE {name} fail', flush=True)
+    except BaseException as error:
+        verdict = 'fail'
+        if name == INSTALL_EXIT:
+            boundary = getattr(error, INSTALL_BOUNDARY, None)
+            if boundary in INSTALL_REFUSALS:
+                verdict += '-' + boundary
+        print(f'HUB_ACTOR_STAGE {name} {verdict}', flush=True)
         raise
     else:
         print(f'HUB_ACTOR_STAGE {name} pass', flush=True)
@@ -40,9 +53,25 @@ def states(rows, prefix):
         need(index < len(STAGES) and 'fail' not in verdicts.values(), 'actor-stage-boundary')
         name = STAGES[index]
         start = prefix+name.encode('ascii')+b' '
-        need(row in (start+b'pass',start+b'fail'), 'actor-stage-frame')
-        verdicts[name] = row[len(start):].decode('ascii')
+        need(row.startswith(start), 'actor-stage-frame')
+        word = row[len(start):]
+        if name == INSTALL_EXIT and word in REFUSAL_WORDS:
+            verdicts[name] = 'fail'
+            verdicts[INSTALL_BOUNDARY] = REFUSAL_WORDS[word]
+        else:
+            need(word in (b'pass', b'fail'), 'actor-stage-frame')
+            verdicts[name] = word.decode('ascii')
     return verdicts
+
+
+def relay_values(verdicts):
+    """Re-encode the validated extra field only as a closed suffix on the failed stage."""
+    boundary = verdicts.get(INSTALL_BOUNDARY)
+    if boundary is not None:
+        need(boundary in INSTALL_REFUSALS and verdicts.get(INSTALL_EXIT) == 'fail', 'actor-relay-boundary')
+    for name, value in verdicts.items():
+        if name != INSTALL_BOUNDARY:
+            yield name, value + '-' + boundary if name == INSTALL_EXIT and boundary is not None else value
 
 
 def complete(verdicts):
