@@ -1,0 +1,541 @@
+name: Noble constrained inert APT witness
+on:
+  push:
+    branches: [ci/v060-noble-qemu-apt-architecture-tables-20261123]
+    paths:
+      - '.github/workflows/v060-noble-qemu-folder-venue.yml'
+      - 'scripts/ci/noble-venue/**'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  venue:
+    if: ${{ github.event.created && !github.event.forced && !github.event.deleted && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Start bounded venue clock
+        run: printf 'VENUE_JOB_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Checkout reviewed venue files
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/v060-noble-qemu-folder-venue.yml
+            /scripts/ci/noble-venue/
+      - id: witness
+        name: Run gated inert APT transition
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          sha256sum -c --status <<'PINS'
+          917e7f99449e9267892f2d60a9329d8f63abdea44f44c883c9a3805ce76ce594  scripts/ci/noble-venue/GUEST-TOOLS.json
+          bab31cbbe0e4b4cf8c2cb976571147be182d5ebda2fea9afbe03635debf61fb3  scripts/ci/noble-venue/GUEST-TRANSACTION.json
+          f95e0e11ba9eac53b256de6102dd10c3e28401ae04a611d0a181f13f6a6418c1  scripts/ci/noble-venue/guest.py
+          3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/noble-venue/readonly_iso.py
+          dd5df1aa76f01c9bb3922036de97f62c1435bbf49678fe008eba08782e02b364  scripts/ci/noble-venue/stand-in.b64
+          40515617f1022f41854a22280368ee158a6ca01c221be8c61896f3f4f2a14a1a  scripts/ci/noble-venue/transition_media.py
+          8f3db32f90ff291f2a557bbd4f8fe6fceb7e1ca2cc0d643542f046d6b194a91a  scripts/ci/noble-venue/transition_seed.py
+          44a02e4065f312ef26e087d23110201d26b0007e96931f327113053abfe04152  scripts/ci/noble-venue/venue-inputs.json
+          9cdd70e814c5383b6bfd6cf70c55506743dfd8a5546cfb0e51c46b97174ba46e  scripts/ci/noble-venue/venue-loader.sh
+          29f043b5db8754a52008a91e840456757b91194056982fc914d0776fd08b265f  scripts/ci/noble-venue/venue-worker.sh
+          7d71dee82b902ccaf355a79427c9a86ab7018e57be0d93a86d7c16ca6deb4d6e  scripts/ci/noble-venue/venue.py
+          7a49535d06b5b0c21802b6142cf1ec331aaef947e57e22d899c5b4bf88d61e77  scripts/ci/noble-venue/venue_seed.py
+          PINS
+          /usr/bin/python3 -E -B scripts/ci/noble-venue/venue.py
+      - name: Exact signed 67-package bodies / ${{ steps.witness.outputs.apt_fixed_signed_package_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Closed read-only package and inert supervisor media / ${{ steps.witness.outputs.apt_readonly_media_sealed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest read-only media and exact archive bytes / ${{ steps.witness.outputs.apt_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Signed real state and private fake dpkg database / ${{ steps.witness.outputs.apt_signed_baseline || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Start exact setpriv and Python worker / ${{ steps.witness.outputs.apt_worker_start || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Bounded worker receipt and exit agreement / ${{ steps.witness.outputs.apt_worker_wire || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Effective worker UID GID groups capabilities and NNP / ${{ steps.witness.outputs.apt_worker_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact guest tool control digest / ${{ steps.witness.outputs.apt_tool_control_pin || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Running stock kernel and tool roster identity / ${{ steps.witness.outputs.apt_stock_kernel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Stock tool and configuration bytes paths and modes / ${{ steps.witness.outputs.apt_stock_objects || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Stock library aliases and ELF interpreter / ${{ steps.witness.outputs.apt_stock_aliases || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Private process output limit / ${{ steps.witness.outputs.apt_output_limit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: x86_64 Landlock ABI at least four / ${{ steps.witness.outputs.apt_landlock_abi || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Create exact filesystem and TCP ruleset / ${{ steps.witness.outputs.apt_landlock_ruleset || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Bind stock tool and configuration rules / ${{ steps.witness.outputs.apt_landlock_stock_paths || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Bind read-only optical and private runtime rules / ${{ steps.witness.outputs.apt_landlock_runtime_paths || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Apply Landlock before any probes / ${{ steps.witness.outputs.apt_landlock_enforcement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Real package tools shell and database unreadable / ${{ steps.witness.outputs.apt_excluded_reads || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Kernel denies negative executable / ${{ steps.witness.outputs.apt_excluded_exec || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Pinned stand-in refuses synthetic unpack / ${{ steps.witness.outputs.apt_standin_selftest || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact APT configuration and inert dpkg path / ${{ steps.witness.outputs.apt_configuration || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Private dpkg journal and three lock probes / ${{ steps.witness.outputs.apt_private_locks || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Bounded inert APT command returned / ${{ steps.witness.outputs.apt_capture || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact 67 local file acquisition completions / ${{ steps.witness.outputs.apt_local_acquisition || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exactly one inert unpack refusal marker / ${{ steps.witness.outputs.apt_unpack_marker || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT reports exit 100 and exact stand-in exit 73 / ${{ steps.witness.outputs.apt_unpack_refusal || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Real and private dpkg databases unchanged / ${{ steps.witness.outputs.apt_databases_unchanged || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact first-attempt runner context
+        if: ${{ always() && steps.witness.outputs.context != '' && steps.witness.outputs.context != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.context }}
+        run: test "$RESULT" = pass
+      - name: Stock Docker and backing before public intake
+        if: ${{ always() && steps.witness.outputs.pre_intake != '' && steps.witness.outputs.pre_intake != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.pre_intake }}
+        run: test "$RESULT" = pass
+      - name: Pull pinned public Noble OCI image
+        if: ${{ always() && steps.witness.outputs.oci_pull != '' && steps.witness.outputs.oci_pull != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.oci_pull }}
+        run: test "$RESULT" = pass
+      - name: Noble OCI config identity and platform
+        if: ${{ always() && steps.witness.outputs.oci_identity != '' && steps.witness.outputs.oci_identity != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.oci_identity }}
+        run: test "$RESULT" = pass
+      - name: All 55 public inputs match size and digest
+        if: ${{ always() && steps.witness.outputs.public_intake != '' && steps.witness.outputs.public_intake != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.public_intake }}
+        run: test "$RESULT" = pass
+      - name: Exact Canonical DEB member paths and digests
+        if: ${{ always() && steps.witness.outputs.members != '' && steps.witness.outputs.members != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.members }}
+        run: test "$RESULT" = pass
+      - name: Canonical detached signature signer and date
+        if: ${{ always() && steps.witness.outputs.guest_signature != '' && steps.witness.outputs.guest_signature != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_signature }}
+        run: test "$RESULT" = pass
+      - name: Unique signed guest checksum row
+        if: ${{ always() && steps.witness.outputs.guest_signed_row != '' && steps.witness.outputs.guest_signed_row != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_signed_row }}
+        run: test "$RESULT" = pass
+      - name: Private tool and NoCloud input seals
+        if: ${{ always() && steps.witness.outputs.sealed_inputs != '' && steps.witness.outputs.sealed_inputs != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.sealed_inputs }}
+        run: test "$RESULT" = pass
+      - name: Backing and memory after staging
+        if: ${{ always() && steps.witness.outputs.post_intake != '' && steps.witness.outputs.post_intake != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.post_intake }}
+        run: test "$RESULT" = pass
+      - name: Create one private preparation worker
+        if: ${{ always() && steps.witness.outputs.prepare_create != '' && steps.witness.outputs.prepare_create != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_create }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker identity and configured limits
+        if: ${{ always() && steps.witness.outputs.prepare_config != '' && steps.witness.outputs.prepare_config != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_config }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker exact configured binds
+        if: ${{ always() && steps.witness.outputs.prepare_mounts != '' && steps.witness.outputs.prepare_mounts != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_mounts }}
+        run: test "$RESULT" = pass
+      - name: Bounded preparation attach transcript
+        if: ${{ always() && steps.witness.outputs.prepare_attach != '' && steps.witness.outputs.prepare_attach != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_attach }}
+        run: test "$RESULT" = pass
+      - name: Preparation Bash entry point reached
+        if: ${{ always() && steps.witness.outputs.prepare_shell != '' && steps.witness.outputs.prepare_shell != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_shell }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker nonroot identity and loopback
+        if: ${{ always() && steps.witness.outputs.prepare_identity != '' && steps.witness.outputs.prepare_identity != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_identity }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker effective mounts and kernel restrictions
+        if: ${{ always() && steps.witness.outputs.prepare_isolation != '' && steps.witness.outputs.prepare_isolation != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_isolation }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker fixture and guest input seals
+        if: ${{ always() && steps.witness.outputs.prepare_seals != '' && steps.witness.outputs.prepare_seals != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_seals }}
+        run: test "$RESULT" = pass
+      - name: Preparation loader wrapper and empty private output ready
+        if: ${{ always() && steps.witness.outputs.prepare_ready != '' && steps.witness.outputs.prepare_ready != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_ready }}
+        run: test "$RESULT" = pass
+      - name: genisoimage loader command completed
+        if: ${{ always() && steps.witness.outputs.tool_1_list != '' && steps.witness.outputs.tool_1_list != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_1_list }}
+        run: test "$RESULT" = pass
+      - name: genisoimage exact resolved loader map
+        if: ${{ always() && steps.witness.outputs.tool_1_map != '' && steps.witness.outputs.tool_1_map != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_1_map }}
+        run: test "$RESULT" = pass
+      - name: isoinfo loader command completed
+        if: ${{ always() && steps.witness.outputs.tool_2_list != '' && steps.witness.outputs.tool_2_list != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_2_list }}
+        run: test "$RESULT" = pass
+      - name: isoinfo exact resolved loader map
+        if: ${{ always() && steps.witness.outputs.tool_2_map != '' && steps.witness.outputs.tool_2_map != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_2_map }}
+        run: test "$RESULT" = pass
+      - name: qemu-img loader command completed
+        if: ${{ always() && steps.witness.outputs.tool_3_list != '' && steps.witness.outputs.tool_3_list != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_3_list }}
+        run: test "$RESULT" = pass
+      - name: qemu-img exact resolved loader map
+        if: ${{ always() && steps.witness.outputs.tool_3_map != '' && steps.witness.outputs.tool_3_map != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_3_map }}
+        run: test "$RESULT" = pass
+      - name: qemu-system-x86_64 loader command completed
+        if: ${{ always() && steps.witness.outputs.tool_4_list != '' && steps.witness.outputs.tool_4_list != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_4_list }}
+        run: test "$RESULT" = pass
+      - name: qemu-system-x86_64 exact resolved loader map
+        if: ${{ always() && steps.witness.outputs.tool_4_map != '' && steps.witness.outputs.tool_4_map != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.tool_4_map }}
+        run: test "$RESULT" = pass
+      - name: Exact read-only NoCloud seed
+        if: ${{ always() && steps.witness.outputs.seed != '' && steps.witness.outputs.seed != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.seed }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker finished bounded overlay
+        if: ${{ always() && steps.witness.outputs.overlay_worker != '' && steps.witness.outputs.overlay_worker != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.overlay_worker }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker exit and exact transcript
+        if: ${{ always() && steps.witness.outputs.prepare_exit != '' && steps.witness.outputs.prepare_exit != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_exit }}
+        run: test "$RESULT" = pass
+      - name: Preparation worker retired before guest boot
+        if: ${{ always() && steps.witness.outputs.prepare_retired != '' && steps.witness.outputs.prepare_retired != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.prepare_retired }}
+        run: test "$RESULT" = pass
+      - name: Exact bounded disposable overlay
+        if: ${{ always() && steps.witness.outputs.overlay != '' && steps.witness.outputs.overlay != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.overlay }}
+        run: test "$RESULT" = pass
+      - name: Backing before no-NIC guest boot
+        if: ${{ always() && steps.witness.outputs.pre_boot != '' && steps.witness.outputs.pre_boot != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.pre_boot }}
+        run: test "$RESULT" = pass
+      - name: Create one private no-NIC boot worker
+        if: ${{ always() && steps.witness.outputs.boot_create != '' && steps.witness.outputs.boot_create != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_create }}
+        run: test "$RESULT" = pass
+      - name: Boot worker identity and configured limits
+        if: ${{ always() && steps.witness.outputs.boot_config != '' && steps.witness.outputs.boot_config != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_config }}
+        run: test "$RESULT" = pass
+      - name: Boot worker exact configured binds
+        if: ${{ always() && steps.witness.outputs.boot_mounts != '' && steps.witness.outputs.boot_mounts != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_mounts }}
+        run: test "$RESULT" = pass
+      - name: Bounded boot attach transcript
+        if: ${{ always() && steps.witness.outputs.boot_attach != '' && steps.witness.outputs.boot_attach != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_attach }}
+        run: test "$RESULT" = pass
+      - name: Boot worker reached QEMU exec boundary
+        if: ${{ always() && steps.witness.outputs.boot_exec != '' && steps.witness.outputs.boot_exec != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_exec }}
+        run: test "$RESULT" = pass
+      - name: Guest Linux kernel reached serial console
+        if: ${{ always() && steps.witness.outputs.guest_kernel != '' && steps.witness.outputs.guest_kernel != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_kernel }}
+        run: test "$RESULT" = pass
+      - name: Guest cloud-init finished with NoCloud seed
+        if: ${{ always() && steps.witness.outputs.guest_nocloud != '' && steps.witness.outputs.guest_nocloud != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_nocloud }}
+        run: test "$RESULT" = pass
+      - name: Exact nonce-bound guest callback began
+        if: ${{ always() && steps.witness.outputs.guest_sentinel != '' && steps.witness.outputs.guest_sentinel != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_sentinel }}
+        run: test "$RESULT" = pass
+      - name: Nonce-bound guest loopback-only readback
+        if: ${{ always() && steps.witness.outputs.guest_loopback != '' && steps.witness.outputs.guest_loopback != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_loopback }}
+        run: test "$RESULT" = pass
+      - name: Guest kernel reported normal poweroff
+        if: ${{ always() && steps.witness.outputs.guest_poweroff != '' && steps.witness.outputs.guest_poweroff != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.guest_poweroff }}
+        run: test "$RESULT" = pass
+      - name: QEMU and boot worker clean terminal exit
+        if: ${{ always() && steps.witness.outputs.boot_exit != '' && steps.witness.outputs.boot_exit != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_exit }}
+        run: test "$RESULT" = pass
+      - name: Attached boot stderr empty
+        if: ${{ always() && steps.witness.outputs.boot_stderr != '' && steps.witness.outputs.boot_stderr != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_stderr }}
+        run: test "$RESULT" = pass
+      - name: Owned boot worker retired
+        if: ${{ always() && steps.witness.outputs.boot_retired != '' && steps.witness.outputs.boot_retired != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.boot_retired }}
+        run: test "$RESULT" = pass
+      - name: Boot attach deadline refused
+        if: ${{ always() && steps.witness.outputs.boot_attach_deadline == 'fail' }}
+        run: exit 1
+      - name: Boot attach output bound refused
+        if: ${{ always() && steps.witness.outputs.boot_attach_output_bound == 'fail' }}
+        run: exit 1
+      - name: Backing and guest output bounds after poweroff
+        if: ${{ always() && steps.witness.outputs.post_boot != '' && steps.witness.outputs.post_boot != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.post_boot }}
+        run: test "$RESULT" = pass
+      - name: Owned workers and scratch retired
+        if: ${{ always() && steps.witness.outputs.retirement != '' && steps.witness.outputs.retirement != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.retirement }}
+        run: test "$RESULT" = pass
+      - name: Input genisoimage / ${{ steps.witness.outputs.input_01 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_01, 'fail_') }}
+        run: exit 1
+      - name: Input libaio1t64 / ${{ steps.witness.outputs.input_02 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_02, 'fail_') }}
+        run: exit 1
+      - name: Input libblkid1 / ${{ steps.witness.outputs.input_03 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_03, 'fail_') }}
+        run: exit 1
+      - name: Input libbpf1 / ${{ steps.witness.outputs.input_04 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_04, 'fail_') }}
+        run: exit 1
+      - name: Input libbz2-1.0 / ${{ steps.witness.outputs.input_05 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_05, 'fail_') }}
+        run: exit 1
+      - name: Input libc6 / ${{ steps.witness.outputs.input_06 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_06, 'fail_') }}
+        run: exit 1
+      - name: Input libcap2 / ${{ steps.witness.outputs.input_07 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_07, 'fail_') }}
+        run: exit 1
+      - name: Input libdaxctl1 / ${{ steps.witness.outputs.input_08 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_08, 'fail_') }}
+        run: exit 1
+      - name: Input libelf1t64 / ${{ steps.witness.outputs.input_09 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_09, 'fail_') }}
+        run: exit 1
+      - name: Input libfdt1 / ${{ steps.witness.outputs.input_10 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_10, 'fail_') }}
+        run: exit 1
+      - name: Input libffi8 / ${{ steps.witness.outputs.input_11 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_11, 'fail_') }}
+        run: exit 1
+      - name: Input libfuse3-3 / ${{ steps.witness.outputs.input_12 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_12, 'fail_') }}
+        run: exit 1
+      - name: Input libglib2.0-0t64 / ${{ steps.witness.outputs.input_13 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_13, 'fail_') }}
+        run: exit 1
+      - name: Input libgmp10 / ${{ steps.witness.outputs.input_14 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_14, 'fail_') }}
+        run: exit 1
+      - name: Input libgnutls30t64 / ${{ steps.witness.outputs.input_15 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_15, 'fail_') }}
+        run: exit 1
+      - name: Input libhogweed6t64 / ${{ steps.witness.outputs.input_16 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_16, 'fail_') }}
+        run: exit 1
+      - name: Input libibverbs1 / ${{ steps.witness.outputs.input_17 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_17, 'fail_') }}
+        run: exit 1
+      - name: Input libidn2-0 / ${{ steps.witness.outputs.input_18 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_18, 'fail_') }}
+        run: exit 1
+      - name: Input libjpeg-turbo8 / ${{ steps.witness.outputs.input_19 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_19, 'fail_') }}
+        run: exit 1
+      - name: Input libkmod2 / ${{ steps.witness.outputs.input_20 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_20, 'fail_') }}
+        run: exit 1
+      - name: Input liblzma5 / ${{ steps.witness.outputs.input_21 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_21, 'fail_') }}
+        run: exit 1
+      - name: Input libmagic1t64 / ${{ steps.witness.outputs.input_22 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_22, 'fail_') }}
+        run: exit 1
+      - name: Input libmount1 / ${{ steps.witness.outputs.input_23 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_23, 'fail_') }}
+        run: exit 1
+      - name: Input libndctl6 / ${{ steps.witness.outputs.input_24 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_24, 'fail_') }}
+        run: exit 1
+      - name: Input libnettle8t64 / ${{ steps.witness.outputs.input_25 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_25, 'fail_') }}
+        run: exit 1
+      - name: Input libnl-3-200 / ${{ steps.witness.outputs.input_26 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_26, 'fail_') }}
+        run: exit 1
+      - name: Input libnl-route-3-200 / ${{ steps.witness.outputs.input_27 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_27, 'fail_') }}
+        run: exit 1
+      - name: Input libnuma1 / ${{ steps.witness.outputs.input_28 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_28, 'fail_') }}
+        run: exit 1
+      - name: Input libp11-kit0 / ${{ steps.witness.outputs.input_29 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_29, 'fail_') }}
+        run: exit 1
+      - name: Input libpcre2-8-0 / ${{ steps.witness.outputs.input_30 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_30, 'fail_') }}
+        run: exit 1
+      - name: Input libpixman-1-0 / ${{ steps.witness.outputs.input_31 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_31, 'fail_') }}
+        run: exit 1
+      - name: Input libpmem1 / ${{ steps.witness.outputs.input_32 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_32, 'fail_') }}
+        run: exit 1
+      - name: Input libpng16-16t64 / ${{ steps.witness.outputs.input_33 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_33, 'fail_') }}
+        run: exit 1
+      - name: Input librdmacm1t64 / ${{ steps.witness.outputs.input_34 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_34, 'fail_') }}
+        run: exit 1
+      - name: Input libsasl2-2 / ${{ steps.witness.outputs.input_35 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_35, 'fail_') }}
+        run: exit 1
+      - name: Input libseccomp2 / ${{ steps.witness.outputs.input_36 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_36, 'fail_') }}
+        run: exit 1
+      - name: Input libselinux1 / ${{ steps.witness.outputs.input_37 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_37, 'fail_') }}
+        run: exit 1
+      - name: Input libslirp0 / ${{ steps.witness.outputs.input_38 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_38, 'fail_') }}
+        run: exit 1
+      - name: Input libssl3t64 / ${{ steps.witness.outputs.input_39 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_39, 'fail_') }}
+        run: exit 1
+      - name: Input libtasn1-6 / ${{ steps.witness.outputs.input_40 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_40, 'fail_') }}
+        run: exit 1
+      - name: Input libudev1 / ${{ steps.witness.outputs.input_41 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_41, 'fail_') }}
+        run: exit 1
+      - name: Input libunistring5 / ${{ steps.witness.outputs.input_42 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_42, 'fail_') }}
+        run: exit 1
+      - name: Input liburing2 / ${{ steps.witness.outputs.input_43 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_43, 'fail_') }}
+        run: exit 1
+      - name: Input libuuid1 / ${{ steps.witness.outputs.input_44 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_44, 'fail_') }}
+        run: exit 1
+      - name: Input libzstd1 / ${{ steps.witness.outputs.input_45 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_45, 'fail_') }}
+        run: exit 1
+      - name: Input ovmf / ${{ steps.witness.outputs.input_46 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_46, 'fail_') }}
+        run: exit 1
+      - name: Input qemu-system-common / ${{ steps.witness.outputs.input_47 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_47, 'fail_') }}
+        run: exit 1
+      - name: Input qemu-system-data / ${{ steps.witness.outputs.input_48 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_48, 'fail_') }}
+        run: exit 1
+      - name: Input qemu-system-x86 / ${{ steps.witness.outputs.input_49 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_49, 'fail_') }}
+        run: exit 1
+      - name: Input qemu-utils / ${{ steps.witness.outputs.input_50 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_50, 'fail_') }}
+        run: exit 1
+      - name: Input ubuntu-keyring / ${{ steps.witness.outputs.input_51 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_51, 'fail_') }}
+        run: exit 1
+      - name: Input zlib1g / ${{ steps.witness.outputs.input_52 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_52, 'fail_') }}
+        run: exit 1
+      - name: Input Canonical SHA256SUMS / ${{ steps.witness.outputs.input_53 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_53, 'fail_') }}
+        run: exit 1
+      - name: Input Canonical SHA256SUMS.gpg / ${{ steps.witness.outputs.input_54 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_54, 'fail_') }}
+        run: exit 1
+      - name: Input Canonical Noble guest image / ${{ steps.witness.outputs.input_55 }}
+        if: ${{ always() && startsWith(steps.witness.outputs.input_55, 'fail_') }}
+        run: exit 1

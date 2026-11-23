@@ -1,0 +1,178 @@
+{
+  "aliases": {
+    "/usr/lib/x86_64-linux-gnu/libapt-pkg.so.6.0": "/usr/lib/x86_64-linux-gnu/libapt-pkg.so.6.0.0",
+    "/usr/lib/x86_64-linux-gnu/libapt-private.so.0.0": "/usr/lib/x86_64-linux-gnu/libapt-private.so.0.0.0",
+    "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0": "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
+    "/usr/lib/x86_64-linux-gnu/libcap.so.2": "/usr/lib/x86_64-linux-gnu/libcap.so.2.66",
+    "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20": "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20.4.3",
+    "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0": "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0.34.0",
+    "/usr/lib/x86_64-linux-gnu/liblz4.so.1": "/usr/lib/x86_64-linux-gnu/liblz4.so.1.9.4",
+    "/usr/lib/x86_64-linux-gnu/liblzma.so.5": "/usr/lib/x86_64-linux-gnu/liblzma.so.5.4.5",
+    "/usr/lib/x86_64-linux-gnu/libseccomp.so.2": "/usr/lib/x86_64-linux-gnu/libseccomp.so.2.5.5",
+    "/usr/lib/x86_64-linux-gnu/libstdc++.so.6": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33",
+    "/usr/lib/x86_64-linux-gnu/libsystemd.so.0": "/usr/lib/x86_64-linux-gnu/libsystemd.so.0.38.0",
+    "/usr/lib/x86_64-linux-gnu/libudev.so.1": "/usr/lib/x86_64-linux-gnu/libudev.so.1.7.8",
+    "/usr/lib/x86_64-linux-gnu/libxxhash.so.0": "/usr/lib/x86_64-linux-gnu/libxxhash.so.0.8.2",
+    "/usr/lib/x86_64-linux-gnu/libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+    "/usr/lib/x86_64-linux-gnu/libzstd.so.1": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5"
+  },
+  "config": {
+    "/etc/group": {
+      "mode": 420,
+      "sha256": "034a0092d819f6aa9e37d91c7a841905dc13c3ca2ed1529f4d5d0e2380fa8ea7",
+      "size": 783
+    },
+    "/etc/nsswitch.conf": {
+      "mode": 420,
+      "sha256": "b953df1d0016f515fc052ca6bb0ccd092b8d13c8789c51c4eaef2b0461574e57",
+      "size": 526
+    },
+    "/etc/passwd": {
+      "mode": 420,
+      "sha256": "5f42d22f9425274275377af16fb7a973c675e90dae3bb4e8a6f05c2b1f7a595e",
+      "size": 1667
+    },
+    "/usr/share/dpkg/cputable": {
+      "mode": 420,
+      "sha256": "00280a0b55eb3c8b684e506fa1763b9598941e99773405ec797a2c880a65e38f",
+      "size": 2062
+    },
+    "/usr/share/dpkg/tupletable": {
+      "mode": 420,
+      "sha256": "4f1e48cb205df7b58a52d4d8a52bc5a06838965ba1fa1595545c3cca7a41b3b4",
+      "size": 2729
+    }
+  },
+  "executables": [
+    "/usr/bin/apt-config",
+    "/usr/bin/apt-get",
+    "/usr/lib/apt/methods/copy",
+    "/usr/lib/apt/methods/file",
+    "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+  ],
+  "image": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+  "kernel": "6.8.0-147-generic",
+  "kernelConfigSHA256": "cf8454bc2e67effab87a5bff3c39042f2d8d106b6a777c4302e52f50d23b7400",
+  "members": {
+    "/usr/bin/apt-config": {
+      "mode": 493,
+      "sha256": "44ec8b9197670a2c12ed2c6b837dd623c23b641e8c491be03ccefc23dd0fba8c",
+      "size": 31120
+    },
+    "/usr/bin/apt-get": {
+      "mode": 493,
+      "sha256": "eb53b3b66cbb7a90a370e26439e941b7cf146ddd91a5422063c761ce9e59c53b",
+      "size": 51680
+    },
+    "/usr/lib/apt/methods/copy": {
+      "mode": 493,
+      "sha256": "eab0efb9c4b90f35299e8b703d3da0d32f2621e82f00ac9cb0877899c4f3e448",
+      "size": 59872
+    },
+    "/usr/lib/apt/methods/file": {
+      "mode": 493,
+      "sha256": "bf5864959417e354b539fd361ecc1c757312593bf0c8530b36def9bc34f1bd86",
+      "size": 59872
+    },
+    "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+      "mode": 493,
+      "sha256": "c20a2dc8917c755f02b94049356320fe1f62ac7d9f8994731f807d9df39302da",
+      "size": 236616
+    },
+    "/usr/lib/x86_64-linux-gnu/libapt-pkg.so.6.0.0": {
+      "mode": 420,
+      "sha256": "a550bb7ffd9d27ef5034611134a4c3587fcf6aa2e4f5d3353b37fc52dc686780",
+      "size": 2007496
+    },
+    "/usr/lib/x86_64-linux-gnu/libapt-private.so.0.0.0": {
+      "mode": 420,
+      "sha256": "2ae6368a58b406939290afbeeff691e642c91b3a970174ff5763b14af81ab9e0",
+      "size": 424336
+    },
+    "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4": {
+      "mode": 420,
+      "sha256": "cc08c9f50a8009ffd6391e0116a100369b11ca9238fa52392c019e6645b122a1",
+      "size": 78944
+    },
+    "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+      "mode": 493,
+      "sha256": "3a15d66867d83762c7f2f1e37359cb8f6c5743edb369c65285cb0b1c4f7498bf",
+      "size": 2129424
+    },
+    "/usr/lib/x86_64-linux-gnu/libcap.so.2.66": {
+      "mode": 420,
+      "sha256": "6ac6abc86ac891c6e13486470e26f1d939f47fda9e6b5d5508a7f5ec881adc84",
+      "size": 51536
+    },
+    "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1": {
+      "mode": 420,
+      "sha256": "d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb",
+      "size": 183024
+    },
+    "/usr/lib/x86_64-linux-gnu/libgcrypt.so.20.4.3": {
+      "mode": 420,
+      "sha256": "6ad6d7007ee1ad8319eb18ba9a512cf09dda49396a303774c68b47477020bad4",
+      "size": 1345072
+    },
+    "/usr/lib/x86_64-linux-gnu/libgpg-error.so.0.34.0": {
+      "mode": 420,
+      "sha256": "6cb18a007bfcb623029f4528a36b46578fea7dc34c2b505b8e6e0d99e6348cd1",
+      "size": 149760
+    },
+    "/usr/lib/x86_64-linux-gnu/liblz4.so.1.9.4": {
+      "mode": 420,
+      "sha256": "40bffd0a098387368b16b992abd5f7cf43c0fa2f05cabe5a6d483719554adfda",
+      "size": 137440
+    },
+    "/usr/lib/x86_64-linux-gnu/liblzma.so.5.4.5": {
+      "mode": 420,
+      "sha256": "696e868dd0700a19a6d65fc01608ec2d70d3cb91f65710e89180cd2e688f30cb",
+      "size": 202904
+    },
+    "/usr/lib/x86_64-linux-gnu/libm.so.6": {
+      "mode": 420,
+      "sha256": "fce00b6f25f459cf4ae0b7fae4257909a1a8a86f9149e7c029a5d617baf1ccd0",
+      "size": 952616
+    },
+    "/usr/lib/x86_64-linux-gnu/libseccomp.so.2.5.5": {
+      "mode": 420,
+      "sha256": "b4d9140a7797ccf3ac14f5d9d579b64f157111662940cb8330c632b11a8cea8e",
+      "size": 125360
+    },
+    "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33": {
+      "mode": 420,
+      "sha256": "1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11",
+      "size": 2592224
+    },
+    "/usr/lib/x86_64-linux-gnu/libsystemd.so.0.38.0": {
+      "mode": 420,
+      "sha256": "b10be60fc80ea6910df1b253658e638bd29f3d1aeeb3798006fc66972366cb94",
+      "size": 910592
+    },
+    "/usr/lib/x86_64-linux-gnu/libudev.so.1.7.8": {
+      "mode": 420,
+      "sha256": "0d6934adafb2ef3c640382440c14d6bd60f391e688c000796ffcea0c72849269",
+      "size": 207288
+    },
+    "/usr/lib/x86_64-linux-gnu/libxxhash.so.0.8.2": {
+      "mode": 420,
+      "sha256": "a43c43c2fbb643f42572577b6c2514905804f963d186d4d630e184c4015e68a7",
+      "size": 71752
+    },
+    "/usr/lib/x86_64-linux-gnu/libz.so.1.3": {
+      "mode": 420,
+      "sha256": "86200da370f20476a2507e9097a789b5ef97269b4ca8d5e164ad82dab9d99892",
+      "size": 113000
+    },
+    "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5": {
+      "mode": 420,
+      "sha256": "0a2128bc10841fb29e76d08d945864dfb0b6a66da5df6df5d8299197439e54bb",
+      "size": 755864
+    }
+  },
+  "negative": {
+    "mode": 493,
+    "sha256": "8a63c98320173f79e263115e10cefc170155e47d1fd4b5a70e4429d2699cae28",
+    "size": 26936
+  }
+}
