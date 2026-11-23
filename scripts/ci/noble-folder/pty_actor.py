@@ -19,6 +19,7 @@ from filesystem import UUID4
 PROMPT_CAP = 16384
 OUTPUT_CAP = 131072
 OP_SECONDS = 135
+RETAINED_NOTICE = b'Linux setup stopped with retained unresolved ownership. Preserve this process and its artifacts.\n'
 TAIL = {
     'install': b'Linux setup operation completed; previous transaction artifacts remain retained.\n',
     'uninstall-current': b'Linux current no-menu payload removed. Settings, reports, original transaction records and any completed Finalize ledger are retained.\n',
@@ -63,12 +64,29 @@ def install_exit_boundary(operation):
         raise
 
 
+def deadline_position(sent, prompt, tail, profile, eof, result):
+    if sent and eof and result is not None:
+        return 'late-completion'
+    output = tail if sent else prompt
+    if output.replace(b'\r\n', b'\n') == RETAINED_NOTICE:
+        return 'retained-after-consent' if sent else 'retained-before-consent'
+    if not sent:
+        if profile is not None:
+            return 'prompt-matched'
+        return 'unmatched-output' if prompt else 'no-output'
+    if eof:
+        return 'await-exit'
+    return 'await-exit-and-eof' if result is None else 'await-eof'
+
+
 def pump(port, operation, profile, deadline, *, now=monotonic, phase=nullcontext):
     """One positive write after an entire exact prompt. A failed port remains adopted."""
     need(operation in TAIL, 'pty-fixed-operation')
     scope = 'actor_install' if operation == 'install' else 'actor_uninstall'
     with phase(scope+'_exit'), install_exit_boundary(operation) as boundary:
-        limit = min(deadline, now() + OP_SECONDS)
+        operation_end = now() + OP_SECONDS
+        limit = min(deadline, operation_end)
+        source = 'tie' if deadline == operation_end else 'actor' if deadline < operation_end else 'operation'
         prompt = bytearray()
         tail = bytearray()
         sent = False
@@ -76,9 +94,15 @@ def pump(port, operation, profile, deadline, *, now=monotonic, phase=nullcontext
         eof = False
         result = None
         owner = None
+
+        def reject_deadline():
+            position = deadline_position(sent,prompt,tail,selected_profile,eof,result)
+            boundary(f'deadline-{source}-{position}')
+            need(False,'pty-deadline-retained')
+
         while not (eof and result is not None):
-            boundary('deadline')
-            need(now() < limit, 'pty-deadline-retained')
+            if not now() < limit:
+                reject_deadline()
             boundary('process-observation')
             result = port.poll_exit()
             boundary('read')
@@ -101,19 +125,26 @@ def pump(port, operation, profile, deadline, *, now=monotonic, phase=nullcontext
             boundary('prompt')
             word, selected_profile = consent.consent(operation, bytes(prompt), installed_profile=profile)
             need(re.fullmatch(re.escape(consent.PROFILE) + UUID4, selected_profile), 'pty-profile-v4')
-            boundary('child-exited-before-consent' if result is not None else 'deadline')
-            need(result is None and now() < limit, 'pty-child-exited-before-consent')
+            boundary('child-exited-before-consent')
+            need(result is None, 'pty-child-exited-before-consent')
+            if not now() < limit:
+                reject_deadline()
             boundary('prompt-owner')
             owner = port.assert_prompt_owner(operation)
             need(type(owner) is tuple and len(owner) == 2 and
                  all(type(value) is int and value > 0 for value in owner), 'pty-child-identity')
+            if not now() < limit:
+                reject_deadline()
             sent = True  # A partial/error write can never be retried.
             boundary('consent-write')
             need(port.write_once(word) == len(word), 'pty-consent-write-retained')
         valid = sent and result == 0 and tail.replace(b'\r\n', b'\n') == TAIL[operation]
-        if not valid:
+        late_completion = valid and not now() < limit
+        if not valid or late_completion:
             boundary('failure-closure')
             port.close_observed(eof,result)
+            if late_completion:
+                reject_deadline()
             if result != 0:
                 boundary('child-signal' if result < 0 else 'child-nonzero')
             else:

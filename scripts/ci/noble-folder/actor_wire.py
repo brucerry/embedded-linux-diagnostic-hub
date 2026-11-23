@@ -15,11 +15,16 @@ CHILD_PREFIX = b'HUB_ACTOR_STAGE '
 RELAY_PREFIX = b'HUB_NOBLE_ACTOR '
 INSTALL_EXIT = 'actor_install_exit'
 INSTALL_BOUNDARY = 'actor_install_boundary'
+DEADLINE_LIMITS = ('operation', 'actor', 'tie')
+DEADLINE_POSITIONS = (
+    'no-output', 'unmatched-output', 'prompt-matched', 'retained-before-consent',
+    'retained-after-consent', 'await-exit-and-eof', 'await-exit', 'await-eof', 'late-completion',
+)
 INSTALL_REFUSALS = (
     'deadline', 'process-observation', 'read', 'frame', 'prompt', 'prompt-unseen',
     'prompt-owner', 'consent-write', 'child-exited-before-consent', 'child-nonzero',
     'child-signal', 'completion-mismatch', 'failure-closure',
-)
+) + tuple(f'deadline-{limit}-{position}' for limit in DEADLINE_LIMITS for position in DEADLINE_POSITIONS)
 REFUSAL_WORDS = {b'fail-' + value.encode('ascii'): value for value in INSTALL_REFUSALS}
 
 
