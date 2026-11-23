@@ -1,0 +1,181 @@
+name: Linux x64 two-format producer review
+
+on:
+    push:
+        branches: [ci/v060-linux-two-format-reader-pins-20261123]
+        paths: [.github/workflows/v060-linux-two-format-original-verifier.yml]
+
+permissions:
+    contents: read
+
+jobs:
+    two-format:
+        if: ${{ github.event.created && !github.event.deleted && !github.event.forced && github.run_attempt == '1' }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 24
+        steps:
+            - name: Read exact first-attempt controller
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+                  fetch-depth: 1
+            - name: Build and read back both original Linux packages in-worker
+              id: producer
+              run: /usr/bin/python3 -B -E scripts/ci/linux-two-format/host.py
+            - name: Exact runner and first-attempt push context / ${{ steps.producer.outputs.context || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Host backing and pre-staging capacity / ${{ steps.producer.outputs.host_space || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Docker pre-staging capacity / ${{ steps.producer.outputs.host_docker_floor || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Scratch pre-staging capacity / ${{ steps.producer.outputs.host_scratch_floor || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Containerd pre-staging capacity when applicable / ${{ steps.producer.outputs.host_containerd_floor || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Exact source and closed publisher inputs / ${{ steps.producer.outputs.inputs || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Pinned worker and host post-staging capacity / ${{ steps.producer.outputs.image_space || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: One owned worker created / ${{ steps.producer.outputs.created || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Worker containment / ${{ steps.producer.outputs.isolation || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Closed eight-provider reconstruction / ${{ steps.producer.outputs.providers || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Offline install and native staging capacity / ${{ steps.producer.outputs.installed || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Packer loader preload policy / ${{ steps.producer.outputs.packer_preload || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Packer archive members and links / ${{ steps.producer.outputs.packer_members || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Packer stock library and utility identity / ${{ steps.producer.outputs.packer_stock || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Packer exact live loader map / ${{ steps.producer.outputs.packer_loader || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Publisher AppImage packer and live loader readback / ${{ steps.producer.outputs.packer || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Official two-format package command / ${{ steps.producer.outputs.build || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original AppImage runtime prefix and envelope / ${{ steps.producer.outputs.appimage_envelope || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Reader identity and exact live loader map / ${{ steps.producer.outputs.reader_admission || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Independent archive inventories and capacity / ${{ steps.producer.outputs.archive_inventory || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Official original archive extraction and verification / ${{ steps.producer.outputs.archive_verification || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier private temp allocation and ownership / ${{ steps.producer.outputs.verifier_temp_allocate || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original package seals before verification / ${{ steps.producer.outputs.verifier_seal_before || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Independent reader seal before verification / ${{ steps.producer.outputs.verifier_reader_seal || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Official verifier process start / ${{ steps.producer.outputs.verifier_process_start || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier bounded output and EOF / ${{ steps.producer.outputs.verifier_process_capture || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier child exit / ${{ steps.producer.outputs.verifier_process_exit || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier process-tree closure / ${{ steps.producer.outputs.verifier_process_closure || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier ordered diagnostic frame / ${{ steps.producer.outputs.verifier_child_frame || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier empty stderr / ${{ steps.producer.outputs.verifier_child_stderr || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier workspace and launcher input / ${{ steps.producer.outputs.verifier_prepare || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier staged package checks / ${{ steps.producer.outputs.verifier_staged_bundle || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original tar header and permanent modes / ${{ steps.producer.outputs.verifier_tar_headers || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original tar extraction / ${{ steps.producer.outputs.verifier_tar_extract || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Extracted tar payload checks / ${{ steps.producer.outputs.verifier_tar_contents || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original tar identity after extraction / ${{ steps.producer.outputs.verifier_tar_final_identity || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original AppImage extraction command / ${{ steps.producer.outputs.verifier_appimage_extract || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Extracted AppImage payload and mode checks / ${{ steps.producer.outputs.verifier_appimage_contents || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Official verifier extraction cleanup / ${{ steps.producer.outputs.verifier_inner_cleanup || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original package seals after verification / ${{ steps.producer.outputs.verifier_seal_after || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier temp empty after subprocess / ${{ steps.producer.outputs.verifier_temp_empty || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Verifier temp owned retirement / ${{ steps.producer.outputs.verifier_temp_retirement || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original hashes, build record and launcher / ${{ steps.producer.outputs.original_evidence || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original tar.gz member modes and staged bytes / ${{ steps.producer.outputs.tar_original_members || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Original AppImage extraction / ${{ steps.producer.outputs.extraction || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Worker attach and accepted terminal frame / ${{ steps.producer.outputs.attach || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Worker retirement / ${{ steps.producer.outputs.worker_retired || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: Scratch retirement / ${{ steps.producer.outputs.scratch_retired || 'unreached' }}
+              if: ${{ always() }}
+              run: /usr/bin/true
+            - name: tar.gz SHA-256 ${{ steps.producer.outputs.tar_sha256 }}
+              if: ${{ success() && steps.producer.outputs.tar_sha256 != '' }}
+              run: /usr/bin/true
+            - name: AppImage SHA-256 ${{ steps.producer.outputs.appimage_sha256 }}
+              if: ${{ success() && steps.producer.outputs.appimage_sha256 != '' }}
+              run: /usr/bin/true
+            - name: Linux build record SHA-256 ${{ steps.producer.outputs.record_sha256 }}
+              if: ${{ success() && steps.producer.outputs.record_sha256 != '' }}
+              run: /usr/bin/true
+            - name: Linux download helper SHA-256 ${{ steps.producer.outputs.launcher_sha256 }}
+              if: ${{ success() && steps.producer.outputs.launcher_sha256 != '' }}
+              run: /usr/bin/true
