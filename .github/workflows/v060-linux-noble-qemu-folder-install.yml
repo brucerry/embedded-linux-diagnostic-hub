@@ -1,7 +1,7 @@
-name: Noble same-attempt folder install qualification
+name: Noble retained ownership diagnostic (nonqualifying)
 on:
   push:
-    branches: [ci/v060-linux-noble-qemu-folder-deadline-guards-20261123]
+    branches: [ci/v060-linux-noble-qemu-folder-retained-phase-20261123]
     paths:
       - '.github/workflows/v060-linux-noble-qemu-folder-install.yml'
       - 'scripts/ci/linux-two-format/**'
@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          printf '%s  %s\n' 'ad5295958437c2c5a4e411466133c08618c39b3ed0788d243768bda2fa2a6c2c' scripts/ci/noble-folder/CONTROL-PINS.txt | /usr/bin/sha256sum --check --strict --status
+          printf '%s  %s\n' 'dff52e04a748d9c2c54d8e504e1030a1ff3bafa50dd137748cf7a663cc485f1c' scripts/ci/noble-folder/CONTROL-PINS.txt | /usr/bin/sha256sum --check --strict --status
           /usr/bin/sha256sum --check --strict --status scripts/ci/noble-folder/CONTROL-PINS.txt
           /usr/bin/python3 -B -E scripts/ci/noble-folder/folder_job.py
       - name: Context / ${{ steps.folder.outputs.context || 'unreached' }}

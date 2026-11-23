@@ -1,0 +1,106 @@
+--- a/electron/linux-permanent-setup.ts
++++ b/electron/linux-permanent-setup.ts
+@@ -101,6 +101,7 @@
+     object,
+     {
+         phase: string;
++        installRetainedPhase?: InstallRetainedPhase;
+         native?: Awaited<ReturnType<typeof createLinuxNativeHost>>;
+         preparation?: ReturnType<typeof prepareLinuxNativeDriver>;
+         uninstall?: ReturnType<typeof prepareLinuxNativeUninstallDriver>;
+@@ -195,6 +196,42 @@
+         reviewSHA256: linuxModelReviewSHA256(expected),
+     });
+     return runLinuxPermanentSetup(host, choices, dataHome, prompts, desktop, selection);
++}
++
++type InstallRetainedPhase =
++    | 'terminal'
++    | 'review'
++    | 'reservation'
++    | 'space'
++    | 'journal'
++    | 'stage'
++    | 'move'
++    | 'release'
++    | 'unknown';
++
++function installTransactionRetainedPhase(
++    pending: string | null,
++    backend: { code: string; pending: string | null },
++): InstallRetainedPhase {
++    if (
++        pending === 'journal' &&
++        (backend.code === 'NATIVE_SPACE' ||
++            backend.code === 'NATIVE_SPACE_UNSUPPORTED' ||
++            backend.pending === 'statfs')
++    )
++        return 'space';
++    switch (pending) {
++        case 'reserve':
++        case 'current':
++            return 'reservation';
++        case 'journal':
++        case 'stage':
++        case 'move':
++        case 'release':
++            return pending;
++        default:
++            return 'unknown';
++    }
+ }
+ 
+ /** Explicit complete-folder installer. Portable AppRun and the read-only review keep their own entries.
+@@ -456,6 +493,11 @@
+         }
+         state.phase = 'transaction';
+         const result = await state.preparation.run(plan);
++        if (choices.operation === 'install' && result.verdict === 'RETAINED_UNKNOWN')
++            state.installRetainedPhase = installTransactionRetainedPhase(
++                result.pending,
++                state.preparation.diagnostics().backend,
++            );
+         state.phase =
+             result.verdict === 'RETAINED_UNKNOWN'
+                 ? 'retained-unknown'
+@@ -467,6 +509,9 @@
+         state.primarySet = true;
+         state.primary = error; // Preserve Error, undefined and any returned owner without a retry.
+         state.candidate ??= linuxNativeHostFailureCustody(error);
++        if (choices.operation === 'install')
++            state.installRetainedPhase =
++                state.phase === 'prompt' ? 'terminal' : state.phase === 'fresh-review' ? 'review' : 'unknown';
+         state.phase = 'retained-unknown';
+         return Object.freeze({ status: 'retained-unknown', owner });
+     }
+@@ -478,6 +523,7 @@
+     if (!state) throw Error('LINUX_PERMANENT_OWNER');
+     return Object.freeze({
+         phase: state.phase,
++        ...(state.installRetainedPhase ? { installRetainedPhase: state.installRetainedPhase } : {}),
+         primarySet: state.primarySet,
+         native: state.native?.diagnostics(),
+         backend: state.preparation?.diagnostics(),
+--- a/scripts/linux-setup-install.cts
++++ b/scripts/linux-setup-install.cts
+@@ -56,8 +56,19 @@
+         // Keep custody before any best-effort diagnostic can throw. Logging never authorizes exit.
+         setInterval(() => {}, 60000);
+         try {
++            // This fixed line is only for the separately pinned nonqualifying diagnostic variant.
++            const phase = custody.installRetainedPhase ?? (terminal.hasPending() ? 'terminal' : 'unknown');
++            const diagnostic =
++                choices.operation === 'install' &&
++                choices.menu === false &&
++                choices.menuExplicit === true &&
++                choices.terminal === true &&
++                args.includes('--no-launch')
++                    ? `HUB_INSTALL_RETAINED_V1 ${phase}\n`
++                    : '';
+             process.stdout.write(
+-                'Linux setup stopped with retained unresolved ownership. Preserve this process and its artifacts.\n',
++                'Linux setup stopped with retained unresolved ownership. Preserve this process and its artifacts.\n' +
++                    diagnostic,
+             );
+         } catch {
+             // Preserve the existing operation failure and unresolved owners.

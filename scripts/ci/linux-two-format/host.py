@@ -30,7 +30,7 @@ BASE = '5e3c66f4a62e3606abdd650972e0f76b71ff5c54'
 TEXT_TREE = '502caca5bac9c9c3ac8beb70d7b21aa3041f15f7'
 IMAGE = 'docker.io/library/buildpack-deps@sha256:e7fdb09e2aacd2a32875a44be9caa1c18f3098b88620ac6a4bde84c0732c9f87'
 CONFIG = 'sha256:f96221e29033048b6f577864f7718af5626d209f80345dde518058c29b6ce2cd'
-BRANCH = 'refs/heads/ci/v060-linux-noble-qemu-folder-deadline-guards-20261123'
+BRANCH = 'refs/heads/ci/v060-linux-noble-qemu-folder-retained-phase-20261123'
 REPO = 'brucerry/embedded-linux-diagnostic-hub'
 WORKFLOW = '.github/workflows/v060-linux-noble-qemu-folder-install.yml'
 FLOOR = 4 * 1024**3
@@ -236,6 +236,11 @@ def source_stage(destination, checkout, root):
     command(git+['apply','--cached','--whitespace=nowarn',str(verifier_source)],env,8,'verifier-source-patch')
     need(command(git+['write-tree'],env,8,'verifier-source-tree').decode().strip()==
          '82d81d1f241727ada9561386d34dfa72d5f10c20','exact-verifier-source-tree')
+    diagnostic=CONTROL/'patches/NONQUALIFYING-RETAINED-PHASE.patch'
+    need(file_hash(diagnostic)=='a55d70c9a315e9ce9224ac5d8033436a7e62ce92affeef0fb9a80f6147f5249a','diagnostic-source-patch-pin')
+    command(git+['apply','--cached','--whitespace=error',str(diagnostic)],env,8,'diagnostic-source-patch')
+    need(command(git+['write-tree'],env,8,'diagnostic-source-tree').decode().strip()==
+         '0241edff9a4f58a5bf5335d8b5e22cffc7c31f23','exact-diagnostic-source-tree')
     command(git+['checkout-index','--all','--prefix='+str(destination)+'/'],env,20,'materialized-text-tree')
 
 

@@ -489,7 +489,7 @@
       false
     ],
     "electron/linux-permanent-setup.ts": [
-      "b75d8c27ed8e173f668cb0e900b1685bbbaba427",
+      "31f95edde755f7f5a6d92eb9df223b4cb00958f3",
       false
     ],
     "electron/linux-rename-noreplace.ts": [
@@ -1297,7 +1297,7 @@
       false
     ],
     "scripts/linux-setup-install.cts": [
-      "ea5a3d3e757ff7678f62b60118aaac54aa11664e",
+      "7f16b85c300f13b93b81255c154f6d5bdc6e767d",
       false
     ],
     "scripts/linux-setup-install.sh": [
@@ -4917,5 +4917,5 @@
       false
     ]
   },
-  "tree": "ad7200af31840c28e379b34a9ea9ca9a9a5a7e2a"
+  "tree": "27cb1a5a61214fb82f0c3d1f204f0bccaf20ca07"
 }

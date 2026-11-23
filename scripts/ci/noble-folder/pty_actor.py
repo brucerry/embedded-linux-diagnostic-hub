@@ -11,7 +11,7 @@ import termios
 from time import monotonic
 
 import consent
-from actor_wire import INSTALL_BOUNDARY
+from actor_wire import INSTALL_BOUNDARY, RETAINED_PHASES
 from loader_gate import need
 from filesystem import UUID4
 
@@ -20,6 +20,11 @@ PROMPT_CAP = 16384
 OUTPUT_CAP = 131072
 OP_SECONDS = 135
 RETAINED_NOTICE = b'Linux setup stopped with retained unresolved ownership. Preserve this process and its artifacts.\n'
+RETAINED_FRAMES = {
+    RETAINED_NOTICE + b'HUB_INSTALL_RETAINED_V1 ' + phase.encode('ascii') + b'\n': phase
+    for phase in RETAINED_PHASES
+}
+RETAINED_FRAMES[RETAINED_NOTICE] = 'unknown'  # The original shipped bytes only attest retention.
 TAIL = {
     'install': b'Linux setup operation completed; previous transaction artifacts remain retained.\n',
     'uninstall-current': b'Linux current no-menu payload removed. Settings, reports, original transaction records and any completed Finalize ledger are retained.\n',
@@ -68,8 +73,13 @@ def deadline_position(sent, prompt, tail, profile, eof, result):
     if sent and eof and result is not None:
         return 'late-completion'
     output = tail if sent else prompt
-    if output.replace(b'\r\n', b'\n') == RETAINED_NOTICE:
-        return 'retained-after-consent' if sent else 'retained-before-consent'
+    normalized = output.replace(b'\r\n', b'\n')
+    if sent and (phase := RETAINED_FRAMES.get(bytes(normalized))) is not None:
+        exit_seen = 'seen' if result is not None else 'unseen'
+        eof_seen = 'seen' if eof else 'unseen'
+        return f'retained-after-consent-{phase}-exit-{exit_seen}-eof-{eof_seen}'
+    if normalized == RETAINED_NOTICE:
+        return 'retained-before-consent'
     if not sent:
         if profile is not None:
             return 'prompt-matched'

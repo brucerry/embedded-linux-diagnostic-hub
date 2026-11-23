@@ -12,7 +12,7 @@ def record(attempt, size, digest):
         'arch': 'x64',
         'attempt': attempt,
         'artifact': {'name': TARBALL, 'bytes': size, 'sha256': digest},
-        'validation': 'build-only',
+        'validation': 'diagnostic-only-nonqualifying',
     }
 
 

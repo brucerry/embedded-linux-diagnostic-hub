@@ -20,11 +20,21 @@ DEADLINE_POSITIONS = (
     'no-output', 'unmatched-output', 'prompt-matched', 'retained-before-consent',
     'retained-after-consent', 'await-exit-and-eof', 'await-exit', 'await-eof', 'late-completion',
 )
+RETAINED_PHASES = (
+    'terminal', 'review', 'reservation', 'space', 'journal', 'stage', 'move', 'release',
+    'unknown',
+)
+RETAINED_OBSERVATIONS = ('seen', 'unseen')
 INSTALL_REFUSALS = (
     'deadline', 'process-observation', 'read', 'frame', 'prompt', 'prompt-unseen',
     'prompt-owner', 'consent-write', 'child-exited-before-consent', 'child-nonzero',
     'child-signal', 'completion-mismatch', 'failure-closure',
-) + tuple(f'deadline-{limit}-{position}' for limit in DEADLINE_LIMITS for position in DEADLINE_POSITIONS)
+) + tuple(f'deadline-{limit}-{position}' for limit in DEADLINE_LIMITS for position in DEADLINE_POSITIONS) + tuple(
+    f'deadline-{limit}-retained-after-consent-{phase}-exit-{exit_seen}-eof-{eof_seen}'
+    for limit in DEADLINE_LIMITS for phase in RETAINED_PHASES
+    for exit_seen in RETAINED_OBSERVATIONS for eof_seen in RETAINED_OBSERVATIONS
+    if (exit_seen, eof_seen) != ('seen', 'seen')
+)
 REFUSAL_WORDS = {b'fail-' + value.encode('ascii'): value for value in INSTALL_REFUSALS}
 
 

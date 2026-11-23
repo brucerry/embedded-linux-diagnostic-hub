@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const artifactName = 'Diagnostic-Hub-linux-x64.tar.gz';
-export const productTree = 'ad7200af31840c28e379b34a9ea9ca9a9a5a7e2a';
+export const productTree = '27cb1a5a61214fb82f0c3d1f204f0bccaf20ca07';
 export const lockSHA256 = '6eda133d8af11aae5e896876515130792e781f2054d071e2f68a9bcc4272b64c';
 export const permanentInputs = Object.freeze({
     'linux-installed-AppRun': { source: 'scripts/linux-installed-launcher.sh', mode: 0o755, cap: 16384 },
@@ -21,7 +21,7 @@ const snapshot = (stats) => [stats.dev, stats.ino, stats.uid, stats.nlink, stats
     stats.size, stats.mtimeNs, stats.ctimeNs];
 const asBigInt = { bigint: true };
 const MAX_ARCHIVE = 2 * 1024 ** 3;
-const sourceManifestPin = 'e9678eef7ba7cf35f0c24db231ec6a99e39a5966274c0807ce57f30c456da8e4';
+const sourceManifestPin = '94e75fe9696c3289171d8a2add8b88449419bb09b98b14af0e211ce7ddc0d0b0';
 const sourceManifestPath = fileURLToPath(new URL('./pins/SOURCE-FILES.json', import.meta.url));
 const readers = {
     'linux-permanent-member-modes.mjs': '81fed81bfdcf2adeae062ff2b59702fff9b6332a6a690e8f48e1669d405416a2',
