@@ -1,0 +1,97 @@
+name: Noble no-product QEMU venue
+on:
+  push:
+    branches: [ci/v060-noble-qemu-folder-venue-20261123]
+    paths:
+      - '.github/workflows/v060-noble-qemu-folder-venue.yml'
+      - 'scripts/ci/noble-venue/**'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  venue:
+    if: ${{ github.event.created && !github.event.forced && !github.event.deleted && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Start bounded venue clock
+        run: printf 'VENUE_JOB_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Checkout reviewed venue files
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/v060-noble-qemu-folder-venue.yml
+            /scripts/ci/noble-venue/
+      - id: witness
+        name: Run bounded no-product venue witness
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          sha256sum -c --status <<'PINS'
+          786fec1f6b04beb704f310ea8cfb65a8edfb69a1b9187377a0b1c3b69aebb546  scripts/ci/noble-venue/venue.py
+          72679cceae8aa25b2b5165d566876049e4efd5168ae1b8b3fe1e1b67aebb2357  scripts/ci/noble-venue/venue_seed.py
+          9cdd70e814c5383b6bfd6cf70c55506743dfd8a5546cfb0e51c46b97174ba46e  scripts/ci/noble-venue/venue-loader.sh
+          1c04a91f509baaeecb70c7b859ee90b974b2cd16878c2695d09ad33e6bed72a3  scripts/ci/noble-venue/venue-worker.sh
+          1cd40b1fadb36cec628ce3939e28abbc8f92149c0650fe67134bfad1e0c84292  scripts/ci/noble-venue/venue-inputs.json
+          PINS
+          /usr/bin/python3 -E -B scripts/ci/noble-venue/venue.py
+      - name: Exact first-attempt runner context
+        if: ${{ always() && steps.witness.outputs.context != '' && steps.witness.outputs.context != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.context }}
+        run: test "$RESULT" = pass
+      - name: Stock Docker and backing before public intake
+        if: ${{ always() && steps.witness.outputs.pre_intake != '' && steps.witness.outputs.pre_intake != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.pre_intake }}
+        run: test "$RESULT" = pass
+      - name: Pinned official inputs and detached signature
+        if: ${{ always() && steps.witness.outputs.provenance != '' && steps.witness.outputs.provenance != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.provenance }}
+        run: test "$RESULT" = pass
+      - name: Backing and memory after staging
+        if: ${{ always() && steps.witness.outputs.post_intake != '' && steps.witness.outputs.post_intake != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.post_intake }}
+        run: test "$RESULT" = pass
+      - name: Complete live loader maps
+        if: ${{ always() && steps.witness.outputs.loader != '' && steps.witness.outputs.loader != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.loader }}
+        run: test "$RESULT" = pass
+      - name: Exact read-only NoCloud seed
+        if: ${{ always() && steps.witness.outputs.seed != '' && steps.witness.outputs.seed != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.seed }}
+        run: test "$RESULT" = pass
+      - name: Exact bounded disposable overlay
+        if: ${{ always() && steps.witness.outputs.overlay != '' && steps.witness.outputs.overlay != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.overlay }}
+        run: test "$RESULT" = pass
+      - name: Backing before no-NIC guest boot
+        if: ${{ always() && steps.witness.outputs.pre_boot != '' && steps.witness.outputs.pre_boot != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.pre_boot }}
+        run: test "$RESULT" = pass
+      - name: One no-NIC TCG boot and normal poweroff
+        if: ${{ always() && steps.witness.outputs.loopback != '' && steps.witness.outputs.loopback != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.loopback }}
+        run: test "$RESULT" = pass
+      - name: Backing and guest output bounds after poweroff
+        if: ${{ always() && steps.witness.outputs.post_boot != '' && steps.witness.outputs.post_boot != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.post_boot }}
+        run: test "$RESULT" = pass
+      - name: Owned workers and scratch retired
+        if: ${{ always() && steps.witness.outputs.retirement != '' && steps.witness.outputs.retirement != 'unreached' }}
+        env:
+          RESULT: ${{ steps.witness.outputs.retirement }}
+        run: test "$RESULT" = pass
