@@ -1,0 +1,420 @@
+{
+  "successorTree": "30182b73211d809a7b2ef57f3ffe0ee9d87a5c33",
+  "testOnlyOverlayTree": "25bee80732419d25b98614c414ef3d336bd9f03d",
+  "lockSHA256": "6eda133d8af11aae5e896876515130792e781f2054d071e2f68a9bcc4272b64c",
+  "linuxX64Placements": 314,
+  "uniqueRegistryArchives": 299,
+  "registryPlanSHA256": "5cdad124072fe4422fb7b27691731c98fee1fe92558195dc6ea8ec6338e2c259",
+  "criticalLockedPackages": {
+    "@esbuild/linux-x64": {
+      "version": "0.28.2",
+      "integrity": "sha512-hQxogTCYTC+aEyvKe763JyNxanjaFnOiALdKB/fFCk5hSLOa62fsckonqWZT0qXr/Ev6SngGZN7RLvGhx0oiBQ==",
+      "resolved": "file:vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ]
+    },
+    "esbuild": {
+      "version": "0.28.2",
+      "integrity": "sha512-VpG3doyzIdeiiPb53zNI26zSzLSeDmrPyxh2Ptj6nWNPV8cZAOT0EGiyylz/etup7fX/QF/9U1aFCKkvsPy2ZQ==",
+      "resolved": "file:vendor/esbuild-0.28.2-source-609683d89297.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ]
+    },
+    "rolldown": {
+      "version": "1.2.12",
+      "integrity": "sha512-8wafseiaG80xmXSfqidUNqZcylTlhmPZZt+za2m+js2sFZ8dTNlhIOV2WcbIPx2hgwPBJpEUGFAMZ9bgBBLTSQ==",
+      "resolved": "https://registry.npmjs.org/rolldown/-/rolldown-1.2.12.tgz"
+    },
+    "@rolldown/binding-linux-x64-gnu": {
+      "version": "1.2.12",
+      "integrity": "sha512-Q9uLBO53Xd4QIq1WOycVQyPP1O4HhraEV2qqb3uTrnVw6QZih9duY4vNXOivL1xoUS1/z+W8eF4NMfl2a8Sdjw==",
+      "resolved": "https://registry.npmjs.org/@rolldown/binding-linux-x64-gnu/-/binding-linux-x64-gnu-1.2.12.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ],
+      "libc": [
+        "glibc"
+      ]
+    },
+    "lightningcss": {
+      "version": "1.33.0",
+      "integrity": "sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==",
+      "resolved": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.33.0.tgz"
+    },
+    "lightningcss-linux-x64-gnu": {
+      "version": "1.33.0",
+      "integrity": "sha512-ar+Ju7LmcN0Jo4FpL4hpFybwNG9/3A/Br5KW2n2jyODg3MEZXaDYADdemoNS+BDNfMgKvylJLj4S5tyRActuAg==",
+      "resolved": "https://registry.npmjs.org/lightningcss-linux-x64-gnu/-/lightningcss-linux-x64-gnu-1.33.0.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ],
+      "libc": [
+        "glibc"
+      ]
+    },
+    "@koromix/koffi-linux-x64": {
+      "version": "3.3.3",
+      "integrity": "sha512-AI4kcNNWeGmzQzsNb0S+ZL/ht4HMtDcQl5nYFkkuVUO2g1/2KdvNekkwNWhpp805mDbLSDoRZtlioHyH/v8poQ==",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-linux-x64/-/koffi-linux-x64-3.3.3.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ]
+    },
+    "electron-builder": {
+      "version": "26.15.3",
+      "integrity": "sha512-a1KM5heqS3gQCZzizXEI8RjJy3QVogULPdeSknt76uLDpBIW/HDGsMg/XgP0riP6PI9COsRvFITKKGDqA8fJxA==",
+      "resolved": "https://registry.npmjs.org/electron-builder/-/electron-builder-26.15.3.tgz"
+    },
+    "app-builder-lib": {
+      "version": "26.15.3",
+      "integrity": "sha512-JgPkt891TgQpDBMhtKM208MGuNXO/VlHaIbPJd32jowKVW3v6iDMm9huf6vdDxlCOs7gsQWo8/+8L5PubeMS1w==",
+      "resolved": "file:vendor/app-builder-lib-linux-x64-node-gzip-9f2b5691607c.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ]
+    },
+    "tar": {
+      "version": "7.5.22",
+      "integrity": "sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==",
+      "resolved": "https://registry.npmjs.org/tar/-/tar-7.5.22.tgz"
+    },
+    "minizlib": {
+      "version": "3.1.0",
+      "integrity": "sha512-KZxYo1BUkWD2TVFLr0MQoM8vUUigWD3LlD83a/75BqC+4qE0Hb1Vo5v1FgcfaNXvfXzr+5EhQ6ing/CaBijTlw==",
+      "resolved": "https://registry.npmjs.org/minizlib/-/minizlib-3.1.0.tgz"
+    },
+    "temp-file": {
+      "version": "3.4.0",
+      "integrity": "sha512-C5tjlC/HCtVUOi3KWVokd4vHVViOmGjtLwIh4MuzPo/nMYTV/p1urt3RnMz2IWXDdKEGJH3k5+KPxtqRsUYGtg==",
+      "resolved": "https://registry.npmjs.org/temp-file/-/temp-file-3.4.0.tgz"
+    },
+    "ssh2": {
+      "version": "1.17.0",
+      "integrity": "sha512-n3z4W9hcQzDqVdZ8wLeXBs6J7vQ4DnSZJnx1bTHU54pDhVRU5lrMW4WjwESIy4Q9LZwefQR4RkuHl0hIXH83Pw==",
+      "resolved": "file:vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz",
+      "cpu": [
+        "x64"
+      ],
+      "os": [
+        "linux"
+      ]
+    }
+  },
+  "allFileProviders": {
+    "@esbuild/linux-x64": {
+      "integrity": "sha512-hQxogTCYTC+aEyvKe763JyNxanjaFnOiALdKB/fFCk5hSLOa62fsckonqWZT0qXr/Ev6SngGZN7RLvGhx0oiBQ==",
+      "path": "vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
+      "recipe": "esbuild-linux-x64",
+      "sha256": "fa8fc7bb43870bc0c3c541c3b945b895c05292ff8fcaaa0f8f5730abf828005e",
+      "size": 4667448,
+      "sourceCommit": "609683d892977362a0f99026cb74b96263d728a9",
+      "sourceRepository": "https://github.com/evanw/esbuild",
+      "sourceTree": "a58e636987c5d8878037e68fb5e71c90329f0bab",
+      "version": "0.28.2"
+    },
+    "agent-base": {
+      "integrity": "sha512-RoHRhg8WZhNp8VuoNbN5RD/GwKx+/9XIp/7t6hKLOTw3hILjh/NgSk6Ow20wS7VOtGW7Lrvp6ObqGgb2vNecPg==",
+      "path": "vendor/agent-base-7.1.4-official-source-981bc1c33458.tgz",
+      "recipe": "typescript-source-build",
+      "sha256": "981bc1c334589e5ccc89b8c9444148b3750e072b27d7a86dbc07cbb752d07637",
+      "size": 6832,
+      "sourceCommit": "b923f5363875d8fd56477094d5ffc562840a4b76",
+      "sourceRepository": "https://github.com/TooTallNate/proxy-agents",
+      "sourceTree": "75504d1caedb863a9f28b4819ec6f043c817c3b9",
+      "version": "7.1.4"
+    },
+    "app-builder-lib": {
+      "integrity": "sha512-JgPkt891TgQpDBMhtKM208MGuNXO/VlHaIbPJd32jowKVW3v6iDMm9huf6vdDxlCOs7gsQWo8/+8L5PubeMS1w==",
+      "path": "vendor/app-builder-lib-linux-x64-node-gzip-9f2b5691607c.tgz",
+      "recipe": "publisher-base-and-matcher-overlay plus reviewed Linux-only streaming gzip",
+      "sha256": "9f2b5691607c437c6b75fa384870aa42298766a89f53e2cb93d07686d0b9609c",
+      "size": 1190615,
+      "sourceCommit": "512a57ec9bcda593d3e0970bd2b9a33a63beeb57",
+      "sourceRepository": "https://github.com/electron-userland/electron-builder",
+      "sourceTree": "af3dad78f86b2eec91b7a0d805a3b66758ca3f7c",
+      "version": "26.15.3"
+    },
+    "esbuild": {
+      "integrity": "sha512-VpG3doyzIdeiiPb53zNI26zSzLSeDmrPyxh2Ptj6nWNPV8cZAOT0EGiyylz/etup7fX/QF/9U1aFCKkvsPy2ZQ==",
+      "path": "vendor/esbuild-0.28.2-source-609683d89297.tgz",
+      "recipe": "esbuild-wrapper",
+      "sha256": "a69e9168a8520a3b8bb724978dc7b15b085a9479659b5cb7dc15257051428100",
+      "size": 30753,
+      "sourceCommit": "609683d892977362a0f99026cb74b96263d728a9",
+      "sourceRepository": "https://github.com/evanw/esbuild",
+      "sourceTree": "a58e636987c5d8878037e68fb5e71c90329f0bab",
+      "version": "0.28.2"
+    },
+    "filelist": {
+      "integrity": "sha512-zsFTEJpUjrXMrNmmDHzD6C+74TwmIbRiOWClhkr8R1fL5X0+ZImQghY91UfqAzlU8vYNH4IKuVShe2Qz5gCIKQ==",
+      "path": "vendor/filelist-1.0.6-source-derived-df765ed95a03.tgz",
+      "recipe": "js-source-selection",
+      "sha256": "df765ed95a0357a74e6314df414ab7f969baa72191239f16f2b2e09209a1749a",
+      "size": 10542,
+      "sourceCommit": "7032f94d04ad905b4f32b92d2278785859e1d55f",
+      "sourceRepository": "https://github.com/mde/filelist",
+      "sourceTree": "b0834ff6f55cf2ed5b020d38e17dfe49bef8f5af",
+      "version": "1.0.6"
+    },
+    "http-proxy-agent": {
+      "integrity": "sha512-KM3c2zMOS/rUmAlElwBFMLvrDisZ5cVO/i0vlJydpZczCG2BAk6fidiP+gq02ccaEWT+EtycGa/KHG9YbjFWUA==",
+      "path": "vendor/http-proxy-agent-7.0.2-official-source-657847db4b64.tgz",
+      "recipe": "typescript-source-build",
+      "sha256": "657847db4b647cc6259148f7caeece0735c0987d569de5023225c01e1ffa4bca",
+      "size": 5700,
+      "sourceCommit": "b5f94e3222c0aaa3bc56218ff125e2c56417c86e",
+      "sourceRepository": "https://github.com/TooTallNate/proxy-agents",
+      "sourceTree": "abedf41e352eca9cd5c797c370cd2096a1ae5f3d",
+      "version": "7.0.2"
+    },
+    "https-proxy-agent": {
+      "integrity": "sha512-0OAlpiRLdaYVrGIDtbKLDtq+rd7CZr4TgxTVjZhPhetIEamzgyzXiuLYAJs1bTEvgtOluOg3NfJJSnjOs5+fkQ==",
+      "path": "vendor/https-proxy-agent-7.0.6-official-source-8a7e12d4f216.tgz",
+      "recipe": "typescript-source-build",
+      "sha256": "8a7e12d4f216a1332ac58bf0166688e75746302c00cb9cf3bbff3dd4a92cf6f3",
+      "size": 8173,
+      "sourceCommit": "7cf0b795e05218d9e49047d5c93de77d2f606510",
+      "sourceRepository": "https://github.com/TooTallNate/proxy-agents",
+      "sourceTree": "20bebf7eebca18d4f9900fb8abf88e0b41100294",
+      "version": "7.0.6"
+    },
+    "ssh2": {
+      "integrity": "sha512-n3z4W9hcQzDqVdZ8wLeXBs6J7vQ4DnSZJnx1bTHU54pDhVRU5lrMW4WjwESIy4Q9LZwefQR4RkuHl0hIXH83Pw==",
+      "path": "vendor/ssh2-1.17.0-linux-x64-source-6d98e9e93000.tgz",
+      "recipe": "js-source-selection",
+      "sha256": "6d98e9e9300044d644a2cf617f405295cb3f01df41d877caf849f7afdcaf8c37",
+      "size": 140991,
+      "sourceCommit": "844f1edfc41589737671f96a4f4e76afdf46abd4",
+      "sourceRepository": "https://github.com/mscdex/ssh2",
+      "sourceTree": "034ef339f3e90ea65e558bcf96f1c374cc013b6f",
+      "version": "1.17.0"
+    }
+  },
+  "fullProviderRecipeInputCount": 80,
+  "canonicalCompilerReferenceCount": 22,
+  "compilerReferenceDebs": {
+    "binutils": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/b/binutils/binutils_2.42-4ubuntu2.10_amd64.deb",
+      "SHA256": "b3b5a84181a38fd191820b2cdcc1a3eeb1cd6333ad472f2092f96e81047e9c74",
+      "Size": 18154,
+      "Version": "2.42-4ubuntu2.10",
+      "pocket": "noble-updates"
+    },
+    "binutils-x86-64-linux-gnu": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/b/binutils/binutils-x86-64-linux-gnu_2.42-4ubuntu2.10_amd64.deb",
+      "SHA256": "1e510a15f30208d39edcd840e48f26a77bbca7c417805eeccb1e3f7de198ef29",
+      "Size": 2462744,
+      "Version": "2.42-4ubuntu2.10",
+      "pocket": "noble-updates"
+    },
+    "cpp-13-x86-64-linux-gnu": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gcc-13/cpp-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+      "SHA256": "2ca48bf0c2d6465bc39322899715a85d934b4d7442dd5586a7bebbe3ce0f806b",
+      "Size": 10714542,
+      "Version": "13.3.0-6ubuntu2~24.04.1",
+      "pocket": "noble-updates"
+    },
+    "gcc": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gcc-defaults/gcc_13.2.0-7ubuntu1_amd64.deb",
+      "SHA256": "0e0bb8b25153ed1c44ab92bc219eed469fcb5820c5c0bc6454b2fd366a33d3ee",
+      "Size": 5018,
+      "Version": "4:13.2.0-7ubuntu1",
+      "pocket": "noble"
+    },
+    "gcc-13": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gcc-13/gcc-13_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+      "SHA256": "7438ff160b020a74970672189ecae25d0ca650de6d7f543f12a3134192cffbd9",
+      "Size": 494262,
+      "Version": "13.3.0-6ubuntu2~24.04.1",
+      "pocket": "noble-updates"
+    },
+    "gcc-13-x86-64-linux-gnu": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gcc-13/gcc-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+      "SHA256": "a134b0319a82d14581b3a14820d2832af4ec9778ed8b9b4ddaeecfb0555ec325",
+      "Size": 21084546,
+      "Version": "13.3.0-6ubuntu2~24.04.1",
+      "pocket": "noble-updates"
+    },
+    "libbinutils": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/b/binutils/libbinutils_2.42-4ubuntu2.10_amd64.deb",
+      "SHA256": "064dce00ce94e1fc2d33779cb0071088f4c8aac79e85345f2e78a020f7d14699",
+      "Size": 576834,
+      "Version": "2.42-4ubuntu2.10",
+      "pocket": "noble-updates"
+    },
+    "libc6": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/glibc/libc6_2.39-0ubuntu8.12_amd64.deb",
+      "SHA256": "d821b41fc59cb4978ecd53bc83e5c964ac15d305c8d2ac4c8a35aebe55010fb9",
+      "Size": 3264258,
+      "Version": "2.39-0ubuntu8.12",
+      "pocket": "noble-updates"
+    },
+    "libc6-dev": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/glibc/libc6-dev_2.39-0ubuntu8.12_amd64.deb",
+      "SHA256": "d81dd6dc9d515762cc93f338efa6219252acf3e2e87b5b89dd7dc517741e6eed",
+      "Size": 2124506,
+      "Version": "2.39-0ubuntu8.12",
+      "pocket": "noble-updates"
+    },
+    "libctf0": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/b/binutils/libctf0_2.42-4ubuntu2.10_amd64.deb",
+      "SHA256": "7ec86d697c3668503c85f308a6832f092075b5880ad002f22185264da0bd4645",
+      "Size": 94474,
+      "Version": "2.42-4ubuntu2.10",
+      "pocket": "noble-updates"
+    },
+    "libgcc-13-dev": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gcc-13/libgcc-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb",
+      "SHA256": "cd689db2691edaa10f37329307292796bb599e722e0505c79e14caaa1fe9a93a",
+      "Size": 2680642,
+      "Version": "13.3.0-6ubuntu2~24.04.1",
+      "pocket": "noble-updates"
+    },
+    "libgcc-s1": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gcc-14/libgcc-s1_14.2.0-4ubuntu2~24.04.1_amd64.deb",
+      "SHA256": "aa7fadbe33b78bcf99885318040601c550c208929565b179891d9a3cc2aa68cd",
+      "Size": 78392,
+      "Version": "14.2.0-4ubuntu2~24.04.1",
+      "pocket": "noble-updates"
+    },
+    "libgmp10": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/g/gmp/libgmp10_6.3.0+dfsg-2ubuntu6.1_amd64.deb",
+      "SHA256": "285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d",
+      "Size": 253460,
+      "Version": "2:6.3.0+dfsg-2ubuntu6.1",
+      "pocket": "noble-updates"
+    },
+    "libisl23": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/i/isl/libisl23_0.26-3build1.1_amd64.deb",
+      "SHA256": "4e040926e50fb961fae9bf95660189d468336a4a17bc321872c434fc8f777e7f",
+      "Size": 679812,
+      "Version": "0.26-3build1.1",
+      "pocket": "noble-updates"
+    },
+    "libjansson4": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/j/jansson/libjansson4_2.14-2build2_amd64.deb",
+      "SHA256": "0cf79113f5d193ce9af2be2ff4b2c3b30dd4e55a0b6c47f7d28f6c849ff3aa60",
+      "Size": 32830,
+      "Version": "2.14-2build2",
+      "pocket": "noble"
+    },
+    "libmpc3": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/m/mpclib3/libmpc3_1.3.1-1build1.1_amd64.deb",
+      "SHA256": "cebe6098bb3d66fdacac9dc6fe406a651216d9c00f27c3f9c159d15d96cdf864",
+      "Size": 54636,
+      "Version": "1.3.1-1build1.1",
+      "pocket": "noble-updates"
+    },
+    "libmpfr6": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/m/mpfr4/libmpfr6_4.2.1-1build1.1_amd64.deb",
+      "SHA256": "aebc1c8b69a1f98bb43dfc268daecd181116dbf40b13ee4e822eb4bdd52b493a",
+      "Size": 353020,
+      "Version": "4.2.1-1build1.1",
+      "pocket": "noble-updates"
+    },
+    "libsframe1": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/b/binutils/libsframe1_2.42-4ubuntu2.10_amd64.deb",
+      "SHA256": "72093fb456864db55f1352bfa5e952a94f7abaff64e71dff1fbf001db1984564",
+      "Size": 15724,
+      "Version": "2.42-4ubuntu2.10",
+      "pocket": "noble-updates"
+    },
+    "libzstd1": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/libz/libzstd/libzstd1_1.5.5+dfsg2-2build1.1_amd64.deb",
+      "SHA256": "dfcf25061e07aad7efd3f4f880ba5ad4d4d09ebe7fc8cc77ab6b8a161d6d4727",
+      "Size": 299472,
+      "Version": "1.5.5+dfsg2-2build1.1",
+      "pocket": "noble-updates"
+    },
+    "linux-libc-dev": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/l/linux/linux-libc-dev_6.8.0-151.151_amd64.deb",
+      "SHA256": "badd744a9dc7e43c53975ac08d88e23dd13223f2334637c25fd9b9e9bb5d236d",
+      "Size": 1711930,
+      "Version": "6.8.0-151.151",
+      "pocket": "noble-updates"
+    },
+    "ubuntu-keyring": {
+      "Architecture": "all",
+      "Filename": "pool/main/u/ubuntu-keyring/ubuntu-keyring_2023.11.28.1_all.deb",
+      "SHA256": "36de43b15853ccae0028e9a767613770c704833f82586f28eb262f0311adb8a8",
+      "Size": 11124,
+      "Version": "2023.11.28.1",
+      "pocket": "noble"
+    },
+    "zlib1g": {
+      "Architecture": "amd64",
+      "Filename": "pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.3_amd64.deb",
+      "SHA256": "376249c8de139568221dbb242318cc8cb8f02299e3a62b7432948e1754fbddf9",
+      "Size": 63158,
+      "Version": "1:1.3.dfsg-3.1ubuntu2.3",
+      "pocket": "noble-updates"
+    }
+  },
+  "compilerReferenceVsPredictedRootArchitectureOrVersionDifferences": {},
+  "compilerVersionCrosscheckIsInstalledReadback": false,
+  "compilerLoaderExpected": {
+    "bytes": 236616,
+    "gid": 0,
+    "mode": "0755",
+    "sha256": "5fc0940888e9d2e1a00e66d6b1a559c36364ee867683652e1074fa576952cc3f",
+    "type": "file",
+    "uid": 0
+  },
+  "toolchainRuntimeAdmission": "unverified in an eligible same-job worker",
+  "lastScopedNobleInstallAttempt": {
+    "job": "https://github.com/brucerry/embedded-linux-diagnostic-hub/actions/runs/44869771672/job/136741452487",
+    "jobConclusion": "failure",
+    "failedAdmission": "Canonical snapshot signatures, 39 verified DEBs, and private immutable stages",
+    "applicationOrInstallInvoked": false
+  },
+  "nodeBinarySHA256": "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52",
+  "nodeNativeHeaderSHA256": {
+    "js_native_api.h": "82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840",
+    "js_native_api_types.h": "4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0",
+    "node_api.h": "2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a",
+    "node_api_types.h": "a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00"
+  },
+  "electronDistributionSHA256": "5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5",
+  "electronDeclarationSHA256": "6bfa87243d506741fdf4195f87538306c45496c6af07fa4552e8e8ffff54c820",
+  "freshCompleteOfflineInstallObservedForThisWorker": false
+}

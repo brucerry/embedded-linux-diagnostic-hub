@@ -1,0 +1,148 @@
+name: Noble same-attempt folder install qualification
+on:
+  push:
+    branches: [ci/v060-linux-noble-qemu-folder-apt-apply-verdicts-20261123]
+    paths:
+      - '.github/workflows/v060-linux-noble-qemu-folder-install.yml'
+      - 'scripts/ci/linux-two-format/**'
+      - 'scripts/ci/noble-folder/**'
+permissions:
+  contents: read
+jobs:
+  two-format:
+    if: ${{ github.event.created && !github.event.deleted && !github.event.forced && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 48
+    steps:
+      - name: Start bounded job clock
+        run: printf 'FOLDER_JOB_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Read the exact first-attempt checkout without retained credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: One private original export and no-NIC folder qualification with retirement
+        id: folder
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf '%s  %s\n' 'd64b8fe9a5ac09bb7f82d9dbc23d1703674fc84fc1aa9149dcbc401bf0aabfd7' scripts/ci/noble-folder/CONTROL-PINS.txt | /usr/bin/sha256sum --check --strict --status
+          /usr/bin/sha256sum --check --strict --status scripts/ci/noble-folder/CONTROL-PINS.txt
+          /usr/bin/python3 -B -E scripts/ci/noble-folder/folder_job.py
+      - name: Exact first hosted attempt / ${{ steps.folder.outputs.context || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer backing / ${{ steps.folder.outputs.host_space || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact publisher inputs / ${{ steps.folder.outputs.inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original tar checksum and record framed / ${{ steps.folder.outputs.private_export || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original tar four member modes / ${{ steps.folder.outputs.tar_original_members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer retired / ${{ steps.folder.outputs.worker_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Media phase backing / ${{ steps.folder.outputs.media_backing || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Locked helper bytes and modes / ${{ steps.folder.outputs.exact_project || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact signed guest package bodies / ${{ steps.folder.outputs.signed_package_bodies || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Read-only original and helper media / ${{ steps.folder.outputs.optical_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Canonical guest and tool identity / ${{ steps.folder.outputs.guest_origin || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Disposable pinned overlay chain / ${{ steps.folder.outputs.guest_overlay || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Post-staging guest host backing / ${{ steps.folder.outputs.guest_boot_backing || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Non-root no-NIC guest execution boundary / ${{ steps.folder.outputs.boot_exec || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest kernel boot / ${{ steps.folder.outputs.guest_kernel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact NoCloud seed / ${{ steps.folder.outputs.guest_nocloud || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest identity and loopback / ${{ steps.folder.outputs.guest_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest closed media and original attempt / ${{ steps.folder.outputs.readonly_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest-only root growth and capacity / ${{ steps.folder.outputs.guest_disk || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT post-grow signed dpkg baseline / ${{ steps.folder.outputs.guest_solver_baseline || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT read-only signed archive readback / ${{ steps.folder.outputs.guest_solver_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT private startup policy and tool identity / ${{ steps.folder.outputs.guest_solver_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT simulation bounded launch and capture / ${{ steps.folder.outputs.guest_solver_capture || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT simulation zero exit / ${{ steps.folder.outputs.guest_solver_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT simulation empty stderr / ${{ steps.folder.outputs.guest_solver_stderr || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT exact install and configure operations / ${{ steps.folder.outputs.guest_solver_plan || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT simulation preserved signed dpkg state / ${{ steps.folder.outputs.guest_solver_unchanged || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT apply preflight and signed baseline / ${{ steps.folder.outputs.guest_apply_preflight || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT apply bounded process capture / ${{ steps.folder.outputs.guest_apply_capture || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT apply zero exit / ${{ steps.folder.outputs.guest_apply_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT exact final dpkg database / ${{ steps.folder.outputs.guest_apply_database || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: APT post-install guest capacity / ${{ steps.folder.outputs.guest_apply_capacity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Locked non-login guest account / ${{ steps.folder.outputs.guest_account || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest helper hashes and modes / ${{ steps.folder.outputs.realized_helpers || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Unprivileged installer and removal proof / ${{ steps.folder.outputs.native_install_removal || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Normal guest poweroff / ${{ steps.folder.outputs.guest_poweroff || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Clean guest worker exit / ${{ steps.folder.outputs.guest_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest worker retirement / ${{ steps.folder.outputs.guest_worker_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Owned scratch retirement / ${{ steps.folder.outputs.scratch_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
