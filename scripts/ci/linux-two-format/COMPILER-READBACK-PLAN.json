@@ -1,0 +1,765 @@
+{
+  "canonicalCompiler": "/usr/bin/x86_64-linux-gnu-gcc-13",
+  "canonicalLoader": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+  "classification": "offline compiler and loader readback plan only",
+  "dispatchPath": "/usr/bin/cc",
+  "elfMembersAndDirectResolution": {
+    "/usr/bin/x86_64-linux-gnu-as": {
+      "alias": null,
+      "canonical": "/usr/bin/x86_64-linux-gnu-as",
+      "directNeeded": {
+        "libbfd-2.42-system.so": "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+        "libzstd.so.1": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5"
+      },
+      "interpreter": [
+        "/lib64/ld-linux-x86-64.so.2"
+      ],
+      "package": "binutils-x86-64-linux-gnu",
+      "pin": {
+        "bytes": 745768,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "21aff249b692b5c31a44007491f922dcb49f41323e362c57d2ada3f52eddb7f0",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.4",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.7",
+          "GLIBC_2.8"
+        ]
+      }
+    },
+    "/usr/bin/x86_64-linux-gnu-gcc-13": {
+      "alias": null,
+      "canonical": "/usr/bin/x86_64-linux-gnu-gcc-13",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [
+        "/lib64/ld-linux-x86-64.so.2"
+      ],
+      "package": "gcc-13-x86-64-linux-gnu",
+      "pin": {
+        "bytes": 1023032,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_2.3"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.11",
+          "GLIBC_2.14",
+          "GLIBC_2.17",
+          "GLIBC_2.2.5",
+          "GLIBC_2.25",
+          "GLIBC_2.3",
+          "GLIBC_2.3.2",
+          "GLIBC_2.3.4",
+          "GLIBC_2.32",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.35",
+          "GLIBC_2.36",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.9"
+        ]
+      }
+    },
+    "/usr/bin/x86_64-linux-gnu-ld.bfd": {
+      "alias": null,
+      "canonical": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+      "directNeeded": {
+        "libbfd-2.42-system.so": "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libctf.so.0": "/usr/lib/x86_64-linux-gnu/libctf.so.0.0.0",
+        "libjansson.so.4": "/usr/lib/x86_64-linux-gnu/libjansson.so.4.14.0"
+      },
+      "interpreter": [
+        "/lib64/ld-linux-x86-64.so.2"
+      ],
+      "package": "binutils-x86-64-linux-gnu",
+      "pin": {
+        "bytes": 1359128,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.11",
+          "GLIBC_2.14",
+          "GLIBC_2.15",
+          "GLIBC_2.2.5",
+          "GLIBC_2.27",
+          "GLIBC_2.3.4",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.8"
+        ],
+        "libctf.so.0": [
+          "LIBCTF_1.0",
+          "LIBCTF_1.1"
+        ],
+        "libjansson.so.4": [
+          "libjansson.so.4"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2": {
+      "alias": null,
+      "canonical": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "directNeeded": {},
+      "interpreter": [],
+      "package": "libc6",
+      "pin": {
+        "bytes": 236616,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "5fc0940888e9d2e1a00e66d6b1a559c36364ee867683652e1074fa576952cc3f",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {}
+    },
+    "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so": {
+      "alias": null,
+      "canonical": "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libsframe.so.1": "/usr/lib/x86_64-linux-gnu/libsframe.so.1.0.0",
+        "libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+        "libzstd.so.1": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5"
+      },
+      "interpreter": [],
+      "package": "libbinutils",
+      "pin": {
+        "bytes": 1479888,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "11f084bc6ff5fc64e91c0b6422040fab1245419e7ff29560a95c1176ce1b9ff4",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_2.3"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.4",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.8"
+        ],
+        "libsframe.so.1": [
+          "LIBSFRAME_1.0"
+        ],
+        "libz.so.1": [
+          "ZLIB_1.2.0"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+      "alias": null,
+      "canonical": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+      },
+      "interpreter": [
+        "/lib64/ld-linux-x86-64.so.2"
+      ],
+      "package": "libc6",
+      "pin": {
+        "bytes": 2129424,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "755a371e86cc9f564ab54f66140747700fb0a103f698f659f2060f707897e09a",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_PRIVATE"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libctf.so.0": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libctf.so.0.0.0",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libctf.so.0.0.0",
+      "directNeeded": {
+        "libbfd-2.42-system.so": "/usr/lib/x86_64-linux-gnu/libbfd-2.42-system.so",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1.3"
+      },
+      "interpreter": [],
+      "package": "libctf0",
+      "pin": {
+        "bytes": 220384,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "25c8f765c259d05b59a3dc3634d711912a7f5ce9be8a28ace081507b925b3ad1",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.33",
+          "GLIBC_2.4",
+          "GLIBC_2.8"
+        ],
+        "libz.so.1": [
+          "ZLIB_1.2.0"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libgmp.so.10": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libgmp.so.10.5.0",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [],
+      "package": "libgmp10",
+      "pin": {
+        "bytes": 534896,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "0ccdfb6d6f5c039465f6d002cf7e4c072d48ac6a2cffc8dd6c748dec31592804",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.7"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libisl.so.23": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libisl.so.23.3.0",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libisl.so.23.3.0",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libgmp.so.10": "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0"
+      },
+      "interpreter": [],
+      "package": "libisl23",
+      "pin": {
+        "bytes": 1863352,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "db4f717fd1678b48e5dddea1cbdd2d239594a70b57e96d0923bfd9533351efa8",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libjansson.so.4": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libjansson.so.4.14.0",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libjansson.so.4.14.0",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [],
+      "package": "libjansson4",
+      "pin": {
+        "bytes": 64008,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "c49935a4b3ac599064281b1f257576087806d0dad7ec46f353bd983b052c5e26",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.4",
+          "GLIBC_2.38",
+          "GLIBC_2.4"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libm.so.6": {
+      "alias": null,
+      "canonical": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [],
+      "package": "libc6",
+      "pin": {
+        "bytes": 952616,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "5dcc4d25466e29ca390ed6fabb371c69b65dff6fa4e91c34561057a020d6994a",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_PRIVATE"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.2.5",
+          "GLIBC_2.36",
+          "GLIBC_2.4",
+          "GLIBC_ABI_DT_RELR",
+          "GLIBC_PRIVATE"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libmpc.so.3": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libmpc.so.3.3.1",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libmpc.so.3.3.1",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libgmp.so.10": "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0",
+        "libm.so.6": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "libmpfr.so.6": "/usr/lib/x86_64-linux-gnu/libmpfr.so.6.2.1"
+      },
+      "interpreter": [],
+      "package": "libmpc3",
+      "pin": {
+        "bytes": 134440,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "91d2b2b0b794028c733431e01acc227ff39ee289384fdf22869c8b42ad3aaa3b",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4"
+        ],
+        "libm.so.6": [
+          "GLIBC_2.2.5"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libmpfr.so.6": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libmpfr.so.6.2.1",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libmpfr.so.6.2.1",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libgmp.so.10": "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0"
+      },
+      "interpreter": [],
+      "package": "libmpfr6",
+      "pin": {
+        "bytes": 760464,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "2156351fa3dedd04a7381c6ac7a8a26efa2d6fb08b80f8a2d644ccdd653710ae",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_2.3"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libsframe.so.1": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libsframe.so.1.0.0",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libsframe.so.1.0.0",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [],
+      "package": "libsframe1",
+      "pin": {
+        "bytes": 35168,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "1693a2dbd77c909d279ae34aa9b5d8d08d97f116f8d0ed724063df11151b3c69",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libz.so.1": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libz.so.1.3",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [],
+      "package": "zlib1g",
+      "pin": {
+        "bytes": 113000,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "f61677c7bdb7c2aa2a243ea781bfd16afcb361cede7b4ef76127a9d8eb9a5242",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4"
+        ]
+      }
+    },
+    "/usr/lib/x86_64-linux-gnu/libzstd.so.1": {
+      "alias": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "libzstd.so.1.5.5",
+        "uid": 0
+      },
+      "canonical": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5",
+      "directNeeded": {
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [],
+      "package": "libzstd1",
+      "pin": {
+        "bytes": 755864,
+        "gid": 0,
+        "mode": "0644",
+        "sha256": "0a2128bc10841fb29e76d08d945864dfb0b6a66da5df6df5d8299197439e54bb",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.2",
+          "GLIBC_2.3.4",
+          "GLIBC_2.34",
+          "GLIBC_2.4"
+        ]
+      }
+    },
+    "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1": {
+      "alias": null,
+      "canonical": "/usr/libexec/gcc/x86_64-linux-gnu/13/cc1",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "libgmp.so.10": "/usr/lib/x86_64-linux-gnu/libgmp.so.10.5.0",
+        "libisl.so.23": "/usr/lib/x86_64-linux-gnu/libisl.so.23.3.0",
+        "libmpc.so.3": "/usr/lib/x86_64-linux-gnu/libmpc.so.3.3.1",
+        "libmpfr.so.6": "/usr/lib/x86_64-linux-gnu/libmpfr.so.6.2.1",
+        "libz.so.1": "/usr/lib/x86_64-linux-gnu/libz.so.1.3",
+        "libzstd.so.1": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.5"
+      },
+      "interpreter": [
+        "/lib64/ld-linux-x86-64.so.2"
+      ],
+      "package": "cpp-13-x86-64-linux-gnu",
+      "pin": {
+        "bytes": 30487984,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "5d1679131184e2de4435b426eb264bf13472fe026db8e5c6bc97445814e8e2f4",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_2.3"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.14",
+          "GLIBC_2.17",
+          "GLIBC_2.2.5",
+          "GLIBC_2.25",
+          "GLIBC_2.3",
+          "GLIBC_2.3.2",
+          "GLIBC_2.3.4",
+          "GLIBC_2.32",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.35",
+          "GLIBC_2.36",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.7",
+          "GLIBC_2.8"
+        ]
+      }
+    },
+    "/usr/libexec/gcc/x86_64-linux-gnu/13/collect2": {
+      "alias": null,
+      "canonical": "/usr/libexec/gcc/x86_64-linux-gnu/13/collect2",
+      "directNeeded": {
+        "ld-linux-x86-64.so.2": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "libc.so.6": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+      },
+      "interpreter": [
+        "/lib64/ld-linux-x86-64.so.2"
+      ],
+      "package": "gcc-13-x86-64-linux-gnu",
+      "pin": {
+        "bytes": 336056,
+        "gid": 0,
+        "mode": "0755",
+        "sha256": "4d1f341ae5b763b513258ee2812422a45e063c30a2f1924a0cf63d3699f3a158",
+        "uid": 0
+      },
+      "requiredVersionsBySONAME": {
+        "ld-linux-x86-64.so.2": [
+          "GLIBC_2.3"
+        ],
+        "libc.so.6": [
+          "GLIBC_2.11",
+          "GLIBC_2.14",
+          "GLIBC_2.17",
+          "GLIBC_2.2.5",
+          "GLIBC_2.3.2",
+          "GLIBC_2.3.4",
+          "GLIBC_2.32",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.35",
+          "GLIBC_2.38",
+          "GLIBC_2.4",
+          "GLIBC_2.9"
+        ]
+      }
+    }
+  },
+  "linkInputs": {
+    "/usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o": {
+      "bytes": 2752,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "667ff5f1edc931d44d1f2bb44d313907aa274bcc207c0beff71a398335f0d29f",
+      "uid": 0
+    },
+    "/usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o": {
+      "bytes": 1168,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "9c8b2caad195193301ef072895dc89bea1d23371d4c19accd821debe27773063",
+      "uid": 0
+    },
+    "/usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a": {
+      "bytes": 3093656,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "d9376c55f97863a4e5fbb6c6beca2591b319bf786f3a7ca56da8964c5662171f",
+      "uid": 0
+    },
+    "/usr/lib/gcc/x86_64-linux-gnu/13/libgcc_s.so": {
+      "bytes": 132,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "69a56a9993b7729b29b274e65016031c81f2397f176ed5ad44d59bd50425e0bd",
+      "uid": 0
+    },
+    "/usr/lib/x86_64-linux-gnu/crti.o": {
+      "bytes": 1192,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "077ccb6c68db1794da3ee262c4a16a3c6f8e902845dd0829110ad4b7065e5aa3",
+      "uid": 0
+    },
+    "/usr/lib/x86_64-linux-gnu/crtn.o": {
+      "bytes": 760,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "a2266079f95b84ccc2162ebbf279bcd78858a748aa1882e0bdb912316c76a58f",
+      "uid": 0
+    },
+    "/usr/lib/x86_64-linux-gnu/libc.so": {
+      "bytes": 283,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "fe2a4ce2930fc6b3966aa987fae808375446c8d3823b8c21792e991aad9c75df",
+      "uid": 0
+    },
+    "/usr/lib/x86_64-linux-gnu/libc_nonshared.a": {
+      "bytes": 5594,
+      "gid": 0,
+      "mode": "0644",
+      "sha256": "3341391290ddd596521a61152b4e2612f4625cc85f737d875b918f6cfb2b2786",
+      "uid": 0
+    }
+  },
+  "loaderPathSpellingInELF": "/lib64/ld-linux-x86-64.so.2",
+  "nodeHeaderPins": {
+    "js_native_api.h": "82d3708ce120f8000ec34d72e1aa70b0d7d8a43027986293681374a71b2cb840",
+    "js_native_api_types.h": "4f19cb90d240765cc0961d92a1ee20f65fdc50db7de1ab0a5cb6bc227224e1a0",
+    "node_api.h": "2d4560831e525b47b060ec8a0864ab73993df9e20215ce9f0fe7b24cd31af32a",
+    "node_api_types.h": "a25356630d3058f0a0c8937d9f297e9471e037fda58c2696d8a505c2bd99cb00"
+  },
+  "offlineAliasPins": {
+    "/usr/bin/as": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "x86_64-linux-gnu-as",
+      "uid": 0
+    },
+    "/usr/bin/gcc": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "gcc-13",
+      "uid": 0
+    },
+    "/usr/bin/gcc-13": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "x86_64-linux-gnu-gcc-13",
+      "uid": 0
+    },
+    "/usr/bin/ld": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "x86_64-linux-gnu-ld",
+      "uid": 0
+    },
+    "/usr/bin/ld.bfd": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "x86_64-linux-gnu-ld.bfd",
+      "uid": 0
+    },
+    "/usr/bin/x86_64-linux-gnu-ld": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "x86_64-linux-gnu-ld.bfd",
+      "uid": 0
+    },
+    "/usr/lib64/ld-linux-x86-64.so.2": {
+      "gid": 0,
+      "mode": "0777",
+      "target": "../lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "uid": 0
+    }
+  },
+  "possibleLinkerPlugin": {
+    "actualSelectionObserved": false,
+    "aliases": {
+      "/usr/lib/bfd-plugins/liblto_plugin.so": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "../../libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so",
+        "uid": 0
+      },
+      "/usr/lib/gcc/x86_64-linux-gnu/13/liblto_plugin.so": {
+        "gid": 0,
+        "mode": "0777",
+        "target": "../../../../libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so",
+        "uid": 0
+      }
+    },
+    "canonical": "/usr/libexec/gcc/x86_64-linux-gnu/13/liblto_plugin.so",
+    "pin": {
+      "bytes": 68296,
+      "gid": 0,
+      "mode": "0755",
+      "sha256": "14469ff8498fca3871c29dbf678c2330123207fffb8308151314a08395309ddf",
+      "uid": 0
+    }
+  },
+  "remainingLiveChecks": [
+    "native ancestry and exact installed package, file and symlink identities in the worker",
+    "ordinary loader-cache resolution for each approved ELF and canonical same-job library digests",
+    "actual compiler dispatch through cc1, assembler, collect2 and ld and actual header/startup/plugin uses",
+    "resource-bounded closure and independent ELF/addon readback after an expressly admitted compile"
+  ],
+  "requireLivePackageManagedLinks": [
+    "/usr/bin/cc",
+    "/etc/alternatives/cc"
+  ],
+  "staticEvidence": {
+    "compilersOrLoadersInvoked": false,
+    "elfRoles": 18,
+    "headerMembers": 1596,
+    "installedOnIntendedWorker": false,
+    "linkInputs": 8,
+    "signedPackagePins": 22
+  }
+}
