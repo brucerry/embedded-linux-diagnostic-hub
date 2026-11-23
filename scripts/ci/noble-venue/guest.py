@@ -1,0 +1,477 @@
+"""Noble inert APT witness. Run APT only inside the verified process-local restrictions."""
+from base64 import b64decode
+import ctypes as c
+import errno
+import fcntl
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+import re
+import resource
+import signal
+import stat
+import subprocess
+import sys
+from urllib.parse import unquote_to_bytes
+
+
+MEDIA=Path('/mnt/hub-apt-witness')
+ROOT=Path('/run/hub-apt-witness')
+STATE=ROOT/'private'
+STATUS=Path('/var/lib/dpkg/status')
+STAND_IN=Path('/var/lib/hub-apt-witness-actor/dpkg-stand-in')
+APT=Path('/usr/bin/apt-get')
+CONFIG=Path('/usr/bin/apt-config')
+UID,GID=42,65534
+LOCK_SHA='bab31cbbe0e4b4cf8c2cb976571147be182d5ebda2fea9afbe03635debf61fb3'
+STAND_IN_SHA='0ddd063c64a47cfaedfa9dd2728678025414e1efca883e0ccb229bbb94f6ec1e'
+IMAGE='04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94'
+LIMIT=1024**2
+WORKER_PHASES=(
+    'apt_worker_identity','apt_tool_control_pin','apt_stock_kernel','apt_stock_objects',
+    'apt_stock_aliases','apt_output_limit','apt_landlock_abi','apt_landlock_ruleset',
+    'apt_landlock_stock_paths','apt_landlock_runtime_paths','apt_landlock_enforcement',
+    'apt_excluded_reads','apt_excluded_exec','apt_standin_selftest',
+    'apt_configuration','apt_private_locks','apt_capture','apt_local_acquisition',
+    'apt_unpack_marker','apt_unpack_refusal',
+)
+PHASES=('apt_media','apt_signed_baseline','apt_worker_start','apt_worker_wire',
+        *WORKER_PHASES,'apt_databases_unchanged')
+ENV={'PATH':'/nonexistent','HOME':'/nonexistent','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive',
+     'TMPDIR':str(STATE/'tmp'),'APT_CONFIG':str(ROOT/'apt.conf')}
+RFLAGS=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC
+EXEC,WRITE,READ,LIST=1,2,4,8
+# Handle through TRUNCATE, including the types of node APT must never create.
+FS_RIGHTS=(1<<15)-1
+WORK_RIGHTS=READ|LIST|WRITE|sum(1<<bit for bit in (4,5,7,8,12,13,14))
+
+
+def need(condition,label):
+    if not condition:
+        raise ValueError(label)
+
+
+def digest(value):
+    return sha256(value).hexdigest()
+
+
+def pinned(path,max_bytes,pin=None,size=None):
+    with os.fdopen(os.open(path,RFLAGS),'rb') as source:
+        first=os.fstat(source.fileno())
+        need(stat.S_ISREG(first.st_mode) and 0<first.st_size<=max_bytes and
+             (size is None or size==first.st_size),'file-size')
+        raw=source.read(first.st_size+1)
+        last=os.fstat(source.fileno())
+        need((first.st_size,first.st_mtime_ns,first.st_ctime_ns)==
+             (last.st_size,last.st_mtime_ns,last.st_ctime_ns) and len(raw)==first.st_size
+             and (pin is None or pin==digest(raw)),'file-pin')
+        return raw
+
+
+def put(path,raw,mode,private=False):
+    with os.fdopen(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600),'wb') as out:
+        out.write(raw)
+        if private:
+            os.fchown(out.fileno(),UID,GID)
+        os.fchmod(out.fileno(),mode)
+
+
+def media(lock):
+    need(len(lock['entries'])==67 and sum(x['compressed_bytes'] for x in lock['entries'])==55561760,
+         'signed-package-roster')
+    children={p.name for p in MEDIA.iterdir()}
+    names=[f'p{n:03}.deb' for n in range(67)]
+    need(children=={'boot.py','lock.jsn','tools.jsn','actor.b64',*names},'flat-media-roster')
+    found=[]
+    for raw in Path('/proc/self/mountinfo').read_text().splitlines():
+        left,_,right=raw.partition(' - ')
+        fields,fs=left.split(),right.split()
+        if len(fields)>5 and fields[4]==str(MEDIA):
+            found.append(fields[3]=='/' and {'ro','nosuid','nodev','noexec'}<=set(fields[5].split(','))
+                         and len(fs)==3 and fs[0]=='iso9660' and fs[1]=='/dev/sr1'
+                         and 'ro' in fs[2].split(','))
+        need(len(fields)<=4 or not fields[4].startswith(str(MEDIA)+'/'),'nested-media')
+    need(found==[True] and all(p.lstat().st_mode&1 for p in (MEDIA,*MEDIA.parents)),'optical-boundary')
+    for name,row in zip(names,lock['entries'],strict=True):
+        path=MEDIA/name
+        need(path.lstat().st_mode&4,'ordinary-user-readable-media')
+        pinned(path,30_574_382,row['sha256'],row['compressed_bytes'])
+
+
+def settings():
+    empty=str(ROOT/'empty.conf')
+    dirs=str(ROOT/'empty')
+    return {
+        'APT::Architecture':'amd64','APT::Sandbox::User':'_apt','APT::Install-Recommends':'false',
+        'APT::Install-Suggests':'false','APT::Get::AllowUnauthenticated':'false',
+        'Acquire::AllowInsecureRepositories':'false','Acquire::AllowDowngradeToInsecureRepositories':'false',
+        'Acquire::Check-Valid-Until':'true','Acquire::Retries':'0','Debug::pkgAcquire::Worker':'true',
+        'Dir::Etc::main':empty,'Dir::Etc::parts':dirs,'Dir::Etc::sourcelist':empty,'Dir::Etc::sourceparts':dirs,
+        'Dir::Etc::preferences':empty,'Dir::Etc::preferencesparts':dirs,
+        'Dir::Etc::trusted':empty,'Dir::Etc::trustedparts':dirs,
+        'Dir::State':str(STATE),'Dir::State::status':str(STATE/'dpkg/status'),
+        'Dir::State::extended_states':str(STATE/'extended_states'),'Dir::State::lists':str(STATE/'lists'),
+        'Dir::Cache':str(STATE/'cache'),'Dir::Cache::archives':str(STATE/'cache/archives'),
+        'Dir::Cache::pkgcache':'','Dir::Cache::srcpkgcache':'','Dir::Log':str(STATE/'log'),
+        'Dir::Bin::dpkg':str(STAND_IN),'Dir::Bin::Methods':'/usr/lib/apt/methods',
+        'DPkg::Run-Directory':str(STATE),'DPkg::Use-Pty':'false','DPkg::Lock::Timeout':'0',
+        'binary::apt-get::Debug::NoLocking':'false',
+    }
+
+
+def config_bytes():
+    return (''.join(f'{key} "{value}";\n' for key,value in settings().items())+
+            'APT::Architectures { "amd64"; };\n').encode('ascii')
+
+
+def verify_config(raw):
+    expected={k.lower():v for k,v in settings().items()}
+    observed={}
+    arches=[]
+    for line in raw.decode('ascii').splitlines():
+        row=re.fullmatch(r'(\S+) "(.*)";',line)
+        need(row is not None,'apt-configuration-framing')
+        key,value=row.groups()
+        key=key.lower()
+        need(not re.search(r'(?:^|::)(?:[^:]*invoke[^:]*|[^:]*install-pkgs[^:]*|hooks?)(?:::|$)',key),
+             'apt-ambient-hook')
+        if key=='apt::architectures::':
+            arches.append(value)
+        elif key in expected:
+            need(key not in observed,'apt-configuration-duplicate')
+            observed[key]=value
+    need(observed==expected and arches==['amd64'],'apt-configuration-identity')
+
+
+def stock_kernel(tools):
+    executables={'/usr/bin/apt-get','/usr/bin/apt-config','/usr/lib/apt/methods/file',
+                 '/usr/lib/apt/methods/copy','/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2'}
+    need(tools['image']==IMAGE and tools['kernel']==os.uname().release and
+         len(tools['members'])==23 and set(tools['executables'])==executables,'stock-tool-roster')
+    return {Path(path) for path in executables}
+
+
+def stock_objects(tools,execute):
+    read=set()
+    for name,pin in (tools['members']|tools['config']).items():
+        path=Path(name)
+        need(path in execute or name in ('/etc/passwd','/etc/group','/etc/nsswitch.conf')
+             or re.fullmatch(r'/usr/lib/x86_64-linux-gnu/[A-Za-z0-9_.+\-]+\.so(?:\.[0-9.]+)?',name),
+             'stock-read-object-roster')
+        need(path.resolve(strict=True)==path,'stock-object-alias')
+        meta=path.lstat()
+        need((meta.st_uid,meta.st_gid,stat.S_IMODE(meta.st_mode))==(0,0,pin['mode']),'stock-object-mode')
+        pinned(path,16*LIMIT,pin['sha256'],pin['size'])
+        read.add(path)
+    pin=tools['negative']
+    pinned(Path('/usr/bin/true'),LIMIT,pin['sha256'],pin['size'])
+    return read
+
+
+def stock_aliases(tools,read):
+    for name,destination in tools['aliases'].items():
+        need(Path(name).resolve(strict=True)==Path(destination) and Path(destination) in read,'stock-library-alias')
+    need(Path('/lib64/ld-linux-x86-64.so.2').resolve(strict=True)==
+         Path('/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2'),'stock-interpreter')
+
+
+class Rules(c.Structure):
+    _fields_=[('fs',c.c_uint64),('net',c.c_uint64)]
+
+
+class Rule(c.Structure):
+    _pack_=1
+    _fields_=[('allow',c.c_uint64),('parent',c.c_int32)]
+
+
+def permission_plan(read,execute):
+    objects={p:READ|(EXEC if p in execute else 0) for p in read}
+    objects|={STAND_IN:READ|EXEC,MEDIA:READ|LIST,ROOT/'empty':LIST,
+              ROOT/'empty.conf':READ,ROOT/'apt.conf':READ,STATE:WORK_RIGHTS,
+              Path('/dev/null'):READ|WRITE}
+    need({p for p,rights in objects.items() if rights&EXEC}==execute|{STAND_IN}
+         and all(path.is_absolute() for path in objects),'landlock-closed-exec-roster')
+    return objects
+
+
+def landlock_interface():
+    libc=c.CDLL(None,use_errno=True)
+    call=libc.syscall
+    call.restype=c.c_long
+    # x86_64 Linux UAPI. An absent or disabled ABI is a refusal, with no fallback.
+    need(os.uname().machine=='x86_64' and call(444,0,0,1)>=4,'landlock-abi')
+    return call
+
+
+def create_ruleset(call):
+    rules=Rules(FS_RIGHTS,3)  # deny TCP connect and bind in addition to no NIC
+    fd=call(444,c.byref(rules),c.sizeof(rules),0)
+    need(fd>=0,'landlock-create')
+    return fd
+
+
+def add_paths(call,fd,objects,paths):
+    for path in sorted(paths):
+        parent=os.open(path,os.O_PATH|os.O_CLOEXEC|os.O_NOFOLLOW)
+        try:
+            need(stat.S_IFMT(os.fstat(parent).st_mode) in (stat.S_IFDIR,stat.S_IFREG,stat.S_IFCHR),
+                 'landlock-object-kind')
+            rule=Rule(objects[path],parent)
+            need(call(445,fd,1,c.byref(rule),0)==0,'landlock-add')
+        finally:
+            os.close(parent)
+
+
+def policy(read,execute,checked):
+    call=checked('apt_landlock_abi',landlock_interface)
+    fd=checked('apt_landlock_ruleset',lambda:create_ruleset(call))
+    try:
+        def stock_paths():
+            objects=permission_plan(read,execute)
+            add_paths(call,fd,objects,read)
+            return objects
+        objects=checked('apt_landlock_stock_paths',stock_paths)
+        checked('apt_landlock_runtime_paths',lambda:add_paths(call,fd,objects,objects.keys()-read))
+        checked('apt_landlock_enforcement',lambda:need(call(446,fd,0)==0,'landlock-enforce'))
+    finally:
+        os.close(fd)
+
+
+def assert_denied_reads():
+    for path in ('/usr/bin/dpkg','/bin/dpkg','/usr/bin/dpkg-deb','/usr/bin/dash',
+                 '/usr/bin/python3.12',str(STATUS)):
+        try:
+            fd=os.open(path,RFLAGS)
+        except PermissionError as error:
+            need(error.errno==errno.EACCES,'exclusion-read-error')
+        else:
+            os.close(fd)
+            raise ValueError('excluded-input-readable')
+
+
+def assert_denied_exec():
+    # A harmless real binary must fail to execute inside the same inherited domain.
+    pid=os.fork()
+    if pid==0:
+        try:
+            os.execve('/usr/bin/true',['/usr/bin/true'],ENV)
+        except OSError as error:
+            os._exit(71 if error.errno==errno.EACCES else 72)
+    _,status=os.waitpid(pid,0)
+    need(os.waitstatus_to_exitcode(status)==71,'exclusion-kernel-execution')
+
+
+def capture(argv,timeout):
+    # Bounded ordinary files avoid unbounded RAM growth and keep raw streams private.
+    output=STATE/'output'
+    error=STATE/'error'
+    with output.open('wb') as out,error.open('wb') as err:
+        child=subprocess.run(argv,env=ENV,stdin=subprocess.DEVNULL,stdout=out,stderr=err,timeout=timeout,
+                             close_fds=True)
+    raw,stderr=output.read_bytes(),error.read_bytes()
+    need(len(raw)+len(stderr)<LIMIT,'apt-output-limit')
+    return child.returncode,raw,stderr
+
+
+def assert_standin():
+    code,raw,stderr=capture([str(STAND_IN),'--unpack','/nonexistent/inert.deb'],4)
+    need((code,raw,stderr)==(73,b'',b'HUB_STANDIN_UNPACK_REFUSED\n'),'exact-stand-in')
+
+
+def check_configuration():
+    code,raw,stderr=capture([str(CONFIG),'dump'],6)
+    need(code==0 and not stderr,'apt-config-dump')
+    verify_config(raw)
+
+
+def check_private_locks():
+    need(not any((STATE/'dpkg/updates').iterdir()) and not any((STATE/'cache/archives/partial').iterdir()),
+         'private-journal-or-cache')
+    for name in ('dpkg/lock','dpkg/lock-frontend','cache/archives/lock'):
+        with (STATE/name).open('a+b') as lock:
+            fcntl.lockf(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+
+
+def apply_inert():
+    return capture([str(APT),'--no-download','--no-remove','--no-install-recommends',
+        '--assume-yes','install',*(str(MEDIA/f'p{i:03}.deb') for i in range(67))],85)
+
+
+def acquisition(stderr):
+    expected={f'p{i:03}.deb'.encode() for i in range(67)}
+    done=set()
+    for line in stderr.splitlines():
+        if not line.startswith(b' <- '):
+            continue
+        method,separator,wire=line[4:].partition(b':')
+        if not separator:
+            continue
+        # APT 2.8.3 QuoteString encodes spaces as well as the line breaks.
+        header,*fields=unquote_to_bytes(wire).split(b'\n')
+        if header.split(b' ',1)[0]!=b'201':
+            continue
+        uris=[field[5:] for field in fields if field.startswith(b'URI: ')]
+        prefix=b'file:'+os.fsencode(MEDIA)+b'/'
+        need(method==b'file' and header==b'201 URI Done' and len(uris)==1
+             and uris[0].startswith(prefix),'apt-foreign-acquisition')
+        name=uris[0][len(prefix):]
+        need(name in expected and name not in done,'apt-acquisition-roster')
+        done.add(name)
+    need(done==expected,'apt-incomplete-acquisition')
+
+
+def worker_identity():
+    proc=Path('/proc/self/status').read_text()
+    identity=all(re.search(pattern,proc,re.M) for pattern in (
+       r'^CapEff:\s+0+$',r'^CapPrm:\s+0+$',r'^CapAmb:\s+0+$',r'^NoNewPrivs:\s+1$'))
+    need(identity and os.getuid()==os.geteuid()==UID and os.getgid()==os.getegid()==GID
+         and not os.getgroups(),'guest-unprivileged-worker')
+
+
+def worker(toolsha):
+    def checked(name,action):
+        try:
+            result=action()
+        except Exception:
+            print(name+' fail',flush=True)
+            raise
+        print(name+' pass',flush=True)
+        return result
+    checked('apt_worker_identity',worker_identity)
+    tools=checked('apt_tool_control_pin',lambda:json.loads(pinned(MEDIA/'tools.jsn',32768,toolsha)))
+    execute=checked('apt_stock_kernel',lambda:stock_kernel(tools))
+    read=checked('apt_stock_objects',lambda:stock_objects(tools,execute))
+    checked('apt_stock_aliases',lambda:stock_aliases(tools,read))
+    checked('apt_output_limit',lambda:resource.setrlimit(resource.RLIMIT_FSIZE,(LIMIT,LIMIT)))
+    policy(read,execute,checked)
+    checked('apt_excluded_reads',assert_denied_reads)
+    checked('apt_excluded_exec',assert_denied_exec)
+    checked('apt_standin_selftest',assert_standin)
+    checked('apt_configuration',check_configuration)
+    checked('apt_private_locks',check_private_locks)
+    code,out,err=checked('apt_capture',apply_inert)
+    checked('apt_local_acquisition',lambda:acquisition(err))
+    checked('apt_unpack_marker',lambda:need(
+        (out.splitlines()+err.splitlines()).count(b'HUB_STANDIN_UNPACK_REFUSED')==1
+        and all(b'HUB_STANDIN_OTHER_REFUSED' not in stream for stream in (out,err)),
+        'apt-unpack-marker'))
+    checked('apt_unpack_refusal',lambda:need(
+        code==100 and f'Sub-process {STAND_IN} returned an error code (73)'.encode() in err,
+        'apt-did-not-report-exact-stand-in-refusal'))
+
+
+def worker_evidence(wire,code):
+    need(0<len(wire)<=2048 and wire.endswith(b'\n'),'worker-wire-limit')
+    rows=wire[:-1].decode('ascii').split('\n')
+    need(len(rows)<=len(WORKER_PHASES),'worker-wire-length')
+    verdicts=[]
+    for index,line in enumerate(rows):
+        name=WORKER_PHASES[index]
+        need(line==name+' pass' or (code==78 and index==len(rows)-1 and line==name+' fail'),
+             'worker-wire-frame')
+        verdicts.append((name,'pass' if line.endswith(' pass') else 'fail'))
+    need((code==0 and len(rows)==len(WORKER_PHASES)) or
+         (code==78 and verdicts[-1][1]=='fail'),'worker-wire-exit')
+    return verdicts
+
+
+def stage_standin(raw):
+    # Noble moves its initramfs noexec /run into the final root. Keep state there.
+    parent=STAND_IN.parent.parent
+    need(parent.resolve(strict=True)==parent,'stand-in-parent-alias')
+    for directory in (parent,*parent.parents):
+        info=directory.lstat()
+        need(stat.S_ISDIR(info.st_mode) and (info.st_uid,info.st_gid)==(0,0)
+             and info.st_mode&0o001 and not info.st_mode&0o022,'stand-in-parent-mode')
+    need(parent.lstat().st_dev==Path('/').lstat().st_dev and
+         not os.statvfs(parent).f_flag&(os.ST_NOEXEC|os.ST_RDONLY),'stand-in-parent-mount')
+    actor=STAND_IN.parent
+    actor.mkdir(mode=0o755)
+    actor.chmod(0o755)
+    put(STAND_IN,raw,0o555)
+    pinned(STAND_IN,4096,STAND_IN_SHA,len(raw))
+
+
+def configure(baseline):
+    ROOT.mkdir(mode=0o755)
+    ROOT.chmod(0o755)
+    (ROOT/'empty').mkdir(mode=0o555)
+    (ROOT/'empty').chmod(0o555)
+    put(ROOT/'empty.conf',b'',0o444)
+    put(ROOT/'apt.conf',config_bytes(),0o444)
+    raw=b64decode(pinned(MEDIA/'actor.b64',4096).strip(),validate=True)
+    need(digest(raw)==STAND_IN_SHA,'stand-in-publisher-bytes')
+    stage_standin(raw)
+    for part in ('','dpkg','dpkg/updates','cache','cache/archives','cache/archives/partial',
+                 'lists','log','tmp'):
+        path=STATE/part
+        path.mkdir(mode=0o700)
+        os.chown(path,UID,GID)
+    put(STATE/'dpkg/status',baseline,0o400,private=True)
+
+
+def supervisor(nonce,toolsha):
+    need(os.getuid()==os.geteuid()==0 and re.fullmatch('[a-f0-9]{64}',nonce),'stock-cloud-init')
+    def mark(name,result):
+        with open('/dev/ttyS0','w') as tty:
+            print(f'HUB_APT_WITNESS {nonce} {name} {result}',file=tty,flush=True)
+    try:
+        lock=json.loads(pinned(MEDIA/'lock.jsn',65536,LOCK_SHA))
+        media(lock)
+    except Exception:
+        mark('apt_media','fail')
+        raise
+    mark('apt_media','pass')
+    try:
+        need(not ROOT.exists() and sorted(os.listdir('/sys/class/net'))==['lo'],'guest-loopback-state')
+        baseline=pinned(STATUS,2*LIMIT,lock['guestStatusSHA256'])
+        configure(baseline)
+    except Exception:
+        mark('apt_signed_baseline','fail')
+        raise
+    mark('apt_signed_baseline','pass')
+    args=['/usr/bin/setpriv',f'--reuid={UID}',f'--regid={GID}','--clear-groups','--no-new-privs',
+          '/usr/bin/python3.12','-I','-B',str(MEDIA/'boot.py'),'worker',toolsha]
+    try:
+        child=subprocess.Popen(args,env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C'},
+                               stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+                               start_new_session=True,close_fds=True)
+    except Exception:
+        mark('apt_worker_start','fail')
+        raise
+    mark('apt_worker_start','pass')
+    try:
+        try:
+            wire,_=child.communicate(timeout=115)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid,signal.SIGKILL)
+            child.communicate(timeout=5)
+            raise
+        verdicts=worker_evidence(wire,child.returncode)
+    except Exception:
+        mark('apt_worker_wire','fail')
+        raise
+    mark('apt_worker_wire','pass')
+    for name,verdict in verdicts:
+        mark(name,verdict)
+    try:
+        need(pinned(STATUS,2*LIMIT,lock['guestStatusSHA256'])==baseline and
+             pinned(STATE/'dpkg/status',2*LIMIT,lock['guestStatusSHA256'])==baseline and
+             not any((STATE/'dpkg/updates').iterdir()),'database-state-preservation')
+    except Exception:
+        if child.returncode==0:
+            mark('apt_databases_unchanged','fail')
+        raise
+    need(child.returncode==0,'apt-exclusion-preflight')
+    mark('apt_databases_unchanged','pass')
+
+
+if __name__=='__main__':
+    try:
+        if len(sys.argv)==3 and sys.argv[1]=='worker':
+            worker(sys.argv[2])
+        else:
+            supervisor(*sys.argv[1:])
+    except Exception:
+        raise SystemExit(78) from None
