@@ -1,0 +1,248 @@
+name: Noble same-attempt folder install qualification
+on:
+  push:
+    branches: [ci/v060-linux-noble-qemu-folder-node-alias-20261123]
+    paths:
+      - '.github/workflows/v060-linux-noble-qemu-folder-install.yml'
+      - 'scripts/ci/linux-two-format/**'
+      - 'scripts/ci/noble-folder/**'
+permissions:
+  contents: read
+jobs:
+  two-format:
+    if: ${{ github.event.created && !github.event.deleted && !github.event.forced && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 48
+    steps:
+      - name: Start bounded job clock
+        run: printf 'FOLDER_JOB_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Read the exact first-attempt checkout without retained credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Tar-only producer and offline Noble folder install and removal
+        id: folder
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf '%s  %s\n' 'a2d913b9e02678071fcdf17aefccf31993391d161ff7984543174f278ada08bb' scripts/ci/noble-folder/CONTROL-PINS.txt | /usr/bin/sha256sum --check --strict --status
+          /usr/bin/sha256sum --check --strict --status scripts/ci/noble-folder/CONTROL-PINS.txt
+          /usr/bin/python3 -B -E scripts/ci/noble-folder/folder_job.py
+      - name: Context / ${{ steps.folder.outputs.context || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Host space / ${{ steps.folder.outputs.host_space || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Inputs / ${{ steps.folder.outputs.inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Image space / ${{ steps.folder.outputs.image_space || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Created / ${{ steps.folder.outputs.created || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Isolation / ${{ steps.folder.outputs.isolation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Export backing / ${{ steps.folder.outputs.export_backing || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original tar checksum and primary build record custody / ${{ steps.folder.outputs.private_export || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Worker retired / ${{ steps.folder.outputs.worker_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Media backing / ${{ steps.folder.outputs.media_backing || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact project / ${{ steps.folder.outputs.exact_project || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Apt fixed signed package intake / ${{ steps.folder.outputs.apt_fixed_signed_package_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Apt readonly media sealed / ${{ steps.folder.outputs.apt_readonly_media_sealed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Optical media / ${{ steps.folder.outputs.optical_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Venue pre intake / ${{ steps.folder.outputs.venue_pre_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Venue oci / ${{ steps.folder.outputs.venue_oci || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest origin / ${{ steps.folder.outputs.guest_origin || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest host preflight / ${{ steps.folder.outputs.guest_host_preflight || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest prep / ${{ steps.folder.outputs.guest_prep || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest prep retired / ${{ steps.folder.outputs.guest_prep_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest overlay / ${{ steps.folder.outputs.guest_overlay || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest boot backing / ${{ steps.folder.outputs.guest_boot_backing || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot exec / ${{ steps.folder.outputs.boot_exec || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest kernel / ${{ steps.folder.outputs.guest_kernel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest nocloud / ${{ steps.folder.outputs.guest_nocloud || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest sentinel / ${{ steps.folder.outputs.guest_sentinel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest loopback / ${{ steps.folder.outputs.guest_loopback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest poweroff / ${{ steps.folder.outputs.guest_poweroff || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov identity / ${{ steps.folder.outputs.prov_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov media / ${{ steps.folder.outputs.prov_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov growth / ${{ steps.folder.outputs.prov_growth || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov tools / ${{ steps.folder.outputs.prov_tools || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov cache / ${{ steps.folder.outputs.prov_cache || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov config / ${{ steps.folder.outputs.prov_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact 62 additions and five upgrades with zero removals / ${{ steps.folder.outputs.prov_simulation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov apply / ${{ steps.folder.outputs.prov_apply || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact 726 installed packages and preserved unrelated records / ${{ steps.folder.outputs.prov_database || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov observer / ${{ steps.folder.outputs.prov_observer || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov capacity / ${{ steps.folder.outputs.prov_capacity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest identity / ${{ steps.folder.outputs.guest_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Readonly media / ${{ steps.folder.outputs.readonly_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest product capacity / ${{ steps.folder.outputs.guest_product_capacity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest account / ${{ steps.folder.outputs.guest_account || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Realized helpers / ${{ steps.folder.outputs.realized_helpers || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Unprivileged no-menu no-launch install verified removal and preservation / ${{ steps.folder.outputs.native_install_removal || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor entry / ${{ steps.folder.outputs.actor_entry || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor preflight / ${{ steps.folder.outputs.actor_preflight || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor node loader / ${{ steps.folder.outputs.actor_node_loader || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor envelope / ${{ steps.folder.outputs.actor_envelope || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor installer loader / ${{ steps.folder.outputs.actor_installer_loader || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor install start / ${{ steps.folder.outputs.actor_install_start || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor install exit / ${{ steps.folder.outputs.actor_install_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor install closure / ${{ steps.folder.outputs.actor_install_closure || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor installed verification / ${{ steps.folder.outputs.actor_installed_verification || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor uninstall preflight / ${{ steps.folder.outputs.actor_uninstall_preflight || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor uninstall start / ${{ steps.folder.outputs.actor_uninstall_start || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor uninstall exit / ${{ steps.folder.outputs.actor_uninstall_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor uninstall closure / ${{ steps.folder.outputs.actor_uninstall_closure || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Actor uninstall verification / ${{ steps.folder.outputs.actor_uninstall_verification || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov exit / ${{ steps.folder.outputs.prov_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov status / ${{ steps.folder.outputs.prov_status || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov progress / ${{ steps.folder.outputs.prov_progress || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov error / ${{ steps.folder.outputs.prov_error || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov prompt / ${{ steps.folder.outputs.prov_prompt || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov child / ${{ steps.folder.outputs.prov_child || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest exit / ${{ steps.folder.outputs.guest_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest worker retired / ${{ steps.folder.outputs.guest_worker_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Immutable media readback after guest retirement / ${{ steps.folder.outputs.post_boot_custody || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Scratch retired / ${{ steps.folder.outputs.scratch_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Four original tar member modes and staged bytes / ${{ steps.folder.outputs.tar_original_members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Build / ${{ steps.folder.outputs.build || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original evidence / ${{ steps.folder.outputs.original_evidence || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
