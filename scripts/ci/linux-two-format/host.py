@@ -20,6 +20,8 @@ import compiler_gate
 import reader_input
 import reproduction as providers
 import tar_admission as pins
+import runtime_input
+import runtime_rebuild
 from worker_protocol import (
     CLOSURE_STAGES, WORKER_STAGES, DIGEST_KEYS, EXTRACTION_POLICY_REVIEWED, VERIFIER_CONDITIONS,
 )
@@ -30,7 +32,7 @@ BASE = '5e3c66f4a62e3606abdd650972e0f76b71ff5c54'
 TEXT_TREE = '502caca5bac9c9c3ac8beb70d7b21aa3041f15f7'
 IMAGE = 'docker.io/library/buildpack-deps@sha256:e7fdb09e2aacd2a32875a44be9caa1c18f3098b88620ac6a4bde84c0732c9f87'
 CONFIG = 'sha256:f96221e29033048b6f577864f7718af5626d209f80345dde518058c29b6ce2cd'
-BRANCH = 'refs/heads/ci/v060-jammy-appimage-frame-lifecycle-20261124'
+BRANCH = 'refs/heads/ci/v060-jammy-corrected-appimage-originals-20261124'
 REPO = 'brucerry/embedded-linux-diagnostic-hub'
 WORKFLOW = '.github/workflows/v060-jammy-appimage-runtime.yml'
 FLOOR = 4 * 1024**3
@@ -44,7 +46,7 @@ PRESTAGE_STAGES = (
     'host_docker_floor', 'host_scratch_floor', 'host_containerd_floor',
 )
 VERIFIER_OUTPUTS = tuple('verifier_' + item for item in VERIFIER_CONDITIONS)
-STAGES = ('context', *PRESTAGE_STAGES, 'host_space', 'inputs', 'image_space', 'created',
+STAGES = ('context', *PRESTAGE_STAGES, 'host_space', 'inputs', 'runtime_rebuild', 'image_space', 'created',
           'isolation', *WORKER_STAGES, *VERIFIER_OUTPUTS, 'extraction', 'attach', 'worker_retired', 'scratch_retired')
 
 class Refused(Exception):
@@ -158,15 +160,15 @@ def file_hash(path):
         return file_digest(body,'sha256').hexdigest()
 
 
-def download(item, root):
+def download(item, root, *, seconds=57):
     name,url,size,digest,redirect = item
     destination = root/name
     with destination.open('xb', buffering=0) as out:
         options=['--location','--proto-redir','=https','--max-redirs','2'] if redirect else ['--max-redirs','0']
         reason, status, stderr = capture(['/usr/bin/curl','--disable','--silent','--show-error','--fail',
-               '--proto','=https','--retry','0','--connect-timeout','5','--max-time','55','--max-filesize',str(size),
+               '--proto','=https','--retry','0','--connect-timeout','5','--max-time',str(min(55, seconds)),'--max-filesize',str(size),
                '--write-out','%{http_code}','--output',f'/proc/self/fd/{out.fileno()}',*options,url],
-               SAFE_ENV, 57, limit=4096, pass_fds=(out.fileno(),))
+               SAFE_ENV, seconds, limit=4096, pass_fds=(out.fileno(),))
         need(reason == 'ok' and not stderr and status == b'200', 'public-intake')
         os.fchmod(out.fileno(),0o400)
     need(destination.stat().st_size==size and file_hash(destination)==digest,'public-input-pin:'+name)
@@ -228,6 +230,12 @@ def source_stage(destination, checkout, root):
     command(git+['apply','--cached','--whitespace=nowarn',str(verifier_source)],env,8,'verifier-source-patch')
     need(command(git+['write-tree'],env,8,'verifier-source-tree').decode().strip()==
          '82d81d1f241727ada9561386d34dfa72d5f10c20','exact-verifier-source-tree')
+    launcher=CONTROL/'patches/PORTABLE-APPRUN.patch'
+    need(file_hash(launcher)=='a655fbf3d7a3547eb1c4b8ea8057d3fcf194478ffe975efcfb117f76ea9d874c',
+         'portable-apprun-patch-pin')
+    command(git+['apply','--cached','--whitespace=error-all',str(launcher)],env,8,'portable-apprun-patch')
+    need(command(git+['write-tree'],env,8,'portable-source-tree').decode().strip()==
+         '0207837c98b4b22b277549ec0784cc6a3879e138','exact-portable-source-tree')
     command(git+['checkout-index','--all','--prefix='+str(destination)+'/'],env,20,'materialized-text-tree')
 
 
@@ -263,6 +271,11 @@ def stage(root, checkout, worker):
     if EXTRACTION_POLICY_REVIEWED or WORKFLOW.endswith("jammy-appimage-runtime.yml"):
         stage_reader(root, sources/'media', cfg['READER-DATA-RECEIPT.json'])
     return sources
+
+
+def stage_runtime(root, sources):
+    runtime_rebuild.rebuild(root, sources/'media'/runtime_input.INPUT, download, command,
+                            free=free, deadline=monotonic()+220)
 
 
 def worker_options(name, root, bound, ownership):
@@ -520,6 +533,7 @@ def main(verdicts):
         (root/'docker').mkdir(mode=0o700)
         backs = step(verdicts, 'host_space', lambda: check_host(worker, root, verdicts))
         source = step(verdicts, 'inputs', lambda: stage(root, checkout, worker))
+        step(verdicts, 'runtime_rebuild', lambda: stage_runtime(root, source))
         step(verdicts, 'image_space', lambda: check_image(worker, backs))
         doc = step(verdicts, 'created', lambda: worker.create(source))
         step(verdicts, 'isolation', lambda: isolated(doc, worker.cid, source, worker.bound))

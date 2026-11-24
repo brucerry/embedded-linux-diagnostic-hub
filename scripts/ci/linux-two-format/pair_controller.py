@@ -27,7 +27,7 @@ import native_preflight
 import appimage_inventory as image
 import archive_inventory
 
-EXTRA=('producer_custody','producer_phase_budget','guest_pair_import','combined_retirement','observer_media','appimage_receipt')
+EXTRA=('producer_custody','producer_phase_budget','guest_pair_import','guest_appimage_lifecycle','combined_retirement','observer_media','appimage_receipt')
 STAGES=tuple('producer_'+key for key in producer.STAGES if key not in producer.VERIFIER_OUTPUTS)+tuple(
     'jammy_'+key for key in jammy.STAGES)+EXTRA
 
@@ -111,6 +111,7 @@ def execute_release(stages,checkout,root,run,deadline):
     try:
         backs=step('host_space',lambda:producer.check_host(worker,building,records))
         inputs=step('inputs',lambda:producer.stage(building,checkout,worker))
+        step('runtime_rebuild',lambda:producer.stage_runtime(building,inputs))
         step('image_space',lambda:producer.check_image(worker,backs))
         document=step('created',lambda:worker.create(inputs))
         step('isolation',lambda:producer.isolated(document,worker.cid,inputs,worker.bound))
@@ -182,9 +183,12 @@ def main(stages,*,venue=jammy.main):
             venue(outcomes,product)
         finally:
             stages.update({'jammy_'+key:value for key,value in outcomes.items()})
-        producer.step(stages,'guest_pair_import',lambda:producer.need(outcomes.get('native_window_renderer_quit')=='pass'
-            and outcomes.get('native_owned_retirement')=='pass'
-            and outcomes.get('retirement')=='pass','combined-guest-import'))
+            if 'native_custody' in outcomes:
+                stages['guest_pair_import']=outcomes['native_custody']
+        producer.step(stages,'guest_appimage_lifecycle',lambda:producer.need(
+            outcomes.get('native_custody')==outcomes.get('native_packaged_window_quit')==
+            outcomes.get('native_owned_retirement')==outcomes.get('retirement')=='pass',
+            'combined-guest-appimage-lifecycle'))
     finally:
         if stages.get('producer_worker_retired')=='fail' or outcomes.get('retirement')=='fail':
             stages['combined_retirement']='preserved'
@@ -203,7 +207,7 @@ def entry():
     success=False
     try:
         main(stages)
-        success=stages.get('guest_pair_import')==stages.get('combined_retirement')=='pass'
+        success=stages.get('guest_appimage_lifecycle')==stages.get('combined_retirement')=='pass'
     except Exception:
         pass
     finally:

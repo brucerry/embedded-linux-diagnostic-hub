@@ -12,6 +12,7 @@ import tarfile
 import compiler_gate
 import handoff
 import read_envelope
+import runtime_input
 import tar_admission as pins
 
 
@@ -52,12 +53,16 @@ def pinned_link_target(name, roster):
     return current
 
 
-def stage_members(archive, root, spec):
+def stage_members(archive, root, spec, corrected):
     _, observed, data = pins.file_data(
         archive, "appimage-tools-body", byte_count=spec["bytes"], capture=True, capture_limit=12*1024**2,
     )
     pins.need(observed["sha256"] == spec["sha256"], "appimage-tools-archive-pin")
+    runtime = runtime_input.read_runtime(corrected)
+    notices = runtime_input.read_notices(runtime_input.read_spec())
     expected = spec["members"]
+    pins.need(runtime_input.RUNTIME in expected and expected[runtime_input.RUNTIME]["type"] == "file",
+              "publisher-runtime-role")
     seen = set()
     links = {}
     root.mkdir(mode=0o700)
@@ -89,7 +94,7 @@ def stage_members(archive, root, spec):
                 body = package.extractfile(member).read(pin["size"] + 1)
                 pins.need(len(body) == pin["size"] and sha(body) == pin["sha256"], "appimage-member-digest")
                 with path.open("xb") as output:
-                    output.write(body)
+                    output.write(runtime if name == runtime_input.RUNTIME else body)
                     os.fchmod(output.fileno(), member.mode)
     pins.need(seen == set(expected), "appimage-member-roster")
     for path, target in links.items():
@@ -99,12 +104,15 @@ def stage_members(archive, root, spec):
         canonical = root / pinned_link_target(path.relative_to(root).as_posix(), expected)
         pins.need(path.resolve(strict=True) == canonical and canonical.is_file(),
                   "appimage-canonical-alias-target")
+    pins.need(runtime_input.read_runtime(root / runtime_input.RUNTIME) == runtime,
+              "corrected-runtime-stage-readback")
+    runtime_input.stage_notices(root, notices)
     return observed["sha256"]
 
-def stage_tools(archive, root, spec, loader, parse_loader, command, *, phase=nullcontext):
+def stage_tools(archive, root, spec, corrected, loader, parse_loader, command, *, phase=nullcontext):
     """Read pinned data before requesting a bounded normal loader observation in the worker."""
     with phase("packer_members"):
-        archive_digest = stage_members(archive, root, spec)
+        archive_digest = stage_members(archive, root, spec, corrected)
     with phase("packer_stock"):
         utilities = {name:stock(Path("/usr/bin")/name) for name in WRAPPER_UTILITIES}
         libdir = root/"linux/x64/lib"
@@ -120,7 +128,9 @@ def stage_tools(archive, root, spec, loader, parse_loader, command, *, phase=nul
         argv = [loader, "--library-path", libdir, "--list", root/PACKAGER_ELF]
         pins.need(parse_loader(command(argv, pinned_env, 12)) == resolution,
                   "appimage-packer-live-loader-resolution")
-    return sha(json.dumps({"archive":archive_digest, "utilities":utilities, "resolution":resolution},
+    return sha(json.dumps({"archive":archive_digest, "utilities":utilities, "resolution":resolution,
+                           "corrected_runtime":runtime_input.RUNTIME_SHA,
+                           "corrected_runtime_spec":runtime_input.SPEC_SHA},
                           sort_keys=True).encode())
 
 

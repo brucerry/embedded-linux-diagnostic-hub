@@ -1,0 +1,66 @@
+{
+  "architecture": "x86_64",
+  "baseCommit": "dd6cebedcbddde9c82f89b011e8e1d40b6e43868",
+  "cleanupPatchSHA256": "3f9c9b19fbf43c61730ace28c898ec6f2b91a924126045f05edfc34437d937c7",
+  "cleanupSourceSHA256": "3047119fc03d063ac588e085275f4db01dc37600e4268ca4289f961617f4b1fe",
+  "notices": {
+    "AppImage-runtime-source-notice.txt": {
+      "bytes": 1652,
+      "sha256": "1f13a0306c45ffa1fc06373ba7f7d2f5ba368692ba2fe0b6163334e05d9c76bf"
+    },
+    "gcc-14.2.0.COPYING.RUNTIME": {
+      "bytes": 3324,
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+    },
+    "gcc-14.2.0.COPYING3": {
+      "bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    "gcc-14.2.0.COPYING3.LIB": {
+      "bytes": 7639,
+      "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+    },
+    "libfuse-3.15.0.GPL2.txt": {
+      "bytes": 18092,
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    "libfuse-3.15.0.LGPL2.txt": {
+      "bytes": 26530,
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+    },
+    "libfuse-3.15.0.LICENSE": {
+      "bytes": 435,
+      "sha256": "b8832d9caaa075bbbd2aef24efa09f8b7ab66a832812d88c602da0c7b4397fad"
+    },
+    "mimalloc-2.1.7.LICENSE": {
+      "bytes": 1096,
+      "sha256": "19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d"
+    },
+    "musl-1.2.5.COPYRIGHT": {
+      "bytes": 6204,
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af"
+    },
+    "squashfuse-0.5.2.LICENSE": {
+      "bytes": 1592,
+      "sha256": "9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13"
+    },
+    "zlib-1.4.LICENSE": {
+      "bytes": 1002,
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    "zstd-1.5.6.COPYING": {
+      "bytes": 18091,
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+    },
+    "zstd-1.5.6.LICENSE": {
+      "bytes": 1549,
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+    }
+  },
+  "output": {
+    "bytes": 961096,
+    "sha256": "1d202e65e0f1b7013e7f6941b3f4785ecac9f9a5868196fabbfdef33d997ce33"
+  },
+  "reproducibilityCommit": "fedfad51acc2860b2916a1eef32ba4a500ff31ef",
+  "toolset": "1.0.3"
+}

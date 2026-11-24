@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import gzip
+from hashlib import sha256
 from pathlib import PurePosixPath
 import re
 import tarfile
@@ -80,7 +81,7 @@ def validate_tree(entries, root_name, *, permanent):
             need(row.kind == "file" and row.mode == mode and row.size > 0, "archive-permanent-mode")
 
 
-def tar_inventory(stream, *, permanent=True):
+def tar_inventory(stream, *, permanent=True, apprun_sha=None):
     # Read plain ustar blocks directly. Reject extension/sparse/link headers before
     # exposing their lengths to a library, with only a small buffer for data discard.
     rows = {}
@@ -106,6 +107,14 @@ def tar_inventory(stream, *, permanent=True):
             expanded += 512 + round_to(item.size,512)
             need(expanded <= MAX_ARCHIVE_FILE_BYTES + 8 * MIB, "tar-expanded-cap")
             remaining = item.size
+            apprun = apprun_sha is not None and name == PurePosixPath(TAR_ROOT, "AppRun")
+            if apprun:
+                need(not directory and item.mode == 0o755 and 0 < remaining <= 16384,
+                     "tar-original-apprun-mode")
+                data = archive.read(remaining)
+                need(len(data) == remaining and sha256(data).hexdigest() == apprun_sha,
+                     "tar-original-apprun-digest")
+                remaining = 0
             while remaining:
                 count = min(65536, remaining)
                 need(len(archive.read(count)) == count,"tar-file-truncated")

@@ -210,7 +210,8 @@ export async function mapOverview(application, requireVisible) {
 
 // The owned child process and its stdio must actually close. An early exit or exitCode
 // alone cannot supply the close event required by this evidence contract.
-export async function observeSession({ launch, mapWindow, verify, retire, commit, observeRetirement = () => {}, rejected = () => false, quitMs = 88000 }) {
+export async function observeSession({ launch, mapWindow, verify, retire, commit, observeRetirement = () => {}, rejected = () => false, quitMs = 88000, verificationStage = 'renderer' }) {
+    assert.ok(['renderer','identity'].includes(verificationStage));
     const end = performance.now() + quitMs;
     let application, child, listener, closed, timer, browserVerified = false;
     let stage = 'launch';
@@ -227,7 +228,7 @@ export async function observeSession({ launch, mapWindow, verify, retire, commit
         stage = 'window';
         await mapWindow(application);
         assert.ok(!rejected());
-        stage = 'renderer';
+        stage = verificationStage;
         browserVerified = await verify(application, child.pid);
         assert.ok(browserVerified && !rejected());
     } catch (error) {

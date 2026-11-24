@@ -38,15 +38,14 @@ MOUNTS={
 PHASES=('native_stock','native_custody','native_guest_storage','native_display_apt',
         'native_runtime_apt','native_display_capability','native_ready','native_prelaunch_grant',
         'native_files','native_post_staging_floor','native_observer_actor_frame','native_observer_display',
-        'native_observer_launch','native_observer_window','native_observer_renderer',
+        'native_observer_launch','native_observer_window','native_observer_identity',
         'native_observer_quit','native_observer_extraction','native_observer_record',
-        'native_observer_display_retirement','native_window_renderer_quit',
+        'native_observer_display_retirement','native_packaged_window_quit',
         'native_process_retirement','native_owned_retirement')
 need=pair.need
 
 def mark(plan,stage,what):
     need(stage in PHASES and (what in ('pass','fail') or
-         (stage=='native_observer_renderer' and what=='fail-proc-unavailable') or
          (stage=='native_observer_launch' and what=='fail-transport')),'native-fixed-phase')
     with open('/dev/ttyS0','w',encoding='ascii') as console:
         print(f"HUB_JAMMY_NATIVE {plan['nonce']} {stage} {what}",file=console,flush=True)
@@ -276,9 +275,8 @@ def actor_launch(plan):
             verdict='record'
             record=read_doc(work/'observation.json',65536)
             need(record=={'asset':handoff.APPIMAGE,'artifactSHA256':expected['archive']['sha256'],
-                 'freshRenderer':{'window':'portable-overview','renderer':'artifact-descendant',
-                  'sandbox':'distinct-user-pid-seccomp-nonewprivs'},'extractionRetired':True},
-                 'native-exact-appimage-renderer')
+                 'window':'portable-overview','extractionRetired':True},
+                 'native-exact-appimage-lifecycle')
             need(not any((work/'runtime-extraction').iterdir()),'native-appimage-extraction-retired')
             gate.check_guest_space(os.statvfs(work),0,12000)
             x.no_tcp_listener()
@@ -300,7 +298,7 @@ def actor_launch(plan):
     return actor_frame(verdict,retired,quit,extraction)
 
 
-OBSERVER_CODES=('launch','window','renderer','renderer-proc-unavailable','quit','extraction','record','pass')
+OBSERVER_CODES=('launch','window','identity','quit','extraction','record','pass')
 ACTOR_CODES=('display','transport',*OBSERVER_CODES)
 
 
@@ -373,13 +371,12 @@ def report_actor(plan,result):
     # Derive the reached prefix from the producer's fixed first failure.
     value,retired,_,_=result
     failed={'display':'display','transport':'launch','launch':'launch','window':'window',
-            'renderer':'renderer','renderer-proc-unavailable':'renderer',
+            'identity':'identity',
             'quit':'quit','extraction':'extraction','record':'record','pass':None}[value]
-    for name in ('display','launch','window','renderer','quit','extraction','record','display_retirement'):
+    for name in ('display','launch','window','identity','quit','extraction','record','display_retirement'):
         stage='native_observer_'+name
         success=name!=failed and (name!='display_retirement' or retired)
-        refusal={'renderer-proc-unavailable':'fail-proc-unavailable',
-                 'transport':'fail-transport'}.get(value,'fail')
+        refusal='fail-transport' if value=='transport' else 'fail'
         mark(plan,stage,'pass' if success else refusal)
         need(success,'native-observer-'+name)
 
@@ -459,7 +456,7 @@ def supervisor(plan):
     with open('/dev/ttyS0','w',encoding='ascii') as console:
         print(report,file=console,flush=True)
     report_actor(phases,result)
-    mark(phases,'native_window_renderer_quit','pass')
+    mark(phases,'native_packaged_window_quit','pass')
     with phase(phases,'native_process_retirement'):
         need(processes=='pass','native-owned-processes-retained')
     with phase(phases,'native_owned_retirement'):

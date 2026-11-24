@@ -77,7 +77,7 @@ def closed(group):
     return False
 
 
-def scan(image, reader, env, expected_row, deadline, guard, *, permanent=True):
+def scan(image, reader, env, expected_row, deadline, guard, *, permanent=True, notices=None, apprun_sha=None):
     """The caller admits the already recognized reader and its exact live loader first."""
     guard()
     wire.need(len(expected_row)==3 and expected_row[0]==wire.APP and
@@ -106,6 +106,22 @@ def scan(image, reader, env, expected_row, deadline, guard, *, permanent=True):
             digest = owned_child([*fixed,'-no-wildcards','-cat',reference,leaf],
                                  env,source,deadline,role.size,exact_size=True)
             pins[leaf] = [role.size,role.mode,digest]
+        if apprun_sha is not None:
+            wire.need(pins["AppRun"][1:] == [0o755, apprun_sha], "appimage-original-apprun")
+        if notices is not None:
+            notice_dir = root / "usr/lib/appimage-runtime-notices"
+            wire.need(set(notices) == {leaf.name for leaf in rows if leaf.parent == notice_dir},
+                      "appimage-original-notice-roster")
+            for name, pin in notices.items():
+                leaf = notice_dir / name
+                row = rows[leaf]
+                wire.need(row.kind == "file" and row.mode == 0o644 and row.size == pin["bytes"],
+                          "appimage-original-notice-mode")
+                guard()
+                body_digest = owned_child([*fixed,'-no-wildcards','-cat',reference,
+                                           leaf.relative_to(root).as_posix()],env,source,deadline,
+                                          row.size,exact_size=True)
+                wire.need(body_digest == pin["sha256"], "appimage-original-notice-digest")
         wire.need(initial==wire.stamp(os.fstat(source))==wire.stamp(image.lstat()),
                   'appimage-inventory-original-drift')
         guard()

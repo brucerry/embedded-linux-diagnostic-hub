@@ -1,0 +1,38 @@
+diff --git a/src/runtime/runtime.c b/src/runtime/runtime.c
+--- a/src/runtime/runtime.c
++++ b/src/runtime/runtime.c
+@@ -945,7 +945,7 @@
+         case FTW_SLN:
+             if (remove(path) != 0) {
+                 fprintf(stderr, "Failed to remove %s: %s\n", path, strerror(errno));
+-                return false;
++                return 1;
+             }
+             break;
+ 
+@@ -953,7 +953,7 @@
+         case FTW_DP:
+             if (rmdir(path) != 0) {
+                 fprintf(stderr, "Failed to remove directory %s: %s\n", path, strerror(errno));
+-                return false;
++                return 1;
+             }
+             break;
+ 
+@@ -970,9 +970,13 @@
+     // FTW_MOUNT: prevent deletion of files on other mounted filesystems
+     // FTW_PHYS: do not follow symlinks, but report symlinks as such; this way, the symlink targets, which might point
+     //           to locations outside path will not be deleted accidentally (attackers might abuse this)
+-    int rv = nftw(path, &rm_recursive_callback, 0, FTW_DEPTH | FTW_MOUNT | FTW_PHYS);
+-
+-    return rv == 0;
++    // musl needs a positive limit, and stops descending when it is exhausted.
++    const int descriptor_limit = 64;
++    if (nftw(path, &rm_recursive_callback, descriptor_limit, FTW_DEPTH | FTW_MOUNT | FTW_PHYS) != 0)
++        return false;
++
++    struct stat remaining;
++    return lstat(path, &remaining) == -1 && errno == ENOENT;
+ }
+ 
+ void build_mount_point(char* mount_dir, const char* const argv0, const char* const temp_base, const size_t templen) {

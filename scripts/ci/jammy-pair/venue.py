@@ -61,7 +61,7 @@ STAGES = ('context','pre_intake','oci_pull','oci_identity',*INTAKE_STAGES,'post_
           'product_readonly_media_sealed','runtime_media_sealed','host_guest_pregrant_evidence','host_runtime_grant',
           'pre_boot','boot_create','boot_config','boot_mounts','boot_attach',
           *BOOT_RESULTS,*LIFECYCLE_STAGES,
-          'native_observer_proc_read','native_observer_transport','post_boot','retirement')
+          'native_observer_transport','post_boot','retirement')
 OPT = {'PATH':'/usr/bin:/bin','LC_ALL':'C'}
 
 

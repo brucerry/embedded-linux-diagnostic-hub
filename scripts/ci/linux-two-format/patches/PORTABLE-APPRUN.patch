@@ -1,0 +1,31 @@
+diff --git a/scripts/linux-launcher.sh b/scripts/linux-launcher.sh
+--- a/scripts/linux-launcher.sh
++++ b/scripts/linux-launcher.sh
+@@ -1,12 +1,25 @@
+ #!/usr/bin/env bash
+ # This launcher is copied into both Linux packages as AppRun.
+ set -euo pipefail
+-APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
++# The archive's launcher and runtime are siblings, including under AppImage extraction.
++APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
++export APPDIR
+ export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+ binary="$APPDIR/diagnostic-hub"
++if [[ ! -f $binary || ! -x $binary ]]; then
++    printf '%s\n' 'Diagnostic Hub executable is missing or not executable. Re-extract the verified package with its file modes.' >&2
++    exit 1
++fi
+ 
+ missing_libraries() {
+-    { ldd "$binary" 2>&1 || true; } | awk '/=> not found/ { print $1 }' | sort -u
++    local report missing status=0
++    report=$(LC_ALL=C ldd "$binary" 2>&1) || status=$?
++    missing=$(printf '%s\n' "$report" | awk '/=> not found/ { print $1 }' | sort -u)
++    if [[ $status != 0 && -z $missing ]]; then
++        printf 'Could not check the Diagnostic Hub executable libraries:\n%s\n' "$report" >&2
++        return 1
++    fi
++    printf '%s\n' "$missing"
+ }
+ missing=$(missing_libraries)
+ if [[ -n $missing ]]; then

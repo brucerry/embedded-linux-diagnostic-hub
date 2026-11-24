@@ -20,9 +20,11 @@ import compiler_gate as compiler
 import dependencies
 import reproduction as providers
 import tar_admission as pins
+import archive_inventory
 import appimage_inventory
 import extract_adapter
 import package_pair
+import runtime_input
 from worker_protocol import ArchiveVerificationRefused, CLOSURE_STAGES
 
 
@@ -381,7 +383,8 @@ def compile_and_package(run_id):
         drain_owned()
         return out
     tool_receipt = package_pair.stage_tools(INPUTS/'media/appimage-tools.tar.gz', tools,
-        config['APPIMAGE-TOOLS.json'],GNU_LOADER,loader_map,loader_command,phase=phase)
+        config['APPIMAGE-TOOLS.json'],INPUTS/'media'/runtime_input.INPUT,
+        GNU_LOADER,loader_map,loader_command,phase=phase)
     with phase('packer'):
         attempt = package_pair.live_attempt(INPUTS/'attempt.json',run_id,tool_receipt)
         env['APPIMAGE_TOOLS_PATH'] = str(tools)
@@ -410,6 +413,14 @@ def compile_and_package(run_id):
         command([*npm,'run','checksums'],30)
         digests=package_pair.evidence(release,attempt,seal)
     with phase('tar_original_members'):
+        _, apprun, _ = pins.file_data(native/'scripts/linux-launcher.sh', 'portable-apprun-source')
+        handoff = package_pair.handoff
+        expected_tar = next(row for row in seal.artifacts if row.name == handoff.TARBALL)
+        with handoff.release_directory(release) as (directory, identity):
+            need(identity == seal.directory, 'tar-apprun-release-directory')
+            with handoff.open_original(directory, handoff.TARBALL, handoff.ARCHIVE_CAP, False) as (body, size, stamp):
+                need((size, stamp) == (expected_tar.size, expected_tar.identity), 'tar-apprun-original-file')
+                archive_inventory.tar_inventory(body, apprun_sha=apprun['sha256'])
         proof=CONTROL/'tar-proof.mjs'
         report=json.loads(command([node,proof,native,'verify'],120))
         need(report['productTree']==pins.TREE and report['lockSHA256']==pins.LOCK and
@@ -431,7 +442,8 @@ def compile_and_package(run_id):
             need(extract_adapter.reader_input.check_stage(reader)==reader_seal,'appimage-reader-stage')
         image=next(a for a in seal.artifacts if a.name==package_pair.handoff.APPIMAGE)
         scan=appimage_inventory.scan(release/image.name,reader,reader_env,
-                     [image.name,image.size,image.sha256],monotonic()+65,reader_guard)
+                     [image.name,image.size,image.sha256],monotonic()+65,reader_guard,
+                     notices=runtime_input.read_spec()["notices"],apprun_sha=apprun["sha256"])
         need(package_pair.evidence(release,attempt,seal)==digests,'appimage-producer-evidence')
     return attempt, digests, release, seal, scan
 

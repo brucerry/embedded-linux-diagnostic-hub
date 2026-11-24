@@ -15,12 +15,12 @@ TARBALL = "Diagnostic-Hub-linux-x64.tar.gz"
 ARTIFACTS = (APPIMAGE, TARBALL)
 RECORD = "linux-build-info.json"
 SOURCE_CHECKOUT_TREE = "04750dde7d6a027568f0aa855795c1efaa80d6a5"
-PRODUCT_TREE = "ad7200af31840c28e379b34a9ea9ca9a9a5a7e2a"
-PRODUCT_MANIFEST = "e9678eef7ba7cf35f0c24db231ec6a99e39a5966274c0807ce57f30c456da8e4"
+PRODUCT_TREE = "02e62f189f5669b713b06fbf55cfeb75b44b584f"
+PRODUCT_MANIFEST = "c725e7b321dc15b6df2e6cac03b021daf3c4fce8409302b25d05f087e727cd7e"
 LINUX_LOCK = "6eda133d8af11aae5e896876515130792e781f2054d071e2f68a9bcc4272b64c"
 REPOSITORY = "brucerry/embedded-linux-diagnostic-hub"
-RUNTIME_BYTES = 944_632
-RUNTIME_SHA256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+RUNTIME_BYTES = 961_096
+RUNTIME_SHA256 = "1d202e65e0f1b7013e7f6941b3f4785ecac9f9a5868196fabbfdef33d997ce33"
 ARCHIVE_CAP = 256 * 1024**2  # This venue plan's allowance, below the repository-wide acceptance cap.
 UNPERFORMED = "unperformed: packaged loopback SSH; real-PC acceptance remains separate."
 

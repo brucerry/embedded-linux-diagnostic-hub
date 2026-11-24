@@ -1,7 +1,7 @@
-name: Jammy AppImage extract-and-run runtime identity
+name: Jammy corrected Linux originals and AppImage lifecycle
 on:
   push:
-    branches: [ci/v060-jammy-appimage-frame-lifecycle-20261124]
+    branches: [ci/v060-jammy-corrected-appimage-originals-20261124]
     paths:
       - '.github/workflows/v060-jammy-appimage-runtime.yml'
       - 'scripts/ci/linux-two-format/**'
@@ -31,25 +31,25 @@ jobs:
             /scripts/ci/linux-two-format/
             /scripts/ci/jammy-pair/
       - id: attempt
-        name: Verify fresh Linux originals and native Jammy portable runtime
+        name: Verify fresh Linux originals and Jammy AppImage lifecycle
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           sha256sum -c --status <<'PINS'
           5db26dee779a0b380a81395a6dccc65adaca81424fea597744e3a22a7dd2f701  scripts/ci/jammy-pair/GUEST-TRANSACTION.json
           051611a1443b28678c8bf7b6c19eef93f03ae2131cbca2da4ef5037c7dff3850  scripts/ci/jammy-pair/OBSERVER-INPUTS.json
           1ef47408fb6ecc64a8e6460ad713aa74ca91dd7a0e6768a65866b9ee773ebd1c  scripts/ci/jammy-pair/RUNTIME-51-LOCK.json
-          4debed03446ecf410ef058d97cc4aeb88c7e1950f3247bd186d422b4cc0df250  scripts/ci/jammy-pair/appimage-observer.mjs
+          b6713d8ccea904700b744333cb6d7dfaab117845408b416bde725628517a6ca6  scripts/ci/jammy-pair/appimage-observer.mjs
           21024213b87d6d75d6032041c23f9170fa46f2661bf4c63b1805a630a89b7c7e  scripts/ci/jammy-pair/archive_inventory.py
           31b673985bdb29754c2f0a2cc5df9d8f17bc92e89952575f5bf6f6ec479339d8  scripts/ci/jammy-pair/browser-frame-evidence.mjs
           75b6c5beeb4119ab514362947c897f85e6c7b18f1004bcee8e6b7732f0d2a180  scripts/ci/jammy-pair/custody_seed.py
           31ad826942c832b981b61f193cfd7520b3f4fd306831a9c7854eaf48bd43955a  scripts/ci/jammy-pair/disp.jsn
           59adf26dbf10118ad7b022ed5123e7666bccae1b54c949eb21e90c7e2347229a  scripts/ci/jammy-pair/guest_closure.py
-          eb27074815c9b7714a7869514d362ec8d3314215da9c4918eecb3a0a995ef282  scripts/ci/jammy-pair/handoff.py
+          b8b291d6185e81bb1c886827facd55d164db6c82a53cb7b29b549e78b125da8e  scripts/ci/jammy-pair/handoff.py
           6742018c7ef461bdd547db991d9593bc97a325f382d464a79ca81bc5e4f27643  scripts/ci/jammy-pair/native_control.py
-          d4bf47c3422bddea1f1c92b0c27b1750e6b76a39ee370060c25110e25c8e8bf3  scripts/ci/jammy-pair/native_guest.py
+          39a542900b9a3aaebb2e74e49c2f624394615ca0cc34135ff33e01b764dab4eb  scripts/ci/jammy-pair/native_guest.py
           c0563aa04b82c42eb5ce569be8321f9638f761aac84f910ac141ca4d8e209188  scripts/ci/jammy-pair/native_hash.py
           7a89afce2118dd7da5becb1aad4dd666fc04721519a03b27532d035f02036d40  scripts/ci/jammy-pair/native_preflight.py
-          a48429774492737be1948fb7829157276ad93f1ba98831c76dbb661ca3370884  scripts/ci/jammy-pair/native_seed.py
+          01727f4caf3c96e4a5e52725589b928901534faebcd6829a2e9679e0aa873c22  scripts/ci/jammy-pair/native_seed.py
           ebe4f7d52457be51141e0c99b3f15ebe3b4ed669618b8eea2d65b5718ffecd67  scripts/ci/jammy-pair/observer_media.py
           216d2246515810346f831859dfb543f2aee3941a738a256bb6bd070dc0b9019a  scripts/ci/jammy-pair/observer_stage.py
           67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116  scripts/ci/jammy-pair/package.json
@@ -58,8 +58,8 @@ jobs:
           f6d5a29812df4349b18fba9ddfb6331edd6bbe85a93fbf03aa05d299ba64b3b0  scripts/ci/jammy-pair/portable_stage.py
           dd6653f8be9f9171b5ec5db4b08bc5ea73ed34a4e015080eac4ca17ababb87df  scripts/ci/jammy-pair/pregrant.py
           3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/jammy-pair/readonly_iso.py
-          d5bc3e0af416471e303e98224b3a492c2f306f230854601faeb6f6032bd28b36  scripts/ci/jammy-pair/runtime-observation.mjs
-          4d3e31e76323fc08d95b5e3b4222ce4572a8539cd1c6ebec0b39658a6af27176  scripts/ci/jammy-pair/runtime-observer.mts
+          49ff8537c7f4f772fb46b83f8aa10c6b09e07fc9a153f4e707e6d82ae84b6731  scripts/ci/jammy-pair/runtime-observation.mjs
+          877566deb7e504f0b8f610d19d08b57c09538e9fa4d0468a348c64bce1f3a2f1  scripts/ci/jammy-pair/runtime-observer.mts
           7dda5480de6b2eff4e6845a4f54cee617673c66f8c02b6907219350240f8d0a6  scripts/ci/jammy-pair/runtime_apply.py
           4711d25b2a49cf9ef233fc7be0f13dcb2825409e3774b26d86ca6020d4ceafe9  scripts/ci/jammy-pair/runtime_apply_observer.py
           0fb66c2c2a13ad0d6b4fbf2ea7528beaa9ae99a696555a9fb4a2280187350d95  scripts/ci/jammy-pair/runtime_cache.py
@@ -72,11 +72,11 @@ jobs:
           40191a0314b7be4863fc3c552dff7ed6155d89ff9290186687eb5354f677e736  scripts/ci/jammy-pair/venue-inputs.json
           9cdd70e814c5383b6bfd6cf70c55506743dfd8a5546cfb0e51c46b97174ba46e  scripts/ci/jammy-pair/venue-loader.sh
           deec60222e310de414508842f98e519e2e31b8a480fa3867e2fff03bc10261a8  scripts/ci/jammy-pair/venue-worker.sh
-          ab7710c43b6221a981434f27b0f6f569c5775e2e1925664e008d4c5d317ef9a5  scripts/ci/jammy-pair/venue.py
+          5109ce401e5fc8875c4c4107b1f0943cb261d4a030e91e780e5d6a9046a0e9ea  scripts/ci/jammy-pair/venue.py
           38f286c165c740a8f40b7ce8a764ce0bfba1c4547acdde3b89392d3b7f04415c  scripts/ci/jammy-pair/venue_seed.py
           3aaa35e7ea9d0b2afcf61e0c80d289f8c3952ff1c0b72c4589a3f152ed36e15f  scripts/ci/linux-two-format/COMPILER-READBACK-PLAN.json
-          68a3269396a436ae80d942a54aa073f8f762c93ee7aae50249e70f00e07a7088  scripts/ci/linux-two-format/appimage_inventory.py
-          21024213b87d6d75d6032041c23f9170fa46f2661bf4c63b1805a630a89b7c7e  scripts/ci/linux-two-format/archive_inventory.py
+          5881f6859f6d06e34457152afe6746e2fb0d9f74db8bbb77d8b5cf975179c403  scripts/ci/linux-two-format/appimage_inventory.py
+          015bbc5fb6ca3169361d0d128e91e4b159240cd0c11bfe46c55f410f8f3aa60e  scripts/ci/linux-two-format/archive_inventory.py
           3326ba0cc925660997e7f44dc9557c90d20774175c5f2b01b73a8cfec4094fb2  scripts/ci/linux-two-format/attach_pair.py
           f1cae7b1b253672e9de857aac673c1b275e65b7d20b2a8022e03228faf4fddf2  scripts/ci/linux-two-format/build-inputs.json
           2656cb141d380fa88ac494395ca7b70fab9b4fc1696264a6840422464a51d976  scripts/ci/linux-two-format/build_layout.py
@@ -84,20 +84,21 @@ jobs:
           c10619f1de764dea0c242513f4760decfed1449318471e24041903cd762f8431  scripts/ci/linux-two-format/contract.py
           65db02fbc1b158dc20a3a7c751e4aa1727fa40c074a114b103c7c8d6921d89f9  scripts/ci/linux-two-format/dependencies.py
           eb125de46583cee473eea846284a1508f566f69d28201383f9851982a175ddd1  scripts/ci/linux-two-format/extract_adapter.py
-          d9de74fa31fe3555084c754c12b6862a2a3a251d89597507b14be256c5e79e47  scripts/ci/linux-two-format/handoff.py
-          ebc8ed255bffc32b64a783c64a2a17dbca307aacf780bf2ee6af00713d7ca24e  scripts/ci/linux-two-format/host.py
+          a3519e670f2611a11954b5290b747cbaa8d548a0f50c7f727b6f07a74abdfaff  scripts/ci/linux-two-format/handoff.py
+          a7860eac14cb546c370ef2f8c29000dd6643a711e28001c3935142503183e265  scripts/ci/linux-two-format/host.py
           922dfd8c2b4188fa43fc6ab95d11ea3394b3c2c708ff412e67e00c55fb3bf07c  scripts/ci/linux-two-format/intake.py
           97e391408405a3b7aef029adac3fe7cd1d2499a04a0d2f8dd1baf6655d237ce1  scripts/ci/linux-two-format/overlay/ArchiveTarget.ts
           02b08547dc8e8dbaa01e95f1ef9831e2734548bb3566d788843c46f49cdc54ff  scripts/ci/linux-two-format/overlay/LINUX-NODE-GZIP.patch
           baf8030c14146d2d24b9e16deea051b101d9a842dd6b1b0efa42d65208ad7373  scripts/ci/linux-two-format/overlay/archive.ts
           a876f3683a8cd7479858e6e22b9de8442915407529de2a402b99f3390117f6a0  scripts/ci/linux-two-format/overlay/emit.cjs
-          e5aa21e737f320ee0d8c221831e5dc18521b5e7c1974cbf1a6e9344b0a1b17c1  scripts/ci/linux-two-format/package_pair.py
-          26f6b08f664eeafe594146e4202a9d9389dc08dcf1ae745ff1cb7c0ef6b65200  scripts/ci/linux-two-format/pair_controller.py
+          c50dfb6cac029603e13e2ece8ed5db5e3764c773d14b115e8e8045a9807c2f56  scripts/ci/linux-two-format/package_pair.py
+          0b90eb520175b342d828afb6079446844d9f6edd9cb8b51e1a9fad93b9163616  scripts/ci/linux-two-format/pair_controller.py
           5d616987a599e667de2895bafe5a0cbc94bdade56cb66a0dd31de119c962c107  scripts/ci/linux-two-format/pair_custody.py
           011b338a2f06260845d3e7a2058bbe11b163ad52255c56a71da0aca3de62387e  scripts/ci/linux-two-format/pair_wire.py
           23ceea737ab85140859f56c52f62256a31d9121c816aa0a6fd817de8e0762e7b  scripts/ci/linux-two-format/patches/EXACT-PROJECTION.patch
           61fc5533a5709c9eaf172aa13e35461bbe78882dc03698f0b6075533f5dd1818  scripts/ci/linux-two-format/patches/LINUX-FOLDER-PRODUCER.patch
           028ddb7b909b9425ee0ce0a10fc4b7b204133240d14b4d585137b3d3d9a67630  scripts/ci/linux-two-format/patches/LINUX-SOURCE-ONLY.patch
+          a655fbf3d7a3547eb1c4b8ea8057d3fcf194478ffe975efcfb117f76ea9d874c  scripts/ci/linux-two-format/patches/PORTABLE-APPRUN.patch
           aaedf7b8b1c7293c8565aeffd9ef0c25f2ec5a746e00e6dfcfa7f78287453895  scripts/ci/linux-two-format/patches/PRODUCT-ESM.patch
           32abf32c8a20c7b108bc8a18135cdb4925a59eb80541a34ec34af9e9203b31d2  scripts/ci/linux-two-format/patches/SHARED-FORMAT-GATE.patch
           9f43f1ed93c67aaa45ad47b0442f2c9d4c858b64df86095b0ac2892f5af83c69  scripts/ci/linux-two-format/patches/TRUE-AFTERPACK-REGRESSION.patch
@@ -109,10 +110,10 @@ jobs:
           3a87ec29019961c6b786d36cc59fac730894a2151c0c9eb4d75de038dd9dbb5a  scripts/ci/linux-two-format/pins/READER-DATA-RECEIPT.json
           5cdad124072fe4422fb7b27691731c98fee1fe92558195dc6ea8ec6338e2c259  scripts/ci/linux-two-format/pins/REGISTRY-PLAN.json
           3382c6771e2a08245e2a274ece91d2b780f1ee6eca3cf6d8500d63d717ec5199  scripts/ci/linux-two-format/pins/SDK-MEMBERS.json
-          e9678eef7ba7cf35f0c24db231ec6a99e39a5966274c0807ce57f30c456da8e4  scripts/ci/linux-two-format/pins/SOURCE-FILES.json
+          c725e7b321dc15b6df2e6cac03b021daf3c4fce8409302b25d05f087e727cd7e  scripts/ci/linux-two-format/pins/SOURCE-FILES.json
           0895986fa9281d78954d3b5e2b900cda583cf2e04de7d7fc595a71b18c7f54d6  scripts/ci/linux-two-format/private_attach.py
           efa8e055a5b49a307c92a756c55a1cfb22fad1578ec4f0e7efe964540cb3dcd5  scripts/ci/linux-two-format/provider-contract.json
-          3d3538a6e779945ba5eaaa13389b7ad71910484d6d810ceb3c5e6b85e4a671e9  scripts/ci/linux-two-format/read_envelope.py
+          5809bd0ca95104680b78fefa9bf49b67c0fb099dd0b7f1e38ee786c8482fac74  scripts/ci/linux-two-format/read_envelope.py
           210e6747dbe9834fd19b828122e88c34afda5bfe15c25b4c14ded76e02d406e9  scripts/ci/linux-two-format/reader_input.py
           3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/linux-two-format/readonly_iso.py
           2df7ede2f96b922bf2b4f239223c7ad8f00f9dcfafdf810a8a5c730aba147c7d  scripts/ci/linux-two-format/recipe/linux-all-eight-inputs.json
@@ -120,9 +121,33 @@ jobs:
           fde75f4f5e0693b48f309705f1b295a8a70d0f796a776cb86465431c227c031c  scripts/ci/linux-two-format/recipe/linux-provider-inputs.json
           ba8d05fed245056ce7383e2d10a682d7725aef04cf371110d757211a1680a9f9  scripts/ci/linux-two-format/recipe/linux-provider-rehearsal.py
           317503371bb05de99e59636d78e08515dc33e0ca998ce64a16703d0c25be7c85  scripts/ci/linux-two-format/reproduction.py
-          86626735146c9d5a2f916ffad5ef6bbef2a250ed6939a513c774fff8008d69b4  scripts/ci/linux-two-format/tar-proof.mjs
-          d03530af353249c6fb42644b676e9cad9dedb88f7ea14b104c1a568fc6a2447c  scripts/ci/linux-two-format/tar_admission.py
-          0206895221d10022d45cc49a510e715f874df4612dc94d36c230edbf2b29960d  scripts/ci/linux-two-format/worker.py
+          f606455052017524ad31cc08115891920301cf2a0d16788903815cc84f6b6d04  scripts/ci/linux-two-format/runtime-source/BUILD-INPUTS.json
+          1ad13c679a8cad343d7a78537ebdc933d6e139451e2d222e97e3250f6dc1bde7  scripts/ci/linux-two-format/runtime-source/RUNTIME.json
+          3d08bff65aa1e5532780da606d944a4b140eb290f64290cd573fb391999783ad  scripts/ci/linux-two-format/runtime-source/build-offline.sh
+          050e46b01ef8bb2d8df8310f356a0f792340492ddaac27fbb4ad3da52664b31c  scripts/ci/linux-two-format/runtime-source/link-runtime.sh
+          1f13a0306c45ffa1fc06373ba7f7d2f5ba368692ba2fe0b6163334e05d9c76bf  scripts/ci/linux-two-format/runtime-source/notices/AppImage-runtime-source-notice.txt
+          9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74  scripts/ci/linux-two-format/runtime-source/notices/gcc-14.2.0.COPYING.RUNTIME
+          8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  scripts/ci/linux-two-format/runtime-source/notices/gcc-14.2.0.COPYING3
+          a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c  scripts/ci/linux-two-format/runtime-source/notices/gcc-14.2.0.COPYING3.LIB
+          8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  scripts/ci/linux-two-format/runtime-source/notices/libfuse-3.15.0.GPL2.txt
+          dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551  scripts/ci/linux-two-format/runtime-source/notices/libfuse-3.15.0.LGPL2.txt
+          b8832d9caaa075bbbd2aef24efa09f8b7ab66a832812d88c602da0c7b4397fad  scripts/ci/linux-two-format/runtime-source/notices/libfuse-3.15.0.LICENSE
+          19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d  scripts/ci/linux-two-format/runtime-source/notices/mimalloc-2.1.7.LICENSE
+          f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af  scripts/ci/linux-two-format/runtime-source/notices/musl-1.2.5.COPYRIGHT
+          9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13  scripts/ci/linux-two-format/runtime-source/notices/squashfuse-0.5.2.LICENSE
+          e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2  scripts/ci/linux-two-format/runtime-source/notices/zlib-1.4.LICENSE
+          f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505  scripts/ci/linux-two-format/runtime-source/notices/zstd-1.5.6.COPYING
+          7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8  scripts/ci/linux-two-format/runtime-source/notices/zstd-1.5.6.LICENSE
+          fc28f05197fd243eb38e7ca119cc1997d2603d877e7130ca385add7ed9a15c8d  scripts/ci/linux-two-format/runtime-source/patches/dependency-prefix-map.patch
+          3f9c9b19fbf43c61730ace28c898ec6f2b91a924126045f05edfc34437d937c7  scripts/ci/linux-two-format/runtime-source/patches/runtime-cleanup.patch
+          3ce159697bee57464662ef195f362a3c33359f7849fd25fecea666526b0edd1f  scripts/ci/linux-two-format/runtime-source/squash-compile.sh
+          0d52a4b8c69dab4becce9e00c01328eb74af000ccc48f7175f612f2c1a5a83ea  scripts/ci/linux-two-format/runtime-source/squash-env.sh
+          234e74b028d9bdcd889e1476538ba35765f6a2e1c473de33b3135a1f6fd4c894  scripts/ci/linux-two-format/runtime-source/tool-wrappers.json
+          7f29936b199872bcbb53398d552500e1a341f98517b7703d21e9b04bdf71740f  scripts/ci/linux-two-format/runtime_input.py
+          1ef1a42dd064c05ef2e006f8f5f469e76e197972f34ac1309a1db80df2d27b89  scripts/ci/linux-two-format/runtime_rebuild.py
+          380483f7118546bbf561683674187056825a740897fb09c962da3aa9e96b3db6  scripts/ci/linux-two-format/tar-proof.mjs
+          e76a84438a9a1c23b13e952213471a4252983b52558f479714f5c5f973ef4a36  scripts/ci/linux-two-format/tar_admission.py
+          2df538ec4644fb83fd680511557165ac578243033d4a712b8f9064322e1a092c  scripts/ci/linux-two-format/worker.py
           366db7c576aa3a2aae65a1fc9c19aec473defa347524cee65c06fd058460fb29  scripts/ci/linux-two-format/worker_protocol.py
           PINS
           /usr/bin/python3 -E -B scripts/ci/linux-two-format/pair_controller.py
@@ -130,6 +155,9 @@ jobs:
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Producer host docker info / ${{ steps.attempt.outputs.producer_host_docker_info || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer exact source-rebuilt AppImage runtime / ${{ steps.attempt.outputs.producer_runtime_rebuild || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Producer host docker platform / ${{ steps.attempt.outputs.producer_host_docker_platform || 'unreached' }}
@@ -477,10 +505,7 @@ jobs:
       - name: Jammy visible packaged window / ${{ steps.attempt.outputs.jammy_native_observer_window || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
-      - name: Jammy renderer and sandbox association / ${{ steps.attempt.outputs.jammy_native_observer_renderer || 'unreached' }}
-        if: ${{ always() }}
-        run: /usr/bin/true
-      - name: Jammy renderer proc read unavailable / ${{ steps.attempt.outputs.jammy_native_observer_proc_read || 'unreached' }}
+      - name: Jammy same-original packaged application identity / ${{ steps.attempt.outputs.jammy_native_observer_identity || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Jammy normal process quit with stdio closure / ${{ steps.attempt.outputs.jammy_native_observer_quit || 'unreached' }}
@@ -507,7 +532,7 @@ jobs:
       - name: Independent dedicated-user processes retired / ${{ steps.attempt.outputs.jammy_native_independent_processes || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
-      - name: Jammy native window renderer quit / ${{ steps.attempt.outputs.jammy_native_window_renderer_quit || 'unreached' }}
+      - name: Jammy packaged window and normal quit / ${{ steps.attempt.outputs.jammy_native_packaged_window_quit || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Jammy native process retirement / ${{ steps.attempt.outputs.jammy_native_process_retirement || 'unreached' }}
@@ -540,7 +565,10 @@ jobs:
       - name: Guest phase and retirement budget remain / ${{ steps.attempt.outputs.producer_phase_budget || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
-      - name: Combined AppImage runtime and normal quit / ${{ steps.attempt.outputs.guest_pair_import || 'unreached' }}
+      - name: Guest same-attempt Linux original import / ${{ steps.attempt.outputs.guest_pair_import || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: AppImage lifecycle acceptance only / ${{ steps.attempt.outputs.guest_appimage_lifecycle || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Combined host scratch retired / ${{ steps.attempt.outputs.combined_retirement || 'unreached' }}

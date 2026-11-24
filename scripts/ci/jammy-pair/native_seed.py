@@ -11,7 +11,7 @@ import native_guest
 import pair_wire as pair
 import runtime_gate
 
-BRANCH='ci/v060-jammy-appimage-frame-lifecycle-20261124'
+BRANCH='ci/v060-jammy-corrected-appimage-originals-20261124'
 PROPOSED_BRANCH='refs/heads/'+BRANCH
 GUEST_STAGES=(*STOCK_STAGES,*native_guest.PHASES)
 LIFECYCLE_STAGES=native_guest.LIFECYCLE_STAGES
@@ -86,15 +86,12 @@ def boot_evidence(wire,nonce,header):
     last=True
     for position,((i,raw),name) in enumerate(zip(selected,native_guest.PHASES)):
         prefix=f'HUB_JAMMY_NATIVE {nonce} {name} '.encode()
-        proc_unavailable=name=='native_observer_renderer' and raw==prefix+b'fail-proc-unavailable'
         transport=name=='native_observer_launch' and raw==prefix+b'fail-transport'
         need(last and sentinel<i<end[0] and
-             (proc_unavailable or transport or raw in (prefix+b'pass',prefix+b'fail')),'native-phase-order')
+             (transport or raw in (prefix+b'pass',prefix+b'fail')),'native-phase-order')
         last=raw==prefix+b'pass'
         evidence[name]=last
         anchors[name]=i
-        if proc_unavailable:
-            evidence['native_observer_proc_read']=False
         if transport:
             evidence['native_observer_transport']=False
     lifecycle=[(i,line) for i,line in enumerate(lines) if b'HUB_JAMMY_LIFECYCLE ' in line]

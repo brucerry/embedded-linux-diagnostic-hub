@@ -41,13 +41,7 @@ function executable(path) {
     return lstat(path).then((row) => row.isFile() && row.nlink===1 && (row.mode&0o100)!==0);
 }
 
-// AppRun replaces its own process with Electron. The outer AppImage runtime remains
-// the child Playwright owns until its real application exits and extraction is retired.
-export async function observeAppImage({ identity, archive, extraction, wrapperPid, baselinePid,
-        rolePins, capture = (target) => stableProcess('/proc',target), checkSpace, recheckFrame, initialRenderer }) {
-    assert.ok(Number.isSafeInteger(wrapperPid) && wrapperPid > 1 &&
-              Number.isSafeInteger(identity.mainPID) && identity.mainPID>1 &&
-              identity.mainPID!==wrapperPid,'appimage-distinct-wrapper-and-application');
+export async function observeOriginalFiles({ identity, archive, extraction, rolePins }) {
     assert.ok(identity.asset===ASSET && identity.extractAndRun==='1' &&
               identity.runtimeTmp===extraction.directory,'appimage-browser-case');
     assert.ok(path.isAbsolute(archive.path) && path.basename(archive.path)===ASSET &&
@@ -77,6 +71,17 @@ export async function observeAppImage({ identity, archive, extraction, wrapperPi
                   'appimage-extracted-member-readback');
         if (name!=='resources/app.asar') assert.ok(await executable(target),'appimage-executable-role');
     }
+    return {root, rootStamp};
+}
+
+// AppRun replaces its own process with Electron. The outer AppImage runtime remains
+// the child Playwright owns until its real application exits and extraction is retired.
+export async function observeAppImage({ identity, archive, extraction, wrapperPid, baselinePid,
+        rolePins, capture = (target) => stableProcess('/proc',target), checkSpace, recheckFrame, initialRenderer }) {
+    assert.ok(Number.isSafeInteger(wrapperPid) && wrapperPid > 1 &&
+              Number.isSafeInteger(identity.mainPID) && identity.mainPID>1 &&
+              identity.mainPID!==wrapperPid,'appimage-distinct-wrapper-and-application');
+    const {root, rootStamp} = await observeOriginalFiles({identity, archive, extraction, rolePins});
     const expected={asset:ASSET,executable:path.join(root,'diagnostic-hub'),
                     asar:path.join(root,'resources/app.asar')};
     const wrapper = await capture(wrapperPid);

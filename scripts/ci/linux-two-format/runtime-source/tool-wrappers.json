@@ -1,0 +1,23 @@
+{
+  "aclocal": "#!/bin/sh\nset -eu\nexec \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/aclocal\" --automake-acdir=@SYSROOT@/usr/share/aclocal-1.17 \"$@\"\n",
+  "ar": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/ar @SYSROOT@/usr/bin/ar \"$@\"\n",
+  "autoconf": "#!/bin/sh\nset -eu\nexec \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/autoconf\" \"$@\"\n",
+  "autoheader": "#!/bin/sh\nset -eu\nexec \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/autoheader\" \"$@\"\n",
+  "autom4te": "#!/bin/sh\nset -eu\nexec \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/autom4te\" \"$@\"\n",
+  "automake": "#!/bin/sh\nset -eu\nexec \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/automake\" \"$@\"\n",
+  "autoreconf": "#!/bin/sh\nset -eu\nexec \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/autoreconf\" \"$@\"\n",
+  "clang": "#!/bin/sh\nset -eu\nif [ \"${1:-}\" = -cc1 ] || [ \"${1:-}\" = -cc1as ]; then\n    exec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/clang @SYSROOT@/usr/bin/clang-19 \"$@\"\nfi\nfor arg do\n    case \"$arg\" in -E|-S|-c|-static|-static-pie|-shared) non_dynamic=1 ;; esac\ndone\nif [ \"${non_dynamic:-0}\" != 1 ]; then\n    set -- \"-Wl,--dynamic-linker=@SYSROOT@/lib/ld-musl-x86_64.so.1,-rpath,@SYSROOT@/lib:@SYSROOT@/usr/lib\" \"$@\"\nfi\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/clang @SYSROOT@/usr/bin/clang-19 -no-canonical-prefixes --sysroot=@SYSROOT@ --gcc-toolchain=@SYSROOT@/usr     --target=x86_64-alpine-linux-musl --ld-path=@TOOLS@/ld -resource-dir=@SYSROOT@/usr/lib/llvm19/lib/clang/19 \"$@\"\n",
+  "ld": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/ld @SYSROOT@/usr/bin/ld.bfd \"$@\"\n",
+  "libtoolize": "#!/bin/sh\nset -eu\n_lt_pkgdatadir=\"@TOOLS@/relocated-libtool\" exec /bin/sh \"@SYSROOT@/usr/bin/libtoolize\" \"$@\"\n",
+  "m4": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/m4 @SYSROOT@/usr/bin/m4 \"$@\"\n",
+  "make": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/make @SYSROOT@/usr/bin/make \"$@\"\n",
+  "meson": "#!/bin/sh\nset -eu\nexec @TOOLS@/python3 @SYSROOT@/usr/bin/meson \"$@\"\n",
+  "ninja": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/ninja @SYSROOT@/usr/bin/samu \"$@\"\n",
+  "objcopy": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/objcopy @SYSROOT@/usr/bin/objcopy \"$@\"\n",
+  "perl": "#!/bin/sh\nset -eu\nexec \"@SYSROOT@/lib/ld-musl-x86_64.so.1\" --library-path \"@SYSROOT@/lib:@SYSROOT@/usr/lib:@SYSROOT@/usr/lib/perl5/core_perl/CORE\" --argv0 \"@TOOLS@/perl\" \"@SYSROOT@/usr/bin/perl\" \"$@\"\n",
+  "pkg-config": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/pkg-config @SYSROOT@/usr/bin/pkgconf \"$@\"\n",
+  "python3": "#!/bin/sh\nset -eu\nPYTHONHOME=@SYSROOT@/usr exec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/python3 @SYSROOT@/usr/bin/python3.12 \"$@\"\n",
+  "ranlib": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/ranlib @SYSROOT@/usr/bin/ranlib \"$@\"\n",
+  "readelf": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/readelf @SYSROOT@/usr/bin/readelf \"$@\"\n",
+  "strip": "#!/bin/sh\nset -eu\nexec @SYSROOT@/lib/ld-musl-x86_64.so.1 --library-path @SYSROOT@/lib:@SYSROOT@/usr/lib --argv0 @TOOLS@/strip @SYSROOT@/usr/bin/strip \"$@\"\n"
+}

@@ -12,7 +12,7 @@ REPO = "brucerry/embedded-linux-diagnostic-hub"
 REF = "refs/heads/ci/v060-linux-folder-mode-tar-buildonly-20261121"
 ENTRY = REPO + "/.github/workflows/linux-tar-only-entry.yml@" + REF
 BASE = "5e3c66f4a62e3606abdd650972e0f76b71ff5c54"
-TREE = "ad7200af31840c28e379b34a9ea9ca9a9a5a7e2a"
+TREE = "02e62f189f5669b713b06fbf55cfeb75b44b584f"
 LOCK = "6eda133d8af11aae5e896876515130792e781f2054d071e2f68a9bcc4272b64c"
 FLOOR = 4 * 1024**3
 CAP = 256 * 1024**2
@@ -26,7 +26,7 @@ MANIFESTS = {
     "SDK-MEMBERS.json": "3382c6771e2a08245e2a274ece91d2b780f1ee6eca3cf6d8500d63d717ec5199",
     "READER-DATA-RECEIPT.json": "3a87ec29019961c6b786d36cc59fac730894a2151c0c9eb4d75de038dd9dbb5a",
     "APPIMAGE-TOOLS.json": "4b55ceb286dfb2b4a1d6859821a0a13ee5255bf98f5183b8fdf18352b7277aad",
-    "SOURCE-FILES.json": "e9678eef7ba7cf35f0c24db231ec6a99e39a5966274c0807ce57f30c456da8e4",
+    "SOURCE-FILES.json": "c725e7b321dc15b6df2e6cac03b021daf3c4fce8409302b25d05f087e727cd7e",
 }
 
 class Refused(Exception):

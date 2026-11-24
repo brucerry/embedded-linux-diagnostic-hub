@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { _electron as electron, expect } from '@playwright/test';
-import { randomUUID } from 'node:crypto';
 import { readFile, writeFile, mkdtemp, realpath, open, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { readWindow } from './browser-frame-evidence.mjs';
-import { mapOverview, observeSession, stableProcess, verifyFrameFence } from './runtime-observation.mjs';
-import { appimageLaunch, observeAppImage, privateExtraction, requireAppImageRetired, ASSET }
+import { mapOverview, observeSession } from './runtime-observation.mjs';
+import { appimageLaunch, observeOriginalFiles, privateExtraction, requireAppImageRetired, ASSET }
     from './appimage-observer.mjs';
 
 const executable = process.env.HUB_TEST_EXECUTABLE;
@@ -52,6 +50,7 @@ process.on('unhandledRejection', () => {
     unhandled = true;
     process.exitCode = 78;
 });
+// This receipt covers the packaged application and its lifecycle only.
 let lifecycle = {quit:'unreached',extraction:'unreached'};
 const result = await observeSession({
     observeRetirement: (value) => { lifecycle=value; },
@@ -64,24 +63,33 @@ const result = await observeSession({
         timeout: 30000,
     }),
     mapWindow: (application) => mapOverview(application, (heading) => expect(heading).toBeVisible()),
-    async verify(application, childPid) {
-        const identity = await application.evaluate(
-            readWindow,'__stagedQualification_'+randomUUID().replaceAll('-',''));
-        const rereadFrame=async()=>(await application.evaluate(readWindow,null)).frameIdentity;
-        verifyFrameFence(identity.frameIdentity,await rereadFrame(),identity.rendererPID);
-        const renderer=await stableProcess('/proc',identity.rendererPID);
-        identity.osSandboxed=renderer.fields.NoNewPrivs.length===1 && renderer.fields.NoNewPrivs[0]==='1' &&
-                             renderer.fields.Seccomp.length===1 && renderer.fields.Seccomp[0]==='2';
-        identity.sandbox=identity.sandbox && identity.osSandboxed;
+    verificationStage: 'identity',
+    async verify(application) {
+        const identity = await application.evaluate(({ app }) => ({
+            packaged: app.isPackaged,
+            version: app.getVersion(),
+            platform: process.platform,
+            arch: process.arch,
+            asar: app.getAppPath(),
+            executable: process.execPath,
+            asset: process.env.HUB_STAGED_ASSET,
+            original: process.env.APPIMAGE,
+            extractionRoot: process.env.APPDIR,
+            runtimeTmp: process.env.TMPDIR,
+            extractAndRun: process.env.APPIMAGE_EXTRACT_AND_RUN,
+        }));
         assert.equal(identity.packaged, true);
         assert.equal(identity.version, version);
         assert.equal(identity.platform, process.platform);
         assert.equal(identity.arch, process.arch);
-        assert.equal(identity.sandbox, true);
-        assert.equal(path.basename(identity.asar), 'app.asar');
-        const freshRenderer=await observeAppImage({identity,archive:binding.archive,
-            extraction,wrapperPid:childPid,baselinePid:process.pid,rolePins:binding.roles,checkSpace,recheckFrame:rereadFrame,initialRenderer:renderer});
-        return {asset:ASSET,artifactSHA256:binding.archive.sha256,freshRenderer,extractionRetired:true};
+        const {root} = await observeOriginalFiles({
+            identity, archive: binding.archive, extraction, rolePins: binding.roles,
+        });
+        assert.equal(identity.executable, path.join(root, 'diagnostic-hub'));
+        assert.equal(identity.asar, path.join(root, 'resources', 'app.asar'));
+        await checkSpace();
+        return {asset:ASSET,artifactSHA256:binding.archive.sha256,
+                window:'portable-overview',extractionRetired:true};
     },
     async retire() {
         await requireAppImageRetired(extraction);
