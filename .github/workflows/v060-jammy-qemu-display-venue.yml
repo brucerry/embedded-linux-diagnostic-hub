@@ -1,0 +1,282 @@
+name: Jammy no-product desktop venue
+on:
+  push:
+    branches: [ci/v060-jammy-qemu-display-venue-20261124]
+    paths:
+      - '.github/workflows/v060-jammy-qemu-display-venue.yml'
+      - 'scripts/ci/jammy-venue/**'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  venue:
+    if: ${{ github.event.created && !github.event.forced && !github.event.deleted && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Start bounded venue clock
+        run: printf 'VENUE_JOB_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Checkout reviewed venue files
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/v060-jammy-qemu-display-venue.yml
+            /scripts/ci/jammy-venue/
+      - id: witness
+        name: Run bounded Jammy display venue
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          sha256sum -c --status <<'PINS'
+          8b038a431f37ef85f5a9403116fcbb3d1cbd6ae2487a21cecabb23f1aab178ba  scripts/ci/jammy-venue/GUEST-TRANSACTION.json
+          7095bcdd39a302f7db3d4007d950e8ad8f145757c512234638a3ad71b35ca8bd  scripts/ci/jammy-venue/apply.py
+          fe36e29312503fe070b8c52f703ac98780ab2d741b016cc6a4b7f25850c5916e  scripts/ci/jammy-venue/cache.py
+          365bf9dc77f5d657fe0c812882b6fd3b7440b28554bb00df33d9864c19d911da  scripts/ci/jammy-venue/contract.py
+          31ad826942c832b981b61f193cfd7520b3f4fd306831a9c7854eaf48bd43955a  scripts/ci/jammy-venue/display-pins.json
+          50c14672e88844e7a2386ba73baa8ecba77754fdad2cf85165ccf4a16f990cc7  scripts/ci/jammy-venue/display.py
+          63fda075b7dd08e64077d28af21581bced572ed2bfd233330387641c5c26d220  scripts/ci/jammy-venue/guest.py
+          4711d25b2a49cf9ef233fc7be0f13dcb2825409e3774b26d86ca6020d4ceafe9  scripts/ci/jammy-venue/observe.py
+          3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/jammy-venue/readonly_iso.py
+          d34459bc89c63aee49ace6af0bed3fb0569215ee8ed8f731484f5a85b0a087fd  scripts/ci/jammy-venue/transition_media.py
+          e465ee0c271aadb72e435e7d6e6fa44993d55f2a396a6fa8496c243899d9f756  scripts/ci/jammy-venue/transition_seed.py
+          40191a0314b7be4863fc3c552dff7ed6155d89ff9290186687eb5354f677e736  scripts/ci/jammy-venue/venue-inputs.json
+          9cdd70e814c5383b6bfd6cf70c55506743dfd8a5546cfb0e51c46b97174ba46e  scripts/ci/jammy-venue/venue-loader.sh
+          53602ea7ce7a7359a420421470a120f50af91a4582b02f10531038036642e6a4  scripts/ci/jammy-venue/venue-worker.sh
+          75d60803349d445b019c5da9eb6b94ad8f48ef7d9c3cdc77ee32ae1f07f259b0  scripts/ci/jammy-venue/venue.py
+          38f286c165c740a8f40b7ce8a764ce0bfba1c4547acdde3b89392d3b7f04415c  scripts/ci/jammy-venue/venue_seed.py
+          8948df0eddd877d6e731f438fb7b214628d02eb11adab75da44c4ec35458a48a  scripts/ci/jammy-venue/wire.py
+          PINS
+          /usr/bin/python3 -E -B scripts/ci/jammy-venue/venue.py
+      - name: Exact runner, source branch and attempt / ${{ steps.witness.outputs.context || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Pre intake / ${{ steps.witness.outputs.pre_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Oci pull / ${{ steps.witness.outputs.oci_pull || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Oci identity / ${{ steps.witness.outputs.oci_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Official signed guest and tool intake / ${{ steps.witness.outputs.public_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Members / ${{ steps.witness.outputs.members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Canonical Jammy guest signature / ${{ steps.witness.outputs.guest_signature || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact Jammy image checksum row / ${{ steps.witness.outputs.guest_signed_row || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Sealed inputs / ${{ steps.witness.outputs.sealed_inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Post intake / ${{ steps.witness.outputs.post_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare create / ${{ steps.witness.outputs.prepare_create || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare config / ${{ steps.witness.outputs.prepare_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare mounts / ${{ steps.witness.outputs.prepare_mounts || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare attach / ${{ steps.witness.outputs.prepare_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare shell / ${{ steps.witness.outputs.prepare_shell || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare identity / ${{ steps.witness.outputs.prepare_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare isolation / ${{ steps.witness.outputs.prepare_isolation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare seals / ${{ steps.witness.outputs.prepare_seals || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare ready / ${{ steps.witness.outputs.prepare_ready || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 1 list / ${{ steps.witness.outputs.tool_1_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 1 map / ${{ steps.witness.outputs.tool_1_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 2 list / ${{ steps.witness.outputs.tool_2_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 2 map / ${{ steps.witness.outputs.tool_2_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 3 list / ${{ steps.witness.outputs.tool_3_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 3 map / ${{ steps.witness.outputs.tool_3_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 4 list / ${{ steps.witness.outputs.tool_4_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 4 map / ${{ steps.witness.outputs.tool_4_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Seed / ${{ steps.witness.outputs.seed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Overlay worker / ${{ steps.witness.outputs.overlay_worker || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare exit / ${{ steps.witness.outputs.prepare_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare retired / ${{ steps.witness.outputs.prepare_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Read-only image and grown private overlay chain / ${{ steps.witness.outputs.overlay || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact signed 54-package display archive intake / ${{ steps.witness.outputs.apt_fixed_signed_package_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Closed read-only package and control media / ${{ steps.witness.outputs.apt_readonly_media_sealed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Host capacity before one boot / ${{ steps.witness.outputs.pre_boot || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot create / ${{ steps.witness.outputs.boot_create || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot config / ${{ steps.witness.outputs.boot_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot mounts / ${{ steps.witness.outputs.boot_mounts || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot attach / ${{ steps.witness.outputs.boot_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot exec / ${{ steps.witness.outputs.boot_exec || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Stock guest kernel started / ${{ steps.witness.outputs.guest_kernel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact NoCloud callback and poweroff phase / ${{ steps.witness.outputs.guest_nocloud || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest sentinel / ${{ steps.witness.outputs.guest_sentinel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest has only loopback and no outward routes / ${{ steps.witness.outputs.guest_loopback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Normal guest poweroff / ${{ steps.witness.outputs.guest_poweroff || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Same no-NIC x64 root-in-guest setup / ${{ steps.witness.outputs.prov_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest optical pins and signed baseline database / ${{ steps.witness.outputs.prov_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact temporary disk growth and measured free space / ${{ steps.witness.outputs.prov_growth || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov tools / ${{ steps.witness.outputs.prov_tools || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov cache / ${{ steps.witness.outputs.prov_cache || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov config / ${{ steps.witness.outputs.prov_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Native simulation has 54 additions and no other changes / ${{ steps.witness.outputs.prov_simulation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov apply / ${{ steps.witness.outputs.prov_apply || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact 651 installed package identities / ${{ steps.witness.outputs.prov_database || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov observer / ${{ steps.witness.outputs.prov_observer || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest storage and no-NIC after package apply / ${{ steps.witness.outputs.prov_capacity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Ordinary uid and unchanged stock sandbox policy / ${{ steps.witness.outputs.display_parent || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Live stock user and PID namespace creation / ${{ steps.witness.outputs.display_userns || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Pinned stock Xvfb, xauth, xdpyinfo and unshare / ${{ steps.witness.outputs.display_tools || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Owned Xvfb socket with TCP disabled / ${{ steps.witness.outputs.display_xvfb || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Wrong cookie refused / ${{ steps.witness.outputs.display_cookie_refusal || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Correct cookie accepted by inert local client / ${{ steps.witness.outputs.display_cookie_acceptance || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Xvfb exited and its socket and lock retired / ${{ steps.witness.outputs.display_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot exit / ${{ steps.witness.outputs.boot_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot stderr / ${{ steps.witness.outputs.boot_stderr || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot worker retired / ${{ steps.witness.outputs.boot_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Post boot / ${{ steps.witness.outputs.post_boot || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Owned scratch retired / ${{ steps.witness.outputs.retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov exit / ${{ steps.witness.outputs.prov_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov status / ${{ steps.witness.outputs.prov_status || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov progress / ${{ steps.witness.outputs.prov_progress || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov error / ${{ steps.witness.outputs.prov_error || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov prompt / ${{ steps.witness.outputs.prov_prompt || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prov child / ${{ steps.witness.outputs.prov_child || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot attach deadline / ${{ steps.witness.outputs.boot_attach_deadline || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot attach output bound / ${{ steps.witness.outputs.boot_attach_output_bound || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
