@@ -1,0 +1,1444 @@
+--- a/.github/workflows/gateway-native-source-buildonly.yml
++++ b/.github/workflows/gateway-native-source-buildonly.yml
+@@ -25,7 +25,8 @@
+         if: >-
+             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
+             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
+-            'refs/heads/ci/v060-gateway-preparation-diagnostics-20261116' && github.run_attempt == 1 }}
++            'refs/heads/ci/v060-gateway-preparation-diagnostics-20261116' && github.run_attempt == 1
++            }}
+         runs-on: ubuntu-24.04
+         timeout-minutes: 20
+         defaults:
+@@ -55,17 +56,23 @@
+               id: preparation
+               run: /usr/bin/python3 -I scripts/ci/prepare-gateway-four-tools.py
+             - name: >-
+-                  Preparation diagnostic /
+-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'report-unavailable' }} /
+-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.stage || 'report-unavailable' }} /
+-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.reason || 'report-unavailable' }} /
+-                  input-${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.input || 'none' }}
++                  Preparation diagnostic / ${{ steps.preparation.outcome == 'success' &&
++                  steps.preparation.outputs.result || 'report-unavailable' }} / ${{
++                  steps.preparation.outcome == 'success' && steps.preparation.outputs.stage ||
++                  'report-unavailable' }} / ${{ steps.preparation.outcome == 'success' &&
++                  steps.preparation.outputs.reason || 'report-unavailable' }} / input-${{
++                  steps.preparation.outcome == 'success' && steps.preparation.outputs.input ||
++                  'none' }}
+               if: ${{ always() }}
+               env:
+-                  PREPARATION_RESULT: ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'unavailable' }}
++                  PREPARATION_RESULT:
++                      ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result
++                      || 'unavailable' }}
+               run: test "$PREPARATION_RESULT" = prepared
+             - name: Run the unchanged native branch source selector and canonical producer readback
+-              if: ${{ success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared' }}
++              if:
++                  ${{ success() && steps.preparation.outcome == 'success' &&
++                  steps.preparation.outputs.result == 'prepared' }}
+               run: |
+                   # No setup-node, broad npm ci, package scripts, runtime, upload or cleanup.
+                   # Missing or mismatched Node/npm stops the preceding step before any provisioning.
+--- a/.prettierignore
++++ b/.prettierignore
+@@ -20,3 +20,11 @@
+ # Accepted diagnostic core is byte-pinned; preserve its reviewed source bytes.
+ /tests/fixtures/inspection/passive-cdp.cjs
+ /tests/fixtures/inspection/release-window.cjs
++
++# Exact Electron 44.5.1 publisher declaration, SHA-256 pinned by the Linux profile.
++/.linux-package-inputs/electron.d.ts
++
++# M01 collectors verify these exact workflow and manifest bytes against their requests.
++/.github/workflows/windows-m01-acquisition.yml
++/.github/workflows/windows-m01-catalog.yml
++/prepared/catalog/catalog-files.json
+--- a/prepared/catalog/catalog-schema.json
++++ b/prepared/catalog/catalog-schema.json
+@@ -1 +1,397 @@
+-{"schema":2,"protocol":"CAT1/CAT1_POLICY/CATALOG24_V1","status":"STAGED_ACTIVATION_AND_RECEIVER_BINDING_SOURCE_ONLY_PENDING_REVIEW","manifestSHA256":"5036119fad368348255bac645b74203bf1447053df566ec2d230a6c718bda16d","requestFields":20,"headerVersion":2,"selectors":{"vc":"default_pointer_exact_enumerated","sdk":"unique_exact_include_lib_intersection"},"maxNamesPerRoot":8,"ninthEntry":"REFUSE","files":24,"maxTotalFileBytes":67108864,"packedFilesPerControlRecord":3,"maxControlRecordBytes":1024,"maxControlRecords":64,"recordBudget":{"fixedFacts":5,"roots":3,"selectors":1,"filePacks":8,"summaryMaximumDistinctNames":41,"totalMaximum":58},"metadataGuard":65536,"preallocationCharge":"Existing actual full charge PLUS CatalogCharge: UTF16(parsed manifest token reserve+names+shared roots+sum fixed role/root/relative+5 separators+11 status+8 size+64 digest per future descriptor),RootWire bytes,3072 transient scratch. Each descriptor bound<=256. Raw manifest/default aliases retired before guard;Cartesian maxima mayrefuse,no truncation/allocation before actual fit.","oldHost64828Bound":"NOT_REUSED_AS_CATALOG_BOUND","caps":{"result":8192,"streamEach":65536,"controlAggregate":1048576,"expanded":1388544,"evidence":10485760,"terminal":327680,"terminalRows":32,"archive":65536,"metadata":65536,"bootstrap":4096,"hold":32768},"closure":"ALWAYS_INCOMPLETE;no PE/version/import parsing or loaderclosure claim","activation":"exit78 removed only in isolated staging;fresh candidate nonce bound;no publication/execution authority","publisher":{"version":2,"recordKeys":["schema","operation","status","run_id","artifact_id","result_ref","command_ref","source_refs","counts","cuts","observation"],"observationKeys":["exit_observed","exit_code","chunk_id","session_id","return_ref"],"exitCode":"Observedexactint32includingnonzero,elseNull;KNOWN_RETURNrequiresobserved;preparationhasnoexitfact.","toolIdentity":"Observedexit requires actualboundedchunk/session and no inprocessreturn_ref. Returnref-only requires SERVICE_SNAPSHOT,unobservedexit,nullcode/nullIDs;closedorigin/run/artifact/assessment binding validated beforeoutputcreation.","unknownIDs":"nullnotfabricatedzero","sourceRefsMax":4,"cutsMax":4,"resultMaxBytes":8192,"publication":"fullUTF8guardbeforeexclusivecreate;noouterwrap/fallback;callerusesalready-admittedwindow","returnReferenceValidation":{"origin":"IN_PROCESS_DATA_RETURN","closedTopFields":17,"assessmentExtraBindings":["artifact_id","request_sha256"],"assessmentRef":"exactsame path/bytes/SHA256 asresult_ref;bothfiles independentlyhash/extent/EOFchecked","copyGuard":"6*(return_refBytes+assessmentBytes)+2*receiptBytes+summaryBytes+3072<=65536 beforecapture/parse;actualmaxima may refuse","toolExit":"Never inferred fromDATAref;actualouterexit/IDs separateafterreturn","capsUnchanged":true}},"consumerInterface":"assess_catalog_and_publish(existingOwner,unobservedToolReturn,memberRoot,independentExpected,exactCommand,validatedPath,receiptPath,operation_evidence=fixed actual transport facts);no new window","selectorDefaultPointer":"vc_defaultfieldretainsobservedtrimmedpointerorUNAVAILABLE;selectedvcUNRESOLVEDifnotenumerated","sdkManifest":"Fixed DATA file hashed via bounded streaming Hash-File;no XML,version,dependency or executable interpretation.","requestKeyOrder":["version","request_nonce","allocation_nonce","repository_id","actor_id","commit","ref","workflow_path","workflow_sha256","collector_sha256","policy_sha256","job_key","issued_utc","expires_utc","artifact_prefix","retention_days","n1_policy","utc_error_seconds","source_reference_sha256","manifest_sha256"],"metadataGuardScope":"Named payload/path/readset live-copy accounting only;CLR/parser/allocator/object overhead UNKNOWN;not a hard memory quota.","fileBudgetBoundary":"Catalog reads admit each requested length against both remaining role and aggregate budgets;exact exhaustion before EOF is REFUSED/UNKNOWN rather than an extra byte read. No binary retained.","consumerRepairs":{"C1":"Closed ordered metadata/framing/domains/provenance,mandatory+conditional summary cohort,setup cuts,claim-open/fresh gate,SPENT/job/attempt","C2":"Selector-dependent descriptor status,VC default byte/size/hash binding,strict successful EOF bounds","sourceOnly":true},"canonicalMetadata":{"request":{"orderedFields":["version","request_nonce","allocation_nonce","repository_id","actor_id","commit","ref","workflow_path","workflow_sha256","collector_sha256","policy_sha256","job_key","issued_utc","expires_utc","artifact_prefix","retention_days","n1_policy","utc_error_seconds","source_reference_sha256","manifest_sha256"],"maxCharacters":[4,32,32,10,8,40,64,64,64,64,64,16,20,20,16,3,32,2,64,64]},"policy":{"orderedFields":["version","namespace_model","namespace_exclusion","utc_error_seconds","ledger_requirement","repository","repository_id","actor","actor_id","event","job_key","ref","workflow_path","workflow_name","request_nonce","artifact_prefix","retention_days","checkout_action_sha","upload_action_sha","source_reference_sha256","read_count","file.0","file.1","file.2","file.3"],"maxCharacters":[11,32,32,2,40,40,10,16,8,17,16,64,64,32,32,16,3,40,40,64,1,264,264,264,264]},"context":{"orderedFields":["GITHUB_REPOSITORY","GITHUB_SHA","GITHUB_ACTOR","GITHUB_RUN_ID","GITHUB_RUN_ATTEMPT","GITHUB_JOB","GITHUB_WORKFLOW","GITHUB_REPOSITORY_ID","GITHUB_ACTOR_ID","GITHUB_EVENT_NAME","GITHUB_REF","GITHUB_WORKFLOW_REF","GITHUB_WORKFLOW_SHA","GITHUB_WORKSPACE","RUNNER_TEMP","RUNNER_OS","RUNNER_ARCH","RUNNER_ENVIRONMENT"],"maxCharacters":[40,40,16,20,1,16,32,10,8,17,64,192,40,192,160,7,3,16]},"intent":{"orderedFields":["version","state","request_nonce","allocation_nonce","request_sha256","policy_sha256","collector_sha256","workflow_sha256","context_sha256","root","claim","relative_files","run","job","attempt","issued","expiry","mapping_a","mapping_b","frequency","outer","owner","setup","namespace_model","utc_error_seconds","ledger","manifest_sha256","vc_version","sdk_version","catalog_roots_sha256"]},"claim":{"orderedFields":["state","request_sha256","nonce","run","job","attempt","authority"]},"result":{"orderedFields":["version","request_sha256","control_sha256","terminal_sha256","catalog_roles","catalog_bytes","closure","original_outer","fresh_gate","physical_closure"]},"bootstrap":{"orderedFields":["domain","run","phase","qualification","host_loss"]},"fact":{"orderedFields":["role","provenance","path","bytes","sha256","status","before","after"]},"root":{"orderedFields":["record","index","names"]},"selector":{"orderedFields":["record","vc","vc_default","sdk","closure"]},"pack":{"orderedFields":["record","first","f0","f1","f2"]},"summary":{"orderedFields":["summary","first","before","after","count","maximum_ticks"]},"numericDomain":"ASCII0or[1-9][0-9]{0,18},value<=9223372036854775807;identity/hashes independently bound;no signs/whitespace/leadingzeroes","headerSubextents":{"version":2,"requestMax":1280,"policyMax":2560,"contextMax":2048,"headerBytes":128,"admissionMax":6144,"clockOrder":"0<=A<=B<setup<=owner<outer<=int63max"},"contextWindowsPaths":"RUNNER_TEMP<=160,GITHUB_WORKSPACE<=192;drive absoluteASCII,no colon beyonddrive,/ quote tilde glob,dot/dotdot,emptycomponent,trailingdot/space orDOSdevice alias;actual full output paths<=320 and2*pathcharssum<=6400"},"summaryCohort":{"mandatory":["absence-query","binding-data-read","catalog-dir-exists","catalog-file-exists","claim-open","clock-admission","context-read","control-write","directory-attributes","directory-create","drive-new","enumerable-new","enumerator-new","enumerator-next","file-attributes","file-close","file-length","file-open","file-read","fileinfo-new","hash-append","hash-dispose","hash-new","hash-result","input-close","input-open","input-read","parent-attributes","space-read","verify-close","verify-eof","verify-open","verify-read","writer-close","writer-flush","writer-open","writer-write"],"conditional":{"catalog-enumerator-dispose":"iff any root is not UNAVAILABLE (EMPTYcounts as enumerated)","catalog-current":"iff any version name exists"},"forbiddenPrecut":["terminal-open","terminal-write"],"setupOnly":["absence-query","binding-data-read","catalog-current","catalog-dir-exists","catalog-enumerator-dispose","claim-open","clock-admission","context-read","directory-attributes","directory-create","enumerable-new","enumerator-new","enumerator-next","input-close","input-open","input-read"],"successfulRecordsMin":54,"successfulRecordsMax":56,"claimOpen":"count1,first=before=fresh_gate,after<setup","missingFinalEndpoints":"UNAVAILABLE_notinvented"},"vcDefaultByteForms":{"grammar":"ASCII numericversion1to3dots;producerabsolute\\A...\\z;no trailing data","forms":["defaultASCII","defaultASCII+LF","defaultASCII+CRLF"],"descriptorBinding":"BYTES requires exact permitted bytes/length/SHA256;nonBYTES requires defaultUNAVAILABLE and selectedVCUNRESOLVED","maximumSuccessfulBytes":255},"selectorDescriptorConsistency":{"alwaysResolvedRoots":["VCBASE","KITBASE"],"vcRoots":["VCBIN","VCLIB","VCINC"],"sdkRoots":["UCRTLIB","UMLIB","UMINC","UCRTINC","SHAREDINC","WINRTINC"],"rule":"unresolvedroot iff UNRESOLVED/0/- descriptor;resolved cannot UNRESOLVED;UNKNOWN/UNSUPPORTED remain honest","successfulBytes":"n<roleMaximum and each prefixsum<67108864 because EOF needs remaining read budget"},"receiverIntegration":"Same verified Python3.9.6 and existing120s owner;late-bound actual dispatch/run/artifact admission;fixed CAT1 DATA validator then bounded final publisher,unwrapped return","dispatchAdmission":"Original pre-first-effect UTC900 anchor is separate from later actual admission-asof. Fixed ledger callable in existing launcher uses same Owner class/internal120 ceiling clipped earlier to original expiry minus assumed30s;requires>720s before/afterSPENT and POSTinput. No external window reset/no credential child. Two separate fixed entries,not a secondPython credentialhandoff.","tailFinalWriteControls":{"hostedFailureTail":"0failure-tailIO after Freeze;maximum60s allowance does not authorize more work;park may outlive observation","hostedFinalWrite":"Endpoint=min(existingOwner,lastKnownTerminalHashReturn+1s),all existing before/after checks share it;no newclock/window;physicalcalls may stall","localRecovery":"same existing120s owner through source/admission/provider/transfer/validation/publisher/stdout;no per-stage120 reset,no physical interruption guarantee","evidence":"final/selfpublication endpoints stillUNAVAILABLE in wire;source gates are not independent duration proof"},"correctionR1":"BeforeSPENT approved launcherSHA equals reviewed AND actualfixedlauncher;canonical issued/asof/expiry;issued<=asof<=actualgatedpreSPENTUTCsample<expiry;originalwindow/N2 unchanged.","correctionR2":"elapsed_ns=actual original observation interval; (check_count-1)*minimum_spacing_ns<=elapsed_ns;canonical observedUTC insideoriginalissued/expiry;necessary relation,noperpoll reconstruction/newclockaccuracy.","publicPhase":{"version":"CAT1_PUBLIC_CALL_V1","source":"public-phase-caller.py","sourceUnits":11,"fixedReads":13,"fixedMutations":8,"complete":21,"arbitraryEndpointOrCommand":false,"clock":"one original900s seed before first remote;N2 assumed30;strict>720;existing120 internal ceiling clips earlier","cuts":"same owning process call/submission/capture/receipt publication;not crossprocess monotonic or pureHTTP latency","nativeReturn":"actual bounded private capture,PID and exitcode;not outertool chunk/session","retainedResult":"selected_result exactly once;rawstdout/HTTPheaders private and retired only after durable verification","outerReturn":"unobserved/null until separately supplied actual outer tool result","failure":"fixed UNKNOWN park;pending aliases and diagnostic retained;no retry/recovery/repair/cleanup","adminBytes":8192,"ordinaryStreamBytes":65536,"metadataGuardBytes":65536,"publicEvidenceReservationBytes":1048576,"wholeEvidenceBytes":10485760,"runtimeFeasibility":"UNMEASURED","authority":"actual new owner decision/review/source/runtime/exactpath/task-parent authority required before attempt marker"}}
++{
++    "schema": 2,
++    "protocol": "CAT1/CAT1_POLICY/CATALOG24_V1",
++    "status": "STAGED_ACTIVATION_AND_RECEIVER_BINDING_SOURCE_ONLY_PENDING_REVIEW",
++    "manifestSHA256": "5036119fad368348255bac645b74203bf1447053df566ec2d230a6c718bda16d",
++    "requestFields": 20,
++    "headerVersion": 2,
++    "selectors": {
++        "vc": "default_pointer_exact_enumerated",
++        "sdk": "unique_exact_include_lib_intersection"
++    },
++    "maxNamesPerRoot": 8,
++    "ninthEntry": "REFUSE",
++    "files": 24,
++    "maxTotalFileBytes": 67108864,
++    "packedFilesPerControlRecord": 3,
++    "maxControlRecordBytes": 1024,
++    "maxControlRecords": 64,
++    "recordBudget": {
++        "fixedFacts": 5,
++        "roots": 3,
++        "selectors": 1,
++        "filePacks": 8,
++        "summaryMaximumDistinctNames": 41,
++        "totalMaximum": 58
++    },
++    "metadataGuard": 65536,
++    "preallocationCharge": "Existing actual full charge PLUS CatalogCharge: UTF16(parsed manifest token reserve+names+shared roots+sum fixed role/root/relative+5 separators+11 status+8 size+64 digest per future descriptor),RootWire bytes,3072 transient scratch. Each descriptor bound<=256. Raw manifest/default aliases retired before guard;Cartesian maxima mayrefuse,no truncation/allocation before actual fit.",
++    "oldHost64828Bound": "NOT_REUSED_AS_CATALOG_BOUND",
++    "caps": {
++        "result": 8192,
++        "streamEach": 65536,
++        "controlAggregate": 1048576,
++        "expanded": 1388544,
++        "evidence": 10485760,
++        "terminal": 327680,
++        "terminalRows": 32,
++        "archive": 65536,
++        "metadata": 65536,
++        "bootstrap": 4096,
++        "hold": 32768
++    },
++    "closure": "ALWAYS_INCOMPLETE;no PE/version/import parsing or loaderclosure claim",
++    "activation": "exit78 removed only in isolated staging;fresh candidate nonce bound;no publication/execution authority",
++    "publisher": {
++        "version": 2,
++        "recordKeys": [
++            "schema",
++            "operation",
++            "status",
++            "run_id",
++            "artifact_id",
++            "result_ref",
++            "command_ref",
++            "source_refs",
++            "counts",
++            "cuts",
++            "observation"
++        ],
++        "observationKeys": ["exit_observed", "exit_code", "chunk_id", "session_id", "return_ref"],
++        "exitCode": "Observedexactint32includingnonzero,elseNull;KNOWN_RETURNrequiresobserved;preparationhasnoexitfact.",
++        "toolIdentity": "Observedexit requires actualboundedchunk/session and no inprocessreturn_ref. Returnref-only requires SERVICE_SNAPSHOT,unobservedexit,nullcode/nullIDs;closedorigin/run/artifact/assessment binding validated beforeoutputcreation.",
++        "unknownIDs": "nullnotfabricatedzero",
++        "sourceRefsMax": 4,
++        "cutsMax": 4,
++        "resultMaxBytes": 8192,
++        "publication": "fullUTF8guardbeforeexclusivecreate;noouterwrap/fallback;callerusesalready-admittedwindow",
++        "returnReferenceValidation": {
++            "origin": "IN_PROCESS_DATA_RETURN",
++            "closedTopFields": 17,
++            "assessmentExtraBindings": ["artifact_id", "request_sha256"],
++            "assessmentRef": "exactsame path/bytes/SHA256 asresult_ref;bothfiles independentlyhash/extent/EOFchecked",
++            "copyGuard": "6*(return_refBytes+assessmentBytes)+2*receiptBytes+summaryBytes+3072<=65536 beforecapture/parse;actualmaxima may refuse",
++            "toolExit": "Never inferred fromDATAref;actualouterexit/IDs separateafterreturn",
++            "capsUnchanged": true
++        }
++    },
++    "consumerInterface": "assess_catalog_and_publish(existingOwner,unobservedToolReturn,memberRoot,independentExpected,exactCommand,validatedPath,receiptPath,operation_evidence=fixed actual transport facts);no new window",
++    "selectorDefaultPointer": "vc_defaultfieldretainsobservedtrimmedpointerorUNAVAILABLE;selectedvcUNRESOLVEDifnotenumerated",
++    "sdkManifest": "Fixed DATA file hashed via bounded streaming Hash-File;no XML,version,dependency or executable interpretation.",
++    "requestKeyOrder": [
++        "version",
++        "request_nonce",
++        "allocation_nonce",
++        "repository_id",
++        "actor_id",
++        "commit",
++        "ref",
++        "workflow_path",
++        "workflow_sha256",
++        "collector_sha256",
++        "policy_sha256",
++        "job_key",
++        "issued_utc",
++        "expires_utc",
++        "artifact_prefix",
++        "retention_days",
++        "n1_policy",
++        "utc_error_seconds",
++        "source_reference_sha256",
++        "manifest_sha256"
++    ],
++    "metadataGuardScope": "Named payload/path/readset live-copy accounting only;CLR/parser/allocator/object overhead UNKNOWN;not a hard memory quota.",
++    "fileBudgetBoundary": "Catalog reads admit each requested length against both remaining role and aggregate budgets;exact exhaustion before EOF is REFUSED/UNKNOWN rather than an extra byte read. No binary retained.",
++    "consumerRepairs": {
++        "C1": "Closed ordered metadata/framing/domains/provenance,mandatory+conditional summary cohort,setup cuts,claim-open/fresh gate,SPENT/job/attempt",
++        "C2": "Selector-dependent descriptor status,VC default byte/size/hash binding,strict successful EOF bounds",
++        "sourceOnly": true
++    },
++    "canonicalMetadata": {
++        "request": {
++            "orderedFields": [
++                "version",
++                "request_nonce",
++                "allocation_nonce",
++                "repository_id",
++                "actor_id",
++                "commit",
++                "ref",
++                "workflow_path",
++                "workflow_sha256",
++                "collector_sha256",
++                "policy_sha256",
++                "job_key",
++                "issued_utc",
++                "expires_utc",
++                "artifact_prefix",
++                "retention_days",
++                "n1_policy",
++                "utc_error_seconds",
++                "source_reference_sha256",
++                "manifest_sha256"
++            ],
++            "maxCharacters": [
++                4, 32, 32, 10, 8, 40, 64, 64, 64, 64, 64, 16, 20, 20, 16, 3, 32, 2, 64, 64
++            ]
++        },
++        "policy": {
++            "orderedFields": [
++                "version",
++                "namespace_model",
++                "namespace_exclusion",
++                "utc_error_seconds",
++                "ledger_requirement",
++                "repository",
++                "repository_id",
++                "actor",
++                "actor_id",
++                "event",
++                "job_key",
++                "ref",
++                "workflow_path",
++                "workflow_name",
++                "request_nonce",
++                "artifact_prefix",
++                "retention_days",
++                "checkout_action_sha",
++                "upload_action_sha",
++                "source_reference_sha256",
++                "read_count",
++                "file.0",
++                "file.1",
++                "file.2",
++                "file.3"
++            ],
++            "maxCharacters": [
++                11, 32, 32, 2, 40, 40, 10, 16, 8, 17, 16, 64, 64, 32, 32, 16, 3, 40, 40, 64, 1, 264,
++                264, 264, 264
++            ]
++        },
++        "context": {
++            "orderedFields": [
++                "GITHUB_REPOSITORY",
++                "GITHUB_SHA",
++                "GITHUB_ACTOR",
++                "GITHUB_RUN_ID",
++                "GITHUB_RUN_ATTEMPT",
++                "GITHUB_JOB",
++                "GITHUB_WORKFLOW",
++                "GITHUB_REPOSITORY_ID",
++                "GITHUB_ACTOR_ID",
++                "GITHUB_EVENT_NAME",
++                "GITHUB_REF",
++                "GITHUB_WORKFLOW_REF",
++                "GITHUB_WORKFLOW_SHA",
++                "GITHUB_WORKSPACE",
++                "RUNNER_TEMP",
++                "RUNNER_OS",
++                "RUNNER_ARCH",
++                "RUNNER_ENVIRONMENT"
++            ],
++            "maxCharacters": [40, 40, 16, 20, 1, 16, 32, 10, 8, 17, 64, 192, 40, 192, 160, 7, 3, 16]
++        },
++        "intent": {
++            "orderedFields": [
++                "version",
++                "state",
++                "request_nonce",
++                "allocation_nonce",
++                "request_sha256",
++                "policy_sha256",
++                "collector_sha256",
++                "workflow_sha256",
++                "context_sha256",
++                "root",
++                "claim",
++                "relative_files",
++                "run",
++                "job",
++                "attempt",
++                "issued",
++                "expiry",
++                "mapping_a",
++                "mapping_b",
++                "frequency",
++                "outer",
++                "owner",
++                "setup",
++                "namespace_model",
++                "utc_error_seconds",
++                "ledger",
++                "manifest_sha256",
++                "vc_version",
++                "sdk_version",
++                "catalog_roots_sha256"
++            ]
++        },
++        "claim": {
++            "orderedFields": [
++                "state",
++                "request_sha256",
++                "nonce",
++                "run",
++                "job",
++                "attempt",
++                "authority"
++            ]
++        },
++        "result": {
++            "orderedFields": [
++                "version",
++                "request_sha256",
++                "control_sha256",
++                "terminal_sha256",
++                "catalog_roles",
++                "catalog_bytes",
++                "closure",
++                "original_outer",
++                "fresh_gate",
++                "physical_closure"
++            ]
++        },
++        "bootstrap": { "orderedFields": ["domain", "run", "phase", "qualification", "host_loss"] },
++        "fact": {
++            "orderedFields": [
++                "role",
++                "provenance",
++                "path",
++                "bytes",
++                "sha256",
++                "status",
++                "before",
++                "after"
++            ]
++        },
++        "root": { "orderedFields": ["record", "index", "names"] },
++        "selector": { "orderedFields": ["record", "vc", "vc_default", "sdk", "closure"] },
++        "pack": { "orderedFields": ["record", "first", "f0", "f1", "f2"] },
++        "summary": {
++            "orderedFields": ["summary", "first", "before", "after", "count", "maximum_ticks"]
++        },
++        "numericDomain": "ASCII0or[1-9][0-9]{0,18},value<=9223372036854775807;identity/hashes independently bound;no signs/whitespace/leadingzeroes",
++        "headerSubextents": {
++            "version": 2,
++            "requestMax": 1280,
++            "policyMax": 2560,
++            "contextMax": 2048,
++            "headerBytes": 128,
++            "admissionMax": 6144,
++            "clockOrder": "0<=A<=B<setup<=owner<outer<=int63max"
++        },
++        "contextWindowsPaths": "RUNNER_TEMP<=160,GITHUB_WORKSPACE<=192;drive absoluteASCII,no colon beyonddrive,/ quote tilde glob,dot/dotdot,emptycomponent,trailingdot/space orDOSdevice alias;actual full output paths<=320 and2*pathcharssum<=6400"
++    },
++    "summaryCohort": {
++        "mandatory": [
++            "absence-query",
++            "binding-data-read",
++            "catalog-dir-exists",
++            "catalog-file-exists",
++            "claim-open",
++            "clock-admission",
++            "context-read",
++            "control-write",
++            "directory-attributes",
++            "directory-create",
++            "drive-new",
++            "enumerable-new",
++            "enumerator-new",
++            "enumerator-next",
++            "file-attributes",
++            "file-close",
++            "file-length",
++            "file-open",
++            "file-read",
++            "fileinfo-new",
++            "hash-append",
++            "hash-dispose",
++            "hash-new",
++            "hash-result",
++            "input-close",
++            "input-open",
++            "input-read",
++            "parent-attributes",
++            "space-read",
++            "verify-close",
++            "verify-eof",
++            "verify-open",
++            "verify-read",
++            "writer-close",
++            "writer-flush",
++            "writer-open",
++            "writer-write"
++        ],
++        "conditional": {
++            "catalog-enumerator-dispose": "iff any root is not UNAVAILABLE (EMPTYcounts as enumerated)",
++            "catalog-current": "iff any version name exists"
++        },
++        "forbiddenPrecut": ["terminal-open", "terminal-write"],
++        "setupOnly": [
++            "absence-query",
++            "binding-data-read",
++            "catalog-current",
++            "catalog-dir-exists",
++            "catalog-enumerator-dispose",
++            "claim-open",
++            "clock-admission",
++            "context-read",
++            "directory-attributes",
++            "directory-create",
++            "enumerable-new",
++            "enumerator-new",
++            "enumerator-next",
++            "input-close",
++            "input-open",
++            "input-read"
++        ],
++        "successfulRecordsMin": 54,
++        "successfulRecordsMax": 56,
++        "claimOpen": "count1,first=before=fresh_gate,after<setup",
++        "missingFinalEndpoints": "UNAVAILABLE_notinvented"
++    },
++    "vcDefaultByteForms": {
++        "grammar": "ASCII numericversion1to3dots;producerabsolute\\A...\\z;no trailing data",
++        "forms": ["defaultASCII", "defaultASCII+LF", "defaultASCII+CRLF"],
++        "descriptorBinding": "BYTES requires exact permitted bytes/length/SHA256;nonBYTES requires defaultUNAVAILABLE and selectedVCUNRESOLVED",
++        "maximumSuccessfulBytes": 255
++    },
++    "selectorDescriptorConsistency": {
++        "alwaysResolvedRoots": ["VCBASE", "KITBASE"],
++        "vcRoots": ["VCBIN", "VCLIB", "VCINC"],
++        "sdkRoots": ["UCRTLIB", "UMLIB", "UMINC", "UCRTINC", "SHAREDINC", "WINRTINC"],
++        "rule": "unresolvedroot iff UNRESOLVED/0/- descriptor;resolved cannot UNRESOLVED;UNKNOWN/UNSUPPORTED remain honest",
++        "successfulBytes": "n<roleMaximum and each prefixsum<67108864 because EOF needs remaining read budget"
++    },
++    "receiverIntegration": "Same verified Python3.9.6 and existing120s owner;late-bound actual dispatch/run/artifact admission;fixed CAT1 DATA validator then bounded final publisher,unwrapped return",
++    "dispatchAdmission": "Original pre-first-effect UTC900 anchor is separate from later actual admission-asof. Fixed ledger callable in existing launcher uses same Owner class/internal120 ceiling clipped earlier to original expiry minus assumed30s;requires>720s before/afterSPENT and POSTinput. No external window reset/no credential child. Two separate fixed entries,not a secondPython credentialhandoff.",
++    "tailFinalWriteControls": {
++        "hostedFailureTail": "0failure-tailIO after Freeze;maximum60s allowance does not authorize more work;park may outlive observation",
++        "hostedFinalWrite": "Endpoint=min(existingOwner,lastKnownTerminalHashReturn+1s),all existing before/after checks share it;no newclock/window;physicalcalls may stall",
++        "localRecovery": "same existing120s owner through source/admission/provider/transfer/validation/publisher/stdout;no per-stage120 reset,no physical interruption guarantee",
++        "evidence": "final/selfpublication endpoints stillUNAVAILABLE in wire;source gates are not independent duration proof"
++    },
++    "correctionR1": "BeforeSPENT approved launcherSHA equals reviewed AND actualfixedlauncher;canonical issued/asof/expiry;issued<=asof<=actualgatedpreSPENTUTCsample<expiry;originalwindow/N2 unchanged.",
++    "correctionR2": "elapsed_ns=actual original observation interval; (check_count-1)*minimum_spacing_ns<=elapsed_ns;canonical observedUTC insideoriginalissued/expiry;necessary relation,noperpoll reconstruction/newclockaccuracy.",
++    "publicPhase": {
++        "version": "CAT1_PUBLIC_CALL_V1",
++        "source": "public-phase-caller.py",
++        "sourceUnits": 11,
++        "fixedReads": 13,
++        "fixedMutations": 8,
++        "complete": 21,
++        "arbitraryEndpointOrCommand": false,
++        "clock": "one original900s seed before first remote;N2 assumed30;strict>720;existing120 internal ceiling clips earlier",
++        "cuts": "same owning process call/submission/capture/receipt publication;not crossprocess monotonic or pureHTTP latency",
++        "nativeReturn": "actual bounded private capture,PID and exitcode;not outertool chunk/session",
++        "retainedResult": "selected_result exactly once;rawstdout/HTTPheaders private and retired only after durable verification",
++        "outerReturn": "unobserved/null until separately supplied actual outer tool result",
++        "failure": "fixed UNKNOWN park;pending aliases and diagnostic retained;no retry/recovery/repair/cleanup",
++        "adminBytes": 8192,
++        "ordinaryStreamBytes": 65536,
++        "metadataGuardBytes": 65536,
++        "publicEvidenceReservationBytes": 1048576,
++        "wholeEvidenceBytes": 10485760,
++        "runtimeFeasibility": "UNMEASURED",
++        "authority": "actual new owner decision/review/source/runtime/exactpath/task-parent authority required before attempt marker"
++    }
++}
+--- a/prepared/windows-bootstrap/acquisition-schema.json
++++ b/prepared/windows-bootstrap/acquisition-schema.json
+@@ -1,375 +1,354 @@
+ {
+-  "schema": 1,
+-  "status": "DATA_ONLY_BOUND_STAGED_SOURCE_CONTRACT_NO_INVOCATION_OR_PUBLICATION_AUTHORITY",
+-  "version": "ACQ1",
+-  "semanticInputRoles": [
+-    {
+-      "role": 1,
+-      "name": "dispatcher request",
+-      "transport": "request_b64 and request_sha256 workflow_dispatch inputs through environment DATA",
+-      "authority": "authorized external dispatcher and reviewed workflow chain,not self-supplied hash"
+-    },
+-    {
+-      "role": 2,
+-      "name": "pinned committed policy",
+-      "contents": "N1/N2 assumptions,ledger requirement,exact context/ref/readset/retention roles;no independent job receipt prerequisite"
+-    },
+-    {
+-      "role": 3,
+-      "name": "fresh job/context and selected file facts",
+-      "trust": "conditional N1 hosted observations,not OS attestation"
+-    }
+-  ],
+-  "dispatchTransport": {
+-    "inputs": [
+-      "request_b64",
+-      "request_sha256"
++    "schema": 1,
++    "status": "DATA_ONLY_BOUND_STAGED_SOURCE_CONTRACT_NO_INVOCATION_OR_PUBLICATION_AUTHORITY",
++    "version": "ACQ1",
++    "semanticInputRoles": [
++        {
++            "role": 1,
++            "name": "dispatcher request",
++            "transport": "request_b64 and request_sha256 workflow_dispatch inputs through environment DATA",
++            "authority": "authorized external dispatcher and reviewed workflow chain,not self-supplied hash"
++        },
++        {
++            "role": 2,
++            "name": "pinned committed policy",
++            "contents": "N1/N2 assumptions,ledger requirement,exact context/ref/readset/retention roles;no independent job receipt prerequisite"
++        },
++        {
++            "role": 3,
++            "name": "fresh job/context and selected file facts",
++            "trust": "conditional N1 hosted observations,not OS attestation"
++        }
+     ],
+-    "base64ASCIICharactersCeiling": 8192,
+-    "decodedASCIIBytesCeiling": 6144,
+-    "digest": "64 lowercase hex SHA256 of canonical decoded bytes",
+-    "strictBase64": "no whitespace,canonical padding and re-encoding equality",
+-    "chosenTemplateDecodedMaximum": 1280,
+-    "chosenTemplateEncodedMaximum": 1708,
+-    "canonicalRequestCartesianMaximumBytes": 886,
+-    "rejectedOversize": "before decode if predicted length exceeds template;no truncation;invalid inputs not admitted"
+-  },
+-  "request": {
+-    "fieldOrder": [
+-      "version",
+-      "request_nonce",
+-      "allocation_nonce",
+-      "repository_id",
+-      "actor_id",
+-      "commit",
+-      "ref",
+-      "workflow_path",
+-      "workflow_sha256",
+-      "collector_sha256",
+-      "policy_sha256",
+-      "job_key",
+-      "issued_utc",
+-      "expires_utc",
+-      "artifact_prefix",
+-      "retention_days",
+-      "n1_policy",
+-      "utc_error_seconds",
+-      "source_reference_sha256"
++    "dispatchTransport": {
++        "inputs": ["request_b64", "request_sha256"],
++        "base64ASCIICharactersCeiling": 8192,
++        "decodedASCIIBytesCeiling": 6144,
++        "digest": "64 lowercase hex SHA256 of canonical decoded bytes",
++        "strictBase64": "no whitespace,canonical padding and re-encoding equality",
++        "chosenTemplateDecodedMaximum": 1280,
++        "chosenTemplateEncodedMaximum": 1708,
++        "canonicalRequestCartesianMaximumBytes": 886,
++        "rejectedOversize": "before decode if predicted length exceeds template;no truncation;invalid inputs not admitted"
++    },
++    "request": {
++        "fieldOrder": [
++            "version",
++            "request_nonce",
++            "allocation_nonce",
++            "repository_id",
++            "actor_id",
++            "commit",
++            "ref",
++            "workflow_path",
++            "workflow_sha256",
++            "collector_sha256",
++            "policy_sha256",
++            "job_key",
++            "issued_utc",
++            "expires_utc",
++            "artifact_prefix",
++            "retention_days",
++            "n1_policy",
++            "utc_error_seconds",
++            "source_reference_sha256"
++        ],
++        "fieldValueMaxCharacters": {
++            "version": 4,
++            "request_nonce": 32,
++            "allocation_nonce": 32,
++            "repository_id": 10,
++            "actor_id": 8,
++            "commit": 40,
++            "ref": 64,
++            "workflow_path": 64,
++            "workflow_sha256": 64,
++            "collector_sha256": 64,
++            "policy_sha256": 64,
++            "job_key": 16,
++            "issued_utc": 20,
++            "expires_utc": 20,
++            "artifact_prefix": 16,
++            "retention_days": 3,
++            "n1_policy": 32,
++            "utc_error_seconds": 2,
++            "source_reference_sha256": 64
++        },
++        "grammar": "exact ordered key=value LF,nonempty printable ASCII,no CR/NUL/unknown/duplicate/trailing fields",
++        "utc": "exact yyyy-MM-ddTHH:mm:ssZ;expiry-issued==900s,integer checked",
++        "hashRoles": "policy/collector/workflow raw-file SHA256 supplied by approved external request after publication;no self-referential commit/hash inside those files",
++        "externalRequestDigest": "external ledger spends this whole request before dispatch;not checked against a self-written signature"
++    },
++    "policy": {
++        "fieldOrder": [
++            "version",
++            "namespace_model",
++            "namespace_exclusion",
++            "utc_error_seconds",
++            "ledger_requirement",
++            "repository",
++            "repository_id",
++            "actor",
++            "actor_id",
++            "event",
++            "job_key",
++            "ref",
++            "workflow_path",
++            "workflow_name",
++            "request_nonce",
++            "artifact_prefix",
++            "retention_days",
++            "checkout_action_sha",
++            "upload_action_sha",
++            "source_reference_sha256",
++            "read_count",
++            "file.0",
++            "file.1",
++            "file.2",
++            "file.3"
++        ],
++        "fieldValueMaxCharacters": {
++            "version": 11,
++            "namespace_model": 32,
++            "namespace_exclusion": 32,
++            "utc_error_seconds": 2,
++            "ledger_requirement": 40,
++            "repository": 40,
++            "repository_id": 10,
++            "actor": 16,
++            "actor_id": 8,
++            "event": 17,
++            "job_key": 16,
++            "ref": 64,
++            "workflow_path": 64,
++            "workflow_name": 32,
++            "request_nonce": 32,
++            "artifact_prefix": 16,
++            "retention_days": 3,
++            "checkout_action_sha": 40,
++            "upload_action_sha": 40,
++            "source_reference_sha256": 64,
++            "read_count": 1,
++            "file.0": 264,
++            "file.1": 264,
++            "file.2": 264,
++            "file.3": 264
++        },
++        "rawMaximum": 2560,
++        "cartesianMaximumBytes": 1974,
++        "initialValues": "Bound local successor:one exact host_pwsh OBSERVE_ONLY target,three UNUSED rows,ref/action/nonce/retention literals below;live path,host,commit,time and run facts remain unobserved. No invocation or publication authority.",
++        "fileRow": "role|absolutePath|maximumBytes|MATCH-or-OBSERVE_ONLY|expectedLowerSHA256-or--",
++        "fileCountTemplateMaximum": 4,
++        "externalSelectedReadsetCeilingUnchanged": 64,
++        "maximumSelectedFileBytesTemplate": 67108864,
++        "pathMaximum": 160,
++        "sourceStaticReference": "accepted local v3 seal only;not delivered or invoked",
++        "selectedLiterals": {
++            "version": "ACQ1_POLICY",
++            "namespace_model": "workflow-trust-freshvm-v1",
++            "namespace_exclusion": "NO_ADVERSARIAL_ADMIN_SYSTEM",
++            "utc_error_seconds": "30",
++            "ledger_requirement": "EXTERNAL_SPENT_BY_REQUEST_SHA",
++            "repository": "brucerry/embedded-linux-diagnostic-hub",
++            "repository_id": "1405501450",
++            "actor": "brucerry",
++            "actor_id": "88369201",
++            "event": "workflow_dispatch",
++            "job_key": "acquire",
++            "ref": "refs/heads/main",
++            "workflow_path": ".github/workflows/windows-m01-acquisition.yml",
++            "workflow_name": "M01 acquisition",
++            "request_nonce": "4932e6f2a17cfcf429758ce3d8e288a0",
++            "artifact_prefix": "m01-acquire",
++            "retention_days": "1",
++            "checkout_action_sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
++            "upload_action_sha": "ea165f8d65b6e75b540449e92b4886f43607fa02",
++            "source_reference_sha256": "8616cb56a30af4cb46048039478578373d0ce63c5372a73a61a08837b49bf6a4",
++            "read_count": "1",
++            "file.0": "host_pwsh|C:\\Program Files\\PowerShell\\7\\pwsh.exe|67108864|OBSERVE_ONLY|-",
++            "file.1": "UNUSED|UNUSED|0|UNUSED|-",
++            "file.2": "UNUSED|UNUSED|0|UNUSED|-",
++            "file.3": "UNUSED|UNUSED|0|UNUSED|-"
++        }
++    },
++    "authority": {
++        "N1": "SUPPLIED_ASSUMPTION:workflow namespace discipline,fresh windows-2025 x64 VM;trusted service/admin/SYSTEM,authorized dispatcher and reviewed setup;no adversarial same-account/admin/SYSTEM guarantee",
++        "N2": "SUPPLIED_ASSUMPTION:absolute host-versus-dispatcher UTC error<=30s throughout request;not measurement/SLA;subtract30s",
++        "externalLedger": {
++            "owner": "authorized dispatcher outside collector",
++            "key": "approved request_sha256 and original issue/expiry",
++            "states": [
++                "UNUSED",
++                "SPENT_BEFORE_DISPATCH",
++                "KNOWN_RETURNED_RUN_BOUND",
++                "COMPLETE_OR_UNKNOWN_HOLD"
++            ],
++            "uncertainDispatch": "SPENT/UNKNOWN;no refund,retry,rerun,arbitrary-old-run search",
++            "duplicateRun": "attempt1 alone does not prevent it;external ledger/actor discipline is trusted,not GitHub replay enforcement",
++            "mutationCapability": "later dispatcher must expose exact run-details return;not implemented or invoked here"
++        },
++        "scope": "ACQUIRE only;existing M01/B0 lease/native consumers unchanged;no SID/ACL/volume/parent-job proof fields fabricated"
++    },
++    "context": {
++        "names": [
++            "GITHUB_REPOSITORY",
++            "GITHUB_SHA",
++            "GITHUB_ACTOR",
++            "GITHUB_RUN_ID",
++            "GITHUB_RUN_ATTEMPT",
++            "GITHUB_JOB",
++            "GITHUB_WORKFLOW",
++            "GITHUB_REPOSITORY_ID",
++            "GITHUB_ACTOR_ID",
++            "GITHUB_EVENT_NAME",
++            "GITHUB_REF",
++            "GITHUB_WORKFLOW_REF",
++            "GITHUB_WORKFLOW_SHA",
++            "GITHUB_WORKSPACE",
++            "RUNNER_TEMP",
++            "RUNNER_OS",
++            "RUNNER_ARCH",
++            "RUNNER_ENVIRONMENT"
++        ],
++        "perValueMaximumCharacters": {
++            "GITHUB_REPOSITORY": 40,
++            "GITHUB_SHA": 40,
++            "GITHUB_ACTOR": 16,
++            "GITHUB_RUN_ID": 20,
++            "GITHUB_RUN_ATTEMPT": 1,
++            "GITHUB_JOB": 16,
++            "GITHUB_WORKFLOW": 32,
++            "GITHUB_REPOSITORY_ID": 10,
++            "GITHUB_ACTOR_ID": 8,
++            "GITHUB_EVENT_NAME": 17,
++            "GITHUB_REF": 64,
++            "GITHUB_WORKFLOW_REF": 192,
++            "GITHUB_WORKFLOW_SHA": 40,
++            "GITHUB_WORKSPACE": 192,
++            "RUNNER_TEMP": 160,
++            "RUNNER_OS": 7,
++            "RUNNER_ARCH": 3,
++            "RUNNER_ENVIRONMENT": 16
++        },
++        "aggregateValueCharactersMaximum": 1280,
++        "wireMaximum": 2048,
++        "extraWorkflowPolicyData": ["ACQUIRE_NONCE", "ACQUIRE_RETENTION_DAYS"],
++        "transportEnvironmentData": ["ACQUIRE_REQUEST_B64", "ACQUIRE_REQUEST_SHA256"],
++        "exactActorRepositoryIDs": ["88369201", "1405501450"],
++        "attempt": "1",
++        "job": "acquire",
++        "host": "github-hosted Windows X64",
++        "parent": "observed RUNNER_TEMP<=160 chars under N1",
++        "workspace": "observed GITHUB_WORKSPACE<=192 chars",
++        "noEnvironmentDump": true
++    },
++    "copyAccounting": {
++        "kind": "named logical serialized-byte bound,not heap/native/CLR/OS process-memory proof",
++        "preallocationMaxima": {
++            "transportOSAndManaged": 6832,
++            "requestDigestOSAndManaged": 256,
++            "workflowBindingDataOSAndManaged": 140,
++            "decodedRequest": 1280,
++            "parsedRequestValuesUTF16": 2560,
++            "policyRaw": 2560,
++            "parsedPolicyValuesUTF16": 5120,
++            "contextOSAndManaged": 5120,
++            "contextWire": 2048,
++            "derivedPathStringsUTF16": 6400,
++            "admission": 6144,
++            "spentIntent": 2816,
++            "encoderStringTemporaries": 5632,
++            "recordWire": 1024,
++            "recordStringsOrTerminalFacts": 2048,
++            "hashStringsAndTemporaries": 3072,
++            "claimBytes": 512,
++            "claimOrPathTemporaries": 1024,
++            "metadataReadbackReserve": 6144,
++            "holdRecordAndSliceDescriptors": 4096
++        },
++        "completeMaximum": 64828,
++        "combinedCeiling": 65536,
++        "spare": 708,
++        "actualGuard": "source Prepare-Metadata recomputes actual input/context/path/A/I lengths plus complete transient/readback/hold reservations before claim;no future fact invented",
++        "aliases": "caller parameter is same managed string reference;OS-native and managed context/transport charged twice explicitly;no whole ASCII request/policy text or split-line copy;file row slices do not duplicate row strings",
++        "canonicalBase64Temporary": "<=3416 UTF16 bytes retires after pure equality before policy IO;not concurrent with complete metadata phase",
++        "postIntentRetirement": "decoded/policy raw/context wire/admission/intent/claim buffers retire only after complete write/flush/close/readback,with immutable archive bytes and hashes retained",
++        "terminalPhase": "maximum57148 named logical bytes including two10240 rows;not concurrent with retired A/I/raw buffers or result construction",
++        "recordReadbacks": "<=1024 chunks except terminal row<=10240;selected/source file raw hash chunks<=65536 are separate read/hash workspace,not copied full metadata",
++        "unmeasured": "CLR strings/array/dictionary/boxing/hash/file/task internals,GC/native/OS/provider copies and stack;not counted as observed zero"
++    },
++    "outputs": {
++        "parent": "RUNNER_TEMP,pre-existing N1 parent",
++        "leaf": "m01-acquire-<request_nonce32hex>-<actual run ID1..20digits>-acquire-1",
++        "injectivity": "fixed prefix/nonce width and delimited digit-only run/fixed job/attempt,source byte domains;no path separator/traversal/ADS/trailing dot-space",
++        "directories": ["<leaf>", "<leaf>/observer"],
++        "siblingClaim": "<leaf>.claim",
++        "files": [
++            "admission.bin",
++            "command-intent.bin",
++            "control.bin",
++            "result.bin",
++            "bootstrap.bin",
++            "terminal.bin"
++        ],
++        "fileCountIncludingClaim": 7,
++        "artifactName": "same leaf",
++        "upload": "literal allowlist six leaves plus sibling claim;closed success only,no wildcard/always recovery or reopen pending",
++        "admissionWire": "128-byte header:version/3 lengths,actual clock bracket/frequency/UTCticks/endpoints,nonce,N1/N2 marker;canonical request+policy+context exact bytes",
++        "intentWire": "canonical actual SPENT plan/readset/namespace/request/policy/context hashes/clock mapping;no future freshness/completion fact",
++        "controlWire": "bounded exact field records with provenance/status/extent/hash and actual available brackets;each append flush/readback-verified before dependent action;fixed-site summaries are explicit cuts",
++        "resultWire": "<=1024 actual template within8192 ceiling;digest/range/status references full immutable records,not lost-fact reconstruction",
++        "terminalWire": "32x10240;16 LE header(index,state,length,flags)+10224 payload/padding;state1 documented text with explicit provenance,state2UNAVAILABLE_UNUSED;no full snapshot;readback byte equality/EOF",
++        "finalEndpoints": "self/final publication timing unavailable on wire;only live known return supports completion;no recursive receipt fiction"
++    },
++    "time": {
++        "originalOuterSeconds": 900,
++        "origin": "external monotonic observation BEFORE dispatch;queue/setup/checkout/delivery consume same UTC expiry",
++        "hostMapping": "QPC A/UTC/QPC B;outer=A+floor((expiry-hostUTC-30s)*frequency),not B+remaining",
++        "hostOwner": "min(entry+600s,outer-120s)",
++        "setup": "min(entry+60s,owner)",
++        "freshBeforeClaimSeconds": 720,
++        "compileLinkSeconds30": "UNUSED",
++        "inspectionSeconds10": "UNUSED",
++        "tailSeconds60": "ceiling only;immediate freeze/park,no tail completion promise",
++        "finalSeconds1": "inside tail,not extra",
++        "retentionSeconds120": "inside outer,not artifact retention-days",
++        "jobTimeoutMinutes15": "vendor job-execution domain;not enforcement of dispatch-to-expiry;may automatically terminate/lose evidence",
++        "externalObservation": "only returned new run ID,<=15 status reads>=60s apart inside original window;not implemented here"
++    },
++    "caps": {
++        "input": 65536,
++        "hold": 32768,
++        "result": 8192,
++        "readHash": 65536,
++        "writer": 65536,
++        "bootstrap": 4096,
++        "rawStreamEach": 65536,
++        "rawStreamUsage": "UNUSED no child",
++        "terminal": 327680,
++        "terminalRows": 32,
++        "controlAggregate": 1048576,
++        "evidence": 10485760,
++        "generatedBytes": 67108864,
++        "generatedFiles": 256,
++        "broaderBytes": 257949696,
++        "broaderFiles": 8192,
++        "freeAdmission": 2147483648,
++        "freeStop": 134217728,
++        "jobThreshold": 268435456,
++        "cohortThreshold": 536870912,
++        "nativeWorkReference": 262144,
++        "nativeSupervisorControlReference": [1025536, 16384],
++        "nativeSupervisorEvidenceReference": [10420224, 65536]
++    },
++    "failure": "retain all arguments/objects/results first;late/failed/unknown freezes and parks without new IO/publication/close/retry;host loss unknown;no physical timeout/closure guarantee",
++    "unavailable": [
++        "loaded runtime/image proof",
++        "ACL/SID/volume/parent-job/descendant/allocated custody",
++        "complete tool/header/dependency closure",
++        "measured UTC accuracy",
++        "hard aggregate quotas",
++        "native/runtime/provider/release qualification"
+     ],
+-    "fieldValueMaxCharacters": {
+-      "version": 4,
+-      "request_nonce": 32,
+-      "allocation_nonce": 32,
+-      "repository_id": 10,
+-      "actor_id": 8,
+-      "commit": 40,
+-      "ref": 64,
+-      "workflow_path": 64,
+-      "workflow_sha256": 64,
+-      "collector_sha256": 64,
+-      "policy_sha256": 64,
+-      "job_key": 16,
+-      "issued_utc": 20,
+-      "expires_utc": 20,
+-      "artifact_prefix": 16,
+-      "retention_days": 3,
+-      "n1_policy": 32,
+-      "utc_error_seconds": 2,
+-      "source_reference_sha256": 64
+-    },
+-    "grammar": "exact ordered key=value LF,nonempty printable ASCII,no CR/NUL/unknown/duplicate/trailing fields",
+-    "utc": "exact yyyy-MM-ddTHH:mm:ssZ;expiry-issued==900s,integer checked",
+-    "hashRoles": "policy/collector/workflow raw-file SHA256 supplied by approved external request after publication;no self-referential commit/hash inside those files",
+-    "externalRequestDigest": "external ledger spends this whole request before dispatch;not checked against a self-written signature"
+-  },
+-  "policy": {
+-    "fieldOrder": [
+-      "version",
+-      "namespace_model",
+-      "namespace_exclusion",
+-      "utc_error_seconds",
+-      "ledger_requirement",
+-      "repository",
+-      "repository_id",
+-      "actor",
+-      "actor_id",
+-      "event",
+-      "job_key",
+-      "ref",
+-      "workflow_path",
+-      "workflow_name",
+-      "request_nonce",
+-      "artifact_prefix",
+-      "retention_days",
+-      "checkout_action_sha",
+-      "upload_action_sha",
+-      "source_reference_sha256",
+-      "read_count",
+-      "file.0",
+-      "file.1",
+-      "file.2",
+-      "file.3"
+-    ],
+-    "fieldValueMaxCharacters": {
+-      "version": 11,
+-      "namespace_model": 32,
+-      "namespace_exclusion": 32,
+-      "utc_error_seconds": 2,
+-      "ledger_requirement": 40,
+-      "repository": 40,
+-      "repository_id": 10,
+-      "actor": 16,
+-      "actor_id": 8,
+-      "event": 17,
+-      "job_key": 16,
+-      "ref": 64,
+-      "workflow_path": 64,
+-      "workflow_name": 32,
+-      "request_nonce": 32,
+-      "artifact_prefix": 16,
+-      "retention_days": 3,
+-      "checkout_action_sha": 40,
+-      "upload_action_sha": 40,
+-      "source_reference_sha256": 64,
+-      "read_count": 1,
+-      "file.0": 264,
+-      "file.1": 264,
+-      "file.2": 264,
+-      "file.3": 264
+-    },
+-    "rawMaximum": 2560,
+-    "cartesianMaximumBytes": 1974,
+-    "initialValues": "Bound local successor:one exact host_pwsh OBSERVE_ONLY target,three UNUSED rows,ref/action/nonce/retention literals below;live path,host,commit,time and run facts remain unobserved. No invocation or publication authority.",
+-    "fileRow": "role|absolutePath|maximumBytes|MATCH-or-OBSERVE_ONLY|expectedLowerSHA256-or--",
+-    "fileCountTemplateMaximum": 4,
+-    "externalSelectedReadsetCeilingUnchanged": 64,
+-    "maximumSelectedFileBytesTemplate": 67108864,
+-    "pathMaximum": 160,
+-    "sourceStaticReference": "accepted local v3 seal only;not delivered or invoked",
+-    "selectedLiterals": {
+-      "version": "ACQ1_POLICY",
+-      "namespace_model": "workflow-trust-freshvm-v1",
+-      "namespace_exclusion": "NO_ADVERSARIAL_ADMIN_SYSTEM",
+-      "utc_error_seconds": "30",
+-      "ledger_requirement": "EXTERNAL_SPENT_BY_REQUEST_SHA",
+-      "repository": "brucerry/embedded-linux-diagnostic-hub",
+-      "repository_id": "1405501450",
+-      "actor": "brucerry",
+-      "actor_id": "88369201",
+-      "event": "workflow_dispatch",
+-      "job_key": "acquire",
+-      "ref": "refs/heads/main",
+-      "workflow_path": ".github/workflows/windows-m01-acquisition.yml",
+-      "workflow_name": "M01 acquisition",
+-      "request_nonce": "4932e6f2a17cfcf429758ce3d8e288a0",
+-      "artifact_prefix": "m01-acquire",
+-      "retention_days": "1",
+-      "checkout_action_sha": "d23441a48e516b6c34aea4fa41551a30e30af803",
+-      "upload_action_sha": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+-      "source_reference_sha256": "8616cb56a30af4cb46048039478578373d0ce63c5372a73a61a08837b49bf6a4",
+-      "read_count": "1",
+-      "file.0": "host_pwsh|C:\\Program Files\\PowerShell\\7\\pwsh.exe|67108864|OBSERVE_ONLY|-",
+-      "file.1": "UNUSED|UNUSED|0|UNUSED|-",
+-      "file.2": "UNUSED|UNUSED|0|UNUSED|-",
+-      "file.3": "UNUSED|UNUSED|0|UNUSED|-"
+-    }
+-  },
+-  "authority": {
+-    "N1": "SUPPLIED_ASSUMPTION:workflow namespace discipline,fresh windows-2025 x64 VM;trusted service/admin/SYSTEM,authorized dispatcher and reviewed setup;no adversarial same-account/admin/SYSTEM guarantee",
+-    "N2": "SUPPLIED_ASSUMPTION:absolute host-versus-dispatcher UTC error<=30s throughout request;not measurement/SLA;subtract30s",
+-    "externalLedger": {
+-      "owner": "authorized dispatcher outside collector",
+-      "key": "approved request_sha256 and original issue/expiry",
+-      "states": [
+-        "UNUSED",
+-        "SPENT_BEFORE_DISPATCH",
+-        "KNOWN_RETURNED_RUN_BOUND",
+-        "COMPLETE_OR_UNKNOWN_HOLD"
+-      ],
+-      "uncertainDispatch": "SPENT/UNKNOWN;no refund,retry,rerun,arbitrary-old-run search",
+-      "duplicateRun": "attempt1 alone does not prevent it;external ledger/actor discipline is trusted,not GitHub replay enforcement",
+-      "mutationCapability": "later dispatcher must expose exact run-details return;not implemented or invoked here"
+-    },
+-    "scope": "ACQUIRE only;existing M01/B0 lease/native consumers unchanged;no SID/ACL/volume/parent-job proof fields fabricated"
+-  },
+-  "context": {
+-    "names": [
+-      "GITHUB_REPOSITORY",
+-      "GITHUB_SHA",
+-      "GITHUB_ACTOR",
+-      "GITHUB_RUN_ID",
+-      "GITHUB_RUN_ATTEMPT",
+-      "GITHUB_JOB",
+-      "GITHUB_WORKFLOW",
+-      "GITHUB_REPOSITORY_ID",
+-      "GITHUB_ACTOR_ID",
+-      "GITHUB_EVENT_NAME",
+-      "GITHUB_REF",
+-      "GITHUB_WORKFLOW_REF",
+-      "GITHUB_WORKFLOW_SHA",
+-      "GITHUB_WORKSPACE",
+-      "RUNNER_TEMP",
+-      "RUNNER_OS",
+-      "RUNNER_ARCH",
+-      "RUNNER_ENVIRONMENT"
+-    ],
+-    "perValueMaximumCharacters": {
+-      "GITHUB_REPOSITORY": 40,
+-      "GITHUB_SHA": 40,
+-      "GITHUB_ACTOR": 16,
+-      "GITHUB_RUN_ID": 20,
+-      "GITHUB_RUN_ATTEMPT": 1,
+-      "GITHUB_JOB": 16,
+-      "GITHUB_WORKFLOW": 32,
+-      "GITHUB_REPOSITORY_ID": 10,
+-      "GITHUB_ACTOR_ID": 8,
+-      "GITHUB_EVENT_NAME": 17,
+-      "GITHUB_REF": 64,
+-      "GITHUB_WORKFLOW_REF": 192,
+-      "GITHUB_WORKFLOW_SHA": 40,
+-      "GITHUB_WORKSPACE": 192,
+-      "RUNNER_TEMP": 160,
+-      "RUNNER_OS": 7,
+-      "RUNNER_ARCH": 3,
+-      "RUNNER_ENVIRONMENT": 16
+-    },
+-    "aggregateValueCharactersMaximum": 1280,
+-    "wireMaximum": 2048,
+-    "extraWorkflowPolicyData": [
+-      "ACQUIRE_NONCE",
+-      "ACQUIRE_RETENTION_DAYS"
+-    ],
+-    "transportEnvironmentData": [
+-      "ACQUIRE_REQUEST_B64",
+-      "ACQUIRE_REQUEST_SHA256"
+-    ],
+-    "exactActorRepositoryIDs": [
+-      "88369201",
+-      "1405501450"
+-    ],
+-    "attempt": "1",
+-    "job": "acquire",
+-    "host": "github-hosted Windows X64",
+-    "parent": "observed RUNNER_TEMP<=160 chars under N1",
+-    "workspace": "observed GITHUB_WORKSPACE<=192 chars",
+-    "noEnvironmentDump": true
+-  },
+-  "copyAccounting": {
+-    "kind": "named logical serialized-byte bound,not heap/native/CLR/OS process-memory proof",
+-    "preallocationMaxima": {
+-      "transportOSAndManaged": 6832,
+-      "requestDigestOSAndManaged": 256,
+-      "workflowBindingDataOSAndManaged": 140,
+-      "decodedRequest": 1280,
+-      "parsedRequestValuesUTF16": 2560,
+-      "policyRaw": 2560,
+-      "parsedPolicyValuesUTF16": 5120,
+-      "contextOSAndManaged": 5120,
+-      "contextWire": 2048,
+-      "derivedPathStringsUTF16": 6400,
+-      "admission": 6144,
+-      "spentIntent": 2816,
+-      "encoderStringTemporaries": 5632,
+-      "recordWire": 1024,
+-      "recordStringsOrTerminalFacts": 2048,
+-      "hashStringsAndTemporaries": 3072,
+-      "claimBytes": 512,
+-      "claimOrPathTemporaries": 1024,
+-      "metadataReadbackReserve": 6144,
+-      "holdRecordAndSliceDescriptors": 4096
+-    },
+-    "completeMaximum": 64828,
+-    "combinedCeiling": 65536,
+-    "spare": 708,
+-    "actualGuard": "source Prepare-Metadata recomputes actual input/context/path/A/I lengths plus complete transient/readback/hold reservations before claim;no future fact invented",
+-    "aliases": "caller parameter is same managed string reference;OS-native and managed context/transport charged twice explicitly;no whole ASCII request/policy text or split-line copy;file row slices do not duplicate row strings",
+-    "canonicalBase64Temporary": "<=3416 UTF16 bytes retires after pure equality before policy IO;not concurrent with complete metadata phase",
+-    "postIntentRetirement": "decoded/policy raw/context wire/admission/intent/claim buffers retire only after complete write/flush/close/readback,with immutable archive bytes and hashes retained",
+-    "terminalPhase": "maximum57148 named logical bytes including two10240 rows;not concurrent with retired A/I/raw buffers or result construction",
+-    "recordReadbacks": "<=1024 chunks except terminal row<=10240;selected/source file raw hash chunks<=65536 are separate read/hash workspace,not copied full metadata",
+-    "unmeasured": "CLR strings/array/dictionary/boxing/hash/file/task internals,GC/native/OS/provider copies and stack;not counted as observed zero"
+-  },
+-  "outputs": {
+-    "parent": "RUNNER_TEMP,pre-existing N1 parent",
+-    "leaf": "m01-acquire-<request_nonce32hex>-<actual run ID1..20digits>-acquire-1",
+-    "injectivity": "fixed prefix/nonce width and delimited digit-only run/fixed job/attempt,source byte domains;no path separator/traversal/ADS/trailing dot-space",
+-    "directories": [
+-      "<leaf>",
+-      "<leaf>/observer"
+-    ],
+-    "siblingClaim": "<leaf>.claim",
+-    "files": [
+-      "admission.bin",
+-      "command-intent.bin",
+-      "control.bin",
+-      "result.bin",
+-      "bootstrap.bin",
+-      "terminal.bin"
+-    ],
+-    "fileCountIncludingClaim": 7,
+-    "artifactName": "same leaf",
+-    "upload": "literal allowlist six leaves plus sibling claim;closed success only,no wildcard/always recovery or reopen pending",
+-    "admissionWire": "128-byte header:version/3 lengths,actual clock bracket/frequency/UTCticks/endpoints,nonce,N1/N2 marker;canonical request+policy+context exact bytes",
+-    "intentWire": "canonical actual SPENT plan/readset/namespace/request/policy/context hashes/clock mapping;no future freshness/completion fact",
+-    "controlWire": "bounded exact field records with provenance/status/extent/hash and actual available brackets;each append flush/readback-verified before dependent action;fixed-site summaries are explicit cuts",
+-    "resultWire": "<=1024 actual template within8192 ceiling;digest/range/status references full immutable records,not lost-fact reconstruction",
+-    "terminalWire": "32x10240;16 LE header(index,state,length,flags)+10224 payload/padding;state1 documented text with explicit provenance,state2UNAVAILABLE_UNUSED;no full snapshot;readback byte equality/EOF",
+-    "finalEndpoints": "self/final publication timing unavailable on wire;only live known return supports completion;no recursive receipt fiction"
+-  },
+-  "time": {
+-    "originalOuterSeconds": 900,
+-    "origin": "external monotonic observation BEFORE dispatch;queue/setup/checkout/delivery consume same UTC expiry",
+-    "hostMapping": "QPC A/UTC/QPC B;outer=A+floor((expiry-hostUTC-30s)*frequency),not B+remaining",
+-    "hostOwner": "min(entry+600s,outer-120s)",
+-    "setup": "min(entry+60s,owner)",
+-    "freshBeforeClaimSeconds": 720,
+-    "compileLinkSeconds30": "UNUSED",
+-    "inspectionSeconds10": "UNUSED",
+-    "tailSeconds60": "ceiling only;immediate freeze/park,no tail completion promise",
+-    "finalSeconds1": "inside tail,not extra",
+-    "retentionSeconds120": "inside outer,not artifact retention-days",
+-    "jobTimeoutMinutes15": "vendor job-execution domain;not enforcement of dispatch-to-expiry;may automatically terminate/lose evidence",
+-    "externalObservation": "only returned new run ID,<=15 status reads>=60s apart inside original window;not implemented here"
+-  },
+-  "caps": {
+-    "input": 65536,
+-    "hold": 32768,
+-    "result": 8192,
+-    "readHash": 65536,
+-    "writer": 65536,
+-    "bootstrap": 4096,
+-    "rawStreamEach": 65536,
+-    "rawStreamUsage": "UNUSED no child",
+-    "terminal": 327680,
+-    "terminalRows": 32,
+-    "controlAggregate": 1048576,
+-    "evidence": 10485760,
+-    "generatedBytes": 67108864,
+-    "generatedFiles": 256,
+-    "broaderBytes": 257949696,
+-    "broaderFiles": 8192,
+-    "freeAdmission": 2147483648,
+-    "freeStop": 134217728,
+-    "jobThreshold": 268435456,
+-    "cohortThreshold": 536870912,
+-    "nativeWorkReference": 262144,
+-    "nativeSupervisorControlReference": [
+-      1025536,
+-      16384
+-    ],
+-    "nativeSupervisorEvidenceReference": [
+-      10420224,
+-      65536
+-    ]
+-  },
+-  "failure": "retain all arguments/objects/results first;late/failed/unknown freezes and parks without new IO/publication/close/retry;host loss unknown;no physical timeout/closure guarantee",
+-  "unavailable": [
+-    "loaded runtime/image proof",
+-    "ACL/SID/volume/parent-job/descendant/allocated custody",
+-    "complete tool/header/dependency closure",
+-    "measured UTC accuracy",
+-    "hard aggregate quotas",
+-    "native/runtime/provider/release qualification"
+-  ],
+-  "runtimeAuthority": false
++    "runtimeAuthority": false
+ }
+--- a/tests/ci/gateway_four_tool_diagnostics_memory_test.py
++++ b/tests/ci/gateway_four_tool_diagnostics_memory_test.py
+@@ -27,7 +27,6 @@
+ SPEC.loader.exec_module(SUBJECT)
+ PROFILE = json.loads((ROOT / "scripts/ci/gateway-four-tool-inputs.json").read_bytes())
+ LOCK = (ROOT / "package-lock.json").read_bytes()
+-WORKFLOW = (ROOT / ".github/workflows/gateway-native-source-buildonly.yml").read_text()
+ MARKER = "PRIVATE_FIXTURE_MARKER"
+ 
+ 
+@@ -332,13 +331,8 @@
+         self.assertEqual(SUBJECT.reason_for(OpaqueError()), "unexpected")
+         self.assertEqual(SUBJECT.reason_for(urllib.error.HTTPError("/fixture", 404, MARKER, {}, None)), "http-error")
+ 
+-    def test_workflow_requires_closed_prepared_report_and_fails_refusal(self):
+-        self.assertNotIn("continue-on-error", WORKFLOW)
+-        self.assertIn("if: ${{ always() }}", WORKFLOW)
+-        self.assertIn('run: test "$PREPARATION_RESULT" = prepared', WORKFLOW)
+-        self.assertIn("if: ${{ success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared' }}", WORKFLOW)
+-        for field in ("result", "stage", "reason", "input"):
+-            self.assertIn("steps.preparation.outcome == 'success' && steps.preparation.outputs." + field, WORKFLOW)
++    # Parsed workflow assertions run in npm run test:gateway-format.
++    def test_profile_retains_exact_node_and_four_inputs(self):
+         self.assertEqual(PROFILE["node"]["version"], "24.22.2")
+         self.assertEqual(len(PROFILE["packages"]), 4)
+ 
+--- a/tests/gateway-package-format.test.mjs
++++ b/tests/gateway-package-format.test.mjs
+@@ -3,6 +3,7 @@
+ import { readFileSync } from 'node:fs';
+ import { createHash } from 'node:crypto';
+ import { gzipSync } from 'node:zlib';
++import { createRequire } from 'node:module';
+ import { encodeGatewayTar, inspectOwnedGatewayTar } from '../scripts/lib/gateway-tar.mjs';
+ import { GATEWAY_PAYLOAD_FILES } from '../scripts/lib/gateway-lock-plan.mjs';
+ import { inspectInnerArchive } from '../scripts/lib/inner-archive-inspection.mjs';
+@@ -98,3 +99,70 @@
+     assert.ok(phases.includes('npm run test:catalog-boundary'));
+     assert.ok(!manifest.scripts['test:gateway-format'].includes('*.test.mjs'));
+ });
++
++function readPreparationWorkflow() {
++    const yaml = createRequire(import.meta.url)('js-yaml');
++    return yaml.load(
++        readFileSync(
++            new URL('../.github/workflows/gateway-native-source-buildonly.yml', import.meta.url),
++            'utf8',
++        ),
++    );
++}
++
++function assertPreparationWiring(workflow) {
++    const job = workflow.jobs.gateway_build;
++    const steps = job.steps;
++    assert.ok(
++        [job, ...steps].every((entry) => !Object.hasOwn(entry, 'continue-on-error')),
++        'preparation and producer failures must fail the job',
++    );
++    const preparation = steps.filter((step) => step.id === 'preparation');
++    assert.equal(preparation.length, 1);
++    const index = steps.indexOf(preparation[0]);
++    const diagnostic = steps[index + 1];
++    const producer = steps[index + 2];
++    const compact = (value) => value.trim().replace(/\s+/g, ' ');
++    const successfulPreparation = "steps.preparation.outcome == 'success'";
++
++    assert.equal(
++        preparation[0].run,
++        '/usr/bin/python3 -I scripts/ci/prepare-gateway-four-tools.py',
++    );
++    assert.equal(compact(diagnostic.if), '${{ always() }}');
++    assert.equal(diagnostic.run.trim(), 'test "$PREPARATION_RESULT" = prepared');
++    assert.equal(
++        compact(diagnostic.env.PREPARATION_RESULT),
++        '${{ ' + successfulPreparation + " && steps.preparation.outputs.result || 'unavailable' }}",
++    );
++    for (const field of ['result', 'stage', 'reason', 'input']) {
++        assert.ok(
++            compact(diagnostic.name).includes(
++                successfulPreparation + ' && steps.preparation.outputs.' + field,
++            ),
++        );
++    }
++    assert.equal(
++        compact(producer.if),
++        '${{ success() && ' +
++            successfulPreparation +
++            " && steps.preparation.outputs.result == 'prepared' }}",
++        'producer must require a prepared result',
++    );
++    assert.match(producer.run, /scripts\/build-gateway-tag-archive\.mjs --qualify-branch\s*$/);
++    return producer;
++}
++
++test('Gateway workflow gates the producer on a successful prepared result', () => {
++    assertPreparationWiring(readPreparationWorkflow());
++});
++
++test('Gateway workflow assertion rejects a producer wired to refusal', () => {
++    const workflow = readPreparationWorkflow();
++    const producer = assertPreparationWiring(workflow);
++    producer.if = producer.if.replace("== 'prepared'", "== 'refused'");
++    assert.throws(
++        () => assertPreparationWiring(workflow),
++        /producer must require a prepared result/,
++    );
++});
+--- a/tests/linux-permanent-member-modes.test.ts
++++ b/tests/linux-permanent-member-modes.test.ts
+@@ -335,56 +335,64 @@
+     assert.equal(child.status, 0, child.stderr);
+ }
+ 
+-test('Linux afterPack publishes permanent member modes under umask 0077', linuxOnly, async (context) => {
+-    const staged = await afterPackFixture(context);
+-    runAfterPack(staged);
+-    await verifyLinuxPermanentDirectoryModes(staged.appOutDir);
+-
+-    const outputs = [
+-        ['resources/linux-installed-AppRun', 0o755, 'installed launcher'],
+-        ['resources/linux-setup-bootstrap.cjs', 0o644, 'bootstrap bundle'],
+-        ['resources/linux-setup-install.cjs', 0o644, 'installer bundle'],
+-        ['resources/diagnostic_hub_rename_noreplace.node', 0o644, 'native marker data'],
+-        ['resources/linux-setup-install.sh', 0o700, 'setup launcher'],
+-        ['resources/linux-setup-review.cjs', 0o600, 'review bundle'],
+-        ['resources/linux-setup-review.json', 0o600],
+-        ['AppRun', 0o755, 'portable launcher'],
+-    ] as const;
+-    for (const [relative, mode, content] of outputs) {
+-        const target = path.join(staged.appOutDir, relative);
+-        const observed = await lstat(target);
+-        assert.ok(observed.isFile());
+-        assert.equal(observed.mode & 0o7777, mode, relative);
+-        if (content !== undefined) assert.equal(await readFile(target, 'utf8'), content);
+-    }
+-    for (const [relative, content] of Object.entries(afterPackInputs)) {
+-        const file = path.join(staged.root, relative);
+-        assert.equal((await lstat(file)).mode & 0o7777, 0o600, relative);
+-        assert.equal(await readFile(file, 'utf8'), content);
+-    }
+-});
++test(
++    'Linux afterPack publishes permanent member modes under umask 0077',
++    linuxOnly,
++    async (context) => {
++        const staged = await afterPackFixture(context);
++        runAfterPack(staged);
++        await verifyLinuxPermanentDirectoryModes(staged.appOutDir);
++
++        const outputs = [
++            ['resources/linux-installed-AppRun', 0o755, 'installed launcher'],
++            ['resources/linux-setup-bootstrap.cjs', 0o644, 'bootstrap bundle'],
++            ['resources/linux-setup-install.cjs', 0o644, 'installer bundle'],
++            ['resources/diagnostic_hub_rename_noreplace.node', 0o644, 'native marker data'],
++            ['resources/linux-setup-install.sh', 0o700, 'setup launcher'],
++            ['resources/linux-setup-review.cjs', 0o600, 'review bundle'],
++            ['resources/linux-setup-review.json', 0o600],
++            ['AppRun', 0o755, 'portable launcher'],
++        ] as const;
++        for (const [relative, mode, content] of outputs) {
++            const target = path.join(staged.appOutDir, relative);
++            const observed = await lstat(target);
++            assert.ok(observed.isFile());
++            assert.equal(observed.mode & 0o7777, mode, relative);
++            if (content !== undefined) assert.equal(await readFile(target, 'utf8'), content);
++        }
++        for (const [relative, content] of Object.entries(afterPackInputs)) {
++            const file = path.join(staged.root, relative);
++            assert.equal((await lstat(file)).mode & 0o7777, 0o600, relative);
++            assert.equal(await readFile(file, 'utf8'), content);
++        }
++    },
++);
+ 
+ for (const kind of ['regular file', 'symlink'] as const) {
+-    test(`Linux afterPack preserves a pre-existing permanent ${kind}`, linuxOnly, async (context) => {
+-        const staged = await afterPackFixture(context);
+-        const member = path.join(staged.resources, 'linux-setup-install.cjs');
+-        const existing = kind === 'symlink' ? path.join(staged.root, 'sentinel') : member;
+-        await writeFile(existing, 'untouched', { mode: 0o600, flag: 'wx' });
+-        if (kind === 'symlink') await symlink(existing, member);
+-        const before = await lstat(existing);
+-        const destination = await lstat(member);
+-
+-        runAfterPack(staged, { code: 'EEXIST' });
+-
+-        const after = await lstat(existing);
+-        assert.equal(after.ino, before.ino);
+-        assert.equal(after.mode, before.mode);
+-        assert.equal(await readFile(existing, 'utf8'), 'untouched');
+-        const memberAfter = await lstat(member);
+-        assert.equal(memberAfter.ino, destination.ino);
+-        assert.equal(memberAfter.mode, destination.mode);
+-        if (kind === 'symlink') assert.equal(await readlink(member), existing);
+-    });
++    test(
++        `Linux afterPack preserves a pre-existing permanent ${kind}`,
++        linuxOnly,
++        async (context) => {
++            const staged = await afterPackFixture(context);
++            const member = path.join(staged.resources, 'linux-setup-install.cjs');
++            const existing = kind === 'symlink' ? path.join(staged.root, 'sentinel') : member;
++            await writeFile(existing, 'untouched', { mode: 0o600, flag: 'wx' });
++            if (kind === 'symlink') await symlink(existing, member);
++            const before = await lstat(existing);
++            const destination = await lstat(member);
++
++            runAfterPack(staged, { code: 'EEXIST' });
++
++            const after = await lstat(existing);
++            assert.equal(after.ino, before.ino);
++            assert.equal(after.mode, before.mode);
++            assert.equal(await readFile(existing, 'utf8'), 'untouched');
++            const memberAfter = await lstat(member);
++            assert.equal(memberAfter.ino, destination.ino);
++            assert.equal(memberAfter.mode, destination.mode);
++            if (kind === 'symlink') assert.equal(await readlink(member), existing);
++        },
++    );
+ }
+ 
+ test('Linux afterPack refuses an aliased resources directory', linuxOnly, async (context) => {
+--- a/tsconfig.json
++++ b/tsconfig.json
+@@ -1,12 +1,7 @@
+ {
+     "compilerOptions": {
+         "target": "ES2022",
+-        "lib": [
+-            "ES2022",
+-            "DOM",
+-            "DOM.Iterable",
+-            "DOM.AsyncIterable"
+-        ],
++        "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+         "module": "ESNext",
+         "moduleResolution": "Bundler",
+         "allowImportingTsExtensions": true,
+@@ -15,9 +10,7 @@
+         "noEmit": true,
+         "esModuleInterop": true,
+         "skipLibCheck": true,
+-        "types": [
+-            "node"
+-        ],
++        "types": ["node"],
+         "allowJs": true,
+         "resolveJsonModule": true
+     },
+@@ -32,7 +25,5 @@
+         "*.ts",
+         "*.mts"
+     ],
+-    "files": [
+-        ".linux-package-inputs/electron.d.ts"
+-    ]
++    "files": [".linux-package-inputs/electron.d.ts"]
+ }
