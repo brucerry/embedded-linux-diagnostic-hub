@@ -6,12 +6,11 @@ from pathlib import Path
 import re
 
 from venue_seed import GUEST_STAGES as STOCK_STAGES, boot_evidence as stock_boot, need, seed as stock_seed
-import appimage_inventory as image
 import native_guest
 import pair_wire as pair
 import runtime_gate
 
-BRANCH='ci/v060-jammy-corrected-appimage-originals-20261124'
+BRANCH='ci/v060-jammy-tar-portable-lifecycle-20261124'
 PROPOSED_BRANCH='refs/heads/'+BRANCH
 GUEST_STAGES=(*STOCK_STAGES,*native_guest.PHASES)
 LIFECYCLE_STAGES=native_guest.LIFECYCLE_STAGES
@@ -29,13 +28,10 @@ def plan_for(nonce,product):
     header=product.header
     pair_pin=sha256(pair.canonical(header)).hexdigest()
     trust=product.observer
-    receipt=product.image_inventory
-    pin=sha256(pair.canonical(receipt)).hexdigest()
-    bound=image.grant_identity(nonce,receipt,pin,trust['lockSHA256'])
+    bound=runtime_gate.binding(nonce,pair_pin,trust['receipt']['sha256'],'archive-runtime-identity')
     return {'nonce':nonce,'header':header,'pairSHA256':pair_pin,
             'observerLock':trust['lockSHA256'],'observerGuest4KiB':trust['observerGuest4KiB'],
-            'guestCopy':product.guest_copy,'observerOverlay64KiB':trust['observerOverlay64KiB'],
-            'imageInventorySHA256':pin,'grant':bound}
+            'guestCopy':product.guest_copy,'grant':bound}
 
 
 def seed(nonce,product):
@@ -43,10 +39,6 @@ def seed(nonce,product):
     cloud=json.loads(initial['user-data'].split(b'\n',1)[1])
     cloud['users']=[{'name':'hub-display','lock_passwd':True,'shell':'/usr/sbin/nologin'}]
     frozen={name:(HERE/name).read_bytes() for name in CONTROL}
-    producer=HERE.parent/'linux-two-format'
-    for name in ('appimage_inventory.py','read_envelope.py'):
-        frozen[name]=(producer/name).read_bytes()
-    frozen['inventory.jsn']=pair.canonical(product.image_inventory)
     frozen['plan.json']=pair.canonical(plan_for(nonce,product))
     # Place the pinned files through cloud-init's per-file writer. The runcmd command
     # argument stays well below Linux MAX_ARG_STRLEN even with both full APT locks.
@@ -94,19 +86,19 @@ def boot_evidence(wire,nonce,header):
         anchors[name]=i
         if transport:
             evidence['native_observer_transport']=False
-    lifecycle=[(i,line) for i,line in enumerate(lines) if b'HUB_JAMMY_LIFECYCLE ' in line]
+    lifecycle=[(i,line) for i,line in enumerate(lines) if b'HUB_JAMMY_TAR_LIFECYCLE ' in line]
     actor='native_observer_actor_frame'
     need(len(lifecycle)==int(evidence.get(actor) is True),'native-lifecycle-count')
     if lifecycle:
         (position,frame),=lifecycle
         need(anchors[actor]<position<anchors.get('native_observer_display',end[0]),'native-lifecycle-order')
         parts=frame.decode('ascii').split(' ')
-        need(len(parts)==6 and parts[:2]==['HUB_JAMMY_LIFECYCLE',nonce] and
+        need(len(parts)==6 and parts[:2]==['HUB_JAMMY_TAR_LIFECYCLE',nonce] and
              native_guest.lifecycle_frame(nonce,*parts[2:]).encode('ascii')==frame,'native-lifecycle-wire')
         for key,result in zip(LIFECYCLE_STAGES,parts[2:],strict=True):
             if result!='unreached':
                 evidence[key]=result=='pass'
-        for primary,value in zip(('native_observer_quit','native_observer_extraction',
+        for primary,value in zip(('native_observer_quit','native_observer_post_quit_floor',
                                   'native_observer_display_retirement','native_process_retirement'),
                                   parts[2:],strict=True):
             if primary in evidence:

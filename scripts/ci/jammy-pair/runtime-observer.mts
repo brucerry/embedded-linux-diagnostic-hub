@@ -4,10 +4,9 @@ import { readFile, writeFile, mkdtemp, realpath, open, statfs } from 'node:fs/pr
 import os from 'node:os';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { mapOverview, observeSession } from './runtime-observation.mjs';
-import { appimageLaunch, observeOriginalFiles, privateExtraction, requireAppImageRetired, ASSET }
-    from './appimage-observer.mjs';
+import { hashOriginalMember, mapOverview, observeSession } from './runtime-observation.mjs';
 
+const ASSET = 'Diagnostic-Hub-linux-x64.tar.gz';
 const executable = process.env.HUB_TEST_EXECUTABLE;
 const destination = process.env.HUB_STAGED_IDENTITY;
 assert.ok(
@@ -18,9 +17,7 @@ assert.ok(destination && path.isAbsolute(destination));
 const { version } = JSON.parse(await readFile('package.json', 'utf8'));
 const profile = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hub-staged-profile-')));
 const pathPin=process.env.HUB_RT_BINDING;
-const runtimeTmp=process.env.HUB_APPIMAGE_TMP;
 assert.ok(pathPin && path.isAbsolute(pathPin) && await realpath(pathPin)===pathPin);
-assert.ok(runtimeTmp && path.isAbsolute(runtimeTmp));
 const control = await open(pathPin,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
 let binding;
 try {
@@ -34,13 +31,21 @@ try {
 } finally {
     await control.close();
 }
-assert.equal(binding.asset,ASSET);
-assert.equal(binding.archive.path,executable);
-const extraction=await privateExtraction(runtimeTmp, process.getuid!());
-const {args,env}=appimageLaunch(profile,extraction,process.env);
+assert.equal(binding.asset, ASSET);
+assert.ok(path.isAbsolute(binding.root) && await realpath(binding.root) === binding.root);
+assert.equal(executable, path.join(binding.root, 'AppRun'));
+assert.equal(await realpath(executable), executable);
+assert.equal(await hashOriginalMember(executable), binding.appRunSHA256);
+const env = Object.fromEntries(
+    ['PATH', 'LC_ALL', 'HOME', 'DISPLAY', 'XAUTHORITY', 'TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME',
+        'HUB_STAGED_ASSET'].map((key) => [key, process.env[key]]),
+);
+assert.ok(Object.values(env).every((value) => typeof value === 'string' && value.length > 0));
+const args = ['--user-data-dir=' + profile];
+
 async function checkSpace() {
-    const data=await statfs(runtimeTmp,{bigint:true});
-    assert.ok(data.bavail*data.bsize>=4294967296n && data.ffree>=12000n);
+    const data = await statfs(binding.root, { bigint: true });
+    assert.ok(data.bavail * data.bsize >= 4294967296n && data.ffree >= 12000n);
 }
 // Pinned Playwright can reject its still-unawaited debugger promises when
 // the launched child exits before the handshake. Keep the failure attributable;
@@ -51,9 +56,9 @@ process.on('unhandledRejection', () => {
     process.exitCode = 78;
 });
 // This receipt covers the packaged application and its lifecycle only.
-let lifecycle = {quit:'unreached',extraction:'unreached'};
+let lifecycle = {quit:'unreached',postQuitFloor:'unreached'};
 const result = await observeSession({
-    observeRetirement: (value) => { lifecycle=value; },
+    observeRetirement: ({quit, extraction}) => { lifecycle = {quit, postQuitFloor: extraction}; },
     rejected: () => unhandled,
     launch: () => electron.launch({
         executablePath: executable,
@@ -73,31 +78,27 @@ const result = await observeSession({
             asar: app.getAppPath(),
             executable: process.execPath,
             asset: process.env.HUB_STAGED_ASSET,
-            original: process.env.APPIMAGE,
-            extractionRoot: process.env.APPDIR,
-            runtimeTmp: process.env.TMPDIR,
-            extractAndRun: process.env.APPIMAGE_EXTRACT_AND_RUN,
+            root: process.env.APPDIR,
         }));
         assert.equal(identity.packaged, true);
         assert.equal(identity.version, version);
         assert.equal(identity.platform, process.platform);
         assert.equal(identity.arch, process.arch);
-        const {root} = await observeOriginalFiles({
-            identity, archive: binding.archive, extraction, rolePins: binding.roles,
-        });
-        assert.equal(identity.executable, path.join(root, 'diagnostic-hub'));
-        assert.equal(identity.asar, path.join(root, 'resources', 'app.asar'));
-        await checkSpace();
-        return {asset:ASSET,artifactSHA256:binding.archive.sha256,
-                window:'portable-overview',extractionRetired:true};
+        assert.equal(identity.asset, ASSET);
+        assert.equal(identity.root, binding.root);
+        for (const [field, member] of [['executable', 'diagnostic-hub'], ['asar', 'resources/app.asar']]) {
+            const file = path.join(binding.root, member);
+            assert.equal(identity[field], file);
+            assert.equal(await realpath(file), file);
+            assert.equal(await hashOriginalMember(file), binding[field + 'SHA256']);
+        }
+        return {asset: ASSET, archiveSHA256: binding.archiveSHA256, window: 'portable-overview'};
     },
-    async retire() {
-        await requireAppImageRetired(extraction);
-        await checkSpace();
-    },
+    retire: checkSpace,
     async commit(identity) {
         await writeFile(destination, JSON.stringify(identity, null, 2) + '\n', { flag: 'wx' });
     },
 });
-process.stdout.write('HUB_OBSERVER '+result+' '+lifecycle.quit+' '+lifecycle.extraction+'\n');
+const verdict = result === 'extraction' ? 'post-quit-floor' : result;
+process.stdout.write('HUB_TAR_OBSERVER '+verdict+' '+lifecycle.quit+' '+lifecycle.postQuitFloor+'\n');
 if (result !== 'pass') process.exitCode = 78;

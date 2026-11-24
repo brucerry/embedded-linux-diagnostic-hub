@@ -29,7 +29,7 @@ from runtime_intake import prepare_runtime
 
 
 REPO = 'brucerry/embedded-linux-diagnostic-hub'
-WORKFLOW = '.github/workflows/v060-jammy-appimage-runtime.yml'
+WORKFLOW = '.github/workflows/v060-jammy-tar-portable-lifecycle.yml'
 HERE = Path(__file__).resolve().parent
 INPUTS_SHA = '40191a0314b7be4863fc3c552dff7ed6155d89ff9290186687eb5354f677e736'
 DOCKER = '/usr/bin/docker'

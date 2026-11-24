@@ -27,7 +27,7 @@ import native_preflight
 import appimage_inventory as image
 import archive_inventory
 
-EXTRA=('producer_custody','producer_phase_budget','guest_pair_import','guest_appimage_lifecycle','combined_retirement','observer_media','appimage_receipt')
+EXTRA=('producer_custody','producer_phase_budget','guest_pair_import','guest_tar_lifecycle','combined_retirement','observer_media','appimage_receipt','tar_live_budget')
 STAGES=tuple('producer_'+key for key in producer.STAGES if key not in producer.VERIFIER_OUTPUTS)+tuple(
     'jammy_'+key for key in jammy.STAGES)+EXTRA
 
@@ -39,8 +39,6 @@ class Product:
     observer: dict
     required_overlay: int
     guest_copy: int
-    image_inventory: dict
-    image_budget: dict
 
     @property
     def medium_bytes(self):
@@ -150,14 +148,20 @@ def execute_release(stages,checkout,root,run,deadline):
         record=native_preflight.by_descriptor(raw,handoff.RECORD,
                     header['members'][4][2],header['members'][4][1],native_preflight.read_small)
         receipt=image.bind(authority,header,record,independent)
-        rows=image.verify(authority,header,receipt,sha256(image.wire.canonical(receipt)).hexdigest())
-        # Sizing here supplies the remaining charge. Actual provisioned occupancy is
-        # read from the same QEMU overlay by the unchanged prelaunch controller.
-        budget=image.budget(receipt['artifact'][1],rows,observer,provisioned=1)
-        producer.need(monotonic()<deadline,'fresh-appimage-budget')
-        return Product(raw,header,expected,observer,budget['afterProvisioningOverlayCharge'],
-                       budget['guestCopy'],receipt,budget)
-    return producer.step(stages,'appimage_receipt',verified_appimage)
+        image.verify(authority,header,receipt,sha256(image.wire.canonical(receipt)).hexdigest())
+    producer.step(stages,'appimage_receipt',verified_appimage)
+
+    def tar_budget():
+        name, size, pin = header['members'][0]
+        producer.need(name==handoff.TARBALL,'fresh-native-tar')
+        inventory=native_preflight.by_descriptor(raw,name,pin,size,archive_inventory.tar_inventory)
+        census=native_preflight.budget({'files':[r.size for r in inventory.values() if r.kind=='file'],
+                                      'dirs':sum(r.kind=='directory' for r in inventory.values())})
+        cost=census['tarTwoCopiesOverlay']//2 + observer['observerOverlay64KiB'] + 192*2**20
+        guest_copy=census['tarTwoCopiesGuestBlocks']//2 + observer['observerGuest4KiB']
+        producer.need(cost<jammy.OVERLAY_LIMIT and monotonic()<deadline,'fresh-native-budget')
+        return Product(raw,header,expected,observer,cost,guest_copy)
+    return producer.step(stages,'tar_live_budget',tar_budget)
 
 
 def main(stages,*,venue=jammy.main):
@@ -185,10 +189,10 @@ def main(stages,*,venue=jammy.main):
             stages.update({'jammy_'+key:value for key,value in outcomes.items()})
             if 'native_custody' in outcomes:
                 stages['guest_pair_import']=outcomes['native_custody']
-        producer.step(stages,'guest_appimage_lifecycle',lambda:producer.need(
+        producer.step(stages,'guest_tar_lifecycle',lambda:producer.need(
             outcomes.get('native_custody')==outcomes.get('native_packaged_window_quit')==
             outcomes.get('native_owned_retirement')==outcomes.get('retirement')=='pass',
-            'combined-guest-appimage-lifecycle'))
+            'combined-guest-tar-lifecycle'))
     finally:
         if stages.get('producer_worker_retired')=='fail' or outcomes.get('retirement')=='fail':
             stages['combined_retirement']='preserved'
@@ -207,7 +211,7 @@ def entry():
     success=False
     try:
         main(stages)
-        success=stages.get('guest_appimage_lifecycle')==stages.get('combined_retirement')=='pass'
+        success=stages.get('guest_tar_lifecycle')==stages.get('combined_retirement')=='pass'
     except Exception:
         pass
     finally:

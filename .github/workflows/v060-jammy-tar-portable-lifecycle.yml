@@ -1,0 +1,582 @@
+name: Jammy corrected Linux portable tar lifecycle
+on:
+  push:
+    branches: [ci/v060-jammy-tar-portable-lifecycle-20261124]
+    paths:
+      - '.github/workflows/v060-jammy-tar-portable-lifecycle.yml'
+      - 'scripts/ci/linux-two-format/**'
+      - 'scripts/ci/jammy-pair/**'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  two-format:
+    if: ${{ github.event.created && !github.event.forced && !github.event.deleted && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - name: Start combined 24-minute clock
+        run: printf 'PAIR_JOB_EPOCH=%s\n' "$(date +%s)" >> "$GITHUB_ENV"
+      - name: Check out only pinned combined controls
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/
+            /scripts/ci/linux-two-format/
+            /scripts/ci/jammy-pair/
+      - id: attempt
+        name: Verify fresh Linux originals and Jammy portable tar lifecycle
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          sha256sum -c --status <<'PINS'
+          5db26dee779a0b380a81395a6dccc65adaca81424fea597744e3a22a7dd2f701  scripts/ci/jammy-pair/GUEST-TRANSACTION.json
+          051611a1443b28678c8bf7b6c19eef93f03ae2131cbca2da4ef5037c7dff3850  scripts/ci/jammy-pair/OBSERVER-INPUTS.json
+          1ef47408fb6ecc64a8e6460ad713aa74ca91dd7a0e6768a65866b9ee773ebd1c  scripts/ci/jammy-pair/RUNTIME-51-LOCK.json
+          b6713d8ccea904700b744333cb6d7dfaab117845408b416bde725628517a6ca6  scripts/ci/jammy-pair/appimage-observer.mjs
+          21024213b87d6d75d6032041c23f9170fa46f2661bf4c63b1805a630a89b7c7e  scripts/ci/jammy-pair/archive_inventory.py
+          31b673985bdb29754c2f0a2cc5df9d8f17bc92e89952575f5bf6f6ec479339d8  scripts/ci/jammy-pair/browser-frame-evidence.mjs
+          75b6c5beeb4119ab514362947c897f85e6c7b18f1004bcee8e6b7732f0d2a180  scripts/ci/jammy-pair/custody_seed.py
+          31ad826942c832b981b61f193cfd7520b3f4fd306831a9c7854eaf48bd43955a  scripts/ci/jammy-pair/disp.jsn
+          59adf26dbf10118ad7b022ed5123e7666bccae1b54c949eb21e90c7e2347229a  scripts/ci/jammy-pair/guest_closure.py
+          b8b291d6185e81bb1c886827facd55d164db6c82a53cb7b29b549e78b125da8e  scripts/ci/jammy-pair/handoff.py
+          6742018c7ef461bdd547db991d9593bc97a325f382d464a79ca81bc5e4f27643  scripts/ci/jammy-pair/native_control.py
+          6cf3f10372f156c60be14a978b0d6fa423f8382c7990fea99271754f8b77d084  scripts/ci/jammy-pair/native_guest.py
+          c0563aa04b82c42eb5ce569be8321f9638f761aac84f910ac141ca4d8e209188  scripts/ci/jammy-pair/native_hash.py
+          7a89afce2118dd7da5becb1aad4dd666fc04721519a03b27532d035f02036d40  scripts/ci/jammy-pair/native_preflight.py
+          fe64161b295c0562256cfbbab096f051b5f8700e3d42d437b5aed0eaed1d0d67  scripts/ci/jammy-pair/native_seed.py
+          ebe4f7d52457be51141e0c99b3f15ebe3b4ed669618b8eea2d65b5718ffecd67  scripts/ci/jammy-pair/observer_media.py
+          216d2246515810346f831859dfb543f2aee3941a738a256bb6bd070dc0b9019a  scripts/ci/jammy-pair/observer_stage.py
+          67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116  scripts/ci/jammy-pair/package.json
+          07328f08b4f9b2becb26c78f49b91b8589e71c4e23e2c3cc4b3ae180424b0d9f  scripts/ci/jammy-pair/pair_guest.py
+          011b338a2f06260845d3e7a2058bbe11b163ad52255c56a71da0aca3de62387e  scripts/ci/jammy-pair/pair_wire.py
+          f6d5a29812df4349b18fba9ddfb6331edd6bbe85a93fbf03aa05d299ba64b3b0  scripts/ci/jammy-pair/portable_stage.py
+          dd6653f8be9f9171b5ec5db4b08bc5ea73ed34a4e015080eac4ca17ababb87df  scripts/ci/jammy-pair/pregrant.py
+          3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/jammy-pair/readonly_iso.py
+          49ff8537c7f4f772fb46b83f8aa10c6b09e07fc9a153f4e707e6d82ae84b6731  scripts/ci/jammy-pair/runtime-observation.mjs
+          7b6278d23706bd0645ff316af8b0becdbc41f75a96b5d78d062a7357cb185ade  scripts/ci/jammy-pair/runtime-observer.mts
+          7dda5480de6b2eff4e6845a4f54cee617673c66f8c02b6907219350240f8d0a6  scripts/ci/jammy-pair/runtime_apply.py
+          4711d25b2a49cf9ef233fc7be0f13dcb2825409e3774b26d86ca6020d4ceafe9  scripts/ci/jammy-pair/runtime_apply_observer.py
+          0fb66c2c2a13ad0d6b4fbf2ea7528beaa9ae99a696555a9fb4a2280187350d95  scripts/ci/jammy-pair/runtime_cache.py
+          365bf9dc77f5d657fe0c812882b6fd3b7440b28554bb00df33d9864c19d911da  scripts/ci/jammy-pair/runtime_contract.py
+          50c14672e88844e7a2386ba73baa8ecba77754fdad2cf85165ccf4a16f990cc7  scripts/ci/jammy-pair/runtime_display.py
+          aba109c0d08c3b4bb51dccee8aea3700536a7c82df09f808428f9ba166b53630  scripts/ci/jammy-pair/runtime_gate.py
+          db93972c2e469671045dd86127b9e261726012543986b5546d9a105a4d5b9352  scripts/ci/jammy-pair/runtime_intake.py
+          797cc288820df910306f8dc556d830548feca3c5a84091bd1e78923b2b42bdcc  scripts/ci/jammy-pair/runtime_provision.py
+          065237a4331fe51cf20e36f9ffac95757bfedc2424ffcd38072c046376fcfe33  scripts/ci/jammy-pair/runtime_wire.py
+          40191a0314b7be4863fc3c552dff7ed6155d89ff9290186687eb5354f677e736  scripts/ci/jammy-pair/venue-inputs.json
+          9cdd70e814c5383b6bfd6cf70c55506743dfd8a5546cfb0e51c46b97174ba46e  scripts/ci/jammy-pair/venue-loader.sh
+          deec60222e310de414508842f98e519e2e31b8a480fa3867e2fff03bc10261a8  scripts/ci/jammy-pair/venue-worker.sh
+          3e15165078968d0a7de6fe2adad87ff72281f9abe446371d5bc20fd82b0c176a  scripts/ci/jammy-pair/venue.py
+          38f286c165c740a8f40b7ce8a764ce0bfba1c4547acdde3b89392d3b7f04415c  scripts/ci/jammy-pair/venue_seed.py
+          3aaa35e7ea9d0b2afcf61e0c80d289f8c3952ff1c0b72c4589a3f152ed36e15f  scripts/ci/linux-two-format/COMPILER-READBACK-PLAN.json
+          5881f6859f6d06e34457152afe6746e2fb0d9f74db8bbb77d8b5cf975179c403  scripts/ci/linux-two-format/appimage_inventory.py
+          015bbc5fb6ca3169361d0d128e91e4b159240cd0c11bfe46c55f410f8f3aa60e  scripts/ci/linux-two-format/archive_inventory.py
+          3326ba0cc925660997e7f44dc9557c90d20774175c5f2b01b73a8cfec4094fb2  scripts/ci/linux-two-format/attach_pair.py
+          f1cae7b1b253672e9de857aac673c1b275e65b7d20b2a8022e03228faf4fddf2  scripts/ci/linux-two-format/build-inputs.json
+          2656cb141d380fa88ac494395ca7b70fab9b4fc1696264a6840422464a51d976  scripts/ci/linux-two-format/build_layout.py
+          978ff6c987965daa6481a6b67bfe5276f069dfb9764ac80683273bfcc132ca18  scripts/ci/linux-two-format/compiler_gate.py
+          c10619f1de764dea0c242513f4760decfed1449318471e24041903cd762f8431  scripts/ci/linux-two-format/contract.py
+          65db02fbc1b158dc20a3a7c751e4aa1727fa40c074a114b103c7c8d6921d89f9  scripts/ci/linux-two-format/dependencies.py
+          eb125de46583cee473eea846284a1508f566f69d28201383f9851982a175ddd1  scripts/ci/linux-two-format/extract_adapter.py
+          a3519e670f2611a11954b5290b747cbaa8d548a0f50c7f727b6f07a74abdfaff  scripts/ci/linux-two-format/handoff.py
+          8e8d30f6026cb789de7e42f4de3b98b3cc9c7ca0a8d3cbc4cfcf718348281ae8  scripts/ci/linux-two-format/host.py
+          922dfd8c2b4188fa43fc6ab95d11ea3394b3c2c708ff412e67e00c55fb3bf07c  scripts/ci/linux-two-format/intake.py
+          97e391408405a3b7aef029adac3fe7cd1d2499a04a0d2f8dd1baf6655d237ce1  scripts/ci/linux-two-format/overlay/ArchiveTarget.ts
+          02b08547dc8e8dbaa01e95f1ef9831e2734548bb3566d788843c46f49cdc54ff  scripts/ci/linux-two-format/overlay/LINUX-NODE-GZIP.patch
+          baf8030c14146d2d24b9e16deea051b101d9a842dd6b1b0efa42d65208ad7373  scripts/ci/linux-two-format/overlay/archive.ts
+          a876f3683a8cd7479858e6e22b9de8442915407529de2a402b99f3390117f6a0  scripts/ci/linux-two-format/overlay/emit.cjs
+          c50dfb6cac029603e13e2ece8ed5db5e3764c773d14b115e8e8045a9807c2f56  scripts/ci/linux-two-format/package_pair.py
+          c9aa24251f3afd2ca3234cbb7a49a958cfaeba344538fe33cecda033999bb17f  scripts/ci/linux-two-format/pair_controller.py
+          5d616987a599e667de2895bafe5a0cbc94bdade56cb66a0dd31de119c962c107  scripts/ci/linux-two-format/pair_custody.py
+          011b338a2f06260845d3e7a2058bbe11b163ad52255c56a71da0aca3de62387e  scripts/ci/linux-two-format/pair_wire.py
+          23ceea737ab85140859f56c52f62256a31d9121c816aa0a6fd817de8e0762e7b  scripts/ci/linux-two-format/patches/EXACT-PROJECTION.patch
+          61fc5533a5709c9eaf172aa13e35461bbe78882dc03698f0b6075533f5dd1818  scripts/ci/linux-two-format/patches/LINUX-FOLDER-PRODUCER.patch
+          028ddb7b909b9425ee0ce0a10fc4b7b204133240d14b4d585137b3d3d9a67630  scripts/ci/linux-two-format/patches/LINUX-SOURCE-ONLY.patch
+          a655fbf3d7a3547eb1c4b8ea8057d3fcf194478ffe975efcfb117f76ea9d874c  scripts/ci/linux-two-format/patches/PORTABLE-APPRUN.patch
+          aaedf7b8b1c7293c8565aeffd9ef0c25f2ec5a746e00e6dfcfa7f78287453895  scripts/ci/linux-two-format/patches/PRODUCT-ESM.patch
+          32abf32c8a20c7b108bc8a18135cdb4925a59eb80541a34ec34af9e9203b31d2  scripts/ci/linux-two-format/patches/SHARED-FORMAT-GATE.patch
+          9f43f1ed93c67aaa45ad47b0442f2c9d4c858b64df86095b0ac2892f5af83c69  scripts/ci/linux-two-format/patches/TRUE-AFTERPACK-REGRESSION.patch
+          4b55ceb286dfb2b4a1d6859821a0a13ee5255bf98f5183b8fdf18352b7277aad  scripts/ci/linux-two-format/pins/APPIMAGE-TOOLS.json
+          9ff1008e31d2052d4d86a5df1d9b23ac678d0fc369a09fc90afadb2002b2513a  scripts/ci/linux-two-format/pins/BUILD-ADMISSION.json
+          12a27a8ead5d61f91205a4d9bb8cddec1d6754ac14f8193a526eca7eca7deea4  scripts/ci/linux-two-format/pins/CUSTODY.json
+          bd9984d62023c8f161426429fdfb1a6ea7e5da66eea62a2e529e7c8e0970bd62  scripts/ci/linux-two-format/pins/NOBLE-COMPILER-REFERENCE.json
+          f1cae7b1b253672e9de857aac673c1b275e65b7d20b2a8022e03228faf4fddf2  scripts/ci/linux-two-format/pins/PROVIDER-INPUTS.json
+          3a87ec29019961c6b786d36cc59fac730894a2151c0c9eb4d75de038dd9dbb5a  scripts/ci/linux-two-format/pins/READER-DATA-RECEIPT.json
+          5cdad124072fe4422fb7b27691731c98fee1fe92558195dc6ea8ec6338e2c259  scripts/ci/linux-two-format/pins/REGISTRY-PLAN.json
+          3382c6771e2a08245e2a274ece91d2b780f1ee6eca3cf6d8500d63d717ec5199  scripts/ci/linux-two-format/pins/SDK-MEMBERS.json
+          c725e7b321dc15b6df2e6cac03b021daf3c4fce8409302b25d05f087e727cd7e  scripts/ci/linux-two-format/pins/SOURCE-FILES.json
+          0895986fa9281d78954d3b5e2b900cda583cf2e04de7d7fc595a71b18c7f54d6  scripts/ci/linux-two-format/private_attach.py
+          efa8e055a5b49a307c92a756c55a1cfb22fad1578ec4f0e7efe964540cb3dcd5  scripts/ci/linux-two-format/provider-contract.json
+          5809bd0ca95104680b78fefa9bf49b67c0fb099dd0b7f1e38ee786c8482fac74  scripts/ci/linux-two-format/read_envelope.py
+          210e6747dbe9834fd19b828122e88c34afda5bfe15c25b4c14ded76e02d406e9  scripts/ci/linux-two-format/reader_input.py
+          3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/linux-two-format/readonly_iso.py
+          2df7ede2f96b922bf2b4f239223c7ad8f00f9dcfafdf810a8a5c730aba147c7d  scripts/ci/linux-two-format/recipe/linux-all-eight-inputs.json
+          1cafe50a9dab937427f16ccfe34ef6d5ab06626202f6ebb32d1c47464504c28d  scripts/ci/linux-two-format/recipe/linux-all-eight.py
+          fde75f4f5e0693b48f309705f1b295a8a70d0f796a776cb86465431c227c031c  scripts/ci/linux-two-format/recipe/linux-provider-inputs.json
+          ba8d05fed245056ce7383e2d10a682d7725aef04cf371110d757211a1680a9f9  scripts/ci/linux-two-format/recipe/linux-provider-rehearsal.py
+          317503371bb05de99e59636d78e08515dc33e0ca998ce64a16703d0c25be7c85  scripts/ci/linux-two-format/reproduction.py
+          f606455052017524ad31cc08115891920301cf2a0d16788903815cc84f6b6d04  scripts/ci/linux-two-format/runtime-source/BUILD-INPUTS.json
+          1ad13c679a8cad343d7a78537ebdc933d6e139451e2d222e97e3250f6dc1bde7  scripts/ci/linux-two-format/runtime-source/RUNTIME.json
+          3d08bff65aa1e5532780da606d944a4b140eb290f64290cd573fb391999783ad  scripts/ci/linux-two-format/runtime-source/build-offline.sh
+          050e46b01ef8bb2d8df8310f356a0f792340492ddaac27fbb4ad3da52664b31c  scripts/ci/linux-two-format/runtime-source/link-runtime.sh
+          1f13a0306c45ffa1fc06373ba7f7d2f5ba368692ba2fe0b6163334e05d9c76bf  scripts/ci/linux-two-format/runtime-source/notices/AppImage-runtime-source-notice.txt
+          9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74  scripts/ci/linux-two-format/runtime-source/notices/gcc-14.2.0.COPYING.RUNTIME
+          8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  scripts/ci/linux-two-format/runtime-source/notices/gcc-14.2.0.COPYING3
+          a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c  scripts/ci/linux-two-format/runtime-source/notices/gcc-14.2.0.COPYING3.LIB
+          8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643  scripts/ci/linux-two-format/runtime-source/notices/libfuse-3.15.0.GPL2.txt
+          dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551  scripts/ci/linux-two-format/runtime-source/notices/libfuse-3.15.0.LGPL2.txt
+          b8832d9caaa075bbbd2aef24efa09f8b7ab66a832812d88c602da0c7b4397fad  scripts/ci/linux-two-format/runtime-source/notices/libfuse-3.15.0.LICENSE
+          19c99805e7a44a34b297a75d1edea9985e300066dfc024d5c99d4236d4573b5d  scripts/ci/linux-two-format/runtime-source/notices/mimalloc-2.1.7.LICENSE
+          f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af  scripts/ci/linux-two-format/runtime-source/notices/musl-1.2.5.COPYRIGHT
+          9e909cc8a8ba27b1a649c964cf9eda37de911f3138c2b64e6d2f01703904ac13  scripts/ci/linux-two-format/runtime-source/notices/squashfuse-0.5.2.LICENSE
+          e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2  scripts/ci/linux-two-format/runtime-source/notices/zlib-1.4.LICENSE
+          f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505  scripts/ci/linux-two-format/runtime-source/notices/zstd-1.5.6.COPYING
+          7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8  scripts/ci/linux-two-format/runtime-source/notices/zstd-1.5.6.LICENSE
+          fc28f05197fd243eb38e7ca119cc1997d2603d877e7130ca385add7ed9a15c8d  scripts/ci/linux-two-format/runtime-source/patches/dependency-prefix-map.patch
+          3f9c9b19fbf43c61730ace28c898ec6f2b91a924126045f05edfc34437d937c7  scripts/ci/linux-two-format/runtime-source/patches/runtime-cleanup.patch
+          3ce159697bee57464662ef195f362a3c33359f7849fd25fecea666526b0edd1f  scripts/ci/linux-two-format/runtime-source/squash-compile.sh
+          0d52a4b8c69dab4becce9e00c01328eb74af000ccc48f7175f612f2c1a5a83ea  scripts/ci/linux-two-format/runtime-source/squash-env.sh
+          234e74b028d9bdcd889e1476538ba35765f6a2e1c473de33b3135a1f6fd4c894  scripts/ci/linux-two-format/runtime-source/tool-wrappers.json
+          7f29936b199872bcbb53398d552500e1a341f98517b7703d21e9b04bdf71740f  scripts/ci/linux-two-format/runtime_input.py
+          1ef1a42dd064c05ef2e006f8f5f469e76e197972f34ac1309a1db80df2d27b89  scripts/ci/linux-two-format/runtime_rebuild.py
+          380483f7118546bbf561683674187056825a740897fb09c962da3aa9e96b3db6  scripts/ci/linux-two-format/tar-proof.mjs
+          e76a84438a9a1c23b13e952213471a4252983b52558f479714f5c5f973ef4a36  scripts/ci/linux-two-format/tar_admission.py
+          2df538ec4644fb83fd680511557165ac578243033d4a712b8f9064322e1a092c  scripts/ci/linux-two-format/worker.py
+          366db7c576aa3a2aae65a1fc9c19aec473defa347524cee65c06fd058460fb29  scripts/ci/linux-two-format/worker_protocol.py
+          PINS
+          /usr/bin/python3 -E -B scripts/ci/linux-two-format/pair_controller.py
+      - name: Exact producer checkout and attempt / ${{ steps.attempt.outputs.producer_context || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker info / ${{ steps.attempt.outputs.producer_host_docker_info || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer exact source-rebuilt AppImage runtime / ${{ steps.attempt.outputs.producer_runtime_rebuild || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker platform / ${{ steps.attempt.outputs.producer_host_docker_platform || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker seccomp / ${{ steps.attempt.outputs.producer_host_docker_seccomp || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker driver / ${{ steps.attempt.outputs.producer_host_docker_driver || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker graph / ${{ steps.attempt.outputs.producer_host_docker_graph || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker readback / ${{ steps.attempt.outputs.producer_host_docker_readback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host scratch readback / ${{ steps.attempt.outputs.producer_host_scratch_readback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host containerd readback / ${{ steps.attempt.outputs.producer_host_containerd_readback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host docker floor / ${{ steps.attempt.outputs.producer_host_docker_floor || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host scratch floor / ${{ steps.attempt.outputs.producer_host_scratch_floor || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host containerd floor / ${{ steps.attempt.outputs.producer_host_containerd_floor || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer host space / ${{ steps.attempt.outputs.producer_host_space || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer inputs / ${{ steps.attempt.outputs.producer_inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer image space / ${{ steps.attempt.outputs.producer_image_space || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer created / ${{ steps.attempt.outputs.producer_created || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer isolation / ${{ steps.attempt.outputs.producer_isolation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer runtime / ${{ steps.attempt.outputs.producer_runtime || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider layout / ${{ steps.attempt.outputs.producer_provider_layout || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider inputs / ${{ steps.attempt.outputs.producer_provider_inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider node / ${{ steps.attempt.outputs.producer_provider_node || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider plan / ${{ steps.attempt.outputs.producer_provider_plan || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider filelist ssh2 / ${{ steps.attempt.outputs.producer_provider_filelist_ssh2 || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider builder matcher / ${{ steps.attempt.outputs.producer_provider_builder_matcher || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider go toolchain / ${{ steps.attempt.outputs.producer_provider_go_toolchain || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider go telemetry / ${{ steps.attempt.outputs.producer_provider_go_telemetry || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider go version / ${{ steps.attempt.outputs.producer_provider_go_version || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider go modules / ${{ steps.attempt.outputs.producer_provider_go_modules || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider esbuild compile / ${{ steps.attempt.outputs.producer_provider_esbuild_compile || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider esbuild identity / ${{ steps.attempt.outputs.producer_provider_esbuild_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider esbuild wrappers / ${{ steps.attempt.outputs.producer_provider_esbuild_wrappers || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider proxy compilers / ${{ steps.attempt.outputs.producer_provider_proxy_compilers || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider agent base / ${{ steps.attempt.outputs.producer_provider_agent_base || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider http proxy agent / ${{ steps.attempt.outputs.producer_provider_http_proxy_agent || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider https proxy agent / ${{ steps.attempt.outputs.producer_provider_https_proxy_agent || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider gzip builder / ${{ steps.attempt.outputs.producer_provider_gzip_builder || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider archive digests / ${{ steps.attempt.outputs.producer_provider_archive_digests || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer provider process closure / ${{ steps.attempt.outputs.producer_provider_process_closure || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer providers / ${{ steps.attempt.outputs.producer_providers || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer installed / ${{ steps.attempt.outputs.producer_installed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer packer preload / ${{ steps.attempt.outputs.producer_packer_preload || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer packer members / ${{ steps.attempt.outputs.producer_packer_members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer packer stock / ${{ steps.attempt.outputs.producer_packer_stock || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer packer loader / ${{ steps.attempt.outputs.producer_packer_loader || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer packer / ${{ steps.attempt.outputs.producer_packer || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer build / ${{ steps.attempt.outputs.producer_build || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original AppImage static runtime and envelope / ${{ steps.attempt.outputs.producer_appimage_envelope || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Recheck both original envelopes and no AppImage execution / ${{ steps.attempt.outputs.producer_archive_verification || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original checksums and official producer record / ${{ steps.attempt.outputs.producer_original_evidence || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Four original tar member modes and staged bytes / ${{ steps.attempt.outputs.producer_tar_original_members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer independent SquashFS and selected hashes / ${{ steps.attempt.outputs.producer_appimage_inventory || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer extraction / ${{ steps.attempt.outputs.producer_extraction || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Bounded original-pair transport and EOF / ${{ steps.attempt.outputs.producer_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer worker retired before guest / ${{ steps.attempt.outputs.producer_worker_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Producer work and pinned staging retired / ${{ steps.attempt.outputs.producer_scratch_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy context / ${{ steps.attempt.outputs.jammy_context || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy pre intake / ${{ steps.attempt.outputs.jammy_pre_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy oci pull / ${{ steps.attempt.outputs.jammy_oci_pull || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy oci identity / ${{ steps.attempt.outputs.jammy_oci_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy public intake / ${{ steps.attempt.outputs.jammy_public_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy members / ${{ steps.attempt.outputs.jammy_members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy guest signature / ${{ steps.attempt.outputs.jammy_guest_signature || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy guest signed row / ${{ steps.attempt.outputs.jammy_guest_signed_row || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy sealed inputs / ${{ steps.attempt.outputs.jammy_sealed_inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy post intake / ${{ steps.attempt.outputs.jammy_post_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare create / ${{ steps.attempt.outputs.jammy_prepare_create || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare config / ${{ steps.attempt.outputs.jammy_prepare_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare mounts / ${{ steps.attempt.outputs.jammy_prepare_mounts || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare attach / ${{ steps.attempt.outputs.jammy_prepare_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare shell / ${{ steps.attempt.outputs.jammy_prepare_shell || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare identity / ${{ steps.attempt.outputs.jammy_prepare_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare isolation / ${{ steps.attempt.outputs.jammy_prepare_isolation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare seals / ${{ steps.attempt.outputs.jammy_prepare_seals || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare ready / ${{ steps.attempt.outputs.jammy_prepare_ready || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 1 list / ${{ steps.attempt.outputs.jammy_tool_1_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 1 map / ${{ steps.attempt.outputs.jammy_tool_1_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 2 list / ${{ steps.attempt.outputs.jammy_tool_2_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 2 map / ${{ steps.attempt.outputs.jammy_tool_2_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 3 list / ${{ steps.attempt.outputs.jammy_tool_3_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 3 map / ${{ steps.attempt.outputs.jammy_tool_3_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 4 list / ${{ steps.attempt.outputs.jammy_tool_4_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy tool 4 map / ${{ steps.attempt.outputs.jammy_tool_4_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy seed / ${{ steps.attempt.outputs.jammy_seed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy overlay worker / ${{ steps.attempt.outputs.jammy_overlay_worker || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare exit / ${{ steps.attempt.outputs.jammy_prepare_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy prepare retired / ${{ steps.attempt.outputs.jammy_prepare_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy overlay / ${{ steps.attempt.outputs.jammy_overlay || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Sealed product ISO with both originals and evidence / ${{ steps.attempt.outputs.jammy_product_readonly_media_sealed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy runtime media sealed / ${{ steps.attempt.outputs.jammy_runtime_media_sealed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy host guest pregrant evidence / ${{ steps.attempt.outputs.jammy_host_guest_pregrant_evidence || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy host runtime grant / ${{ steps.attempt.outputs.jammy_host_runtime_grant || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy pre boot / ${{ steps.attempt.outputs.jammy_pre_boot || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot create / ${{ steps.attempt.outputs.jammy_boot_create || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot config / ${{ steps.attempt.outputs.jammy_boot_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot mounts / ${{ steps.attempt.outputs.jammy_boot_mounts || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot attach / ${{ steps.attempt.outputs.jammy_boot_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot exec / ${{ steps.attempt.outputs.jammy_boot_exec || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy guest kernel / ${{ steps.attempt.outputs.jammy_guest_kernel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy guest nocloud / ${{ steps.attempt.outputs.jammy_guest_nocloud || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy guest sentinel / ${{ steps.attempt.outputs.jammy_guest_sentinel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest only loopback and no outward routes / ${{ steps.attempt.outputs.jammy_guest_loopback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest normal poweroff / ${{ steps.attempt.outputs.jammy_guest_poweroff || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native stock / ${{ steps.attempt.outputs.jammy_native_stock || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest rehashed five original files and inventoried the tar / ${{ steps.attempt.outputs.jammy_native_custody || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native guest storage / ${{ steps.attempt.outputs.jammy_native_guest_storage || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native display apt / ${{ steps.attempt.outputs.jammy_native_display_apt || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native runtime apt / ${{ steps.attempt.outputs.jammy_native_runtime_apt || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native display capability / ${{ steps.attempt.outputs.jammy_native_display_capability || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native ready / ${{ steps.attempt.outputs.jammy_native_ready || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native prelaunch grant / ${{ steps.attempt.outputs.jammy_native_prelaunch_grant || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native files / ${{ steps.attempt.outputs.jammy_native_files || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native post staging floor / ${{ steps.attempt.outputs.jammy_native_post_staging_floor || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy observer actor frame / ${{ steps.attempt.outputs.jammy_native_observer_actor_frame || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy authenticated Xvfb / ${{ steps.attempt.outputs.jammy_native_observer_display || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy observer launch / ${{ steps.attempt.outputs.jammy_native_observer_launch || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy observer transport failed before verdict / ${{ steps.attempt.outputs.jammy_native_observer_transport || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy visible packaged window / ${{ steps.attempt.outputs.jammy_native_observer_window || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy same-original packaged application identity / ${{ steps.attempt.outputs.jammy_native_observer_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy normal process quit with stdio closure / ${{ steps.attempt.outputs.jammy_native_observer_quit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy post-quit 4 GiB floor / ${{ steps.attempt.outputs.jammy_native_observer_post_quit_floor || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy exact runtime record / ${{ steps.attempt.outputs.jammy_native_observer_record || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy owned Xvfb retirement / ${{ steps.attempt.outputs.jammy_native_observer_display_retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Independent normal quit / ${{ steps.attempt.outputs.jammy_native_independent_quit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Independent post-quit 4 GiB floor / ${{ steps.attempt.outputs.jammy_native_independent_post_quit_floor || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Independent Xvfb retirement / ${{ steps.attempt.outputs.jammy_native_independent_xvfb || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Independent dedicated-user processes retired / ${{ steps.attempt.outputs.jammy_native_independent_processes || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy packaged window and normal quit / ${{ steps.attempt.outputs.jammy_native_packaged_window_quit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native process retirement / ${{ steps.attempt.outputs.jammy_native_process_retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy native owned retirement / ${{ steps.attempt.outputs.jammy_native_owned_retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot exit / ${{ steps.attempt.outputs.jammy_boot_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy boot stderr / ${{ steps.attempt.outputs.jammy_boot_stderr || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest worker retired / ${{ steps.attempt.outputs.jammy_boot_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Immutable inputs and overlay cap rechecked / ${{ steps.attempt.outputs.jammy_post_boot || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest scratch retired / ${{ steps.attempt.outputs.jammy_retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Same-attempt AppImage inventory custody / ${{ steps.attempt.outputs.appimage_receipt || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Original tar census and overlay budget / ${{ steps.attempt.outputs.tar_live_budget || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact same-attempt originals admitted / ${{ steps.attempt.outputs.producer_custody || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest phase and retirement budget remain / ${{ steps.attempt.outputs.producer_phase_budget || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest same-attempt Linux original import / ${{ steps.attempt.outputs.guest_pair_import || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Portable tar lifecycle only / ${{ steps.attempt.outputs.guest_tar_lifecycle || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Combined host scratch retired / ${{ steps.attempt.outputs.combined_retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Observer media / ${{ steps.attempt.outputs.observer_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true

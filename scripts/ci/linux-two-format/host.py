@@ -32,9 +32,9 @@ BASE = '5e3c66f4a62e3606abdd650972e0f76b71ff5c54'
 TEXT_TREE = '502caca5bac9c9c3ac8beb70d7b21aa3041f15f7'
 IMAGE = 'docker.io/library/buildpack-deps@sha256:e7fdb09e2aacd2a32875a44be9caa1c18f3098b88620ac6a4bde84c0732c9f87'
 CONFIG = 'sha256:f96221e29033048b6f577864f7718af5626d209f80345dde518058c29b6ce2cd'
-BRANCH = 'refs/heads/ci/v060-jammy-corrected-appimage-originals-20261124'
+BRANCH = 'refs/heads/ci/v060-jammy-tar-portable-lifecycle-20261124'
 REPO = 'brucerry/embedded-linux-diagnostic-hub'
-WORKFLOW = '.github/workflows/v060-jammy-appimage-runtime.yml'
+WORKFLOW = '.github/workflows/v060-jammy-tar-portable-lifecycle.yml'
 FLOOR = 4 * 1024**3
 LABEL = 'org.hub.two-format'
 OWNER_LABEL = 'org.hub.two-format-owner'
@@ -268,7 +268,7 @@ def stage(root, checkout, worker):
         (sources/name).mkdir(mode=0o700)
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(lambda item:download(item,sources),plan))
-    if EXTRACTION_POLICY_REVIEWED or WORKFLOW.endswith("jammy-appimage-runtime.yml"):
+    if EXTRACTION_POLICY_REVIEWED or WORKFLOW.endswith("jammy-tar-portable-lifecycle.yml"):
         stage_reader(root, sources/'media', cfg['READER-DATA-RECEIPT.json'])
     return sources
 

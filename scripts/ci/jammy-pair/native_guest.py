@@ -15,7 +15,6 @@ import sys
 from time import monotonic,sleep
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-import appimage_inventory as image
 import archive_inventory
 import runtime_display as x
 import runtime_provision as stock
@@ -39,7 +38,7 @@ PHASES=('native_stock','native_custody','native_guest_storage','native_display_a
         'native_runtime_apt','native_display_capability','native_ready','native_prelaunch_grant',
         'native_files','native_post_staging_floor','native_observer_actor_frame','native_observer_display',
         'native_observer_launch','native_observer_window','native_observer_identity',
-        'native_observer_quit','native_observer_extraction','native_observer_record',
+        'native_observer_quit','native_observer_post_quit_floor','native_observer_record',
         'native_observer_display_retirement','native_packaged_window_quit',
         'native_process_retirement','native_owned_retirement')
 need=pair.need
@@ -198,46 +197,37 @@ def actor_stage(plan):
     x.parent()
     work=base_dir()
     work.mkdir(mode=0o700)
-    staged, tools=work/'original',work/'observer'
+    staged, tools=work/'tar',work/'observer'
     for p in (staged,tools):
         p.mkdir(mode=0o700)
     until=monotonic()+75
-    artifact=plan['header']['members'][2]
-    need(artifact[0]==handoff.APPIMAGE,'native-appimage-artifact')
-    target=staged/handoff.APPIMAGE
-    def copy_original(source):
-        handoff.appimage_prefix(source)
-        need(observer_stage.write_regular(target,source,artifact[1],until)==(artifact[1],artifact[2]),
-             'native-appimage-immutable-copy')
-    native.by_descriptor(PORTABLE,'app.bin',artifact[2],artifact[1],copy_original)
-    target.chmod(0o500)
+    artifact=next(row for row in plan['header']['members'] if row[0]==handoff.TARBALL)
+    _,rows,pins=portable_stage.stage(PORTABLE,artifact[1],artifact[2],staged,until)
     actual=observer_stage.materialize(OBSERVER,tools,plan['observerLock'],until)
     need(actual['execution'] is False,'native-observer-data-staging')
-    return {'sha256':artifact[2], 'bytes':artifact[1]}
+    package=Path(archive_inventory.TAR_ROOT)
+    # The control file is written by the root supervisor and taken only from verified tar members.
+    return {key+'SHA256':pins[package/leaf] for key,leaf in
+            (('appRun','AppRun'),('executable','diagnostic-hub'),('asar','resources/app.asar'))}
 
 
 def actor_launch(plan):
     x.parent()
     x.executable_pins()
     work=base_dir()
-    app=work/'original'/handoff.APPIMAGE
+    tree=work/'tar'/archive_inventory.TAR_ROOT
     tools=work/'observer'
     child_env={'PATH':'/usr/bin:/bin','LC_ALL':'C','HOME':str(Path.home()),'TMPDIR':str(work/'temp'),
                'DISPLAY':x.DISPLAY,'XDG_CONFIG_HOME':str(work/'config'),'XDG_CACHE_HOME':str(work/'cache'),
-               'HUB_TEST_EXECUTABLE':str(app),'HUB_STAGED_ASSET':handoff.APPIMAGE,
-               'HUB_APPIMAGE_TMP':str(work/'runtime-extraction'),
+               'HUB_TEST_EXECUTABLE':str(tree/'AppRun'),'HUB_STAGED_ASSET':handoff.TARBALL,
                'HUB_STAGED_IDENTITY':str(work/'observation.json'),'HUB_RT_BINDING':str(ROOT/'binding.json')}
-    for p in (work/'temp',work/'config',work/'cache',work/'runtime-extraction'):
+    for p in (work/'temp',work/'config',work/'cache'):
         p.mkdir(mode=0o700)
     gate.check_guest_space(os.statvfs(work),0,12000)
     full_ro=ROOT/'binding.json'
     expected=read_doc(full_ro,4096)
-    need(expected['archive']['path']==str(app) and expected['asset']==handoff.APPIMAGE,
+    need(expected['root']==str(tree) and expected['asset']==handoff.TARBALL,
          'native-actor-binding')
-    needed=image_budget(plan)
-    gate.check_guest_space(os.statvfs(work),needed['guestCopy']-
-                           plan['observerGuest4KiB']-image.archive.round_to(expected['archive']['size'],4096),
-                           12000)
     binary=tools/'node'
     mode=binary.lstat()
     need(stat.S_IMODE(mode.st_mode)==0o400 and mode.st_uid==os.getuid(),'native-observer-binary-mode')
@@ -257,7 +247,7 @@ def actor_launch(plan):
                         '-nolisten','tcp','-noreset'],env=child_env,stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
     verdict='display'
-    quit=extraction='unreached'
+    quit=post_quit_floor='unreached'
     retired=False
     try:
         until=monotonic()+8
@@ -270,15 +260,12 @@ def actor_launch(plan):
         need(x.local_client(bad,child_env)>0 and x.local_client(good,child_env)==0,'native-cookie-contrast')
         verdict='transport'
         code,out,_=capture_observer(binary,tools,child_env|{'XAUTHORITY':str(good)})
-        verdict,quit,extraction=parse_observer(code,out)
+        verdict,quit,post_quit_floor=parse_observer(code,out)
         if verdict=='pass':
             verdict='record'
             record=read_doc(work/'observation.json',65536)
-            need(record=={'asset':handoff.APPIMAGE,'artifactSHA256':expected['archive']['sha256'],
-                 'window':'portable-overview','extractionRetired':True},
-                 'native-exact-appimage-lifecycle')
-            need(not any((work/'runtime-extraction').iterdir()),'native-appimage-extraction-retired')
-            gate.check_guest_space(os.statvfs(work),0,12000)
+            need(record=={'asset':handoff.TARBALL,'archiveSHA256':expected['archiveSHA256'],
+                          'window':'portable-overview'},'native-exact-tar-lifecycle')
             x.no_tcp_listener()
             verdict='pass'
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
@@ -295,59 +282,59 @@ def actor_launch(plan):
         else:
             retired=(closed==0 and not os.path.lexists(x.SOCKET) and
                      not os.path.lexists(x.PID_LOCK))
-    return actor_frame(verdict,retired,quit,extraction)
+    return actor_frame(verdict,retired,quit,post_quit_floor)
 
 
-OBSERVER_CODES=('launch','window','identity','quit','extraction','record','pass')
+OBSERVER_CODES=('launch','window','identity','quit','post-quit-floor','record','pass')
 ACTOR_CODES=('display','transport',*OBSERVER_CODES)
 
 
 READBACK_STATES=('pass','fail','unreached')
-LIFECYCLE_KEYS=('quit','extraction','xvfb','processes')
+LIFECYCLE_KEYS=('quit','post_quit_floor','xvfb','processes')
 LIFECYCLE_STAGES=tuple('native_independent_'+key for key in LIFECYCLE_KEYS)
 
 
-def check_retirement(quit,extraction):
-    need(quit in READBACK_STATES and extraction in READBACK_STATES and
-         ((extraction!='unreached')==(quit=='pass')),'native-retirement-order')
+def check_retirement(quit,post_quit_floor):
+    need(quit in READBACK_STATES and post_quit_floor in READBACK_STATES and
+         ((post_quit_floor!='unreached')==(quit=='pass')),'native-retirement-order')
 
 
-def check_outcome(value,quit,extraction):
-    check_retirement(quit,extraction)
+def check_outcome(value,quit,post_quit_floor):
+    check_retirement(quit,post_quit_floor)
     if value in ('display','transport'):
-        need(quit==extraction=='unreached','native-retirement-before-observer')
+        need(quit==post_quit_floor=='unreached','native-retirement-before-observer')
     if value in ('record','pass'):
-        need(quit==extraction=='pass','native-retirement-before-record')
+        need(quit==post_quit_floor=='pass','native-retirement-before-record')
     if value=='quit':
-        need((quit,extraction)==('fail','unreached'),'native-quit-refusal-shape')
-    if value=='extraction':
-        need((quit,extraction)==('pass','fail'),'native-extraction-refusal-shape')
+        need((quit,post_quit_floor)==('fail','unreached'),'native-quit-refusal-shape')
+    if value=='post-quit-floor':
+        need((quit,post_quit_floor)==('pass','fail'),'native-post_quit_floor-refusal-shape')
 
 
 def parse_observer(code,out):
-    found=re.fullmatch(rb'HUB_OBSERVER ([a-z-]+) (pass|fail|unreached) (pass|fail|unreached)\n',out)
+    found=re.fullmatch(rb'HUB_TAR_OBSERVER ([a-z-]+) (pass|fail|unreached) (pass|fail|unreached)\n',out)
     need(found is not None,'native-observer-frame')
-    value,quit,extraction=(part.decode('ascii') for part in found.groups())
+    value,quit,post_quit_floor=(part.decode('ascii') for part in found.groups())
     need(value in OBSERVER_CODES and code==(0 if value=='pass' else 78),'native-observer-exit-and-frame')
-    check_outcome(value,quit,extraction)
-    return value,quit,extraction
+    check_outcome(value,quit,post_quit_floor)
+    return value,quit,post_quit_floor
 
 
-def actor_frame(verdict,retired,quit,extraction):
+def actor_frame(verdict,retired,quit,post_quit_floor):
     need(verdict in ACTOR_CODES and type(retired) is bool,'native-actor-result')
-    check_outcome(verdict,quit,extraction)
+    check_outcome(verdict,quit,post_quit_floor)
     flag='retired' if retired else 'retirement-failed'
-    return f'HUB_PORTABLE_OBSERVER {verdict} {flag} {quit} {extraction}\n'.encode('ascii')
+    return f'HUB_TAR_ACTOR {verdict} {flag} {quit} {post_quit_floor}\n'.encode('ascii')
 
 
 def parse_actor(response):
-    found=re.fullmatch(rb'HUB_PORTABLE_OBSERVER ([a-z-]+) (retired|retirement-failed) '
+    found=re.fullmatch(rb'HUB_TAR_ACTOR ([a-z-]+) (retired|retirement-failed) '
                        rb'(pass|fail|unreached) (pass|fail|unreached)\n',response)
     need(found is not None,'native-observer-actor-frame')
-    value,flag,quit,extraction=(part.decode('ascii') for part in found.groups())
+    value,flag,quit,post_quit_floor=(part.decode('ascii') for part in found.groups())
     retired=flag=='retired'
-    need(actor_frame(value,retired,quit,extraction)==response,'native-observer-actor-frame')
-    return value,retired,quit,extraction
+    need(actor_frame(value,retired,quit,post_quit_floor)==response,'native-observer-actor-frame')
+    return value,retired,quit,post_quit_floor
 
 
 def process_retirement(uid):
@@ -360,11 +347,11 @@ def process_retirement(uid):
     return 'pass'
 
 
-def lifecycle_frame(nonce,quit,extraction,xvfb,processes):
-    check_retirement(quit,extraction)
+def lifecycle_frame(nonce,quit,post_quit_floor,xvfb,processes):
+    check_retirement(quit,post_quit_floor)
     need(re.fullmatch('[a-f0-9]{64}',nonce) and
          xvfb in ('pass','fail') and processes in ('pass','fail'),'native-lifecycle-frame')
-    return f'HUB_JAMMY_LIFECYCLE {nonce} {quit} {extraction} {xvfb} {processes}'
+    return f'HUB_JAMMY_TAR_LIFECYCLE {nonce} {quit} {post_quit_floor} {xvfb} {processes}'
 
 
 def report_actor(plan,result):
@@ -372,8 +359,8 @@ def report_actor(plan,result):
     value,retired,_,_=result
     failed={'display':'display','transport':'launch','launch':'launch','window':'window',
             'identity':'identity',
-            'quit':'quit','extraction':'extraction','record':'record','pass':None}[value]
-    for name in ('display','launch','window','identity','quit','extraction','record','display_retirement'):
+            'quit':'quit','post-quit-floor':'post_quit_floor','record':'record','pass':None}[value]
+    for name in ('display','launch','window','identity','quit','post_quit_floor','record','display_retirement'):
         stage='native_observer_'+name
         success=name!=failed and (name!='display_retirement' or retired)
         refusal='fail-transport' if value=='transport' else 'fail'
@@ -384,20 +371,6 @@ def capture_observer(node,tools,env):
     # Use the exact bounded subprocess helper from the stock witness, with isolated cwd.
     import runtime_provision as g
     return g.control([str(node),str(tools/'runtime-observer.mts')],env,monotonic()+90,90,cwd=tools)
-
-
-def read_inventory(plan):
-    return json.loads(stock.read(ROOT/'inventory.jsn',image.METADATA_LIMIT,plan['imageInventorySHA256']),
-                      object_pairs_hook=pair.closed_object)
-
-
-def image_budget(plan):
-    receipt=read_inventory(plan)
-    authority=handoff.Attempt(**plan['header']['attempt'])
-    entries=image.verify(authority,plan['header'],receipt,plan['imageInventorySHA256'])
-    need(plan['grant']==image.grant_identity(plan['nonce'],receipt,plan['imageInventorySHA256'],
-                                            plan['observerLock']),'native-appimage-grant')
-    return image.budget(receipt['artifact'][1],entries,plan,provisioned=1)
 
 
 def supervisor(plan):
@@ -413,9 +386,9 @@ def supervisor(plan):
     with phase(phases,'native_custody'):
         proof=native.original_tar(PORTABLE,authority,plan['header'],plan['pairSHA256'],
             deadlines,Path('/proc/self/mountinfo').read_text())
-        needed=image_budget(plan)
-        need(needed['guestCopy']==plan['guestCopy'] and proof['recordSHA256']==plan['header']['members'][4][2],
-             'native-appimage-census-binding')
+        needed=native.budget(proof)
+        expectedGuest=needed['tarTwoCopiesGuestBlocks']//2 + plan['observerGuest4KiB']
+        need(expectedGuest==plan['guestCopy'],'native-census-guest-copy-binding')
     with phase(phases,'native_guest_storage'):
         first.grow()
         first.space(gate.DISK_FLOOR+plan['guestCopy']+212*2**20)
@@ -436,13 +409,13 @@ def supervisor(plan):
         native_control.guest_control(plan['grant'],min(deadlines-100,monotonic()+30))
     with phase(phases,'native_files'):
         facts=run_as(account,plan,'stage',75,deadlines-80)
-        facts=json.loads(facts,object_pairs_hook=pair.closed_object)
-        original=plan['header']['members'][2]
-        need(facts=={'sha256':original[2],'bytes':original[1]},'native-staged-appimage-digest')
-        archive=Path(account.pw_dir)/'case/original'/handoff.APPIMAGE
-        receipt=read_inventory(plan)
-        record={'asset':handoff.APPIMAGE,'archive':{'path':str(archive),'size':original[1],'sha256':original[2]},
-                'roles':receipt['roles']}
+        pins=json.loads(facts,object_pairs_hook=pair.closed_object)
+        need(set(pins)=={'appRunSHA256','executableSHA256','asarSHA256'} and all(handoff.hex_string(s,64) for s in pins.values()),
+             'native-extracted-member-digests')
+        home=Path(account.pw_dir)
+        product=home/'case/tar'/archive_inventory.TAR_ROOT
+        record=pins|{'asset':handoff.TARBALL,'root':str(product),
+             'archiveSHA256':proof['tarSHA256'],'executable':str(product/'diagnostic-hub'),'asar':str(product/'resources/app.asar')}
         protected_output(ROOT/'binding.json',pair.canonical(record))
     with phase(phases,'native_post_staging_floor'):
         gate.check_guest_space(os.statvfs('/'),0,12000)
@@ -450,9 +423,9 @@ def supervisor(plan):
     with phase(phases,'native_observer_actor_frame'):
         response=run_as(account,plan,'launch',105,deadlines)
         result=parse_actor(response)
-    _,retired,quit,extraction=result
+    _,retired,quit,post_quit_floor=result
     processes=process_retirement(account.pw_uid)
-    report=lifecycle_frame(plan['nonce'],quit,extraction,'pass' if retired else 'fail',processes)
+    report=lifecycle_frame(plan['nonce'],quit,post_quit_floor,'pass' if retired else 'fail',processes)
     with open('/dev/ttyS0','w',encoding='ascii') as console:
         print(report,file=console,flush=True)
     report_actor(phases,result)
