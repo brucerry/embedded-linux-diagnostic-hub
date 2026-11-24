@@ -35,7 +35,7 @@ def start_readback(pid):
     return ticks
 
 
-def host_work(work, overlay_owner, capacity, remaining, host_measurement, bound, end, *, cancelled=None, pregrant):
+def host_work(work, overlay_owner, capacity, remaining, host_measurement, bound, end, *, cancelled=None, pregrant, measure_overlay=measure):
     need(type(host_measurement) is Worker and host_measurement.pid>1 and
          host_measurement.uid==os.getuid()>0 and host_measurement.gid==os.getgid()==overlay_owner.gid and
          host_measurement.pid_start==start_readback(host_measurement.pid),'launch-qemu-owner')
@@ -54,7 +54,7 @@ def host_work(work, overlay_owner, capacity, remaining, host_measurement, bound,
         need(inode(owned)==inode(work.lstat()) and inode(state)==inode(endpoint.lstat()) and
              host_measurement.pid_start==start_readback(host_measurement.pid),
              'launch-qemu-identity-drift')
-        value=measure(work/'disk.qcow2',overlay_owner,capacity,remaining,
+        value=measure_overlay(work/'disk.qcow2',overlay_owner,capacity,remaining,
                        limits=qemu_limits(host_measurement.pid))
         need(host_measurement.pid_start==start_readback(host_measurement.pid),'launch-qemu-after-measure')
         return value

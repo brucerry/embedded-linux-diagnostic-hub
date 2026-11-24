@@ -1,0 +1,276 @@
+name: Jammy stock provisioning capacity measurement
+on:
+  push:
+    branches: [ci/v060-jammy-provisioning-capacity-20261124]
+    paths:
+      - '.github/workflows/v060-jammy-provisioning-capacity.yml'
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  provisioning:
+    if: ${{ github.event.created && !github.event.forced && !github.event.deleted && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 24
+    steps:
+      - name: Check out pinned measurement controls
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/workflows/
+            /scripts/ci/jammy-pair/
+      - id: measure
+        name: Provision exact signed Jammy closure and measure before product writes
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          sha256sum -c --strict --status <<'PINS'
+          5db26dee779a0b380a81395a6dccc65adaca81424fea597744e3a22a7dd2f701  scripts/ci/jammy-pair/GUEST-TRANSACTION.json
+          051611a1443b28678c8bf7b6c19eef93f03ae2131cbca2da4ef5037c7dff3850  scripts/ci/jammy-pair/OBSERVER-INPUTS.json
+          1ef47408fb6ecc64a8e6460ad713aa74ca91dd7a0e6768a65866b9ee773ebd1c  scripts/ci/jammy-pair/RUNTIME-51-LOCK.json
+          21024213b87d6d75d6032041c23f9170fa46f2661bf4c63b1805a630a89b7c7e  scripts/ci/jammy-pair/archive_inventory.py
+          e5ae7f5002b3ea815dc34eada84f98501616aab70f7cc14afddc3145fff70fbb  scripts/ci/jammy-pair/capacity-worker.sh
+          3180df6faa21be95f340fdd179daf0e19fa550a253f87cfa38799ca993818b68  scripts/ci/jammy-pair/capacity_guest.py
+          cca35d311198de6f444759ce6599d7d280987c72f30f066ae1628ac79ea2678b  scripts/ci/jammy-pair/capacity_venue.py
+          75b6c5beeb4119ab514362947c897f85e6c7b18f1004bcee8e6b7732f0d2a180  scripts/ci/jammy-pair/custody_seed.py
+          31ad826942c832b981b61f193cfd7520b3f4fd306831a9c7854eaf48bd43955a  scripts/ci/jammy-pair/disp.jsn
+          59adf26dbf10118ad7b022ed5123e7666bccae1b54c949eb21e90c7e2347229a  scripts/ci/jammy-pair/guest_closure.py
+          b8b291d6185e81bb1c886827facd55d164db6c82a53cb7b29b549e78b125da8e  scripts/ci/jammy-pair/handoff.py
+          0ffbe50f796968d4f3d5ead19828ff978f66067815d7bea2f9f705f544931c0d  scripts/ci/jammy-pair/native_control.py
+          4946b7dc30580889a3902f86c8198f52d5d736251d6e2da97760e880db58ae51  scripts/ci/jammy-pair/native_guest.py
+          c0563aa04b82c42eb5ce569be8321f9638f761aac84f910ac141ca4d8e209188  scripts/ci/jammy-pair/native_hash.py
+          7a89afce2118dd7da5becb1aad4dd666fc04721519a03b27532d035f02036d40  scripts/ci/jammy-pair/native_preflight.py
+          267d722ebac1a6f2f7fc42b39ad9c7dbef0f96872de63b82a6fbdf03c8760915  scripts/ci/jammy-pair/native_seed.py
+          ebe4f7d52457be51141e0c99b3f15ebe3b4ed669618b8eea2d65b5718ffecd67  scripts/ci/jammy-pair/observer_media.py
+          216d2246515810346f831859dfb543f2aee3941a738a256bb6bd070dc0b9019a  scripts/ci/jammy-pair/observer_stage.py
+          67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116  scripts/ci/jammy-pair/package.json
+          07328f08b4f9b2becb26c78f49b91b8589e71c4e23e2c3cc4b3ae180424b0d9f  scripts/ci/jammy-pair/pair_guest.py
+          011b338a2f06260845d3e7a2058bbe11b163ad52255c56a71da0aca3de62387e  scripts/ci/jammy-pair/pair_wire.py
+          f6d5a29812df4349b18fba9ddfb6331edd6bbe85a93fbf03aa05d299ba64b3b0  scripts/ci/jammy-pair/portable_stage.py
+          dd6653f8be9f9171b5ec5db4b08bc5ea73ed34a4e015080eac4ca17ababb87df  scripts/ci/jammy-pair/pregrant.py
+          3dbce3af9e11e284cc7543a1a8457ff44271d5e04e3444b6378426cfea3cd3dc  scripts/ci/jammy-pair/readonly_iso.py
+          7dda5480de6b2eff4e6845a4f54cee617673c66f8c02b6907219350240f8d0a6  scripts/ci/jammy-pair/runtime_apply.py
+          4711d25b2a49cf9ef233fc7be0f13dcb2825409e3774b26d86ca6020d4ceafe9  scripts/ci/jammy-pair/runtime_apply_observer.py
+          0fb66c2c2a13ad0d6b4fbf2ea7528beaa9ae99a696555a9fb4a2280187350d95  scripts/ci/jammy-pair/runtime_cache.py
+          365bf9dc77f5d657fe0c812882b6fd3b7440b28554bb00df33d9864c19d911da  scripts/ci/jammy-pair/runtime_contract.py
+          50c14672e88844e7a2386ba73baa8ecba77754fdad2cf85165ccf4a16f990cc7  scripts/ci/jammy-pair/runtime_display.py
+          aba109c0d08c3b4bb51dccee8aea3700536a7c82df09f808428f9ba166b53630  scripts/ci/jammy-pair/runtime_gate.py
+          db93972c2e469671045dd86127b9e261726012543986b5546d9a105a4d5b9352  scripts/ci/jammy-pair/runtime_intake.py
+          797cc288820df910306f8dc556d830548feca3c5a84091bd1e78923b2b42bdcc  scripts/ci/jammy-pair/runtime_provision.py
+          065237a4331fe51cf20e36f9ffac95757bfedc2424ffcd38072c046376fcfe33  scripts/ci/jammy-pair/runtime_wire.py
+          40191a0314b7be4863fc3c552dff7ed6155d89ff9290186687eb5354f677e736  scripts/ci/jammy-pair/venue-inputs.json
+          9cdd70e814c5383b6bfd6cf70c55506743dfd8a5546cfb0e51c46b97174ba46e  scripts/ci/jammy-pair/venue-loader.sh
+          deec60222e310de414508842f98e519e2e31b8a480fa3867e2fff03bc10261a8  scripts/ci/jammy-pair/venue-worker.sh
+          b85f1519a6d1170adcc7105afa4d334e77868d9dbc1088cec8ea1d2386451c83  scripts/ci/jammy-pair/venue.py
+          38f286c165c740a8f40b7ce8a764ce0bfba1c4547acdde3b89392d3b7f04415c  scripts/ci/jammy-pair/venue_seed.py
+          PINS
+          exec /usr/bin/python3 -B scripts/ci/jammy-pair/capacity_venue.py
+      - name: Context / ${{ steps.measure.outputs.context || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Pre intake / ${{ steps.measure.outputs.pre_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Oci pull / ${{ steps.measure.outputs.oci_pull || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Oci identity / ${{ steps.measure.outputs.oci_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Public intake / ${{ steps.measure.outputs.public_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Members / ${{ steps.measure.outputs.members || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest signature / ${{ steps.measure.outputs.guest_signature || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest signed row / ${{ steps.measure.outputs.guest_signed_row || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Sealed inputs / ${{ steps.measure.outputs.sealed_inputs || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Apt media / ${{ steps.measure.outputs.apt_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Post intake / ${{ steps.measure.outputs.post_intake || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare create / ${{ steps.measure.outputs.prepare_create || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare config / ${{ steps.measure.outputs.prepare_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare mounts / ${{ steps.measure.outputs.prepare_mounts || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare attach / ${{ steps.measure.outputs.prepare_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare shell / ${{ steps.measure.outputs.prepare_shell || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare identity / ${{ steps.measure.outputs.prepare_identity || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare isolation / ${{ steps.measure.outputs.prepare_isolation || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare seals / ${{ steps.measure.outputs.prepare_seals || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare ready / ${{ steps.measure.outputs.prepare_ready || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 1 list / ${{ steps.measure.outputs.tool_1_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 1 map / ${{ steps.measure.outputs.tool_1_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 2 list / ${{ steps.measure.outputs.tool_2_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 2 map / ${{ steps.measure.outputs.tool_2_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 3 list / ${{ steps.measure.outputs.tool_3_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 3 map / ${{ steps.measure.outputs.tool_3_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 4 list / ${{ steps.measure.outputs.tool_4_list || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Tool 4 map / ${{ steps.measure.outputs.tool_4_map || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Seed / ${{ steps.measure.outputs.seed || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Overlay worker / ${{ steps.measure.outputs.overlay_worker || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare exit / ${{ steps.measure.outputs.prepare_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Prepare retired / ${{ steps.measure.outputs.prepare_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Overlay header / ${{ steps.measure.outputs.overlay_header || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Pre boot / ${{ steps.measure.outputs.pre_boot || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot create / ${{ steps.measure.outputs.boot_create || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot config / ${{ steps.measure.outputs.boot_config || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot mounts / ${{ steps.measure.outputs.boot_mounts || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot attach / ${{ steps.measure.outputs.boot_attach || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot exec / ${{ steps.measure.outputs.boot_exec || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest kernel / ${{ steps.measure.outputs.guest_kernel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest nocloud / ${{ steps.measure.outputs.guest_nocloud || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest sentinel / ${{ steps.measure.outputs.guest_sentinel || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest loopback / ${{ steps.measure.outputs.guest_loopback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest normal poweroff / ${{ steps.measure.outputs.guest_poweroff || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Stock guest / ${{ steps.measure.outputs.stock_guest || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Grow / ${{ steps.measure.outputs.grow || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact signed 54-package display transaction and 651-package database / ${{ steps.measure.outputs.display_54 || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Exact signed 51-package runtime transaction and 702-package database / ${{ steps.measure.outputs.runtime_51 || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Ordinary-user guest free space and readback closure / ${{ steps.measure.outputs.ordinary_user || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Guest synchronized capacity checkpoint acknowledged / ${{ steps.measure.outputs.sample_ack || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Final loopback / ${{ steps.measure.outputs.final_loopback || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Bounded nonce-bound guest capacity evidence / ${{ steps.measure.outputs.guest_evidence || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Owned QCOW2 host measurement at guest checkpoint / ${{ steps.measure.outputs.host_measurement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: QEMU normal exit / ${{ steps.measure.outputs.worker_exit || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Boot worker retired / ${{ steps.measure.outputs.boot_worker_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Immutable media / ${{ steps.measure.outputs.immutable_media || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: All owned workers retired / ${{ steps.measure.outputs.workers_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Owned scratch retired / ${{ steps.measure.outputs.scratch_retired || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Overlay header cluster bits / ${{ steps.measure.outputs.cluster_bits || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Checkpoint host logical bytes / ${{ steps.measure.outputs.host_logical || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Checkpoint host allocated bytes / ${{ steps.measure.outputs.host_allocated || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Provisioning observed host logical high-water bytes / ${{ steps.measure.outputs.logical_peak || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Provisioning observed host allocated high-water bytes / ${{ steps.measure.outputs.allocated_peak || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Checkpoint ordinary-user guest available bytes / ${{ steps.measure.outputs.guest_free || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Checkpoint ordinary-user guest available inodes / ${{ steps.measure.outputs.guest_inodes || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Retained stock-layout planning threshold / ${{ steps.measure.outputs.stock || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Retained direct-stage planning threshold / ${{ steps.measure.outputs.direct_stage || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Provisioning-only measurement result / ${{ steps.measure.outputs.result || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true

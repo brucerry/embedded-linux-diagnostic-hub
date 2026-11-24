@@ -64,9 +64,9 @@ def read_doc(path,cap):
     return json.loads(stock.read(path,cap),object_pairs_hook=pair.closed_object)
 
 
-def mounted():
+def mounted(mounts=MOUNTS):
     source=Path('/proc/self/mountinfo').read_text()
-    for path,dev in MOUNTS.items():
+    for path,dev in mounts.items():
         rows=[]
         for line in source.splitlines():
             front,sep,back=line.partition(' - ')
@@ -145,8 +145,8 @@ class Provision(stock.Provision):
         shutil.rmtree(stock.ROOT)
 
 
-def run_as(account,plan,step,seconds,end):
-    argv=['/usr/bin/python3.10','-I','-B',__file__,step]
+def run_as(account,plan,step,seconds,end,*,entry=__file__):
+    argv=['/usr/bin/python3.10','-I','-B',entry,step]
     timeout=min(seconds,end-monotonic())
     need(timeout>0,'native-user-phase-time')
     child=subprocess.Popen(argv,env={'PATH':'/usr/bin:/bin','LC_ALL':'C','HOME':account.pw_dir},

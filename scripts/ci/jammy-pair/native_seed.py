@@ -35,11 +35,15 @@ def plan_for(nonce,product):
 
 
 def seed(nonce,product):
+    return guest_seed(nonce,plan_for(nonce,product),native_guest.MOUNTS,'native_guest.py')
+
+
+def guest_seed(nonce,plan,mounts,entry,*,controls=CONTROL):
     initial=stock_seed(nonce)
     cloud=json.loads(initial['user-data'].split(b'\n',1)[1])
     cloud['users']=[{'name':'hub-display','lock_passwd':True,'shell':'/usr/sbin/nologin'}]
-    frozen={name:(HERE/name).read_bytes() for name in CONTROL}
-    frozen['plan.json']=pair.canonical(plan_for(nonce,product))
+    frozen={name:(HERE/name).read_bytes() for name in controls}
+    frozen['plan.json']=pair.canonical(plan)
     # Place the pinned files through cloud-init's per-file writer. The runcmd command
     # argument stays well below Linux MAX_ARG_STRLEN even with both full APT locks.
     script='/usr/bin/test -d /run/hub-native-control\n'
@@ -50,10 +54,10 @@ def seed(nonce,product):
         cloud['write_files'].append({'path':path,'encoding':'b64','permissions':'0444',
                                      'owner':'root:root','content':base64.b64encode(data).decode()})
         script+=f"printf '%s\\n' '{sha256(data).hexdigest()}  {path}' | /usr/bin/sha256sum -c --strict --status\n"
-    for path,device in native_guest.MOUNTS.items():
+    for path,device in mounts.items():
         script+=f'/usr/bin/mkdir -m 0755 {path}\n'
         script+=f'/usr/bin/mount -t iso9660 -o ro,nodev,nosuid,noexec,map=normal {device} {path}\n'
-    script+='exec /usr/bin/python3.10 -I -B /run/hub-native-control/native_guest.py\n'
+    script+=f'exec /usr/bin/python3.10 -I -B /run/hub-native-control/{entry}\n'
     cloud['runcmd'][0][2]+=script
     need(len(cloud['runcmd'][0][2].encode())<=16*1024,'bounded-cloud-init-command-argument')
     raw=b'#cloud-config\n'+json.dumps(cloud,sort_keys=True,indent=2).encode()+b'\n'

@@ -224,19 +224,19 @@ def extract_archive_members(stage, fixture, archive, members, total, deadline):
     return total
 
 
-def context():
+def context(branch=PROPOSED_BRANCH, workflow=WORKFLOW, job='two-format'):
     env = os.environ
     need(os.getuid() == os.geteuid() != 0 and os.getgid() != 0 and os.uname().machine == 'x86_64' and
          env.get('RUNNER_ENVIRONMENT')=='github-hosted' and env.get('RUNNER_OS')=='Linux' and
          env.get('RUNNER_ARCH')=='X64' and env.get('GITHUB_REPOSITORY')==REPO and
-         env.get('GITHUB_REF')==PROPOSED_BRANCH and env.get('GITHUB_EVENT_NAME')=='push' and
-         env.get('GITHUB_RUN_ATTEMPT')=='1' and env.get('GITHUB_JOB')=='two-format' and
-         env.get('GITHUB_WORKFLOW_REF')==f'{REPO}/{WORKFLOW}@{PROPOSED_BRANCH}' and
+         env.get('GITHUB_REF')==branch and env.get('GITHUB_EVENT_NAME')=='push' and
+         env.get('GITHUB_RUN_ATTEMPT')=='1' and env.get('GITHUB_JOB')==job and
+         env.get('GITHUB_WORKFLOW_REF')==f'{REPO}/{workflow}@{branch}' and
          re.fullmatch(r'[a-f0-9]{40}',env.get('GITHUB_SHA','')) and
          env['GITHUB_SHA']==env.get('GITHUB_WORKFLOW_SHA'),'venue-context')
     event_file = Path(env['GITHUB_EVENT_PATH'])
     event = json.loads(event_file.read_bytes())
-    need(event.get('after')==env['GITHUB_SHA'] and event.get('ref')==PROPOSED_BRANCH and
+    need(event.get('after')==env['GITHUB_SHA'] and event.get('ref')==branch and
          event.get('created') is True and event.get('forced') is False and event.get('deleted') is False and
          event.get('repository',{}).get('private') is False,'first-branch-creation')
     run = env['GITHUB_RUN_ID']
@@ -283,7 +283,7 @@ class OwnedWorker:
              row['Config']['Labels'].get('hub-jammy-venue-owner')==self.name,'worker-identity')
         return row
 
-    def launch(self, deadline, maximum, phase=None, grant=None):
+    def launch(self, deadline, maximum, phase=None, grant=None, *, attach=None):
         if phase is None:
             phase = lambda _stage: nullcontext()
         with phase(self.phase+'_create'):
@@ -293,6 +293,9 @@ class OwnedWorker:
         with phase(self.phase+'_mounts'):
             self.check_mounts(row)
         with phase(self.phase+'_attach'):
+            if attach is not None:
+                need(self.phase=='boot' and grant is None,'exclusive-boot-attach')
+                return attach(self,deadline,maximum)
             if grant is None:
                 return capture([*DAEMON,'start','--attach',self.cid],self.env,deadline,maximum,
                                stdout_cap=256*1024,stderr_cap=8192)
@@ -440,7 +443,7 @@ def overlay_and_seed(stage):
     return seed_pin
 
 
-def assemble(pins, stage, env, deadline, phase, results, product):
+def assemble(pins, stage, env, deadline, phase, results, product, *, sealer=None):
     download, fixture, inputs = (stage/part for part in ('download','fixture','input'))
     products = []
     archive_id = {}
@@ -489,7 +492,7 @@ def assemble(pins, stage, env, deadline, phase, results, product):
     with phase('guest_signed_row'):
         verify_guest_row(guest,download)
     with phase('sealed_inputs'):
-        return seal_fixture(pins,fixture,inputs,download,product)
+        return (sealer or seal_fixture)(pins,fixture,inputs,download,product)
 
 
 def verify_guest_signature(guest, stage, env, deadline):
@@ -508,12 +511,12 @@ def verify_guest_row(guest, download):
     need(rows==[guest['sha256'].encode()],'guest-signed-checksum')
 
 
-def seal_fixture(pins, fixture, inputs, download, product):
+def seal_fixture(pins, fixture, inputs, download, product, *, seed_builder=seed, worker_name='venue-worker.sh'):
     nonce = secrets.token_hex(32)
-    for name, value in seed(nonce,product).items():
+    for name, value in seed_builder(nonce,product).items():
         write_new(inputs/name,value)
-    for script in ('venue-worker.sh','venue-loader.sh'):
-        write_new(fixture/script,(HERE/script).read_bytes())
+    write_new(fixture/'venue-worker.sh',(HERE/worker_name).read_bytes())
+    write_new(fixture/'venue-loader.sh',(HERE/'venue-loader.sh').read_bytes())
     for name, maps in pins['loaderMaps'].items():
         write_new(fixture/(name+'.map'),''.join(f'{soname} {path} {pin}\n'
                   for soname,(path,pin) in sorted(maps.items())).encode())
