@@ -1,0 +1,95 @@
+{
+  "sourceCommit": "5e3c66f4a62e3606abdd650972e0f76b71ff5c54",
+  "sources": {
+    "tests/staged-artifact-native.mts": "0b090aa04de222ae5713796d51d7c408161f5663e3f72ccc8a8ec97458f2ff55",
+    "scripts/staged-artifact-gate.mjs": "9cd6fb2d1f30b68dbed9bf93152053dc55f1d68d4f96fa425287a5f638bd7d68",
+    "scripts/lib/installer-lifecycle-evidence.mjs": "2630994f060e5440c1d96c593120b3d8a4bc5260b15ad8089f32bd97a552b9c7",
+    "docs/downloads.md": "ae531b72aa3aa0626bec3768ac8e4d6d013b40999dc0a1bf7e147c7f3060cee5",
+    "docs/production.md": "821cb94c51bf8b77092f433429c65571830732818b61ad8448f819baf75d69ab",
+    "docs/platform-artifact-gates.md": "3d6c9c04858c5b1ed29370a990b41c4c7dd54efcc2f8eaa516c8ac7aa8c35337",
+    "scripts/linux-setup-bootstrap.cts": "2906dbed91b7a0a1f7e6e25583863dd4be88c9e59543f4d496b9225e80ac0ffd"
+  },
+  "observer": {
+    "node": {
+      "version": "v24.22.2",
+      "archiveURL": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.gz",
+      "bytes": 58299872,
+      "sha256": "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9"
+    },
+    "placements": {
+      "node_modules/tsx": {
+        "bytes": 142405,
+        "sha256": "60eeb6697e987b40ea1944061f186c2314b8381fd6da4dc1bdbe75e0744a9f78",
+        "sri": "sha512-Yiex1Ovn8z2xPpOWckIiysV1SSyRMY9BkLF++q0yKiDxCqRhosKfMg3janKkiLBwZ5c/YryloKwGZcrEmtwxKw==",
+        "url": "https://registry.npmjs.org/tsx/-/tsx-4.23.15.tgz",
+        "version": "4.23.15"
+      },
+      "node_modules/esbuild": {
+        "size": 30753,
+        "sha256": "a69e9168a8520a3b8bb724978dc7b15b085a9479659b5cb7dc15257051428100",
+        "path": "vendor/esbuild-0.28.2-source-609683d89297.tgz",
+        "integrity": "sha512-VpG3doyzIdeiiPb53zNI26zSzLSeDmrPyxh2Ptj6nWNPV8cZAOT0EGiyylz/etup7fX/QF/9U1aFCKkvsPy2ZQ==",
+        "recipe": "esbuild-wrapper",
+        "version": "0.28.2"
+      },
+      "node_modules/@esbuild/linux-x64": {
+        "size": 4667448,
+        "sha256": "fa8fc7bb43870bc0c3c541c3b945b895c05292ff8fcaaa0f8f5730abf828005e",
+        "path": "vendor/esbuild-linux-x64-0.28.2-source-ed59354772a5.tgz",
+        "integrity": "sha512-hQxogTCYTC+aEyvKe763JyNxanjaFnOiALdKB/fFCk5hSLOa62fsckonqWZT0qXr/Ev6SngGZN7RLvGhx0oiBQ==",
+        "recipe": "esbuild-linux-x64",
+        "version": "0.28.2"
+      },
+      "node_modules/@playwright/test": {
+        "bytes": 8749,
+        "sha256": "fc594f36b7b4aafece614ec6852ad728423215a76edd0a2a1821bb0c49539c4e",
+        "sri": "sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==",
+        "url": "https://registry.npmjs.org/@playwright/test/-/test-1.63.0.tgz",
+        "version": "1.63.0"
+      },
+      "node_modules/playwright": {
+        "bytes": 899597,
+        "sha256": "195a5ee9bfed7c6e9c03965950e32e5e4dbedaa02e740e5a530eb4b87dae050c",
+        "sri": "sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==",
+        "url": "https://registry.npmjs.org/playwright/-/playwright-1.63.0.tgz",
+        "version": "1.63.0"
+      },
+      "node_modules/playwright-core": {
+        "bytes": 3123044,
+        "sha256": "208593d4e1bcd8f8fe5f869cad1cc332dc7f1d70dc1d58c102dc3ac36e30f26c",
+        "sri": "sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==",
+        "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.63.0.tgz",
+        "version": "1.63.0"
+      }
+    },
+    "admittedIn": "45318116305 producer control",
+    "realizedGuestLoaderAndObserverMedia": "unverified"
+  },
+  "tarCase": {
+    "id": "archive-runtime-identity",
+    "exec": "Diagnostic-Hub-linux-x64/AppRun",
+    "qualification": "documented portable runtime only",
+    "requireExactArchiveToRunningExecutableAndAsar": true
+  },
+  "appimageCase": {
+    "id": "appimage-runtime-identity",
+    "env": {
+      "APPIMAGE_EXTRACT_AND_RUN": "1"
+    },
+    "qualification": "documented FUSE-free portable runtime only"
+  },
+  "appimageDirectFUSE": {
+    "reviewStanding": "separate optional path, no activation",
+    "runtimeRoster": "106 additions, 703 packages, zero upgrades/removals",
+    "libfuse2SHA256": "accb0569b063a9d21e2c2a4e30b299da4e87d11af3b41ac1c01f7329ba393ea2",
+    "requires": [
+      "stock guest device access under nonroot",
+      "actual runtime owned read-only mount",
+      "actual renderer and normal quit",
+      "verified unmount and no surviving processes"
+    ],
+    "guaranteedVenue": false
+  },
+  "permanentInstallerCasesAdmitted": false,
+  "noExecution": true
+}

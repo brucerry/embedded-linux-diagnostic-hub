@@ -1,0 +1,79 @@
+--- a/packages/app-builder-lib/src/targets/archive.ts
++++ b/packages/app-builder-lib/src/targets/archive.ts
+@@ -1,5 +1,8 @@
+ import { debug7z, exec, exists, log, statOrNull, unlinkIfExists } from "builder-util"
+ import { move } from "fs-extra"
++import { createWriteStream } from "node:fs"
++import { mkdtemp, rename, rm } from "node:fs/promises"
++import { pipeline } from "node:stream/promises"
+ import * as path from "path"
+ import { create } from "tar"
+ import { TarOptionsWithAliasesAsync } from "tar/dist/commonjs/options"
+@@ -22,14 +25,13 @@
+   outFile: string
+   dirToArchive: string
+   isMacApp: boolean
++  isLinuxApp?: boolean
+   tempDirManager: TmpDir
+ }
+ 
+ /** @internal */
+-export async function tar({ compression, format, outFile, dirToArchive, isMacApp, tempDirManager }: TarConfig): Promise<void> {
+-  const tarFile = await tempDirManager.getTempFile({ suffix: ".tar" })
+-  const tarArgs: TarOptionsWithAliasesAsync = {
+-    file: tarFile,
++export async function tar({ compression, format, outFile, dirToArchive, isMacApp, isLinuxApp, tempDirManager }: TarConfig): Promise<void> {
++  const tarArgs: Pick<TarOptionsWithAliasesAsync, "portable" | "cwd" | "prefix"> = {
+     portable: true,
+     cwd: dirToArchive,
+     prefix: path.basename(outFile, `.${format}`),
+@@ -41,8 +43,29 @@
+     tarDirectory = path.basename(dirToArchive)
+   }
+ 
++  if (format === "tar.gz" && isLinuxApp === true && !isMacApp && process.platform === "linux") {
++    // node-tar streams its existing portable tar through its pinned minizlib Gzip.
++    const explicit = process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL
++    if (explicit != null) {
++      validateCompressionLevel(explicit)
++    }
++    const level = explicit != null ? Number(explicit) : compression === "store" ? 0 : 9
++    const temporary = await mkdtemp(path.join(path.dirname(outFile), ".linux-tar-gzip-"))
++    const staged = path.join(temporary, "archive.tar.gz")
++    try {
++      await pipeline(create({ ...tarArgs, gzip: { level } }, [tarDirectory]), createWriteStream(staged, { flags: "wx" }))
++      // A closed gzip stream is published atomically on the output filesystem.
++      await rename(staged, outFile)
++    } finally {
++      await rm(temporary, { recursive: true, force: true })
++    }
++    return
++  }
++
++  const tarFile = await tempDirManager.getTempFile({ suffix: ".tar" })
++
+   await Promise.all([
+-    create(tarArgs, [tarDirectory]),
++    create({ ...tarArgs, file: tarFile }, [tarDirectory]),
+     // remove file before - 7z doesn't overwrite file, but update
+     unlinkIfExists(outFile),
+   ])
+--- a/packages/app-builder-lib/src/targets/ArchiveTarget.ts
++++ b/packages/app-builder-lib/src/targets/ArchiveTarget.ts
+@@ -44,7 +44,15 @@
+       })
+       let updateInfo: any = null
+       if (format.startsWith("tar.")) {
+-        await tar({ compression: packager.compression, format, outFile: artifactPath, dirToArchive: appOutDir, isMacApp: isMac, tempDirManager: packager.info.tempDirManager })
++        await tar({
++          compression: packager.compression,
++          format,
++          outFile: artifactPath,
++          dirToArchive: appOutDir,
++          isMacApp: isMac,
++          isLinuxApp: packager.platform === Platform.LINUX,
++          tempDirManager: packager.info.tempDirManager,
++        })
+       } else {
+         let withoutDir = !isMac
+         let dirToArchive = appOutDir
