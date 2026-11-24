@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from hashlib import sha256
 import os
+from functools import partial
 from pathlib import Path
 import re
 import stat
@@ -14,11 +15,14 @@ import guest_closure
 import native_control
 import native_guest as qualified
 from runtime_gate import DISK_FLOOR, need
+from runtime_wire import EXTRA as APPLY_FIELDS
 
 
 MOUNTS = {'/mnt/hub-apt-witness': '/dev/sr1', '/mnt/hub-apt-runtime': '/dev/sr2'}
 PHASES = ('stock_guest', 'grow', 'display_54', 'runtime_51', 'ordinary_user', 'sample_ack', 'final_loopback')
 TITLE = 'HUB_JAMMY_CAPACITY'
+RUNTIME_STAGES = ('media_baseline', 'preflight', 'simulation', 'apply_preflight', 'apply',
+                  'database', 'observer', 'post_database_loopback', 'post_database_floor', 'final_inventory', 'cache_retired')
 DATA = re.compile(rb'([1-9][0-9]{0,10}) ([1-9][0-9]{0,9})\n')
 LOCKS = (qualified.native.DISPLAY_PIN, qualified.native.RUNTIME_PIN)
 MAX_GUEST = qualified.stock.DISK
@@ -64,13 +68,28 @@ def mark(nonce, words):
 
 
 @contextmanager
-def phase(nonce, name):
+def phase(nonce, name, *, prefix=''):
     try:
         yield
     except Exception:
-        mark(nonce, name + ' fail')
+        mark(nonce, prefix + name + ' fail')
         raise
-    mark(nonce, name + ' pass')
+    mark(nonce, prefix + name + ' pass')
+
+
+class ObservedRuntime(qualified.Provision):
+    def __init__(self, plan, deadline):
+        super().__init__(plan, 1, deadline)
+        self.apply_fields = []
+
+    def mark(self, stage, value):
+        super().mark(stage, value)
+        order = tuple(APPLY_FIELDS)
+        need(len(self.apply_fields) < len(order) and stage == order[len(self.apply_fields)],
+             'runtime-observation-order')
+        self.apply_fields.append(value)
+        if stage == order[-1]:
+            mark(self.nonce, 'rt51_result ' + ' '.join(self.apply_fields))
 
 
 def supervisor():
@@ -90,8 +109,10 @@ def supervisor():
     with phase(nonce, 'display_54'):
         first.run_exact()
     with phase(nonce, 'runtime_51'):
-        last = qualified.Provision(plan, 1, end - 115)
-        last.run_exact()
+        report = partial(phase, nonce, prefix='rt51 ')
+        with report('media_baseline'):
+            last = ObservedRuntime(plan, end - 115)
+        last.run_exact(report=report)
     with phase(nonce, 'ordinary_user'):
         final = qualified.stock.Provision(nonce)
         final.deadline = min(final.deadline, end)

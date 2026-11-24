@@ -1,6 +1,6 @@
 """Stock Jammy guest controller. All application effects cross the measured grant."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict
 from hashlib import sha256
 import json
@@ -119,30 +119,33 @@ class Provision(stock.Provision):
         # transaction and exact database as named steps, through the owning root controller.
         need(stage in stock.EXTRA and value in stock.EXTRA[stage],'native-apt-coarse-observation')
 
-    def run_exact(self):
-        self.tools()
-        need(self.command(['/usr/bin/findmnt','-n','-o','FSTYPE','--target','/run'],5)==b'tmpfs\n',
-             'native-apt-tmpfs-cache')
-        need(os.statvfs('/run').f_bavail*os.statvfs('/run').f_frsize>=68_005_584,'native-apt-cache-space')
-        self.cache()
-        try:
+    def run_exact(self, *, report=nullcontext):
+        with report("preflight"):
+            self.tools()
+            need(self.command(['/usr/bin/findmnt','-n','-o','FSTYPE','--target','/run'],5)==b'tmpfs\n',
+                 'native-apt-tmpfs-cache')
+            need(os.statvfs('/run').f_bavail*os.statvfs('/run').f_frsize>=68_005_584,'native-apt-cache-space')
+            self.cache()
             self.config()
+        with report("simulation"):
             self.simulate()
-            self.transaction()
+        self.transaction(report=report)
+        with report("database"):
             self.database()
+        with report("observer"):
             self.observer()
-            self.capacity()
+        self.capacity(report=report)
+        with report("final_inventory"):
             result=stock.read(stock.STATUS,4*2**20)
             if self.index==1:
                 need(native.package_digest(native.contract.database(result))==
                      self.doc['afterInventorySHA256'],'native-apt-runtime-db')
-        except BaseException:
-            # Leave uncertain package state to whole-guest retirement.
-            raise
-        need(stock.ROOT==Path('/run/hub-jammy-provisioning') and
-             stock.ROOT.resolve()==stock.ROOT and stock.ROOT.lstat().st_uid==0
-             and shutil.rmtree.avoids_symlink_attacks,'native-apt-private-cache')
-        shutil.rmtree(stock.ROOT)
+        # Uncertain transaction state stays with the retiring guest, as before.
+        with report("cache_retired"):
+            need(stock.ROOT==Path('/run/hub-jammy-provisioning') and
+                 stock.ROOT.resolve()==stock.ROOT and stock.ROOT.lstat().st_uid==0
+                 and shutil.rmtree.avoids_symlink_attacks,'native-apt-private-cache')
+            shutil.rmtree(stock.ROOT)
 
 
 def run_as(account,plan,step,seconds,end,*,entry=__file__):

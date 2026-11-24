@@ -1,5 +1,5 @@
 """Provisioning only. Loaded by cloud-init from fixed, hash-checked optical data."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from hashlib import sha256
 import json
 import os
@@ -217,18 +217,20 @@ class Provision:
         need(read(STATUS,4*2**20,self.lock['guestStatusSHA256'])==self.before,'baseline-drift')
         self.verify_config()
 
-    def transaction(self):
-        need(not self.attempted,'single-apply')
-        self.attempted=True
-        self.baseline()
-        self.tools()
-        check_cache(ROOT/'archives',self.rows,self.deadline)
-        result=apply(self.inputs,self.env,self.deadline,self.verify_config)
-        for (stage,allowed),value in zip(EXTRA.items(),result.fields(),strict=True):
-            need(value in allowed,'receipt-telemetry')
-            self.mark(stage,value)
-        need(result.exit=='zero' and result.child_closed,'apply-exit')
-        self.observation=result.observation
+    def transaction(self, *, report=nullcontext):
+        with report("apply_preflight"):
+            need(not self.attempted,'single-apply')
+            self.attempted=True
+            self.baseline()
+            self.tools()
+            check_cache(ROOT/'archives',self.rows,self.deadline)
+        with report("apply"):
+            result=apply(self.inputs,self.env,self.deadline,self.verify_config)
+            for (stage,allowed),value in zip(EXTRA.items(),result.fields(),strict=True):
+                need(value in allowed,'receipt-telemetry')
+                self.mark(stage,value)
+            need(result.exit=='zero' and result.child_closed,'apply-exit')
+            self.observation=result.observation
 
     def database(self):
         provisioned_state(self.before,read(STATUS,4*2**20),self.lock)
@@ -238,9 +240,11 @@ class Provision:
         need(result.stream=='valid' and result.progress=='child-reported' and not result.package_error
              and not result.conffile_prompt,'apply-status')
 
-    def capacity(self):
-        self.network()
-        self.space(MIN_FREE)
+    def capacity(self, *, report=nullcontext):
+        with report("post_database_loopback"):
+            self.network()
+        with report("post_database_floor"):
+            self.space(MIN_FREE)
 
     def display_actions(self):
         probe = Display(self.deadline)

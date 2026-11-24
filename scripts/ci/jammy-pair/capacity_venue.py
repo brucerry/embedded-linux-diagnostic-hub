@@ -21,9 +21,11 @@ import venue_seed
 from runtime_gate import HOST_FLOOR, MODEL_CAP, inode, need
 
 
-BRANCH = 'refs/heads/ci/v060-jammy-provisioning-capacity-20261124'
+BRANCH = 'refs/heads/ci/v060-jammy-runtime51-verdicts-20261124'
 WORKFLOW = '.github/workflows/v060-jammy-provisioning-capacity.yml'
 JOB = 'provisioning'
+RUNTIME_DETAILS = tuple('runtime_51_' + name for name in guest.RUNTIME_STAGES)
+RUNTIME_RESULTS = tuple('runtime_51_' + name for name in guest.APPLY_FIELDS)
 THRESHOLDS = {
     'stock': (763_428_864, 5_454_950_400),
     'direct_stage': (1_113_980_928, 5_111_939_072),
@@ -36,7 +38,8 @@ STAGES = (
     *(stage for stage, _ in venue.PREPARE_FRAMES),
     'prepare_exit', 'prepare_retired', 'overlay_header', 'pre_boot',
     'boot_create', 'boot_config', 'boot_mounts', 'boot_attach',
-    *venue_seed.GUEST_STAGES, *guest.PHASES, 'guest_evidence', 'host_measurement', 'worker_exit',
+    *venue_seed.GUEST_STAGES, *guest.PHASES[:guest.PHASES.index('runtime_51')],
+    *RUNTIME_DETAILS, *guest.PHASES[guest.PHASES.index('runtime_51'):], 'guest_evidence', 'host_measurement', 'worker_exit',
     'boot_worker_retired', 'immutable_media', 'workers_retired', 'scratch_retired',
 )
 
@@ -153,6 +156,54 @@ def attach_owned(worker, deadline, maximum, watch, nonce):
     return code, out, err, None if issues.is_set() or len(result) != 1 else result[0]
 
 
+class RuntimeEvidence:
+    """Reduce a closed, ordered set of second-transaction observations."""
+
+    def __init__(self):
+        self.position = 0
+        self.failed = False
+        self.applied = None
+
+    def current(self):
+        need(self.position < len(guest.RUNTIME_STAGES) and not self.failed,
+             'runtime-evidence-closed')
+        return guest.RUNTIME_STAGES[self.position]
+
+    def observe(self, frame, stages):
+        current = self.current()
+        if frame.startswith(b'rt51_result '):
+            need(current == 'apply' and self.applied is None, 'runtime-result-order')
+            values = frame.decode('ascii').split(' ')[1:]
+            need(len(values) == len(RUNTIME_RESULTS) and
+                 all(value in allowed for value, allowed in zip(values, guest.APPLY_FIELDS.values(), strict=True)),
+                 'runtime-result-vocabulary')
+            self.applied = dict(zip(guest.APPLY_FIELDS, values, strict=True))
+            return
+        tokens = frame.decode('ascii').split(' ')
+        need(len(tokens) == 3 and tokens[:2] == ['rt51', current] and tokens[2] in ('pass', 'fail'),
+             'runtime-evidence-order')
+        value = tokens[2]
+        if current == 'apply':
+            if value == 'pass':
+                need(self.applied is not None and self.applied['prov_exit'] == 'zero'
+                     and self.applied['prov_child'] == 'closed', 'runtime-apply-proof')
+            if self.applied is not None:
+                stages.update(zip(RUNTIME_RESULTS, self.applied.values(), strict=True))
+        if current == 'observer' and value == 'pass':
+            expected = {'prov_status': 'valid', 'prov_progress': 'child-reported',
+                        'prov_error': 'not-seen', 'prov_prompt': 'not-seen'}
+            need(all(self.applied[key] == state for key, state in expected.items()), 'runtime-observer-proof')
+        stages[RUNTIME_DETAILS[self.position]] = value
+        self.position += 1
+        self.failed = value == 'fail'
+
+    def finish(self, value):
+        if value == 'pass':
+            need(not self.failed and self.position == len(RUNTIME_DETAILS), 'runtime-evidence-incomplete')
+        else:
+            need(self.failed, 'runtime-failed-detail-missing')
+
+
 def evidence(wire, nonce, stages):
     stock = venue_seed.boot_evidence(wire, nonce)
     stages.update({name: 'pass' if value else 'fail' for name, value in stock.items()})
@@ -166,11 +217,16 @@ def evidence(wire, nonce, stages):
     next_phase = 0
     sample = None
     closed = False
+    runtime = RuntimeEvidence()
     for position,row in enumerate(lines):
         if guest.TITLE.encode() not in row:
             continue
         need(start < position < end and row.startswith(prefix) and not closed, 'capacity-serial-identity')
         frame = row.removeprefix(prefix)
+        if frame.startswith((b'rt51 ', b'rt51_result ')):
+            need(next_phase == guest.PHASES.index('runtime_51'), 'runtime-evidence-phase')
+            runtime.observe(frame, stages)
+            continue
         if frame.startswith(b'sample '):
             need(next_phase == guest.PHASES.index('ordinary_user') and sample is None, 'capacity-serial-sample-order')
             sample = guest.parse(frame.removeprefix(b'sample ') + b'\n')
@@ -181,7 +237,10 @@ def evidence(wire, nonce, stages):
         closed = frame.endswith(b' fail')
         if name == 'ordinary_user' and not closed:
             need(sample is not None, 'capacity-serial-missing-sample')
-        stages[name] = 'fail' if closed else 'pass'
+        value = 'fail' if closed else 'pass'
+        stages[name] = value
+        if name == 'runtime_51':
+            runtime.finish(value)
         next_phase += 1
     return sample if not closed and next_phase == len(guest.PHASES) else None
 
@@ -344,6 +403,8 @@ def entry():
     good = bool(metrics) and all(stages.get(name) == 'pass' for name in STAGES)
     with output.open('a', encoding='ascii') as out:
         for name in STAGES:
+            print(f'{name}={stages.get(name, "unreached")}', file=out)
+        for name in RUNTIME_RESULTS:
             print(f'{name}={stages.get(name, "unreached")}', file=out)
         if good:
             for name in (*NUMERIC, *THRESHOLDS):
