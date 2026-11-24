@@ -1,0 +1,48 @@
+diff --git a/scripts/lib/linux-review-after-pack.cjs b/scripts/lib/linux-review-after-pack.cjs
+index b57f62c743ece94abe3cfa359a411b02263761d4..85ef4796e6aa51c0655cf287223f128d4f331426 100644
+--- a/scripts/lib/linux-review-after-pack.cjs
++++ b/scripts/lib/linux-review-after-pack.cjs
+@@ -5,6 +5,13 @@ const path = require('node:path');
+ // Concrete build-time writer; never called by module import or the pure tests' default path.
+ const same = (a, b) =>
+     ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'].every((key) => a[key] === b[key]);
++// These are the original members with exact mode requirements in the permanent envelope.
++const exactPermanentMembers = new Set([
++    'linux-installed-AppRun',
++    'linux-setup-bootstrap.cjs',
++    'linux-setup-install.cjs',
++    'diagnostic_hub_rename_noreplace.node',
++]);
+ const disk = {
+     async readBundle(file, limit) {
+         const before = await fs.lstat(file);
+@@ -46,6 +53,7 @@ const disk = {
+         const directory = await fs.lstat(parent);
+         if (!directory.isDirectory() || directory.mode & 0o7022)
+             throw Error('LINUX_REVIEW_OUTPUT_DIRECTORY');
++        const exactMode = exactPermanentMembers.has(path.basename(file));
+         // Exclusive creation. On failure retain this new partial file; no overwrite/unlink fallback.
+         const fd = await fs.open(
+             file,
+@@ -54,10 +62,12 @@ const disk = {
+                 constants.O_EXCL |
+                 constants.O_NOFOLLOW |
+                 constants.O_NONBLOCK,
+-            mode,
++            exactMode ? mode & 0o600 : mode,
+         );
+         try {
+             await fd.writeFile(bytes);
++            // The creator's umask must not change these four archived member modes.
++            if (exactMode) await fd.chmod(mode);
+             await fd.sync();
+             const observed = Buffer.alloc(bytes.length + 1);
+             let count = 0;
+@@ -73,6 +83,7 @@ const disk = {
+                 !held.isFile() ||
+                 held.nlink !== 1 ||
+                 held.size !== bytes.length ||
++                (exactMode && (held.mode & 0o7777) !== mode) ||
+                 !same(held, named) ||
+                 !parentAfter.isDirectory() ||
+                 !['dev', 'ino', 'mode'].every((key) => directory[key] === parentAfter[key]) ||

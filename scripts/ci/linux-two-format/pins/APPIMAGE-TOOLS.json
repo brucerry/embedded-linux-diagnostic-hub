@@ -1,0 +1,270 @@
+{
+  "bytes": 11979282,
+  "members": {
+    "appimage-tool": {
+      "mode": "0755",
+      "sha256": "b4a6ca0d0cde9a665ed6e9adac266dc00c3449b3885a4718a0bcb530ed6d0be8",
+      "size": 1761,
+      "type": "file"
+    },
+    "desktop-file-validate": {
+      "linkTarget": "appimage-tool",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libXss.so.1": {
+      "linkTarget": "libXss.so.1.0.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libXss.so.1.0.0": {
+      "mode": "0644",
+      "sha256": "270fe6e4d430118793d01cac5c6081d0ea9e244cfcf510475bc779bef21b754a",
+      "size": 14488,
+      "type": "file"
+    },
+    "lib/x64/libXtst.so.6": {
+      "linkTarget": "libXtst.so.6.1.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libXtst.so.6.1.0": {
+      "mode": "0644",
+      "sha256": "a3343e51790f219fbb3cb48bc1ba267b4727d9e9277e43cdfc081deb14d910b2",
+      "size": 22944,
+      "type": "file"
+    },
+    "lib/x64/libappindicator3.so.1": {
+      "linkTarget": "libappindicator3.so.1.0.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libappindicator3.so.1.0.0": {
+      "mode": "0644",
+      "sha256": "e986459b76c7592b6ee5a27a3ed1bae6aded0c677e9d6efc52d34499006e7fde",
+      "size": 52216,
+      "type": "file"
+    },
+    "lib/x64/libgconf-2.so.4": {
+      "linkTarget": "libgconf-2.so.4.1.5",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libgconf-2.so.4.1.5": {
+      "mode": "0644",
+      "sha256": "ad8ca9b6042cb2790ea143451e1f166fb4806aef2dd96fba00b20e37a32abf35",
+      "size": 192360,
+      "type": "file"
+    },
+    "lib/x64/libindicator3.so.7": {
+      "linkTarget": "libindicator3.so.7.0.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libindicator3.so.7.0.0": {
+      "mode": "0644",
+      "sha256": "9ef1b4287cbf444af16f3e3da4fa97b6305a0329f457fb25b1ae6a6fd271baea",
+      "size": 73280,
+      "type": "file"
+    },
+    "lib/x64/libnotify.so.4": {
+      "linkTarget": "libnotify.so.4.0.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "lib/x64/libnotify.so.4.0.0": {
+      "mode": "0644",
+      "sha256": "980f4f40c18f122a5e560fb41147ccc1bcd13992a2bbf26b11c4ecb8081c0fd3",
+      "size": 34728,
+      "type": "file"
+    },
+    "linux/x64/desktop-file-validate": {
+      "mode": "0755",
+      "sha256": "1dc4d16f4118c401cf8b16bc4c36b63e4ccd7717c2228e00987151864f7337a6",
+      "size": 82376,
+      "type": "file"
+    },
+    "linux/x64/lib/libjbig.so.0": {
+      "mode": "0644",
+      "sha256": "73f8fe2191c200357f974b6e06ef1fea547e9f6d90814a28e236ad0af06911b2",
+      "size": 58216,
+      "type": "file"
+    },
+    "linux/x64/lib/libjpeg.so.8": {
+      "linkTarget": "libjpeg.so.8.1.2",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libjpeg.so.8.1.2": {
+      "mode": "0644",
+      "sha256": "724b00137a2928285625f9ab38814a4151a263bab8b75b77227b6cbfbd337282",
+      "size": 424648,
+      "type": "file"
+    },
+    "linux/x64/lib/liblcms2.so.2": {
+      "linkTarget": "liblcms2.so.2.0.8",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/liblcms2.so.2.0.8": {
+      "mode": "0644",
+      "sha256": "58c8f9430f4c17bac60f380b439d7a4db29271cb1411821239b82da3a0038a1c",
+      "size": 357216,
+      "type": "file"
+    },
+    "linux/x64/lib/liblz4.so.1": {
+      "linkTarget": "liblz4.so.1.7.1",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/liblz4.so.1.7.1": {
+      "mode": "0644",
+      "sha256": "536ab2f5d4448fd1ff62d43b99ece092ec7824b083af7c7007bb0889353d2777",
+      "size": 112672,
+      "type": "file"
+    },
+    "linux/x64/lib/liblzma.so.5": {
+      "linkTarget": "liblzma.so.5.2.2",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/liblzma.so.5.2.2": {
+      "mode": "0644",
+      "sha256": "cf2f5872a6c7fd81fd530ea2e1af2485cb1e8458846fb108cbef71efafe4eac7",
+      "size": 153912,
+      "type": "file"
+    },
+    "linux/x64/lib/liblzo2.so.2": {
+      "linkTarget": "liblzo2.so.2.0.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/liblzo2.so.2.0.0": {
+      "mode": "0644",
+      "sha256": "fa749c759be3caa72fe8430a8baf73a9fd4082e4974c79e6e74a9c9c74a9f7a8",
+      "size": 137256,
+      "type": "file"
+    },
+    "linux/x64/lib/libopenjp2.a": {
+      "mode": "0644",
+      "sha256": "d830aa672c084832c150921448b71d4389cadd331b14852ab40d8fb6ef04113b",
+      "size": 597192,
+      "type": "file"
+    },
+    "linux/x64/lib/libopenjp2.so": {
+      "linkTarget": "libopenjp2.so.7",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libopenjp2.so.2.5.4": {
+      "mode": "0644",
+      "sha256": "30a2dc9f5a9046c8cbba70c21d6e61c92b0cbec1e6fe4c307634888a09974400",
+      "size": 437808,
+      "type": "file"
+    },
+    "linux/x64/lib/libopenjp2.so.7": {
+      "linkTarget": "libopenjp2.so.2.5.4",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libpng16.so.16": {
+      "linkTarget": "libpng16.so.16.34.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libpng16.so.16.34.0": {
+      "mode": "0644",
+      "sha256": "0353da90d7c3699685c99c2cabf17d7b4a4212c3a2d6c29beb739e1c83da418e",
+      "size": 202672,
+      "type": "file"
+    },
+    "linux/x64/lib/libtiff.so.5": {
+      "linkTarget": "libtiff.so.5.3.0",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libtiff.so.5.3.0": {
+      "mode": "0644",
+      "sha256": "bd2fcd1ef0870e61680ded0d099f1723af608a3d36cafff4419b302a97e4834f",
+      "size": 489960,
+      "type": "file"
+    },
+    "linux/x64/lib/libz.so.1": {
+      "linkTarget": "libz.so.1.2.11",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libz.so.1.2.11": {
+      "mode": "0644",
+      "sha256": "7d49957222b354be17425cc5cc59e255a97ae8415dcd414c920c1c5c04dc5d32",
+      "size": 116960,
+      "type": "file"
+    },
+    "linux/x64/lib/libzstd.so.1": {
+      "linkTarget": "libzstd.so.1.3.3",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "linux/x64/lib/libzstd.so.1.3.3": {
+      "mode": "0644",
+      "sha256": "70ccbc667e32cf4fb66bb7183c32ced9e0df4eec6a9093aae7d2471b7c053b64",
+      "size": 501680,
+      "type": "file"
+    },
+    "linux/x64/lib/pkgconfig": {
+      "mode": "0755",
+      "size": 0,
+      "type": "directory"
+    },
+    "linux/x64/lib/pkgconfig/libopenjp2.pc": {
+      "mode": "0644",
+      "sha256": "b094c3287f59ec6eaa23d65961cdd56f660e24f6102f2c625aa238f9e6ec5ebb",
+      "size": 382,
+      "type": "file"
+    },
+    "linux/x64/mksquashfs": {
+      "mode": "0755",
+      "sha256": "dac172a43e46b9d3f96a8ef270d1fe8194e46ace2863f72a03a24eb0f8f9e61c",
+      "size": 8817792,
+      "type": "file"
+    },
+    "mksquashfs": {
+      "linkTarget": "appimage-tool",
+      "mode": "0777",
+      "size": 0,
+      "type": "symlink"
+    },
+    "runtimes/runtime-x64": {
+      "mode": "0644",
+      "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+      "size": 944632,
+      "type": "file"
+    },
+    "select-runtime.env": {
+      "mode": "0755",
+      "sha256": "4dd903764f04d65559508e67a98e91b054af2962181e3bc6a2b0449b1b07bf80",
+      "size": 1291,
+      "type": "file"
+    }
+  },
+  "sha256": "84021a78ee214ae6fd33a2d62a92ba25542dd10bc86bf117a9b2d0bba44e7665",
+  "url": "https://github.com/electron-userland/electron-builder-binaries/releases/download/appimage%401.0.3/appimage-tools-runtime-20251108.tar.gz"
+}
