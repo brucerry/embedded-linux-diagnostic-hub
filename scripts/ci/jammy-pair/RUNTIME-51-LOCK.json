@@ -1,0 +1,754 @@
+{
+  "afterInventorySHA256": "af7a3b8a54c9e4528ff666a8c81d88a94d961cfcaafa7cc25b9fcca62db9778b",
+  "beforeInventorySHA256": "34b18f90556360afe3873dc053e2cd1b71924c01f1a1eb2467c8c56072bec74e",
+  "entries": [
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "adwaita-icon-theme_41.0-1ubuntu1_all.deb",
+      "compressed_bytes": 3444050,
+      "filename": "pool/main/a/adwaita-icon-theme/adwaita-icon-theme_41.0-1ubuntu1_all.deb",
+      "installed_kib": 5234,
+      "name": "adwaita-icon-theme",
+      "sha256": "9391c87c5479507895be429434d6ebd60593e8f3a708fec6cd7950579128debc",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "41.0-1ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "dconf-gsettings-backend_0.40.0-3ubuntu0.1_amd64.deb",
+      "compressed_bytes": 22742,
+      "filename": "pool/main/d/dconf/dconf-gsettings-backend_0.40.0-3ubuntu0.1_amd64.deb",
+      "installed_kib": 80,
+      "name": "dconf-gsettings-backend",
+      "sha256": "90632fbb3a6865d36a8ec17e4152f419efd7e94768c68a5e7fa5b60cdce47a94",
+      "sources": [
+        "jammy-updates/main"
+      ],
+      "version": "0.40.0-3ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "dconf-service_0.40.0-3ubuntu0.1_amd64.deb",
+      "compressed_bytes": 28092,
+      "filename": "pool/main/d/dconf/dconf-service_0.40.0-3ubuntu0.1_amd64.deb",
+      "installed_kib": 103,
+      "name": "dconf-service",
+      "sha256": "cc9d865340084258519eb69d1e53119aa389b0b0d19f0e3f433c2adc4575de7b",
+      "sources": [
+        "jammy-updates/main"
+      ],
+      "version": "0.40.0-3ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "fontconfig_2.13.1-4.2ubuntu5_amd64.deb",
+      "compressed_bytes": 177468,
+      "filename": "pool/main/f/fontconfig/fontconfig_2.13.1-4.2ubuntu5_amd64.deb",
+      "installed_kib": 375,
+      "name": "fontconfig",
+      "sha256": "9a844b4e8c27b76f39a00dd36dc833b2c99bfa24959df9b6b0749659c31a5c1c",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "2.13.1-4.2ubuntu5"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "gtk-update-icon-cache_3.24.33-1ubuntu2.2_amd64.deb",
+      "compressed_bytes": 31412,
+      "filename": "pool/main/g/gtk+3.0/gtk-update-icon-cache_3.24.33-1ubuntu2.2_amd64.deb",
+      "installed_kib": 160,
+      "name": "gtk-update-icon-cache",
+      "sha256": "e5087f202e43276fe5f53e1dc11107307e043031f0331cc688e39baf2f33dc72",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "3.24.33-1ubuntu2.2"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "hicolor-icon-theme_0.17-2_all.deb",
+      "compressed_bytes": 9976,
+      "filename": "pool/main/h/hicolor-icon-theme/hicolor-icon-theme_0.17-2_all.deb",
+      "installed_kib": 440,
+      "name": "hicolor-icon-theme",
+      "sha256": "9000eb98868252261978ff49501c0ace3124cb369c395e9f5015ddc556fe2ba6",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "0.17-2"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "humanity-icon-theme_0.6.16_all.deb",
+      "compressed_bytes": 1281812,
+      "filename": "pool/main/h/humanity-icon-theme/humanity-icon-theme_0.6.16_all.deb",
+      "installed_kib": 20660,
+      "name": "humanity-icon-theme",
+      "sha256": "a9bb76c7eb926bd97e50455a79f266de826a246b2250e1ac4aebcda013dd51c7",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "0.6.16"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libasound2_1.2.6.1-1ubuntu1.2_amd64.deb",
+      "compressed_bytes": 390788,
+      "filename": "pool/main/a/alsa-lib/libasound2_1.2.6.1-1ubuntu1.2_amd64.deb",
+      "installed_kib": 1154,
+      "name": "libasound2",
+      "sha256": "dce4ce1043cde35f4bc375a4b1bd84badd5dec7e656ea2a8849edf9215bc8c33",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.2.6.1-1ubuntu1.2"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "libasound2-data_1.2.6.1-1ubuntu1.2_all.deb",
+      "compressed_bytes": 19318,
+      "filename": "pool/main/a/alsa-lib/libasound2-data_1.2.6.1-1ubuntu1.2_all.deb",
+      "installed_kib": 217,
+      "name": "libasound2-data",
+      "sha256": "e175a0617ae4a35667a9cf159ee5ee226d09ad43ed7719b721a7ea797974f65c",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.2.6.1-1ubuntu1.2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libatk-bridge2.0-0_2.38.0-3_amd64.deb",
+      "compressed_bytes": 66556,
+      "filename": "pool/main/a/at-spi2-atk/libatk-bridge2.0-0_2.38.0-3_amd64.deb",
+      "installed_kib": 250,
+      "name": "libatk-bridge2.0-0",
+      "sha256": "98924a5b376da9c075663ea61721fb0d91a55be3473c4643286491247f229b48",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "2.38.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libatk1.0-0_2.36.0-3build1_amd64.deb",
+      "compressed_bytes": 51938,
+      "filename": "pool/main/a/atk1.0/libatk1.0-0_2.36.0-3build1_amd64.deb",
+      "installed_kib": 199,
+      "name": "libatk1.0-0",
+      "sha256": "598b522b64a20c9a3ea44fa816b539976c39d41bf2bccd104fed49954638f0f9",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "2.36.0-3build1"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "libatk1.0-data_2.36.0-3build1_all.deb",
+      "compressed_bytes": 2824,
+      "filename": "pool/main/a/atk1.0/libatk1.0-data_2.36.0-3build1_all.deb",
+      "installed_kib": 44,
+      "name": "libatk1.0-data",
+      "sha256": "a023521fb4930ba6a1f0c5a72a0d1c575b881ce1e117893621cab74e4bd0a60e",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "2.36.0-3build1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libatspi2.0-0_2.44.0-3_amd64.deb",
+      "compressed_bytes": 80886,
+      "filename": "pool/main/a/at-spi2-core/libatspi2.0-0_2.44.0-3_amd64.deb",
+      "installed_kib": 255,
+      "name": "libatspi2.0-0",
+      "sha256": "93b243e9d8fb3de9ba78251cf3dec2c6b66836ea7329ae4026981ce8dda62de4",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "2.44.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libavahi-client3_0.8-5ubuntu5.5_amd64.deb",
+      "compressed_bytes": 28138,
+      "filename": "pool/main/a/avahi/libavahi-client3_0.8-5ubuntu5.5_amd64.deb",
+      "installed_kib": 138,
+      "name": "libavahi-client3",
+      "sha256": "4c4a1aba2bb173f2b238f34d236664a1f695ffccb56aef3abba797393f52ccac",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "0.8-5ubuntu5.5"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libavahi-common-data_0.8-5ubuntu5.5_amd64.deb",
+      "compressed_bytes": 24030,
+      "filename": "pool/main/a/avahi/libavahi-common-data_0.8-5ubuntu5.5_amd64.deb",
+      "installed_kib": 116,
+      "name": "libavahi-common-data",
+      "sha256": "245062599ea288b3f2ee7403fdaf2b62c59ba6efec93a1560affe2a9ce4360fb",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "0.8-5ubuntu5.5"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libavahi-common3_0.8-5ubuntu5.5_amd64.deb",
+      "compressed_bytes": 23880,
+      "filename": "pool/main/a/avahi/libavahi-common3_0.8-5ubuntu5.5_amd64.deb",
+      "installed_kib": 115,
+      "name": "libavahi-common3",
+      "sha256": "4a1c7c6aa1c1832e7aa703dce1c4f9b6970d7df47243d8f5352fd22b2fb2fac6",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "0.8-5ubuntu5.5"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libcairo-gobject2_1.16.0-5ubuntu2.1_amd64.deb",
+      "compressed_bytes": 19460,
+      "filename": "pool/main/c/cairo/libcairo-gobject2_1.16.0-5ubuntu2.1_amd64.deb",
+      "installed_kib": 102,
+      "name": "libcairo-gobject2",
+      "sha256": "1c56e1d49921272ac243ff9c39771da7e37891b1ca0bc30696639e624aaf0443",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.16.0-5ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libcairo2_1.16.0-5ubuntu2.1_amd64.deb",
+      "compressed_bytes": 627714,
+      "filename": "pool/main/c/cairo/libcairo2_1.16.0-5ubuntu2.1_amd64.deb",
+      "installed_kib": 1351,
+      "name": "libcairo2",
+      "sha256": "096c5309b8fb37aeb32636f13c58309005ef4aa73aaa4c4299c2e824c1fbd359",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.16.0-5ubuntu2.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libcolord2_1.4.6-1_amd64.deb",
+      "compressed_bytes": 155164,
+      "filename": "pool/main/c/colord/libcolord2_1.4.6-1_amd64.deb",
+      "installed_kib": 616,
+      "name": "libcolord2",
+      "sha256": "a483a6b4a7b9a76f268b67eadc84bea0efd8307133bebdbdae3effa2e409b1e9",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1.4.6-1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libcups2_2.4.1op1-1ubuntu4.21_amd64.deb",
+      "compressed_bytes": 265558,
+      "filename": "pool/main/c/cups/libcups2_2.4.1op1-1ubuntu4.21_amd64.deb",
+      "installed_kib": 789,
+      "name": "libcups2",
+      "sha256": "563f1355772c47290633c0283e6c53f6ba109d4961dee3397c9ed96359722630",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "2.4.1op1-1ubuntu4.21"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libdatrie1_0.2.13-2_amd64.deb",
+      "compressed_bytes": 19886,
+      "filename": "pool/main/libd/libdatrie/libdatrie1_0.2.13-2_amd64.deb",
+      "installed_kib": 63,
+      "name": "libdatrie1",
+      "sha256": "7203107da01abcaf8f88db41e4ccc949285e20326edacdfe59ebb321a16026a0",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "0.2.13-2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libdconf1_0.40.0-3ubuntu0.1_amd64.deb",
+      "compressed_bytes": 40498,
+      "filename": "pool/main/d/dconf/libdconf1_0.40.0-3ubuntu0.1_amd64.deb",
+      "installed_kib": 108,
+      "name": "libdconf1",
+      "sha256": "8cc719e288131b7232a22d58f4c32e96f59a9ff23378a7c6f4f401eb06f99b63",
+      "sources": [
+        "jammy-updates/main"
+      ],
+      "version": "0.40.0-3ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libdeflate0_1.10-2_amd64.deb",
+      "compressed_bytes": 70884,
+      "filename": "pool/main/libd/libdeflate/libdeflate0_1.10-2_amd64.deb",
+      "installed_kib": 154,
+      "name": "libdeflate0",
+      "sha256": "a64f7f93a487e57e1a01404d378a8ef1428b1c6b0ecf24fc484c89b681a051c9",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1.10-2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libepoxy0_1.5.10-1_amd64.deb",
+      "compressed_bytes": 237222,
+      "filename": "pool/main/libe/libepoxy/libepoxy0_1.5.10-1_amd64.deb",
+      "installed_kib": 1380,
+      "name": "libepoxy0",
+      "sha256": "b074cde6aa853be14ec11148794bfeb2f55db41a9abdc0c99f18db97bb99e47b",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1.5.10-1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libgbm1_23.2.1-1ubuntu3.1~22.04.4_amd64.deb",
+      "compressed_bytes": 33678,
+      "filename": "pool/main/m/mesa/libgbm1_23.2.1-1ubuntu3.1~22.04.4_amd64.deb",
+      "installed_kib": 148,
+      "name": "libgbm1",
+      "sha256": "10d37ffd63f8f98fc9a1ad5b32abc7a9da760f4ed85c806d98f10a61c17f8ef5",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "23.2.1-1ubuntu3.1~22.04.4"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libgdk-pixbuf-2.0-0_2.42.8+dfsg-1ubuntu0.5_amd64.deb",
+      "compressed_bytes": 148234,
+      "filename": "pool/main/g/gdk-pixbuf/libgdk-pixbuf-2.0-0_2.42.8+dfsg-1ubuntu0.5_amd64.deb",
+      "installed_kib": 517,
+      "name": "libgdk-pixbuf-2.0-0",
+      "sha256": "dc19853a6d8981b6a4ab140f454d7ad4f4688f3de959663f30e18c6327b8a64f",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "2.42.8+dfsg-1ubuntu0.5"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "libgdk-pixbuf2.0-common_2.42.8+dfsg-1ubuntu0.5_all.deb",
+      "compressed_bytes": 5560,
+      "filename": "pool/main/g/gdk-pixbuf/libgdk-pixbuf2.0-common_2.42.8+dfsg-1ubuntu0.5_all.deb",
+      "installed_kib": 56,
+      "name": "libgdk-pixbuf2.0-common",
+      "sha256": "c202d69a7beee5077629cb5fe49ed810911deeafb0a072eb375011b03c623c37",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "2.42.8+dfsg-1ubuntu0.5"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libgraphite2-3_1.3.14-1ubuntu0.1_amd64.deb",
+      "compressed_bytes": 71614,
+      "filename": "pool/main/g/graphite2/libgraphite2-3_1.3.14-1ubuntu0.1_amd64.deb",
+      "installed_kib": 183,
+      "name": "libgraphite2-3",
+      "sha256": "fefc2bc510b80a7a2a8570352be4f0bf9e2d36d122d2c8316cfa008103a2a7e5",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.3.14-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libgtk-3-0_3.24.33-1ubuntu2.2_amd64.deb",
+      "compressed_bytes": 3052782,
+      "filename": "pool/main/g/gtk+3.0/libgtk-3-0_3.24.33-1ubuntu2.2_amd64.deb",
+      "installed_kib": 10280,
+      "name": "libgtk-3-0",
+      "sha256": "b22a6e211b0e79aeaf467773a6689abf96c3a524446528c8b54c80b5e165fe4a",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "3.24.33-1ubuntu2.2"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "libgtk-3-common_3.24.33-1ubuntu2.2_all.deb",
+      "compressed_bytes": 238990,
+      "filename": "pool/main/g/gtk+3.0/libgtk-3-common_3.24.33-1ubuntu2.2_all.deb",
+      "installed_kib": 432,
+      "name": "libgtk-3-common",
+      "sha256": "29f52f47c4bb082a8aa36dc2ab9f111ab9068f5d922bf12b4429cf607c4a0fac",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "3.24.33-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libharfbuzz0b_2.7.4-1ubuntu3.2_amd64.deb",
+      "compressed_bytes": 352528,
+      "filename": "pool/main/h/harfbuzz/libharfbuzz0b_2.7.4-1ubuntu3.2_amd64.deb",
+      "installed_kib": 860,
+      "name": "libharfbuzz0b",
+      "sha256": "e895a3c842c60296549d09c2ffafb4098b853e501e28dc8de710b90357007616",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "2.7.4-1ubuntu3.2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libjbig0_2.1-3.1ubuntu0.22.04.1_amd64.deb",
+      "compressed_bytes": 29166,
+      "filename": "pool/main/j/jbigkit/libjbig0_2.1-3.1ubuntu0.22.04.1_amd64.deb",
+      "installed_kib": 82,
+      "name": "libjbig0",
+      "sha256": "4666c37d8620b6d17a2d4acf2cb1459f071e74881dc490a159e90244d7a98cc6",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "2.1-3.1ubuntu0.22.04.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libjpeg-turbo8_2.1.2-0ubuntu1_amd64.deb",
+      "compressed_bytes": 134436,
+      "filename": "pool/main/libj/libjpeg-turbo/libjpeg-turbo8_2.1.2-0ubuntu1_amd64.deb",
+      "installed_kib": 543,
+      "name": "libjpeg-turbo8",
+      "sha256": "bb9538fa94f06bf6b7907105439f0a0a30e3ec27030832820a6c2cc2dc6578a8",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "2.1.2-0ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libjpeg8_8c-2ubuntu10_amd64.deb",
+      "compressed_bytes": 2264,
+      "filename": "pool/main/libj/libjpeg8-empty/libjpeg8_8c-2ubuntu10_amd64.deb",
+      "installed_kib": 9,
+      "name": "libjpeg8",
+      "sha256": "869e3e6fbdbe7a645dffcb86b4e285957225a89b6a76840f4aab2bedaf0e4e88",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "8c-2ubuntu10"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "liblcms2-2_2.12~rc1-2ubuntu0.1_amd64.deb",
+      "compressed_bytes": 158758,
+      "filename": "pool/main/l/lcms2/liblcms2-2_2.12~rc1-2ubuntu0.1_amd64.deb",
+      "installed_kib": 414,
+      "name": "liblcms2-2",
+      "sha256": "4e74357c16f3b8a833dafab18aaadef6bfe5bda17730fa8afa2e85c24025a7d5",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "2.12~rc1-2ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libpango-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb",
+      "compressed_bytes": 229548,
+      "filename": "pool/main/p/pango1.0/libpango-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb",
+      "installed_kib": 563,
+      "name": "libpango-1.0-0",
+      "sha256": "cbc98b6f1676ea97454639c573f81ac7578224b7733dc80b377eca82d1eb0c86",
+      "sources": [
+        "jammy-updates/main"
+      ],
+      "version": "1.50.6+ds-2ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libpangocairo-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb",
+      "compressed_bytes": 39822,
+      "filename": "pool/main/p/pango1.0/libpangocairo-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb",
+      "installed_kib": 159,
+      "name": "libpangocairo-1.0-0",
+      "sha256": "112050121990441b7ad72b12fdfd32a52adfb71c2cf8b466634eb925c5076706",
+      "sources": [
+        "jammy-updates/main"
+      ],
+      "version": "1.50.6+ds-2ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libpangoft2-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb",
+      "compressed_bytes": 53954,
+      "filename": "pool/main/p/pango1.0/libpangoft2-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb",
+      "installed_kib": 197,
+      "name": "libpangoft2-1.0-0",
+      "sha256": "6590177d0dff28a473bee0f7965f3bc12302464f8fb43fdd3b3a1cddd69453b1",
+      "sources": [
+        "jammy-updates/main"
+      ],
+      "version": "1.50.6+ds-2ubuntu1"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "libthai-data_0.1.29-1build1_all.deb",
+      "compressed_bytes": 161598,
+      "filename": "pool/main/libt/libthai/libthai-data_0.1.29-1build1_all.deb",
+      "installed_kib": 595,
+      "name": "libthai-data",
+      "sha256": "63afa587e6d40d6bc71b0e4d353b0936e2d919e48476418f0a0e3d9542d29714",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "0.1.29-1build1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libthai0_0.1.29-1build1_amd64.deb",
+      "compressed_bytes": 19228,
+      "filename": "pool/main/libt/libthai/libthai0_0.1.29-1build1_amd64.deb",
+      "installed_kib": 99,
+      "name": "libthai0",
+      "sha256": "cf035ace18e725828442635a90109a05958a2f0941eaddeac863cd0145e47f73",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "0.1.29-1build1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libtiff5_4.3.0-6ubuntu0.13_amd64.deb",
+      "compressed_bytes": 185292,
+      "filename": "pool/main/t/tiff/libtiff5_4.3.0-6ubuntu0.13_amd64.deb",
+      "installed_kib": 585,
+      "name": "libtiff5",
+      "sha256": "298a778a6a579a556f6bb4e32512cd76e0483b57b4a379ee85397f62fe21f225",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "4.3.0-6ubuntu0.13"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libwayland-client0_1.20.0-1ubuntu0.1_amd64.deb",
+      "compressed_bytes": 25950,
+      "filename": "pool/main/w/wayland/libwayland-client0_1.20.0-1ubuntu0.1_amd64.deb",
+      "installed_kib": 85,
+      "name": "libwayland-client0",
+      "sha256": "2c06ef99bc387136e6357014fcb9fa6f47e0cb4e54d9b5ee10c750743a216e5a",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.20.0-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libwayland-cursor0_1.20.0-1ubuntu0.1_amd64.deb",
+      "compressed_bytes": 10664,
+      "filename": "pool/main/w/wayland/libwayland-cursor0_1.20.0-1ubuntu0.1_amd64.deb",
+      "installed_kib": 54,
+      "name": "libwayland-cursor0",
+      "sha256": "23a4253600cd8f75161747d3c4dcfc37c92a0074455b3883c46caef7aade34da",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.20.0-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libwayland-egl1_1.20.0-1ubuntu0.1_amd64.deb",
+      "compressed_bytes": 5582,
+      "filename": "pool/main/w/wayland/libwayland-egl1_1.20.0-1ubuntu0.1_amd64.deb",
+      "installed_kib": 34,
+      "name": "libwayland-egl1",
+      "sha256": "1b95b4ed225a6ab3c6a5e35e76eefa6896625e9d6cf139f0ea594ececb8348d0",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.20.0-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libwayland-server0_1.20.0-1ubuntu0.1_amd64.deb",
+      "compressed_bytes": 34268,
+      "filename": "pool/main/w/wayland/libwayland-server0_1.20.0-1ubuntu0.1_amd64.deb",
+      "installed_kib": 107,
+      "name": "libwayland-server0",
+      "sha256": "b5d514dc17edac6b93ba2476d90806337ca4afcc914952a7e78af2e5cd0c4a7b",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.20.0-1ubuntu0.1"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libwebp7_1.2.2-2ubuntu0.22.04.2_amd64.deb",
+      "compressed_bytes": 206268,
+      "filename": "pool/main/libw/libwebp/libwebp7_1.2.2-2ubuntu0.22.04.2_amd64.deb",
+      "installed_kib": 439,
+      "name": "libwebp7",
+      "sha256": "c24f4ed7a866aef76652027f07376f00e5e83f308b1f2c4faa1ee6ae8b7f2cfc",
+      "sources": [
+        "jammy-updates/main",
+        "jammy-security/main"
+      ],
+      "version": "1.2.2-2ubuntu0.22.04.2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libxcb-render0_1.14-3ubuntu3_amd64.deb",
+      "compressed_bytes": 16356,
+      "filename": "pool/main/libx/libxcb/libxcb-render0_1.14-3ubuntu3_amd64.deb",
+      "installed_kib": 86,
+      "name": "libxcb-render0",
+      "sha256": "26d331ed6e1219485dbd6a35b7c9cf552e1470f41bf2158b44a1331405f05250",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1.14-3ubuntu3"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libxcursor1_1%3a1.2.0-2build4_amd64.deb",
+      "compressed_bytes": 20920,
+      "filename": "pool/main/libx/libxcursor/libxcursor1_1.2.0-2build4_amd64.deb",
+      "installed_kib": 63,
+      "name": "libxcursor1",
+      "sha256": "4ea5fa73bc989f5b8cbeecfdb650e142920859837279d0a64891cb80aff9dfc8",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1:1.2.0-2build4"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libxdamage1_1%3a1.1.5-2build2_amd64.deb",
+      "compressed_bytes": 7154,
+      "filename": "pool/main/libx/libxdamage/libxdamage1_1.1.5-2build2_amd64.deb",
+      "installed_kib": 31,
+      "name": "libxdamage1",
+      "sha256": "a705af86334b9c219e5f50e21e5bc51bfbf8b8189ca88d4fcafff734de81a503",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1:1.1.5-2build2"
+    },
+    {
+      "architecture": "amd64",
+      "beforeVersion": null,
+      "cacheName": "libxkbcommon0_1.4.0-1_amd64.deb",
+      "compressed_bytes": 124684,
+      "filename": "pool/main/libx/libxkbcommon/libxkbcommon0_1.4.0-1_amd64.deb",
+      "installed_kib": 302,
+      "name": "libxkbcommon0",
+      "sha256": "a0470edb237d52b71ad41f755c043164abed01423585ed5ea19525b3baaf84f7",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "1.4.0-1"
+    },
+    {
+      "architecture": "all",
+      "beforeVersion": null,
+      "cacheName": "ubuntu-mono_20.10-0ubuntu2_all.deb",
+      "compressed_bytes": 152680,
+      "filename": "pool/main/u/ubuntu-themes/ubuntu-mono_20.10-0ubuntu2_all.deb",
+      "installed_kib": 5587,
+      "name": "ubuntu-mono",
+      "sha256": "b6d85a81f11b4b2df255037e66870571c752bc27572ed9418dd6bb75e104aca9",
+      "sources": [
+        "jammy/main"
+      ],
+      "version": "20.10-0ubuntu2"
+    }
+  ],
+  "guestAfterPackageCount": 702,
+  "guestBeforePackageCount": 651,
+  "prerequisiteDisplayLockSHA256": "5db26dee779a0b380a81395a6dccc65adaca81424fea597744e3a22a7dd2f701",
+  "signedSnapshot": "20261120T060000Z",
+  "sourcePlanSHA256": "108fe99c151233869ce3fb63e3b457b0b4d95b53367b03461a6386a98caa163b",
+  "transaction": {
+    "adds": 51,
+    "removals": 0,
+    "upgrades": 0
+  }
+}
