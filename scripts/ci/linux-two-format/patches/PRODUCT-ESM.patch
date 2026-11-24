@@ -1,0 +1,150 @@
+diff --git a/scripts/lib/linux-release-observation.ts b/scripts/lib/linux-release-observation.mts
+similarity index 100%
+rename from scripts/lib/linux-release-observation.ts
+rename to scripts/lib/linux-release-observation.mts
+diff --git a/.github/workflows/v060-build-only-qualification.yml b/.github/workflows/v060-build-only-qualification.yml
+--- a/.github/workflows/v060-build-only-qualification.yml
++++ b/.github/workflows/v060-build-only-qualification.yml
+@@ -188,7 +188,7 @@
+                   import { execFileSync } from 'node:child_process';
+                   import { extractFile } from '@electron/asar';
+                   import { observeLinuxGzipTar, linuxObservationWindow } from './scripts/lib/linux-archive-members.mjs';
+-                  import { normalizeLinuxPackagerCensus } from './scripts/lib/linux-release-observation.ts';
++                  import { normalizeLinuxPackagerCensus } from './scripts/lib/linux-release-observation.mts';
+                   import { verifyDesktopPackageBundles } from './scripts/lib/desktop-package-bundles.mjs';
+                   import { validateLinuxReviewCapability, reviewBundleHash } from './scripts/lib/linux-review-package.mjs';
+                   import { planLinuxPermanentEnvelope, prepareLinuxPermanentEnvelope } from './scripts/lib/linux-setup-envelope.ts';
+diff --git a/scripts/lib/linux-permanent-member-modes.mjs b/scripts/lib/linux-permanent-member-modes.mjs
+--- a/scripts/lib/linux-permanent-member-modes.mjs
++++ b/scripts/lib/linux-permanent-member-modes.mjs
+@@ -8,7 +8,7 @@
+     linuxObservationWindow,
+     observeLinuxGzipTar,
+ } from './linux-archive-members.mjs';
+-import { normalizeLinuxPackagerCensus } from './linux-release-observation.ts';
++import { normalizeLinuxPackagerCensus } from './linux-release-observation.mts';
+ 
+ // The installer planner checks these same original-member modes before making an envelope.
+ const required = new Map([
+diff --git a/scripts/lib/linux-setup-envelope-disk.mjs b/scripts/lib/linux-setup-envelope-disk.mjs
+--- a/scripts/lib/linux-setup-envelope-disk.mjs
++++ b/scripts/lib/linux-setup-envelope-disk.mjs
+@@ -14,7 +14,7 @@
+     assertLinuxObservedMembers,
+     assertLinuxObservedDescriptor,
+     normalizeLinuxPackagerCensus,
+-} from './linux-release-observation.ts';
++} from './linux-release-observation.mts';
+ 
+ const owners = new Set(); // Retain allocated paths/handles on uncertainty; no automatic cleanup.
+ const identityKeys = ['dev', 'ino', 'uid', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'];
+diff --git a/scripts/linux-owned-installation-fixture.ts b/scripts/linux-owned-installation-fixture.ts
+--- a/scripts/linux-owned-installation-fixture.ts
++++ b/scripts/linux-owned-installation-fixture.ts
+@@ -8,7 +8,7 @@
+ import { spawn } from 'node:child_process';
+ import { observeOwnedChild } from './lib/owned-child.mjs';
+ import { observeLinuxGzipTar, linuxObservationWindow } from './lib/linux-archive-members.mjs';
+-import { normalizeLinuxPackagerCensus } from './lib/linux-release-observation.ts';
++import { normalizeLinuxPackagerCensus } from './lib/linux-release-observation.mts';
+ import {
+     planLinuxPermanentEnvelope,
+     prepareLinuxPermanentEnvelope,
+diff --git a/scripts/linux-setup-bootstrap.cts b/scripts/linux-setup-bootstrap.cts
+--- a/scripts/linux-setup-bootstrap.cts
++++ b/scripts/linux-setup-bootstrap.cts
+@@ -17,7 +17,7 @@
+ import {
+     validateLinuxObservationRecords,
+     normalizeLinuxPackagerCensus,
+-} from './lib/linux-release-observation';
++} from './lib/linux-release-observation.mts';
+ import { observeLinuxGzipTar, linuxObservationWindow } from './lib/linux-archive-members.mjs';
+ import { linuxPermanentArguments } from '../electron/linux-permanent-setup';
+ 
+diff --git a/tests/linux-member-observer.test.ts b/tests/linux-member-observer.test.ts
+--- a/tests/linux-member-observer.test.ts
++++ b/tests/linux-member-observer.test.ts
+@@ -14,7 +14,7 @@
+     assertLinuxObservedMembers,
+     assertLinuxObservedDescriptor,
+     normalizeLinuxPackagerCensus,
+-} from '../scripts/lib/linux-release-observation.ts';
++} from '../scripts/lib/linux-release-observation.mts';
+ import { createLinuxReviewCapability } from '../scripts/lib/linux-review-package.mjs';
+ import packaging from '../scripts/lib/linux-review-after-pack.cjs';
+ const hash = (x: Buffer | string) => createHash('sha256').update(x).digest('hex');
+diff --git a/tests/linux-private-provenance.test.ts b/tests/linux-private-provenance.test.ts
+--- a/tests/linux-private-provenance.test.ts
++++ b/tests/linux-private-provenance.test.ts
+@@ -11,7 +11,7 @@
+ import {
+     validateLinuxObservationRecords,
+     linuxObservationRecordPaths,
+-} from '../scripts/lib/linux-release-observation.ts';
++} from '../scripts/lib/linux-release-observation.mts';
+ import type { LinuxEnvelopePlan } from '../scripts/lib/linux-setup-envelope.ts';
+ import { recordLinuxBuild, linuxBuildArguments } from '../scripts/record-linux-build.mjs';
+ const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+diff --git a/scripts/verify-linux-package.mjs b/scripts/verify-linux-package.mjs
+--- a/scripts/verify-linux-package.mjs
++++ b/scripts/verify-linux-package.mjs
+@@ -13,6 +13,13 @@
+     verifyLinuxPermanentDirectoryModes,
+ } from './lib/linux-permanent-member-modes.mjs';
+ 
++// The isolated build controller consumes only these fixed markers and keeps raw output private.
++const reportPhases = process.env.DIAGNOSTIC_HUB_LINUX_VERIFY_PHASES === '1';
++function mark(condition) {
++    if (reportPhases) process.stdout.write(`HUB_LINUX_VERIFY_PHASE ${condition}\n`);
++}
++
++mark('prepare');
+ const directory = path.resolve(process.argv[2] ?? 'release');
+ const temporary = await mkdtemp(path.join(tmpdir(), 'diagnostic-hub-linux-package-'));
+ const unpacked = path.join(directory, 'linux-unpacked');
+@@ -67,12 +74,15 @@
+     assert.equal(executable.readUInt16LE(18), 62, 'Executable must be x86_64.');
+ }
+ try {
++    mark('staged_bundle');
+     if (existsSync(unpacked)) {
+         await verifyLinuxPermanentDirectoryModes(unpacked);
+         await verifyBundle(unpacked);
+     }
++    mark('tar_headers');
+     await readLinuxTarPermanentMembers(path.join(directory, LINUX_ARCHIVE), {
+         async consume(archiveFd, archiveRoot) {
++            mark('tar_extract');
+             const archiveDirectory = path.join(temporary, 'archive');
+             await mkdir(archiveDirectory);
+             const extraction = spawnSync(
+@@ -81,15 +91,19 @@
+                 { stdio: [archiveFd, 'pipe', 'pipe'], encoding: 'utf8' },
+             );
+             assert.equal(extraction.status, 0, extraction.stderr);
++            mark('tar_contents');
+             await verifyBundle(path.join(archiveDirectory, archiveRoot));
++            mark('tar_final_identity');
+         },
+     });
++    mark('appimage_extract');
+     const image = path.join(directory, LINUX_ASSET);
+     const extraction = spawnSync(image, ['--appimage-extract'], {
+         cwd: temporary,
+         encoding: 'utf8',
+     });
+     assert.equal(extraction.status, 0, extraction.stderr);
++    mark('appimage_contents');
+     const appdir = path.join(temporary, 'squashfs-root');
+     assert.ok(
+         (await readFile(path.join(appdir, 'AppRun'))).equals(launcher),
+@@ -100,6 +114,8 @@
+     console.log(
+         'Linux AppImage/archive verified: current renderer/backend/icons, ELF64 architecture, permanent-installer modes and sandbox-preserving launcher.',
+     );
++    mark('inner_cleanup');
+ } finally {
+     await rm(temporary, { recursive: true, force: true });
+ }
++mark('complete');
