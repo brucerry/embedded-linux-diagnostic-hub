@@ -191,7 +191,8 @@ def main(stages,*,venue=jammy.main):
                 stages['guest_pair_import']=outcomes['native_custody']
         producer.step(stages,'guest_tar_lifecycle',lambda:producer.need(
             outcomes.get('native_custody')==outcomes.get('native_packaged_window_quit')==
-            outcomes.get('native_owned_retirement')==outcomes.get('retirement')=='pass',
+            outcomes.get('native_owned_retirement')==outcomes.get('native_final_loopback')==
+            outcomes.get('retirement')=='pass',
             'combined-guest-tar-lifecycle'))
     finally:
         if stages.get('producer_worker_retired')=='fail' or outcomes.get('retirement')=='fail':

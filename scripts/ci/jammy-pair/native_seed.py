@@ -10,7 +10,7 @@ import native_guest
 import pair_wire as pair
 import runtime_gate
 
-BRANCH='ci/v060-jammy-tar-portable-lifecycle-20261124'
+BRANCH='ci/v060-jammy-tar-retirement-clock-20261124'
 PROPOSED_BRANCH='refs/heads/'+BRANCH
 GUEST_STAGES=(*STOCK_STAGES,*native_guest.PHASES)
 LIFECYCLE_STAGES=native_guest.LIFECYCLE_STAGES

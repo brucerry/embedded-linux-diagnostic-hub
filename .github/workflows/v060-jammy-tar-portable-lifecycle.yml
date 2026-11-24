@@ -1,7 +1,7 @@
 name: Jammy corrected Linux portable tar lifecycle
 on:
   push:
-    branches: [ci/v060-jammy-tar-portable-lifecycle-20261124]
+    branches: [ci/v060-jammy-tar-retirement-clock-20261124]
     paths:
       - '.github/workflows/v060-jammy-tar-portable-lifecycle.yml'
       - 'scripts/ci/linux-two-format/**'
@@ -46,10 +46,10 @@ jobs:
           59adf26dbf10118ad7b022ed5123e7666bccae1b54c949eb21e90c7e2347229a  scripts/ci/jammy-pair/guest_closure.py
           b8b291d6185e81bb1c886827facd55d164db6c82a53cb7b29b549e78b125da8e  scripts/ci/jammy-pair/handoff.py
           6742018c7ef461bdd547db991d9593bc97a325f382d464a79ca81bc5e4f27643  scripts/ci/jammy-pair/native_control.py
-          6cf3f10372f156c60be14a978b0d6fa423f8382c7990fea99271754f8b77d084  scripts/ci/jammy-pair/native_guest.py
+          9beb9eef881f74cf095b8e766d39623999ff3ac5d12034717152f428730375a1  scripts/ci/jammy-pair/native_guest.py
           c0563aa04b82c42eb5ce569be8321f9638f761aac84f910ac141ca4d8e209188  scripts/ci/jammy-pair/native_hash.py
           7a89afce2118dd7da5becb1aad4dd666fc04721519a03b27532d035f02036d40  scripts/ci/jammy-pair/native_preflight.py
-          fe64161b295c0562256cfbbab096f051b5f8700e3d42d437b5aed0eaed1d0d67  scripts/ci/jammy-pair/native_seed.py
+          60b25d9e421b7818dc84690aa7bcad8c3c066da4f54c01abc08043c6d8a55daa  scripts/ci/jammy-pair/native_seed.py
           ebe4f7d52457be51141e0c99b3f15ebe3b4ed669618b8eea2d65b5718ffecd67  scripts/ci/jammy-pair/observer_media.py
           216d2246515810346f831859dfb543f2aee3941a738a256bb6bd070dc0b9019a  scripts/ci/jammy-pair/observer_stage.py
           67e56df326b6c7f2bab40c8a190c730468e7c368d7db328047fe7771ce046116  scripts/ci/jammy-pair/package.json
@@ -85,14 +85,14 @@ jobs:
           65db02fbc1b158dc20a3a7c751e4aa1727fa40c074a114b103c7c8d6921d89f9  scripts/ci/linux-two-format/dependencies.py
           eb125de46583cee473eea846284a1508f566f69d28201383f9851982a175ddd1  scripts/ci/linux-two-format/extract_adapter.py
           a3519e670f2611a11954b5290b747cbaa8d548a0f50c7f727b6f07a74abdfaff  scripts/ci/linux-two-format/handoff.py
-          8e8d30f6026cb789de7e42f4de3b98b3cc9c7ca0a8d3cbc4cfcf718348281ae8  scripts/ci/linux-two-format/host.py
+          a7987bb5cf0c68210e4685fb1efdad76e6979433531920be4f6ba204ebeb4908  scripts/ci/linux-two-format/host.py
           922dfd8c2b4188fa43fc6ab95d11ea3394b3c2c708ff412e67e00c55fb3bf07c  scripts/ci/linux-two-format/intake.py
           97e391408405a3b7aef029adac3fe7cd1d2499a04a0d2f8dd1baf6655d237ce1  scripts/ci/linux-two-format/overlay/ArchiveTarget.ts
           02b08547dc8e8dbaa01e95f1ef9831e2734548bb3566d788843c46f49cdc54ff  scripts/ci/linux-two-format/overlay/LINUX-NODE-GZIP.patch
           baf8030c14146d2d24b9e16deea051b101d9a842dd6b1b0efa42d65208ad7373  scripts/ci/linux-two-format/overlay/archive.ts
           a876f3683a8cd7479858e6e22b9de8442915407529de2a402b99f3390117f6a0  scripts/ci/linux-two-format/overlay/emit.cjs
           c50dfb6cac029603e13e2ece8ed5db5e3764c773d14b115e8e8045a9807c2f56  scripts/ci/linux-two-format/package_pair.py
-          c9aa24251f3afd2ca3234cbb7a49a958cfaeba344538fe33cecda033999bb17f  scripts/ci/linux-two-format/pair_controller.py
+          52f7aea29e42170dc69a10ceacb3acc9f117d3bac6f1be018f164f252d74c0b0  scripts/ci/linux-two-format/pair_controller.py
           5d616987a599e667de2895bafe5a0cbc94bdade56cb66a0dd31de119c962c107  scripts/ci/linux-two-format/pair_custody.py
           011b338a2f06260845d3e7a2058bbe11b163ad52255c56a71da0aca3de62387e  scripts/ci/linux-two-format/pair_wire.py
           23ceea737ab85140859f56c52f62256a31d9121c816aa0a6fd817de8e0762e7b  scripts/ci/linux-two-format/patches/EXACT-PROJECTION.patch
@@ -539,6 +539,9 @@ jobs:
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Jammy native owned retirement / ${{ steps.attempt.outputs.jammy_native_owned_retirement || 'unreached' }}
+        if: ${{ always() }}
+        run: /usr/bin/true
+      - name: Jammy final loopback and owned-path absence readback / ${{ steps.attempt.outputs.jammy_native_final_loopback || 'unreached' }}
         if: ${{ always() }}
         run: /usr/bin/true
       - name: Jammy boot exit / ${{ steps.attempt.outputs.jammy_boot_exit || 'unreached' }}

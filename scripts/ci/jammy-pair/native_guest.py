@@ -40,7 +40,7 @@ PHASES=('native_stock','native_custody','native_guest_storage','native_display_a
         'native_observer_launch','native_observer_window','native_observer_identity',
         'native_observer_quit','native_observer_post_quit_floor','native_observer_record',
         'native_observer_display_retirement','native_packaged_window_quit',
-        'native_process_retirement','native_owned_retirement')
+        'native_process_retirement','native_owned_retirement','native_final_loopback')
 need=pair.need
 
 def mark(plan,stage,what):
@@ -432,14 +432,27 @@ def supervisor(plan):
     mark(phases,'native_packaged_window_quit','pass')
     with phase(phases,'native_process_retirement'):
         need(processes=='pass','native-owned-processes-retained')
-    with phase(phases,'native_owned_retirement'):
+    retire_after_quit(plan, account, deadlines)
+
+
+def retire_after_quit(plan, account, guest_deadline):
+    with phase(plan,'native_owned_retirement'):
+        need(monotonic()<guest_deadline,'native-owned-deletion-deadline')
         destination=Path(account.pw_dir)/'case'
         need(destination==destination.resolve() and destination.lstat().st_uid==account.pw_uid and
              stat.S_IMODE(destination.lstat().st_mode)==0o700 and shutil.rmtree.avoids_symlink_attacks,
              'native-private-user-retirement')
         shutil.rmtree(destination)
         need(not os.path.lexists(destination),'native-owned-removal')
-        extra.network()
+        need(monotonic()<guest_deadline,'native-owned-deletion-deadline')
+    with phase(plan,'native_final_loopback'):
+        # Reuse the stock route rules inside the native deadline. The early APT
+        # subdeadline expires before later application and teardown phases can finish.
+        final=stock.Provision(plan['nonce'])
+        final.deadline=min(final.deadline,guest_deadline)
+        final.network()
+        need(monotonic()<final.deadline,'native-final-readback-deadline')
+        need(not os.path.lexists(destination),'native-final-owned-residue')
 
 
 def main():
