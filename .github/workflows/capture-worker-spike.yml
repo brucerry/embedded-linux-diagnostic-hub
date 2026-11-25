@@ -1,4 +1,4 @@
-name: Capture worker compiler spike (nonpublishing)
+name: Capture and desktop compiler spike (nonpublishing)
 
 on:
     push:
@@ -25,7 +25,7 @@ jobs:
                   set -euo pipefail
                   plan="$RUNNER_TEMP/hub-capture-compiler"
                   test ! -e node_modules
-                  node scripts/ci/capture-worker/write-plan.mjs "$plan"
+                  node scripts/ci/capture-worker/write-plan.mjs "$plan" --desktop
                   npm ci --prefix "$plan" --ignore-scripts --no-audit --no-fund
                   test ! -e "$plan/node_modules/esbuild"
                   test ! -e "$plan/node_modules/@esbuild"
@@ -35,3 +35,5 @@ jobs:
             - name: Compile and parse the two actual capture scripts
               run: |
                   node --test tests/capture-worker-bundler-contract.test.mjs tests/capture-worker-bundler-real.test.mjs
+            - name: Compile and validate the five desktop and installer entry points
+              run: node --test tests/desktop-compiler-spike.test.mjs
