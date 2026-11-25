@@ -203,7 +203,11 @@ async function compile(entry, fixture, output, probe = undefined) {
         assert.ok(chunk.dynamicImports.every((name) => name === filename));
         assert.ok(Buffer.byteLength(chunk.code) <= 2 * 1024 ** 2, 'Updater test bundle is oversized.');
         assert.equal(fs.realpathSync(chunk.facadeModuleId), fs.realpathSync(entryPath));
-        const inputs = Object.keys(chunk.modules).map((name) => fs.realpathSync(name));
+        // Rolldown inserts this exact internal helper, not a filesystem module.
+        // Its emitted bytes remain subject to the same parse and import checks.
+        const inputs = Object.keys(chunk.modules)
+            .filter((name) => name !== '\0rolldown/runtime.js')
+            .map((name) => fs.realpathSync(name));
         for (const file of inputs) {
             assert.ok(
                 file === probe || captured.has(file) || insideSemver(file),
