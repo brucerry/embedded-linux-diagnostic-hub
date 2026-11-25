@@ -16,6 +16,15 @@ for (const [pkg, lock] of [[shared, sharedLock], [linux, linuxLock]]) {
     assert.equal(pkg.version, '0.6.0');
     for (const field of ['dependencies', 'devDependencies']) assert.deepEqual(pkg[field], lock[''][field]);
 }
+const commonTypes = json('tsconfig.json');
+const linuxTypes = json('tsconfig.linux.json');
+assert.equal(commonTypes.files, undefined, 'Shared projects must not require staged Linux inputs');
+assert.deepEqual(linuxTypes, {
+    extends: './tsconfig.json',
+    files: ['.linux-package-inputs/electron.d.ts'],
+});
+assert.equal(shared.scripts.typecheck, 'tsc --noEmit');
+assert.equal(linux.scripts.typecheck, 'tsc --noEmit --project tsconfig.linux.json');
 assert.equal(shared.devDependencies.electron, '44.5.1');
 assert.equal(sharedLock['node_modules/electron'].version, '44.5.1');
 assert.equal(shared.build.electronDist, undefined);
