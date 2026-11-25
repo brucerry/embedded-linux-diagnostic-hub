@@ -14,7 +14,7 @@ import {
     assertLinuxObservedMembers,
     assertLinuxObservedDescriptor,
     normalizeLinuxPackagerCensus,
-} from './linux-release-observation.ts';
+} from './linux-release-observation.mts';
 
 const owners = new Set(); // Retain allocated paths/handles on uncertainty; no automatic cleanup.
 const identityKeys = ['dev', 'ino', 'uid', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'];

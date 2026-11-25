@@ -11,7 +11,7 @@ import {
 import {
     validateLinuxObservationRecords,
     linuxObservationRecordPaths,
-} from '../scripts/lib/linux-release-observation.ts';
+} from '../scripts/lib/linux-release-observation.mts';
 import type { LinuxEnvelopePlan } from '../scripts/lib/linux-setup-envelope.ts';
 import { recordLinuxBuild, linuxBuildArguments } from '../scripts/record-linux-build.mjs';
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');

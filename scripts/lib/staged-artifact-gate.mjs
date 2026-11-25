@@ -15,6 +15,10 @@ import { readBoundedJSON, readBoundedReceiptBytes } from './bounded-receipt-json
 import { consumeFinalWebStartupEvidence } from './final-web-startup-evidence.mjs';
 import { validateStagedGCModes, consumeStagedGCEvidence } from './product-soak-contract.mjs';
 import {
+    requiresStagedMacRuntimeBinding,
+    validateStagedMacRuntimeBinding,
+} from './staged-mac-runtime.mjs';
+import {
     validateInstallerRun,
     validateInstallerReferences,
     consumeInstallerLifecycleEvidence,
@@ -412,6 +416,8 @@ export function validateNativeRuntimeIdentity(actual, expected) {
 /** Retained JSON must match the summary for this fixed case, not whichever asset it claims. */
 export function validateRetainedRuntimeIdentity(actual, receipt, expected, caseId) {
     validateNativeRuntimeIdentity(actual, { ...expected, caseId });
+    if (requiresStagedMacRuntimeBinding(expected))
+        validateStagedMacRuntimeBinding(actual, expected, receipt);
     const asset = nativeRuntimeBindings(expected.lane)[caseId];
     const summaries = receipt.applications.filter((app) => app.asset === asset);
     assert.equal(summaries.length, 1, 'Require one summary for the staged runtime case.');
@@ -453,11 +459,12 @@ export function validatePlatformReceipt(receipt, expected) {
         applicationAssets.sort(),
         'Every staged application must have its own actual runtime identity.',
     );
-    for (const [caseId, asset] of Object.entries(nativeRuntimeBindings(lane.id)))
-        validateNativeRuntimeIdentity(
-            receipt.applications.find((app) => app.asset === asset),
-            { version: expected.version, lane: lane.id, caseId },
-        );
+    for (const [caseId, asset] of Object.entries(nativeRuntimeBindings(lane.id))) {
+        const actual = receipt.applications.find((app) => app.asset === asset);
+        validateNativeRuntimeIdentity(actual, { version: expected.version, lane: lane.id, caseId });
+        if (requiresStagedMacRuntimeBinding(expected))
+            validateStagedMacRuntimeBinding(actual, expected, receipt);
+    }
     for (const item of receipt.cases.filter((entry) => entry.id.endsWith('runtime-identity')))
         assert.ok(
             item.evidence.some((entry) => entry.path === `${lane.id}/${item.id}.json`),

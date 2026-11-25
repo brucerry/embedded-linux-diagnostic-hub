@@ -24,5 +24,6 @@
         "tests",
         "*.ts",
         "*.mts"
-    ]
+    ],
+    "files": [".linux-package-inputs/electron.d.ts"]
 }

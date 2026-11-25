@@ -188,7 +188,7 @@ jobs:
                   import { execFileSync } from 'node:child_process';
                   import { extractFile } from '@electron/asar';
                   import { observeLinuxGzipTar, linuxObservationWindow } from './scripts/lib/linux-archive-members.mjs';
-                  import { normalizeLinuxPackagerCensus } from './scripts/lib/linux-release-observation.ts';
+                  import { normalizeLinuxPackagerCensus } from './scripts/lib/linux-release-observation.mts';
                   import { verifyDesktopPackageBundles } from './scripts/lib/desktop-package-bundles.mjs';
                   import { validateLinuxReviewCapability, reviewBundleHash } from './scripts/lib/linux-review-package.mjs';
                   import { planLinuxPermanentEnvelope, prepareLinuxPermanentEnvelope } from './scripts/lib/linux-setup-envelope.ts';

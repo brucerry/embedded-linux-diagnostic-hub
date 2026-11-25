@@ -1,0 +1,42 @@
+name: Package lane preflight (nonpublishing)
+
+on:
+    push:
+        branches: [ci/v060-package-lane-preflight-20261125]
+
+permissions:
+    contents: read
+
+jobs:
+    preflight:
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: ubuntu-22.04
+                      os: linux
+                      arch: x64
+                    - runner: windows-2022
+                      os: win32
+                      arch: x64
+                    - runner: macos-15
+                      os: darwin
+                      arch: arm64
+                    - runner: macos-15-intel
+                      os: darwin
+                      arch: x64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 8
+        steps:
+            - uses: actions/checkout@v6
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: '24.22.2'
+                  package-manager-cache: false
+            - name: Verify native runner and exact dependency plans
+              run: node scripts/ci/linux-package-lane/check-plans.mjs ${{ matrix.os }} ${{ matrix.arch }}
+            - name: Test Linux input preflight
+              if: runner.os == 'Linux'
+              run: node tests/linux-package-lane.test.mjs

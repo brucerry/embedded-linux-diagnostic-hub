@@ -87,6 +87,7 @@ export interface LinuxNativeOps {
         | 'writeSync'
         | 'closeSync'
         | 'ftruncateSync'
+        | 'fchmodSync'
         | 'fsyncSync'
         | 'mkdirSync'
         | 'readlinkSync'
@@ -1403,16 +1404,19 @@ function createBackend(
         const before = stat(sourcePath);
         regular(before, bytes, false);
         if (before.size !== bytes) fail('NATIVE_COPY_SIZE');
-        const inputFD = open(sourcePath, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK),
-            outputFD = open(
-                targetPath,
-                C.O_RDWR | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW | C.O_NONBLOCK,
-                before.mode & 0o777,
-            );
-        if (!sameInode(before, fstat(inputFD))) fail('NATIVE_COPY_CHANGED');
+        const wantedMode = before.mode & 0o777;
+        if ((wantedMode & 0o400) === 0) fail('NATIVE_COPY_MODE');
+        const inputFD = open(sourcePath, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+        if (!stable(before, fstat(inputFD))) fail('NATIVE_COPY_CHANGED');
+        const outputFD = open(
+            targetPath,
+            C.O_RDWR | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW | C.O_NONBLOCK,
+            0o600,
+        );
         const created = fstat(outputFD);
-        regular(created, bytes, false);
-        if ((created.mode & 0o777) !== (before.mode & 0o777)) fail('NATIVE_COPY_MODE');
+        regular(created, bytes, true);
+        if (created.size !== 0 || !sameInode(created, stat(targetPath)))
+            fail('NATIVE_COPY_CHANGED');
         const digest = createHash('sha256'),
             buffer = Buffer.alloc(65536);
         let total = 0;
@@ -1443,7 +1447,30 @@ function createBackend(
             !sameInode(created, stat(targetPath))
         )
             fail('NATIVE_COPY_CHANGED');
+        // Restore only the approved source member's mode, only on the newly made owned FD.
+        // Do this after checking the source digest, without changing the process umask.
+        destinationParent.check();
+        const written = fstat(outputFD);
+        if (
+            !sameInode(created, written) ||
+            written.size !== bytes ||
+            !stable(written, stat(targetPath))
+        )
+            fail('NATIVE_COPY_CHANGED');
+        if ((written.mode & 0o777) !== wantedMode)
+            call('copy-mode', () => fs.fchmodSync(outputFD, wantedMode));
+        const expected = { ...written, mode: (written.mode & ~0o777) | wantedMode } as Stats;
+        const synced = fstat(outputFD);
+        regular(synced, bytes, false);
+        if (
+            !sameInode(expected, synced) ||
+            synced.size !== bytes ||
+            !stable(synced, stat(targetPath))
+        )
+            fail('NATIVE_COPY_MODE');
         call('file-sync', () => fs.fsyncSync(outputFD));
+        if (!stable(synced, fstat(outputFD)) || !stable(synced, stat(targetPath)))
+            fail('NATIVE_COPY_CHANGED');
         call('parent-sync', () => fs.fsyncSync(destinationParent.fd));
         close(outputFD);
         close(inputFD);
