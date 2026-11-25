@@ -48,3 +48,5 @@ jobs:
                   tests/release-catalog-boundary-memory.test.mjs
             - name: Check shared and Linux TypeScript input separation without building the app
               run: node --test tests/typescript-lane-config.test.mjs
+            - name: Run updater memory fixtures with the alternate compiler and existing no-network guard
+              run: node scripts/test-updater-memory-rolldown-spike.mjs
