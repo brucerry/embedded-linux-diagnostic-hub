@@ -32,6 +32,7 @@ const fs = Object.freeze({
     writeSync: physicalFS.writeSync.bind(physicalFS),
     closeSync: physicalFS.closeSync.bind(physicalFS),
     ftruncateSync: physicalFS.ftruncateSync.bind(physicalFS),
+    fchmodSync: physicalFS.fchmodSync.bind(physicalFS),
     fsyncSync: physicalFS.fsyncSync.bind(physicalFS),
     mkdirSync: physicalFS.mkdirSync.bind(physicalFS),
     readlinkSync: physicalFS.readlinkSync.bind(physicalFS),

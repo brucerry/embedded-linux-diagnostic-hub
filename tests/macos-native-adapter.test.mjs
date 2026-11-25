@@ -544,6 +544,7 @@ test('actual adapter record shapes feed the shipping-payload lifecycle producer 
                 quitScheduledAck: true,
                 quitComplete: true,
             });
+            this.custody.shutdown.mode = 'CLOSING';
             this.custody.shutdown.complete = true;
             this.child.emit('exit', 0, null);
             this.child.stdout.emit('end');

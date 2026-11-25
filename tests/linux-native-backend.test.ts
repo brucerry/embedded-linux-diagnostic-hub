@@ -79,7 +79,7 @@ class FakeServer extends EventEmitter {
         return this;
     }
 }
-function fixture(atomicMove = true) {
+function fixture(atomicMove = true, creationMask = 0) {
     const nodes = new Map<string, FakeNode>(),
         fds = new Map<number, FakeNode>(),
         calls: string[] = [],
@@ -184,7 +184,7 @@ function fixture(atomicMove = true) {
             let value = nodes.get(canonical);
             if ((flags & constants.O_CREAT) !== 0) {
                 if (value && (flags & constants.O_EXCL) !== 0) return error('EEXIST');
-                if (!value) value = file(canonical, '', mode);
+                if (!value) value = file(canonical, '', mode & ~creationMask);
             }
             if (!value) return error('ENOENT');
             if (value.kind === 'link' && (flags & constants.O_NOFOLLOW) !== 0)
@@ -219,6 +219,12 @@ function fixture(atomicMove = true) {
             item.mtime++;
             return size;
         },
+        fchmodSync(fd: number, mode: number) {
+            const item = fds.get(fd);
+            if (!item) return error('EBADF');
+            call('chmod', item.path);
+            item.mode = (item.mode & ~0o777) | mode;
+        },
         ftruncateSync(fd: number, size: number) {
             call('truncate');
             const item = fds.get(fd);
@@ -237,7 +243,7 @@ function fixture(atomicMove = true) {
             call('mkdir', name);
             const canonical = resolve(name);
             if (nodes.has(canonical)) return error('EEXIST');
-            directory(canonical, 1000, options.mode);
+            directory(canonical, 1000, options.mode & ~creationMask);
         },
         opendirSync(name: string) {
             call('opendir', name);
@@ -483,6 +489,64 @@ test('concrete filesystem implementation completes fresh install using memory-on
         f.calls.some((call) => /unlink|delete|signal|spawn/.test(call)),
         false,
     );
+});
+test('folder staging preserves executable and data modes under umask 0077', async () => {
+    const f = fixture(true, 0o077);
+    const relative = 'app/resources/demo.asar';
+    const source = f.plan.host.sourceRoot;
+    const manifest = f.plan.review.source.manifest;
+    manifest.files.push({ kind: 'file', path: relative, bytes: 4, sha256: hash('data') });
+    f.file(source + '/' + SETUP_PAYLOAD, JSON.stringify(manifest));
+    f.file(source + '/' + relative, 'data', 0o644);
+    f.plan.review.source.verifiedManifestSHA256 = hash(JSON.stringify(manifest));
+    f.plan.reviewSHA256 = linuxModelReviewSHA256(f.plan.review);
+    const b = f.backend();
+    const result = await new LinuxTransactionModel(b.kernel, {
+        ...b.effects,
+        kind: 'injected-memory-effects',
+    }).run(f.plan);
+    assert.equal(result.verdict, 'ACTIVE_PREVIOUS_RETAINED');
+    assert.equal(f.node(f.plan.root + '/app/diagnostic-hub').mode & 0o777, 0o755);
+    assert.equal(f.node(f.plan.root + '/' + relative).mode & 0o777, 0o644);
+    assert.equal(f.node(f.plan.root + '/' + relative).bytes.toString(), 'data');
+    assert.equal(f.node(f.plan.root + '/app/resources').mode & 0o777, 0o700);
+    assert.equal(f.node(f.plan.root + '/' + SETUP_OWNER).mode & 0o777, 0o600);
+    assert.equal(f.calls.filter((name) => name === 'chmod').length, 2);
+    assert.equal(f.fds.size, 0);
+});
+test('folder staging refuses an occupied copy path before any chmod', async () => {
+    const f = fixture(true, 0o077),
+        b = f.backend();
+    const target = b.scope.stage + '/app/diagnostic-hub';
+    f.setHook((name, file) => {
+        if (name === 'open' && file?.endsWith('/diagnostic-hub') && f.nodes.has(b.scope.stage))
+            f.file(target, 'unchanged', 0o600);
+    });
+    const result = await new LinuxTransactionModel(b.kernel, {
+        ...b.effects,
+        kind: 'injected-memory-effects',
+    }).run(f.plan);
+    assert.equal(result.verdict, 'RETAINED_UNKNOWN');
+    assert.equal(f.node(target).bytes.toString(), 'unchanged');
+    assert.equal(f.node(target).mode & 0o777, 0o600);
+    assert.ok(!f.calls.includes('chmod'));
+    assert.ok(!f.nodes.has(f.plan.root));
+});
+test('folder staging keeps partial custody rather than advancing after chmod failure', async () => {
+    const f = fixture(true, 0o077),
+        b = f.backend();
+    f.setHook((name) => {
+        if (name === 'chmod') throw Error('injected-mode-failure');
+    });
+    const result = await new LinuxTransactionModel(b.kernel, {
+        ...b.effects,
+        kind: 'injected-memory-effects',
+    }).run(f.plan);
+    assert.equal(result.verdict, 'RETAINED_UNKNOWN');
+    assert.equal(f.calls.at(-1), 'chmod');
+    assert.equal(f.node(b.scope.stage + '/app/diagnostic-hub').mode & 0o777, 0o600);
+    assert.ok(!f.nodes.has(f.plan.root));
+    assert.ok(b.diagnostics().retainedFDs > 0);
 });
 test('production model refuses native tag before reservation even with complete fake native facade', async () => {
     const f = fixture(),

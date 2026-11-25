@@ -8,7 +8,7 @@ import { types as utilTypes } from 'node:util';
 import { spawn } from 'node:child_process';
 import { observeOwnedChild } from './lib/owned-child.mjs';
 import { observeLinuxGzipTar, linuxObservationWindow } from './lib/linux-archive-members.mjs';
-import { normalizeLinuxPackagerCensus } from './lib/linux-release-observation.ts';
+import { normalizeLinuxPackagerCensus } from './lib/linux-release-observation.mts';
 import {
     planLinuxPermanentEnvelope,
     prepareLinuxPermanentEnvelope,

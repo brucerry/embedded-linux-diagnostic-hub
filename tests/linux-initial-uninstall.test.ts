@@ -153,7 +153,7 @@ const driver = execute(
 const fixtureSource = read('tests/linux-native-backend.test.ts');
 assert.equal(
     hash(fixtureSource),
-    '117374f6d75ac5b30b7b51bd881871861bef1afddf3760ec0a4b7758cddf8c43',
+    '5f6234ec22e17b462e4e4501b0673777086024087b3a0c5dafaa4c0e5ab1012e',
 );
 const fixtureTree = ts.createSourceFile(
     'fixed-backend-fixture.ts',

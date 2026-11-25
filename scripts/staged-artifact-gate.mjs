@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, writeFile, copyFile, mkdtemp, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, copyFile, mkdtemp, readdir, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,12 @@ import { includesWindowsSetup } from './lib/release-assets.mjs';
 import { WINDOWS_SETUP_ASSET } from './lib/windows-setup-release.mjs';
 import { createCaseLogLifecycle } from './lib/case-log-lifecycle.mjs';
 import { readBoundedReceiptBytes } from './lib/bounded-receipt-json.mjs';
+import {
+    readStagedMacRuntimeBinding,
+    recordStagedMacInstallMarker,
+    requiresStagedMacRuntimeBinding,
+    validateStagedMacRuntimeBinding,
+} from './lib/staged-mac-runtime.mjs';
 import {
     PLATFORM_LANES,
     laneDefinition,
@@ -249,6 +255,7 @@ if (mode === 'build-setup') {
     const receiptFile = path.join(output, lane.id + '.json');
     try {
         receipt.artifacts = await artifacts(lane.id);
+        const expected = { ...selected, lane: lane.id, artifacts: receipt.artifacts };
         const run = (id, command, env = {}) =>
             runCase(id, command, env, directory, output, receipt.cases);
         const identity = async (id, executable, asset, extra = {}) => {
@@ -259,7 +266,10 @@ if (mode === 'build-setup') {
                 HUB_STAGED_ASSET: asset,
                 ...extra,
             });
-            receipt.applications.push(await readBoundedJSON(destination, 64 * 1024));
+            const actual = await readBoundedJSON(destination, 64 * 1024);
+            if (requiresStagedMacRuntimeBinding(expected))
+                validateStagedMacRuntimeBinding(actual, expected, receipt);
+            receipt.applications.push(actual);
             const h = await hashFile(
                 destination,
                 path.relative(output, destination).split(path.sep).join('/'),
@@ -298,14 +308,36 @@ if (mode === 'build-setup') {
             await run('bundle-helper-installer', [node, 'tests/macos-installer-smoke.mjs'], {
                 GITHUB_ENV: environment,
             });
-            const entry = (await readFile(environment, 'utf8'))
-                .split(/\r?\n/)
-                .find((line) => line.startsWith('HUB_TEST_EXECUTABLE='));
-            assert.ok(
-                entry,
-                'The actual native installer did not report its installed executable.',
-            );
-            const executable = entry.slice('HUB_TEST_EXECUTABLE='.length);
+            let executable;
+            if (requiresStagedMacRuntimeBinding(expected)) {
+                const marker = await recordStagedMacInstallMarker(output, expected);
+                assert.equal(receipt.cases.at(-1).id, 'bundle-helper-installer');
+                receipt.cases.at(-1).evidence.push(marker);
+                expected.macRuntimeBinding = await readStagedMacRuntimeBinding(
+                    release,
+                    output,
+                    receipt,
+                    expected,
+                );
+                ({ executable } = expected.macRuntimeBinding);
+                // Current native runner can additionally reject aliases in the helper path.
+                // Publication readback repeats the same path comparison, not this OS lookup.
+                for (const installed of [executable, expected.macRuntimeBinding.asar])
+                    assert.equal(
+                        await realpath(installed),
+                        installed,
+                        'Aliased Mac installed path.',
+                    );
+            } else {
+                const entry = (await readFile(environment, 'utf8'))
+                    .split(/\r?\n/)
+                    .find((line) => line.startsWith('HUB_TEST_EXECUTABLE='));
+                assert.ok(
+                    entry,
+                    'The actual native installer did not report its installed executable.',
+                );
+                executable = entry.slice('HUB_TEST_EXECUTABLE='.length);
+            }
             await identity(
                 'installed-runtime-identity',
                 executable,
@@ -427,11 +459,7 @@ if (mode === 'build-setup') {
         }
         validateArtifactRecords(await artifacts(lane.id), receipt.artifacts);
         receipt.status = 'passed';
-        validatePlatformReceipt(receipt, {
-            ...selected,
-            lane: lane.id,
-            artifacts: receipt.artifacts,
-        });
+        validatePlatformReceipt(receipt, expected);
     } catch (error) {
         receipt.status = 'blocked';
         receipt.failure = String(error);
@@ -444,23 +472,22 @@ if (mode === 'build-setup') {
     const selected = context();
     for (const lane of PLATFORM_LANES) {
         const receipt = await readBoundedJSON(path.join(output, lane.id + '.json'));
-        validatePlatformReceipt(receipt, {
-            ...selected,
-            lane: lane.id,
-            artifacts: await artifacts(lane.id),
-        });
+        const expected = { ...selected, lane: lane.id, artifacts: await artifacts(lane.id) };
+        if (requiresStagedMacRuntimeBinding(expected))
+            expected.macRuntimeBinding = await readStagedMacRuntimeBinding(
+                release,
+                output,
+                receipt,
+                expected,
+            );
+        validatePlatformReceipt(receipt, expected);
         await verifyEvidence(output, receipt.cases);
         for (const item of receipt.cases.filter((entry) => entry.id.endsWith('runtime-identity'))) {
             const identity = await readBoundedJSON(
                 path.join(output, lane.id, item.id + '.json'),
                 64 * 1024,
             );
-            validateRetainedRuntimeIdentity(
-                identity,
-                receipt,
-                { ...selected, lane: lane.id },
-                item.id,
-            );
+            validateRetainedRuntimeIdentity(identity, receipt, expected, item.id);
         }
         if (includesWindowsSetup(version)) {
             const installerRoot = path.join(output, lane.id, 'installer');

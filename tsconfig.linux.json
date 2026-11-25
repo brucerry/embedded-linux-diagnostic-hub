@@ -1,0 +1,4 @@
+{
+    "extends": "./tsconfig.json",
+    "files": [".linux-package-inputs/electron.d.ts"]
+}

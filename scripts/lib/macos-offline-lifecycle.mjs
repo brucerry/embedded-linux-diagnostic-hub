@@ -78,6 +78,44 @@ async function readRecords(records, readBytes) {
     }
     return values;
 }
+// The adapter writes prequit before issuing normalQuit, then snapshots the same owned
+// desktop after normalQuit acknowledged root exit, complete pipes and transport closure.
+// Validate those phase semantics only for v2, which retains both full adapter records.
+function inspectMacOfflineSnapshots(before, closed) {
+    for (const key of [
+        'quitIntent',
+        'quitScheduledAck',
+        'quitComplete',
+        'mainTransportClosed',
+        'rendererTransportClosed',
+        'physicalDescendantClosure',
+    ])
+        assert.equal(before[key], false, 'Invalid Mac prequit snapshot: ' + key);
+    for (const key of ['exitCode', 'signal'])
+        assert.equal(before[key], null, 'Invalid Mac prequit snapshot: ' + key);
+    assert.equal(before.shutdown?.mode, 'INACTIVE', 'Mac prequit shutdown already activated.');
+    assert.equal(before.shutdown.complete, false);
+    assert.equal(before.shutdown.incident, null);
+    assert.equal(before.shutdown.terminal, null);
+    assert.equal(closed.shutdown.mode, 'CLOSING', 'Mac closure did not complete normal shutdown.');
+    assert.equal(closed.shutdown.terminal, null);
+    for (const sample of [before, closed]) {
+        assert.equal(sample.streams?.capExceeded, false, 'Mac capture exceeded stream budget.');
+        // The native adapter's independent capture check caps each stream at 64 KiB;
+        // occupancy can legitimately be lower, including zero, at either snapshot.
+        for (const key of ['stdoutBytes', 'stderrBytes'])
+            assert.ok(
+                Number.isSafeInteger(sample.streams[key]) &&
+                    sample.streams[key] >= 0 &&
+                    sample.streams[key] <= 65_536,
+                'Invalid Mac stream byte count: ' + key,
+            );
+    }
+    for (const key of ['stdoutBytes', 'stderrBytes'])
+        assert.ok(closed.streams[key] >= before.streams[key], 'Mac stream byte count regressed.');
+    for (const key of ['stdoutComplete', 'stderrComplete'])
+        assert.equal(closed.streams[key], true, 'Incomplete Mac captured stream: ' + key);
+}
 /** Correlates existing actual adapter shapes with a selected shipping package. Still
  * unqualified: installed named-file samples do not prove loaded code or group retirement. */
 export function inspectMacOfflinePayload(observation, item, expected) {
@@ -130,6 +168,7 @@ export function inspectMacOfflinePayload(observation, item, expected) {
         },
         expected,
     );
+    inspectMacOfflineSnapshots(observation.prequit.closure, observation.closed.closure);
     return 'shipping-payload-and-direct-child-consistent-unqualified';
 }
 /** Re-read the four exact retained records at both ingestion and final readback. */

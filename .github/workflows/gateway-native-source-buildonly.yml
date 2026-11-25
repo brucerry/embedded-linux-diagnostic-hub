@@ -25,7 +25,8 @@ jobs:
         if: >-
             ${{ github.repository == 'brucerry/embedded-linux-diagnostic-hub' &&
             github.event.repository.private == false && github.event_name == 'push' && github.ref ==
-            'refs/heads/ci/v060-gateway-preparation-diagnostics-20261116' && github.run_attempt == 1 }}
+            'refs/heads/ci/v060-gateway-preparation-diagnostics-20261116' && github.run_attempt == 1
+            }}
         runs-on: ubuntu-24.04
         timeout-minutes: 20
         defaults:
@@ -55,17 +56,23 @@ jobs:
               id: preparation
               run: /usr/bin/python3 -I scripts/ci/prepare-gateway-four-tools.py
             - name: >-
-                  Preparation diagnostic /
-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'report-unavailable' }} /
-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.stage || 'report-unavailable' }} /
-                  ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.reason || 'report-unavailable' }} /
-                  input-${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.input || 'none' }}
+                  Preparation diagnostic / ${{ steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result || 'report-unavailable' }} / ${{
+                  steps.preparation.outcome == 'success' && steps.preparation.outputs.stage ||
+                  'report-unavailable' }} / ${{ steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.reason || 'report-unavailable' }} / input-${{
+                  steps.preparation.outcome == 'success' && steps.preparation.outputs.input ||
+                  'none' }}
               if: ${{ always() }}
               env:
-                  PREPARATION_RESULT: ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result || 'unavailable' }}
+                  PREPARATION_RESULT:
+                      ${{ steps.preparation.outcome == 'success' && steps.preparation.outputs.result
+                      || 'unavailable' }}
               run: test "$PREPARATION_RESULT" = prepared
             - name: Run the unchanged native branch source selector and canonical producer readback
-              if: ${{ success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared' }}
+              if:
+                  ${{ success() && steps.preparation.outcome == 'success' &&
+                  steps.preparation.outputs.result == 'prepared' }}
               run: |
                   # No setup-node, broad npm ci, package scripts, runtime, upload or cleanup.
                   # Missing or mismatched Node/npm stops the preceding step before any provisioning.

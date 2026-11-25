@@ -14,7 +14,7 @@ import {
     assertLinuxObservedMembers,
     assertLinuxObservedDescriptor,
     normalizeLinuxPackagerCensus,
-} from '../scripts/lib/linux-release-observation.ts';
+} from '../scripts/lib/linux-release-observation.mts';
 import { createLinuxReviewCapability } from '../scripts/lib/linux-review-package.mjs';
 import packaging from '../scripts/lib/linux-review-after-pack.cjs';
 const hash = (x: Buffer | string) => createHash('sha256').update(x).digest('hex');
@@ -513,6 +513,7 @@ test('AO15 real helper handoff still refuses and explicit observer export is nev
     assert.equal(refused.reason, 'provenance-unavailable');
     assert.equal(refused.handoffAllowed, false);
     assert.deepEqual(Object.keys(packaging).sort(), [
+        'createInstallPackager',
         'createReviewPackager',
         'observeReviewEnvelope',
         'prepareReviewEnvelope',

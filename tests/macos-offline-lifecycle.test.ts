@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { verifyInstallerEvidence } from '../scripts/lib/staged-artifact-gate.mjs';
 import {
     produceMacOfflineLifecycle,
     MAC_OFFLINE_RECORD_LIMITS,
@@ -14,13 +18,34 @@ import { installerMemoryFixture } from './fixtures/installer-lifecycle-memory.mj
 const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 const id = 'macos-bundle:offline-launch';
 const json = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2) + '\n');
-function fixture() {
-    const base = installerMemoryFixture(),
+function fixture(lane = 'darwin-arm64') {
+    const base = installerMemoryFixture(lane),
         expected = base.expected;
     const before = structuredClone(base.values.get(id).observation.prequit);
     const closed = structuredClone(base.values.get(id).observation.closed);
     before.ownerId = '1'.repeat(32) + ':macos-bundle:offline-launch:1:42';
     closed.ownerId = before.ownerId;
+    // Authored control data shaped like the actual adapter's state snapshots, not native receipts.
+    Object.assign(before.closure, {
+        exitCode: null,
+        signal: null,
+        quitIntent: false,
+        quitScheduledAck: false,
+        quitComplete: false,
+        mainTransportClosed: false,
+        rendererTransportClosed: false,
+        shutdown: { mode: 'INACTIVE', complete: false, incident: null, terminal: null },
+        streams: { stdoutBytes: 8, stderrBytes: 12, capExceeded: false },
+        physicalDescendantClosure: false,
+    });
+    Object.assign(closed.closure.shutdown, { mode: 'CLOSING', terminal: null });
+    Object.assign(closed.closure.streams, {
+        stdoutBytes: 10,
+        stderrBytes: 20,
+        stdoutComplete: true,
+        stderrComplete: true,
+        capExceeded: false,
+    });
     const payload = macPayloadIdentity([
         { path: 'Contents', kind: 'directory', mode: 0o755 },
         { path: 'Contents/MacOS', kind: 'directory', mode: 0o755 },
@@ -48,7 +73,7 @@ function fixture() {
         },
         shippingBuildInfo: {
             platform: 'darwin',
-            arch: 'arm64',
+            arch: expected.lane.slice(7),
             version: expected.version,
             commit: expected.sourceCommit,
             asset: archive.name,
@@ -245,6 +270,88 @@ for (const [label, role, change] of [
         f.update(role);
         await assert.rejects(produceMacOfflineLifecycle(f.expected, f.records, f.read));
     });
+for (const [label, role, mutate] of [
+    ['quit intent already recorded', 'prequit', (v: any) => (v.quitIntent = true)],
+    ['quit acknowledged already', 'prequit', (v: any) => (v.quitScheduledAck = true)],
+    ['quit completed already', 'prequit', (v: any) => (v.quitComplete = true)],
+    ['transport already closed', 'prequit', (v: any) => (v.mainTransportClosed = true)],
+    ['retirement invented at prequit', 'prequit', (v: any) => (v.physicalDescendantClosure = true)],
+    ['shutdown already active', 'prequit', (v: any) => (v.shutdown.mode = 'CLOSING')],
+    ['unexpected prequit exit code', 'prequit', (v: any) => (v.exitCode = 0)],
+    [
+        'EOF with incomplete captured stdout',
+        'closed',
+        (v: any) => (v.streams.stdoutComplete = false),
+    ],
+    [
+        'EOF with incomplete captured stderr',
+        'closed',
+        (v: any) => (v.streams.stderrComplete = false),
+    ],
+    ['stream cap flagged', 'closed', (v: any) => (v.streams.capExceeded = true)],
+    [
+        'stream cap exceeded even without flag',
+        'closed',
+        (v: any) => (v.streams.stderrBytes = 65537),
+    ],
+    ['cumulative stream count fell', 'closed', (v: any) => (v.streams.stdoutBytes = 7)],
+    ['retained shutdown state', 'closed', (v: any) => (v.shutdown.terminal = 'unknown')],
+] as const)
+    test('Mac v2 phase evidence refuses ' + label, async () => {
+        const f = fixture();
+        mutate(f.values[role].closure);
+        f.update(role);
+        await assert.rejects(produceMacOfflineLifecycle(f.expected, f.records, f.read));
+    });
+
+test('production installer file reader cannot qualify synthetic Mac v2 evidence on either architecture', async () => {
+    const parent = await realpath(os.tmpdir());
+    const root = await mkdtemp(path.join(parent, 'hub-mac-v2-file-'));
+    try {
+        for (const lane of ['darwin-arm64', 'darwin-x64']) {
+            const f = fixture(lane);
+            const result = await produceMacOfflineLifecycle(f.expected, f.records, f.read);
+            f.bind(result);
+            const evidenceRoot = path.join(root, lane);
+            for (const [file, bytes] of f.base.files) {
+                const destination = path.join(evidenceRoot, file);
+                await mkdir(path.dirname(destination), { recursive: true });
+                await writeFile(destination, bytes, { flag: 'wx' });
+            }
+            await assert.rejects(
+                verifyInstallerEvidence(evidenceRoot, f.base.receipt, f.expected),
+                /Installer lifecycle evidence blocked/,
+            );
+
+            // Rehash every affected reference around an intentionally inconsistent snapshot.
+            f.values.prequit.closure.quitIntent = true;
+            f.update('prequit');
+            const envelope = JSON.parse(result.bytes.toString());
+            envelope.observation.prequit = f.values.prequit;
+            envelope.observation.records.prequit = f.records.prequit;
+            result.bytes = Buffer.from(JSON.stringify(envelope) + '\n');
+            result.lifecycleEvidence.bytes = result.bytes.length;
+            result.lifecycleEvidence.sha256 = hash(result.bytes);
+            result.evidence[0] = { ...result.lifecycleEvidence };
+            const index = result.evidence.findIndex((ref) => ref.path === f.records.prequit.path);
+            assert.ok(index > 0);
+            result.evidence[index] = { ...f.records.prequit };
+            f.bind(result);
+            await writeFile(path.join(evidenceRoot, result.lifecycleEvidence.path), result.bytes);
+            await writeFile(
+                path.join(evidenceRoot, f.records.prequit.path),
+                f.files.get(f.records.prequit.path)!,
+            );
+            await assert.rejects(
+                verifyInstallerEvidence(evidenceRoot, f.base.receipt, f.expected),
+                /Invalid Mac prequit snapshot: quitIntent/,
+            );
+        }
+    } finally {
+        await rm(root, { recursive: true });
+    }
+});
+
 for (const role of ['prequit', 'closed', 'installedPayload', 'shippingBuildInfo'])
     test('final readback checks raw bytes for ' + role, async () => {
         const f = fixture(),

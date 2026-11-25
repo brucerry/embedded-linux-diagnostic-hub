@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
+import { createRequire } from 'node:module';
 import { encodeGatewayTar, inspectOwnedGatewayTar } from '../scripts/lib/gateway-tar.mjs';
 import { GATEWAY_PAYLOAD_FILES } from '../scripts/lib/gateway-lock-plan.mjs';
 import { inspectInnerArchive } from '../scripts/lib/inner-archive-inspection.mjs';
@@ -97,4 +98,71 @@ test('aggregate verification explicitly selects only the Gateway format cohort',
     assert.equal(phases.filter((value) => value === 'npm run test:gateway-format').length, 1);
     assert.ok(phases.includes('npm run test:catalog-boundary'));
     assert.ok(!manifest.scripts['test:gateway-format'].includes('*.test.mjs'));
+});
+
+function readPreparationWorkflow() {
+    const yaml = createRequire(import.meta.url)('js-yaml');
+    return yaml.load(
+        readFileSync(
+            new URL('../.github/workflows/gateway-native-source-buildonly.yml', import.meta.url),
+            'utf8',
+        ),
+    );
+}
+
+function assertPreparationWiring(workflow) {
+    const job = workflow.jobs.gateway_build;
+    const steps = job.steps;
+    assert.ok(
+        [job, ...steps].every((entry) => !Object.hasOwn(entry, 'continue-on-error')),
+        'preparation and producer failures must fail the job',
+    );
+    const preparation = steps.filter((step) => step.id === 'preparation');
+    assert.equal(preparation.length, 1);
+    const index = steps.indexOf(preparation[0]);
+    const diagnostic = steps[index + 1];
+    const producer = steps[index + 2];
+    const compact = (value) => value.trim().replace(/\s+/g, ' ');
+    const successfulPreparation = "steps.preparation.outcome == 'success'";
+
+    assert.equal(
+        preparation[0].run,
+        '/usr/bin/python3 -I scripts/ci/prepare-gateway-four-tools.py',
+    );
+    assert.equal(compact(diagnostic.if), '${{ always() }}');
+    assert.equal(diagnostic.run.trim(), 'test "$PREPARATION_RESULT" = prepared');
+    assert.equal(
+        compact(diagnostic.env.PREPARATION_RESULT),
+        '${{ ' + successfulPreparation + " && steps.preparation.outputs.result || 'unavailable' }}",
+    );
+    for (const field of ['result', 'stage', 'reason', 'input']) {
+        assert.ok(
+            compact(diagnostic.name).includes(
+                successfulPreparation + ' && steps.preparation.outputs.' + field,
+            ),
+        );
+    }
+    assert.equal(
+        compact(producer.if),
+        '${{ success() && ' +
+            successfulPreparation +
+            " && steps.preparation.outputs.result == 'prepared' }}",
+        'producer must require a prepared result',
+    );
+    assert.match(producer.run, /scripts\/build-gateway-tag-archive\.mjs --qualify-branch\s*$/);
+    return producer;
+}
+
+test('Gateway workflow gates the producer on a successful prepared result', () => {
+    assertPreparationWiring(readPreparationWorkflow());
+});
+
+test('Gateway workflow assertion rejects a producer wired to refusal', () => {
+    const workflow = readPreparationWorkflow();
+    const producer = assertPreparationWiring(workflow);
+    producer.if = producer.if.replace("== 'prepared'", "== 'refused'");
+    assert.throws(
+        () => assertPreparationWiring(workflow),
+        /producer must require a prepared result/,
+    );
 });

@@ -4,7 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
+import {
+    fixtureMacRuntime,
+    stageMacRuntimeFixture,
+} from './fixtures/staged-mac-runtime-memory.mjs';
 import {
     releaseAssets,
     releaseCatalog,
@@ -179,6 +183,14 @@ function example(id: string) {
     return { expected, installer, receipt };
 }
 
+async function stagedPlatformExample(t: TestContext, id: string) {
+    const f = example(id);
+    if (!id.startsWith('darwin-')) return f;
+    const files = await stageMacRuntimeFixture(t, f.expected, f.receipt);
+    Object.assign(f.receipt.applications[0], fixtureMacRuntime);
+    return { ...f, expected: { ...f.expected, macRuntimeBinding: await files.readBinding() } };
+}
+
 test('v0.6 setup catalog uses the existing packager names and preserves historical catalogs', () => {
     const old = releaseAssets('0.5.2');
     assert.equal(old.length, 10);
@@ -195,13 +207,13 @@ test('v0.6 setup catalog uses the existing packager names and preserves historic
     assert.throws(() => releaseAssets('latest'));
 });
 
-test('four native receipt contracts require exact artifact/source/runtime and complete cases', () => {
+test('four native receipt contracts require exact artifact/source/runtime and complete cases', async (t) => {
     assert.deepEqual(
         PLATFORM_LANES.map((lane) => lane.id),
         ['win32-x64', 'linux-x64', 'darwin-x64', 'darwin-arm64'],
     );
     for (const lane of PLATFORM_LANES) {
-        const f = example(lane.id);
+        const f = await stagedPlatformExample(t, lane.id);
         assert.equal(validatePlatformReceipt(f.receipt, f.expected), f.receipt);
         for (const update of [
             { status: 'unsupported' },
@@ -260,9 +272,9 @@ test('skips, unsupported status, missing evidence and abnormal exits cannot qual
     }
 });
 
-test('the publication verifier accepts each platform path convention and rejects relative executable/evidence paths', () => {
+test('the publication verifier accepts each platform path convention and rejects relative executable/evidence paths', async (t) => {
     for (const lane of PLATFORM_LANES) {
-        const f = example(lane.id);
+        const f = await stagedPlatformExample(t, lane.id);
         validatePlatformReceipt(f.receipt, f.expected);
         assert.throws(() =>
             validatePlatformReceipt(

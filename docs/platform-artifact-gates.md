@@ -85,6 +85,17 @@ failed constituent observations. These checks establish consistency of the retai
 they do not authenticate a producer or prove that executable/ASAR bytes came from the outer archive.
 Exact payload/build/runtime provenance and real native observation remain required.
 
+For current Mac release lanes (v0.6 and later), the staged consumer and publisher additionally
+compare both observed hashes to the separate architecture build-info's shipping `payloadIdentity`.
+They read that file with the existing selected artifact byte length and digest and require it to
+describe the exact staged ZIP and source commit. The successful helper case retains the original
+two-line install marker; the same marker bytes are verified at final readback. The executable and
+ASAR must be at the exact paths derived from that installed bundle, not merely at some same-byte
+copy. Live consume also refuses aliased installed paths. This correlates observed named-file hashes
+and paths with shipping metadata; it is not loaded-inode proof, stable future custody, observer
+authentication or installer qualification. Historical Mac catalogs and the other platform lanes keep
+their existing requirements.
+
 Windows consumes the actual portable EXE. Linux consumes both AppImage and extracted complete tar
 archive. Mac consumes the actual installer-helper result. Existing desktop/native-window tests run
 against the selected staged executable; no source-build/development fallback is allowed. These tests
@@ -156,9 +167,21 @@ bytes, or independently approve native work. Other case projections remain
 The [retained offline-launch producer](macos-offline-lifecycle-producer.md) additionally connects
 the existing installed-payload sample and shipping build-info to those same closure facts as
 `macos-owned-offline-launch/v2`. It re-reads four exact retained records at both existing consumer
-entry points. This supplies named-file/payload consistency, not loaded-code, service/run provenance
-or native qualification. Both versions remain unqualified; automatic native CLI wiring remains
-blocked on independently selected run context and separately admitted native execution.
+entry points. The full prequit snapshot must precede shutdown and transport closure. The closed
+snapshot requires normal shutdown, bounded complete stream captures and nondecreasing stream byte
+counts. This supplies named-file/payload consistency, not loaded-code, service/run provenance or
+native qualification. Both versions remain unqualified; automatic native CLI wiring remains blocked
+on independently selected run context and separately admitted native execution.
+
+The separate [Mac descendant census model](../scripts/lib/macos-descendant-census.mjs) accepts
+bounded offline observer records only. It requires externally selected run, attempt, source,
+package, offline-envelope hash and root PID plus exact start identity. It tracks positively observed
+descendants through reparenting and never treats a recycled PID as the original. Missing visibility,
+cadence, lifecycle anchors or parent start identities make the history incomplete. Absence in a
+complete final snapshot is only absence of previously observed instances: a short-lived or
+already-reparented process may never be seen. The model cannot authenticate its source, observe
+native processes itself, confirm physical descendant closure, or change either release gate. No
+collector or publication path consumes it.
 
 There is no admitted qualifying installer producer yet. The semantic installer gate therefore
 rejects publication unconditionally after consistency checks, alongside the unchanged full-product

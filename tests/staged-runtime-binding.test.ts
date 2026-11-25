@@ -52,10 +52,17 @@ test('all native lanes bind each fixed runtime case to its own designated artifa
         for (const [caseId, asset] of Object.entries(nativeRuntimeBindings(lane.id))) {
             const actual = f.applications.find((item) => item.asset === asset)!;
             assert.equal(validateNativeRuntimeIdentity(actual, { ...f.expected, caseId }), actual);
-            assert.equal(
-                validateRetainedRuntimeIdentity(actual, f.receipt, f.expected, caseId),
-                actual,
-            );
+            // Current Mac retained validation also needs the independently read staged
+            // payload and helper marker. This control covers fixed-case shape only.
+            if (lane.platform === 'darwin')
+                assert.throws(() =>
+                    validateRetainedRuntimeIdentity(actual, f.receipt, f.expected, caseId),
+                );
+            else
+                assert.equal(
+                    validateRetainedRuntimeIdentity(actual, f.receipt, f.expected, caseId),
+                    actual,
+                );
         }
     }
     assert.throws(() => nativeRuntimeBindings('unsupported'));
@@ -182,9 +189,13 @@ test('final verifier uses fixed-case binding after retained evidence rehash and 
             verifier.indexOf('validateRetainedRuntimeIdentity('),
     );
     assert.match(verifier, /readBoundedJSON\([\s\S]*64 \* 1024/);
+    assert.ok(
+        verifier.indexOf('readStagedMacRuntimeBinding(') <
+            verifier.indexOf('validatePlatformReceipt(receipt, expected)'),
+    );
     assert.match(
         verifier,
-        /validateRetainedRuntimeIdentity\(\s*identity,\s*receipt,\s*\{ \.\.\.selected, lane: lane\.id \},\s*item\.id,/,
+        /validateRetainedRuntimeIdentity\(identity, receipt, expected, item\.id\)/,
     );
     assert.doesNotMatch(
         verifier,

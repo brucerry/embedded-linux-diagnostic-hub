@@ -52,6 +52,7 @@ export function captureLinuxNativeHost(input: LinuxNativeOps): LinuxNativeOps {
             'writeSync',
             'closeSync',
             'ftruncateSync',
+            'fchmodSync',
             'fsyncSync',
             'mkdirSync',
             'readlinkSync',

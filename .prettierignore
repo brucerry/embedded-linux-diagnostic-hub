@@ -20,3 +20,11 @@ dist-site/
 # Accepted diagnostic core is byte-pinned; preserve its reviewed source bytes.
 /tests/fixtures/inspection/passive-cdp.cjs
 /tests/fixtures/inspection/release-window.cjs
+
+# Exact Electron 44.5.1 publisher declaration, SHA-256 pinned by the Linux profile.
+/.linux-package-inputs/electron.d.ts
+
+# M01 collectors verify these exact workflow and manifest bytes against their requests.
+/.github/workflows/windows-m01-acquisition.yml
+/.github/workflows/windows-m01-catalog.yml
+/prepared/catalog/catalog-files.json

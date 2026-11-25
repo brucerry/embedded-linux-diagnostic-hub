@@ -18,10 +18,12 @@ const guards = source.slice(
     source.indexOf('# BEGIN GUARDED PATHS'),
     source.indexOf('# END GUARDED PATHS'),
 );
-const inventory = source.slice(
-    source.indexOf('hub_bounded_tar_listing() {'),
-    source.indexOf('\ndesktop_available=0'),
-);
+// Source only the two archive helpers, never the launcher branches that follow them.
+const inventoryStart = source.indexOf('\nhub_bounded_tar_listing() {');
+const validatorStart = source.indexOf('\nhub_validate_portable_tar() {', inventoryStart);
+const validatorEnd = source.indexOf('\n}\n', validatorStart);
+assert.ok(inventoryStart >= 0 && validatorStart > inventoryStart && validatorEnd > validatorStart);
+const inventory = source.slice(inventoryStart, validatorEnd + '\n}\n'.length);
 function archive(entries: { name: string; type?: string; mode?: string }[]) {
     const blocks: Buffer[] = [];
     for (const entry of entries) {

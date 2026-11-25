@@ -361,6 +361,7 @@ test('LE14 existing packager exposes only the explicit envelope API and uses inj
     assert.equal(f.calls[0], 'admit');
     assert.equal(typeof packaging.createReviewPackager, 'function');
     assert.deepEqual(Object.keys(packaging).sort(), [
+        'createInstallPackager',
         'createReviewPackager',
         'observeReviewEnvelope',
         'prepareReviewEnvelope',

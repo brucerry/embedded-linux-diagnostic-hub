@@ -17,7 +17,7 @@ import {
 import {
     validateLinuxObservationRecords,
     normalizeLinuxPackagerCensus,
-} from './lib/linux-release-observation';
+} from './lib/linux-release-observation.mts';
 import { observeLinuxGzipTar, linuxObservationWindow } from './lib/linux-archive-members.mjs';
 import { linuxPermanentArguments } from '../electron/linux-permanent-setup';
 

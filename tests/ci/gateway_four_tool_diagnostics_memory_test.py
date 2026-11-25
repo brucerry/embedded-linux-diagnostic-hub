@@ -27,7 +27,6 @@ SUBJECT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SUBJECT)
 PROFILE = json.loads((ROOT / "scripts/ci/gateway-four-tool-inputs.json").read_bytes())
 LOCK = (ROOT / "package-lock.json").read_bytes()
-WORKFLOW = (ROOT / ".github/workflows/gateway-native-source-buildonly.yml").read_text()
 MARKER = "PRIVATE_FIXTURE_MARKER"
 
 
@@ -332,13 +331,8 @@ class GuardAndWorkflowTests(unittest.TestCase):
         self.assertEqual(SUBJECT.reason_for(OpaqueError()), "unexpected")
         self.assertEqual(SUBJECT.reason_for(urllib.error.HTTPError("/fixture", 404, MARKER, {}, None)), "http-error")
 
-    def test_workflow_requires_closed_prepared_report_and_fails_refusal(self):
-        self.assertNotIn("continue-on-error", WORKFLOW)
-        self.assertIn("if: ${{ always() }}", WORKFLOW)
-        self.assertIn('run: test "$PREPARATION_RESULT" = prepared', WORKFLOW)
-        self.assertIn("if: ${{ success() && steps.preparation.outcome == 'success' && steps.preparation.outputs.result == 'prepared' }}", WORKFLOW)
-        for field in ("result", "stage", "reason", "input"):
-            self.assertIn("steps.preparation.outcome == 'success' && steps.preparation.outputs." + field, WORKFLOW)
+    # Parsed workflow assertions run in npm run test:gateway-format.
+    def test_profile_retains_exact_node_and_four_inputs(self):
         self.assertEqual(PROFILE["node"]["version"], "24.22.2")
         self.assertEqual(len(PROFILE["packages"]), 4)
 
