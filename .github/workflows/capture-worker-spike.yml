@@ -1,0 +1,37 @@
+name: Capture worker compiler spike (nonpublishing)
+
+on:
+    push:
+        branches: [ci/v060-capture-worker-spike-20261125]
+
+permissions:
+    contents: read
+
+jobs:
+    capture:
+        if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+        runs-on: ubuntu-22.04
+        timeout-minutes: 8
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+              with:
+                  node-version: '24.22.2'
+                  package-manager-cache: false
+            - name: Prepare locked compiler-only dependencies
+              run: |
+                  set -euo pipefail
+                  plan="$RUNNER_TEMP/hub-capture-compiler"
+                  test ! -e node_modules
+                  node scripts/ci/capture-worker/write-plan.mjs "$plan"
+                  npm ci --prefix "$plan" --ignore-scripts --no-audit --no-fund
+                  test ! -e "$plan/node_modules/esbuild"
+                  test ! -e "$plan/node_modules/@esbuild"
+                  test ! -e "$plan/node_modules/ssh2"
+                  test ! -e "$plan/node_modules/app-builder-lib"
+                  ln -s "$plan/node_modules" node_modules
+            - name: Compile and parse the two actual capture scripts
+              run: |
+                  node --test tests/capture-worker-bundler-contract.test.mjs tests/capture-worker-bundler-real.test.mjs

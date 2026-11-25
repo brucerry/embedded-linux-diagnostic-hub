@@ -1,22 +1,14 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
-import { build as bundle } from 'esbuild';
+import { build, defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
+import { bundleCaptureWorker } from './scripts/lib/capture-worker-bundle.mjs';
 
 const captureEntries = {
     'capture-download-sw.js': './src/features/automation/capture/capture-download-worker.ts',
     'capture-download-frame.js': './src/features/automation/capture/capture-download-frame.ts',
 };
 async function captureScript(entry: string) {
-    const result = await bundle({
-        entryPoints: [fileURLToPath(new URL(entry, import.meta.url))],
-        bundle: true,
-        format: 'iife',
-        platform: 'browser',
-        target: 'es2022',
-        write: false,
-    });
-    return result.outputFiles[0].contents;
+    return bundleCaptureWorker(build, fileURLToPath(new URL(entry, import.meta.url)));
 }
 
 export function webBase(repository?: string, override?: string) {
