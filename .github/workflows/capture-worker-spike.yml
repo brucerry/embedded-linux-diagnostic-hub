@@ -35,5 +35,5 @@ jobs:
             - name: Compile and parse the two actual capture scripts
               run: |
                   node --test tests/capture-worker-bundler-contract.test.mjs tests/capture-worker-bundler-real.test.mjs
-            - name: Compile and validate the five desktop and installer entry points
+            - name: Compile and validate desktop, installer and Gateway entry points
               run: node --test tests/desktop-compiler-spike.test.mjs

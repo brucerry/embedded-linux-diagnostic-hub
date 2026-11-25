@@ -14,17 +14,18 @@ const cases=[
  ['linux-setup-review','scripts/linux-setup-review.cts',['electron','ssh2']],
  ['linux-setup-install','scripts/linux-setup-install.cts',['electron','ssh2']],
  ['linux-setup-bootstrap','scripts/linux-setup-bootstrap.cts',['electron','ssh2','original-fs']],
+ ['gateway','gateway/main.ts',['ssh2'],'main.cjs'],
 ];
-for (const [name, entry, external] of cases) {
+for (const [name, entry, external, filename=name+'.cjs'] of cases) {
  test(name + ' emits one standalone CJS file with only the approved imports', async () => {
  let build;
  try {
  build=await rolldown({input:resolve(entry),platform:'node',external,onLog(level,info,handler){if(info.code==='UNRESOLVED_IMPORT')throw new Error(info.message);handler(level,info)}});
- const {output}=await build.generate({format:'cjs',entryFileNames:name+'.cjs',codeSplitting:false});
+ const {output}=await build.generate({format:'cjs',entryFileNames:filename,codeSplitting:false});
  assert.equal(output.length,1);
  const [chunk]=output;
  assert.equal(chunk.type,'chunk');
- assert.equal(chunk.fileName,name+'.cjs');
+ assert.equal(chunk.fileName,filename);
  assert.ok(chunk.code.length>100);
  new Script(chunk.code,{filename:chunk.fileName});
  assert.ok(chunk.dynamicImports.every(x=>x===chunk.fileName));
