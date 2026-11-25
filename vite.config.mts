@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react';
-import { build, defineConfig } from 'vite';
+import { build, defineConfig, parseSync } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { bundleCaptureWorker } from './scripts/lib/capture-worker-bundle.mjs';
 
@@ -8,7 +8,7 @@ const captureEntries = {
     'capture-download-frame.js': './src/features/automation/capture/capture-download-frame.ts',
 };
 async function captureScript(entry: string) {
-    return bundleCaptureWorker(build, fileURLToPath(new URL(entry, import.meta.url)));
+    return bundleCaptureWorker(build, fileURLToPath(new URL(entry, import.meta.url)), parseSync);
 }
 
 export function webBase(repository?: string, override?: string) {

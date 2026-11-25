@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
-import { build, version } from 'vite';
+import { build, parseSync, version } from 'vite';
 import { bundleCaptureWorker } from '../scripts/lib/capture-worker-bundle.mjs';
 
 const root = new URL('../', import.meta.url);
@@ -15,7 +15,7 @@ for (const name of ['frame', 'worker']) {
         const entry = fileURLToPath(
             new URL(`src/features/automation/capture/capture-download-${name}.ts`, root),
         );
-        const output = await bundleCaptureWorker(build, entry);
+        const output = await bundleCaptureWorker(build, entry, parseSync);
         assert.ok(output.length > 0 && output.length < 1024 * 1024);
         assert.doesNotThrow(() => new Script(output.toString('utf8'), { filename: entry + '.js' }));
     });
