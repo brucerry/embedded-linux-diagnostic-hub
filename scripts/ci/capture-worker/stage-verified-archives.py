@@ -16,9 +16,12 @@ root = Path(sys.argv[1]).resolve(strict=True)
 assert len(sys.argv) == 2
 pins = json.loads((root / "package-lock.json").read_bytes())["packages"]
 entries = [(key, meta) for key, meta in pins.items() if key]
-assert len(entries) in (15, 36)
+assert len(entries) in (15, 36, 43)
 fixture_pins = {"node_modules/js-yaml", "node_modules/argparse", "node_modules/typescript"}
-assert fixture_pins.intersection(pins) == (fixture_pins if len(entries) == 36 else set())
+assert fixture_pins.intersection(pins) == (fixture_pins if len(entries) >= 36 else set())
+renderer_pins = {"node_modules/" + name for name in (
+    "@vitejs/plugin-react", "react", "react-dom", "lucide-react", "scheduler", "@xterm/xterm", "@xterm/addon-fit")}
+assert renderer_pins.intersection(pins) == (renderer_pins if len(entries) == 43 else set())
 for key, meta in sorted(entries, key=lambda item: (item[0].count('/'), item[0])):
     parts = PurePosixPath(key).parts
     assert parts[0] == "node_modules" and all(p not in (".", "..", "esbuild", "@esbuild", "ssh2", "app-builder-lib") and "\\" not in p and ":" not in p for p in parts)

@@ -25,7 +25,7 @@ jobs:
                   set -euo pipefail
                   plan="$RUNNER_TEMP/hub-capture-compiler"
                   test ! -e node_modules
-                  node scripts/ci/capture-worker/write-plan.mjs "$plan" --desktop
+                  node scripts/ci/capture-worker/write-plan.mjs "$plan" --renderer
                   python3 -B scripts/ci/capture-worker/stage-verified-archives.py "$plan"
                   test ! -e "$plan/node_modules/esbuild"
                   test ! -e "$plan/node_modules/@esbuild"
@@ -52,3 +52,10 @@ jobs:
               run: node scripts/test-updater-memory-rolldown-spike.mjs
             - name: Run receipt and package-bundle checks with native Node TypeScript support
               run: node --test tests/bounded-receipt-json.test.ts tests/desktop-package-bundles.test.ts
+            - name: Build and compare the actual desktop and web renderer assets
+              run: |
+                  set -euo pipefail
+                  output="$(mktemp -d "$RUNNER_TEMP/hub-renderer-XXXXXX")"
+                  node node_modules/vite/bin/vite.js build --mode production --outDir "$output/production"
+                  node node_modules/vite/bin/vite.js build --mode web --outDir "$output/web"
+                  node scripts/ci/capture-worker/check-renderer-output.mjs "$output"

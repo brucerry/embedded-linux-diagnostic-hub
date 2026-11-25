@@ -14,9 +14,12 @@ const allowed = [
     'detect-libc', 'fdir', 'lightningcss', 'lightningcss-linux-x64-gnu', 'nanoid',
     'picocolors', 'picomatch', 'postcss', 'rolldown', 'source-map-js', 'tinyglobby', 'vite',
 ];
-const desktop = process.argv[3] === '--desktop';
+const renderer = process.argv[3] === '--renderer';
+const desktop = process.argv[3] === '--desktop' || renderer;
 assert.ok(process.argv.length === 3 || (process.argv.length === 4 && desktop));
 if (desktop) allowed.push('semver', 'fflate', 'js-yaml', 'argparse', 'typescript');
+if (renderer)
+    allowed.push('@vitejs/plugin-react', 'react', 'react-dom', 'lucide-react', 'scheduler', '@xterm/xterm', '@xterm/addon-fit');
 const dependencies = {};
 const plats = new Set(['@rolldown/binding-linux-x64-gnu', 'lightningcss-linux-x64-gnu']);
 const packages = {};
