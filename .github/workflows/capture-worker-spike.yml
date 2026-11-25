@@ -26,7 +26,7 @@ jobs:
                   plan="$RUNNER_TEMP/hub-capture-compiler"
                   test ! -e node_modules
                   node scripts/ci/capture-worker/write-plan.mjs "$plan" --desktop
-                  npm ci --prefix "$plan" --ignore-scripts --no-audit --no-fund
+                  python3 -B scripts/ci/capture-worker/stage-verified-archives.py "$plan"
                   test ! -e "$plan/node_modules/esbuild"
                   test ! -e "$plan/node_modules/@esbuild"
                   test ! -e "$plan/node_modules/ssh2"
