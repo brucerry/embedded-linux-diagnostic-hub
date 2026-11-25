@@ -46,3 +46,5 @@ jobs:
                   tests/macos-installer-observation.test.mjs
                   tests/release-lane-membership.test.mjs
                   tests/release-catalog-boundary-memory.test.mjs
+            - name: Check shared and Linux TypeScript input separation without building the app
+              run: node --test tests/typescript-lane-config.test.mjs

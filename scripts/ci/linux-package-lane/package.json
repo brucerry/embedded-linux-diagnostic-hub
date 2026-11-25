@@ -12,7 +12,7 @@
         "dev": "vite --host 127.0.0.1",
         "desktop:dev": "npm run build:desktop && concurrently -k \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
         "build:desktop": "esbuild electron/main.ts electron/preload.ts --bundle --platform=node --format=cjs --outdir=dist-electron --out-extension:.js=.cjs --external:electron --external:ssh2 && esbuild scripts/linux-setup-review.cts --bundle --platform=node --format=cjs --outfile=dist-electron/linux-setup-review.cjs --external:electron --external:ssh2 && esbuild scripts/linux-setup-install.cts --bundle --platform=node --format=cjs --outfile=dist-electron/linux-setup-install.cjs --external:electron --external:ssh2 && esbuild scripts/linux-setup-bootstrap.cts --bundle --platform=node --format=cjs --outfile=dist-electron/linux-setup-bootstrap.cjs --external:electron --external:ssh2 --external:original-fs",
-        "typecheck": "tsc --noEmit",
+        "typecheck": "tsc --noEmit --project tsconfig.linux.json",
         "build": "npm run typecheck && vite build && npm run build:desktop",
         "build:web": "npm run typecheck && vite build --mode web",
         "preview:web": "vite preview --mode web --host 127.0.0.1",

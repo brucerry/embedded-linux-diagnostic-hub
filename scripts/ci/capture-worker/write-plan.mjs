@@ -16,7 +16,7 @@ const allowed = [
 ];
 const desktop = process.argv[3] === '--desktop';
 assert.ok(process.argv.length === 3 || (process.argv.length === 4 && desktop));
-if (desktop) allowed.push('semver', 'fflate', 'js-yaml', 'argparse');
+if (desktop) allowed.push('semver', 'fflate', 'js-yaml', 'argparse', 'typescript');
 const dependencies = {};
 const plats = new Set(['@rolldown/binding-linux-x64-gnu', 'lightningcss-linux-x64-gnu']);
 const packages = {};
