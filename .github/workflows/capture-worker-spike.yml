@@ -37,3 +37,12 @@ jobs:
                   node --test tests/capture-worker-bundler-contract.test.mjs tests/capture-worker-bundler-real.test.mjs
             - name: Compile and validate desktop, installer and Gateway entry points
               run: node --test tests/desktop-compiler-spike.test.mjs
+            - name: Check release contracts with fixtures only
+              run: >-
+                  node --test
+                  tests/gateway-package-format.test.mjs
+                  tests/macos-native-package-contract.test.mjs
+                  tests/macos-installer-actions.test.mjs
+                  tests/macos-installer-observation.test.mjs
+                  tests/release-lane-membership.test.mjs
+                  tests/release-catalog-boundary-memory.test.mjs
