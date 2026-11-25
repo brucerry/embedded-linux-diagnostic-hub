@@ -50,3 +50,5 @@ jobs:
               run: node --test tests/typescript-lane-config.test.mjs
             - name: Run updater memory fixtures with the alternate compiler and existing no-network guard
               run: node scripts/test-updater-memory-rolldown-spike.mjs
+            - name: Run receipt and package-bundle checks with native Node TypeScript support
+              run: node --test tests/bounded-receipt-json.test.ts tests/desktop-package-bundles.test.ts
