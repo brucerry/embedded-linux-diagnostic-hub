@@ -1,0 +1,20 @@
+name: Ubuntu 26.04 benign process observation
+on:
+  push:
+    branches: [ci/v060-ubuntu2604-retirement-readiness-20261127]
+permissions:
+  contents: read
+jobs:
+  isolated-readiness:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.run_attempt == 1
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Check an unprivileged owned test service only
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          /usr/bin/python3 -B -I runner-owned-preflight.py --run-benign-probe
