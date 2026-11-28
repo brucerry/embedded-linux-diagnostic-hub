@@ -24,3 +24,28 @@ test('missing, reused, populated, frozen and unordered scopes stay unqualified',
         [{...after, monotonicNs: before.monotonicNs}, /out of order/],
     ]) assert.throws(() => inspectLinuxNativeScopeObservation(scope, {before, after: bad}), why);
 });
+
+test('pinned scope snapshots reject bad reads and replacement descriptor identity', async () => {
+    const { capturePinnedLinuxScopeSnapshot } =
+        await import('../scripts/lib/linux-native-scope-observation.mjs');
+    const handle = (events, changed = false) => {
+        let calls = 0;
+        return {
+            async stat(options) {
+                assert.deepEqual(options, { bigint: true });
+                return { dev: 27n, ino: changed && ++calls === 2 ? 1002n : 1001n,
+                    isFile: () => true };
+            },
+            async read(buffer, offset, length, position) {
+                assert.deepEqual([offset, length, position], [0, 1025, 0]);
+                return { bytesRead: buffer.write(events) };
+            },
+        };
+    };
+    const snapshot = await capturePinnedLinuxScopeSnapshot(handle(before.events));
+    assert.equal(snapshot.ino, undefined);
+    assert.equal(snapshot.inode, '1001');
+    assert.equal(snapshot.events, before.events);
+    await assert.rejects(capturePinnedLinuxScopeSnapshot(handle('')), /Missing or oversized/);
+    await assert.rejects(capturePinnedLinuxScopeSnapshot(handle(before.events, true)), /changed/);
+});

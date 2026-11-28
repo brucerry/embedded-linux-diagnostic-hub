@@ -40,3 +40,26 @@ export function inspectLinuxNativeScopeObservation(selected, observed) {
         releaseAcceptance: false,
     });
 }
+
+/** Record one bounded kernel snapshot using a caller-owned, already pinned FD.
+ * Acquisition and authorization of that descriptor remain the caller's job.
+ */
+export async function capturePinnedLinuxScopeSnapshot(handle) {
+    const before = await handle.stat({ bigint: true });
+    assert.ok(before.isFile() && before.dev > 0n && before.ino > 0n, 'Invalid scope descriptor');
+    const buffer = Buffer.alloc(1025);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    assert.ok(bytesRead > 0 && bytesRead <= 1024, 'Missing or oversized scope readback');
+    const events = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead));
+    population(events);
+    const monotonicNs = process.hrtime.bigint().toString();
+    const after = await handle.stat({ bigint: true });
+    assert.ok(after.isFile() && before.dev === after.dev && before.ino === after.ino,
+        'Scope descriptor changed during capture');
+    return Object.freeze({
+        device: before.dev.toString(),
+        inode: before.ino.toString(),
+        monotonicNs,
+        events,
+    });
+}
