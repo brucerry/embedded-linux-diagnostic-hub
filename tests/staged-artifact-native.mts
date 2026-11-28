@@ -36,6 +36,13 @@ try {
     const page = await application.firstWindow();
     await page.waitForURL('app://bundle/index.html');
     await expect(page.getByRole('heading', { name: 'Device overview' })).toBeVisible();
+    await page.waitForFunction(
+        () =>
+            typeof window.diagnosticHub?.connect === 'function' &&
+            typeof window.diagnosticHub?.readUpdateInfo === 'function',
+        undefined,
+        { timeout: 10000 },
+    );
     identity = await application.evaluate(
         async ({ app, BrowserWindow }, marker) => {
             const contents = BrowserWindow.getAllWindows()[0].webContents;
