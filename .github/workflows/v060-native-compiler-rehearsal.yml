@@ -1,0 +1,44 @@
+name: Hub v0.6.0 desktop compiler native lanes
+on:
+  push:
+    branches: [ci/v060-native-compiler-8078fb5]
+permissions:
+  contents: read
+jobs:
+  compile:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-native-compiler-8078fb5'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            lane: win32-x64-msvc
+            python: python
+          - runner: macos-15-intel
+            lane: darwin-x64
+            python: python3
+          - runner: macos-15
+            lane: darwin-arm64
+            python: python3
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: '8078fb5f83b4d87c70e9806b1f90881a5c26da05'
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Compile and syntax-check only
+        run: ${{ matrix.python }} -B harness/.github/ci/v060-native-compiler/produce.py candidate --lane ${{ matrix.lane }}
