@@ -5,7 +5,11 @@ import path from 'node:path';
 import { selectReviewedBinding } from './lib/desktop-compiler-binding.mjs';
 
 // Compile only. Electron and the SSH runtime remain exogenous to this step.
-const cases = [
+const [mode, ...rest] = process.argv.slice(2);
+assert.ok(rest.length === 0 && (mode === undefined || mode === '--gateway-review'),
+    'Expected desktop mode or explicit Gateway compiler review.');
+const gatewayReview = mode === '--gateway-review';
+const cases = gatewayReview ? [['gateway/main.ts', 'main', ['ssh2']]] : [
     ['electron/main.ts', 'main', ['electron', 'ssh2']],
     ['electron/preload.ts', 'preload', ['electron']],
     ['scripts/linux-setup-review.cts', 'linux-setup-review', ['electron', 'ssh2']],
@@ -27,7 +31,7 @@ assert.ok((await lstat(binding)).isFile());
 assert.equal(await realpath(binding), binding, 'Compiler binary must be local to the selected tree.');
 const { rolldown } = await import('rolldown');
 const temporary = await mkdtemp(path.join(root, '.desktop-rolldown-'));
-const dest = path.join(root, 'dist-electron');
+const dest = path.join(root, gatewayReview ? '.gateway-rolldown-review' : 'dist-electron');
 try {
     for (const [input, name, external] of cases) {
         const warnings = [];
@@ -52,6 +56,12 @@ try {
                 for (const entry of runtimeImports)
                     assert.ok(isBuiltin(entry) || external.includes(entry),
                         'Unexpected external: ' + entry);
+            }
+            if (gatewayReview) {
+                assert.ok(runtimeImports.includes('ssh2'), 'Gateway must retain the approved runtime boundary.');
+                assert.ok(runtimeImports.every((id) => !id.startsWith('ssh2/')));
+                assert.ok(output[0].moduleIds.every((id) => !/[\\/]node_modules[\\/]ssh2(?:[\\/]|$)/.test(id)),
+                    'SSH runtime must never be inlined.');
             }
             assert.deepEqual(warnings, [], 'Unexpected compiler warnings.');
         } finally {

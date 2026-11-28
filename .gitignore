@@ -13,3 +13,6 @@ test-results/
 validation/
 
 dist-site/
+
+# Isolated Gateway compiler review output (never a release asset)
+/.gateway-rolldown-review/

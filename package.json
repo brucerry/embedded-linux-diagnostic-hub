@@ -16,6 +16,7 @@
         "build": "npm run typecheck && vite build && npm run build:desktop",
         "build:web": "npm run typecheck && vite build --mode web",
         "preview:web": "vite preview --mode web --host 127.0.0.1",
+        "build:gateway:reviewed": "node scripts/build-desktop-rolldown.mjs --gateway-review",
         "build:gateway": "esbuild gateway/main.ts --bundle --platform=node --format=cjs --outfile=dist-gateway/main.cjs --external:ssh2",
         "gateway": "npm run build:gateway && node --env-file=.env.gateway dist-gateway/main.cjs",
         "package:gateway": "npm run build:gateway && node scripts/package-gateway.mjs",
