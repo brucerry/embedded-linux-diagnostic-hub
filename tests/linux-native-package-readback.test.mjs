@@ -64,3 +64,27 @@ test('edited and honestly rehashed wrong payload/runtime records are refused', (
         assert.throws(() => inspectLinuxPackageRuntimeReadback(x.selection, bytes(x)), expected);
     }
 });
+
+test('Linux direct closure is independently selected and does not authorize cleanup', async () => {
+    const { inspectLinuxNativeLaunchEvidence } =
+        await import('../scripts/lib/linux-native-launch-evidence.mjs');
+    const f = fixture(), raw = bytes(f), child = {
+        code: 0, kind: 'linux-owned-direct-child-observation/v1', pid: 42, processTreeRetired: 'not-verified',
+        releaseAcceptance: false, stderrEOF: true, stdoutEOF: true,
+    };
+    f.selection.launcherPID = child.pid;
+    const inspect = (payload, updateDigest = true) => {
+        const selected = Buffer.from(JSON.stringify(payload));
+        if (updateDigest) f.selection.closureSHA256 = digest(selected);
+        return inspectLinuxNativeLaunchEvidence(f.selection, raw, selected);
+    };
+    const result = inspect(child);
+    assert.equal(result.directExit, 'consistent');
+    assert.equal(result.cleanupAuthorized, false);
+    assert.equal(result.releaseAcceptance, false);
+    assert.throws(() => inspect({ ...child, pid: 43 }, false), /differs from selected bytes/);
+    assert.throws(() => inspect({ ...child, pid: 43 }), /different owned launcher/);
+    for (const patch of [{ code: 1 }, { stderrEOF: false }, { processTreeRetired: true }]) {
+        assert.throws(() => inspect({ ...child, ...patch }));
+    }
+});
