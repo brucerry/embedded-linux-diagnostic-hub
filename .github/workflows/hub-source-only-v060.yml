@@ -1,0 +1,38 @@
+name: Hub v0.6.0 isolated source-only checks
+
+on:
+  push:
+    branches: [ci/v060-source-only-8078fb5]
+
+permissions:
+  contents: read
+
+jobs:
+  source-only:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-source-only-8078fb5' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 8078fb5f83b4d87c70e9806b1f90881a5c26da05
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+      - name: Exact candidate, source-contract tests only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 8078fb5f83b4d87c70e9806b1f90881a5c26da05
+          test "$(git rev-parse 'HEAD^{tree}')" = e2b3d22a30a5a20be0c299a337dcf2144c13603d
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test ! -e node_modules
+          test "$(node --version)" = v24.21.0
+          node --experimental-strip-types --test-isolation=none --test --test-reporter=tap \
+            tests/capture-worker-bundler-contract.test.mjs \
+            tests/macos-census-port.test.ts tests/macos-descendant-census.test.ts
