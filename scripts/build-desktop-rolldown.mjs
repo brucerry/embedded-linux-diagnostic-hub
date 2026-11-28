@@ -7,7 +7,7 @@ import { selectReviewedBinding } from './lib/desktop-compiler-binding.mjs';
 // Compile only. Electron and the SSH runtime remain exogenous to this step.
 const cases = [
     ['electron/main.ts', 'main', ['electron', 'ssh2']],
-    ['electron/preload.ts', 'preload', ['electron', 'ssh2']],
+    ['electron/preload.ts', 'preload', ['electron']],
     ['scripts/linux-setup-review.cts', 'linux-setup-review', ['electron', 'ssh2']],
     ['scripts/linux-setup-install.cts', 'linux-setup-install', ['electron', 'ssh2']],
     ['scripts/linux-setup-bootstrap.cts', 'linux-setup-bootstrap', ['electron', 'ssh2', 'original-fs']],
@@ -41,9 +41,18 @@ try {
             const direct = [...output[0].code.matchAll(/(?:require|import)\(\s*["']([^"']+)["']\s*\)/g)];
             assert.ok(!direct.some((m) => [filename, './' + filename].includes(m[1])),
                 'Compiler output directly imports itself.');
-            for (const entry of [...output[0].imports, ...output[0].dynamicImports])
-                assert.ok(entry === filename || isBuiltin(entry) || external.includes(entry),
-                    'Unexpected external: ' + entry);
+            const runtimeImports = [...output[0].imports, ...output[0].dynamicImports]
+                .filter((entry) => entry !== filename);
+            if (name === 'preload') {
+                // The production renderer is sandboxed. Require review before expanding
+                // this intentionally narrower list than Electron's sandbox API.
+                for (const entry of [...runtimeImports, ...direct.map((match) => match[1])])
+                    assert.ok(external.includes(entry), 'Unsupported sandboxed preload import: ' + entry);
+            } else {
+                for (const entry of runtimeImports)
+                    assert.ok(isBuiltin(entry) || external.includes(entry),
+                        'Unexpected external: ' + entry);
+            }
             assert.deepEqual(warnings, [], 'Unexpected compiler warnings.');
         } finally {
             await bundle.close();
