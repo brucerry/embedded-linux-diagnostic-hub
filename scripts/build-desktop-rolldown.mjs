@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
 import { selectReviewedBinding } from './lib/desktop-compiler-binding.mjs';
@@ -29,6 +30,12 @@ const selected = selectReviewedBinding({
 const binding = path.join(root, 'node_modules', selected.name, selected.filename);
 assert.ok((await lstat(binding)).isFile());
 assert.equal(await realpath(binding), binding, 'Compiler binary must be local to the selected tree.');
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+const gatewayBefore = gatewayReview ? {
+    lockSHA256: sha256(await readFile(path.join(root, 'package-lock.json'))),
+    entrySHA256: sha256(await readFile(path.join(root, 'gateway', 'main.ts'))),
+    bindingSHA256: sha256(await readFile(binding)),
+} : undefined;
 const { rolldown } = await import('rolldown');
 const temporary = await mkdtemp(path.join(root, '.desktop-rolldown-'));
 const dest = path.join(root, gatewayReview ? '.gateway-rolldown-review' : 'dist-electron');
@@ -63,6 +70,24 @@ try {
                 assert.ok(output[0].moduleIds.every((id) => !/[\\/]node_modules[\\/]ssh2(?:[\\/]|$)/.test(id)),
                     'SSH runtime must never be inlined.');
             }
+            if (gatewayReview) {
+                const record = {
+                    schemaVersion: 1,
+                    kind: 'isolated-gateway-compiler-readback',
+                    sourceEntry: input,
+                    compiler: { wrapper: wrapper.version, binding: selected.name, node: process.versions.node },
+                    ...gatewayBefore,
+                    bundleSHA256: sha256(await readFile(path.join(temporary, filename))),
+                    imports: [...new Set(runtimeImports)].sort(),
+                    runtimeExecuted: false,
+                    releaseAdmission: false,
+                };
+                assert.equal(sha256(await readFile(path.join(root, 'package-lock.json'))), record.lockSHA256);
+                assert.equal(sha256(await readFile(path.join(root, input))), record.entrySHA256);
+                assert.equal(sha256(await readFile(binding)), record.bindingSHA256);
+                await writeFile(path.join(temporary, 'compiler-readback.json'),
+                    JSON.stringify(record, null, 2) + '\n', {flag: 'wx'});
+            }
             assert.deepEqual(warnings, [], 'Unexpected compiler warnings.');
         } finally {
             await bundle.close();
@@ -70,6 +95,8 @@ try {
     }
     await mkdir(dest, {recursive:true});
     for (const [,name] of cases) await rename(path.join(temporary,name+'.cjs'),path.join(dest,name+'.cjs'));
+    if (gatewayReview)
+        await rename(path.join(temporary, 'compiler-readback.json'), path.join(dest, 'compiler-readback.json'));
 } finally {
     await rm(temporary, {recursive:true,force:true});
 }
