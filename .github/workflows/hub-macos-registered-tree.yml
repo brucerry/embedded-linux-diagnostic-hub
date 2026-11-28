@@ -1,0 +1,55 @@
+name: Hub macOS registered process tree preflight
+
+on:
+  push:
+    branches: [ci/v060-macos-owned-tree-8078fb5]
+
+permissions:
+  contents: read
+
+jobs:
+  native-abi:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-macos-owned-tree-8078fb5' && github.run_attempt == 1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Observe only the owned test process chain
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          test "$(git rev-parse HEAD^)" = 8078fb5f83b4d87c70e9806b1f90881a5c26da05
+          test "$(git rev-parse 'HEAD^^{tree}')" = e2b3d22a30a5a20be0c299a337dcf2144c13603d
+          test -z "$(git status --porcelain --untracked-files=all)"
+          work="$(mktemp -d "$RUNNER_TEMP/hub-owned-abi.XXXXXXXX")"
+          src=tests/native-preflight/macos-registered-tree.c
+          printf '%s  %s\n' 01aeca65144449bc5dd6afc7e1f41b62792742040326b7fbf315f50f4226834d "$src" | shasum -a 256 -c
+          xcrun --sdk macosx clang -Wall -Wextra -Werror -pedantic -std=c11 "$src" -o "$work/observer"
+          test "$(lipo -archs "$work/observer")" = "$EXPECTED_ARCH"
+          "$work/observer" > "$work/result.json"
+          python3 - "$work/result.json" <<'PY'
+          import json,sys
+          with open(sys.argv[1]) as f: d=json.load(f)
+          assert d == {"scope":"registered-test-chain", "ownedEdges":2, "parentWaits":2,
+                       "registeredInstancesRetired":True, "descendantCoverage":"registered-only",
+                       "productionQualified":False}
+          print(d)
+          PY
