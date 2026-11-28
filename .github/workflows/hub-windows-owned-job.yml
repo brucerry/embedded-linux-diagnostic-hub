@@ -1,0 +1,62 @@
+name: Hub Windows owned process job preflight
+
+on:
+  push:
+    branches: [ci/v060-windows-owned-job-8078fb5]
+
+permissions:
+  contents: read
+
+jobs:
+  native-job:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-windows-owned-job-8078fb5' && github.run_attempt == 1
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Compile and test a bounded owned Windows job
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $IsWindows -or $env:RUNNER_ARCH -ne 'X64') { throw 'Windows x64 is required' }
+          if ((git rev-parse 'HEAD^') -ne '8078fb5f83b4d87c70e9806b1f90881a5c26da05' -or
+              (git rev-parse 'HEAD^^{tree}') -ne 'e2b3d22a30a5a20be0c299a337dcf2144c13603d' -or
+              (git status --porcelain --untracked-files=all)) { throw 'Unexpected source' }
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = @(& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          if ($LASTEXITCODE -ne 0 -or $vs.Count -ne 1) { throw 'No unambiguous MSVC toolchain' }
+          $env:HUB_VCVARS = Join-Path $vs[0] 'VC/Auxiliary/Build/vcvars64.bat'
+          if (-not (Test-Path -LiteralPath $env:HUB_VCVARS -PathType Leaf)) { throw 'No compiler environment' }
+          $env:HUB_PROBE = Join-Path $env:RUNNER_TEMP ('hub-owned-job-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $env:HUB_PROBE | Out-Null
+          $src = 'tests/native-preflight/windows-owned-job.c'
+          if ((Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+              '4ef3af8a6243a6bb10139ed111795da5b7fbc3e9c96aad48213bc1c00cca6308') { throw 'Unexpected fixture hash' }
+          Copy-Item -LiteralPath $src -Destination (Join-Path $env:HUB_PROBE 'owned-job.c')
+          @'
+          @echo off
+          call "%HUB_VCVARS%" >nul
+          if errorlevel 1 exit /b 1
+          cd /d "%HUB_PROBE%"
+          if errorlevel 1 exit /b 1
+          cl.exe /nologo /W4 /WX /Fe:observer.exe owned-job.c
+          exit /b %errorlevel%
+          '@ | Set-Content -Encoding Ascii -LiteralPath (Join-Path $env:HUB_PROBE 'compile.cmd')
+          Push-Location -LiteralPath $env:HUB_PROBE
+          try {
+              & cmd.exe /d /c compile.cmd
+              if ($LASTEXITCODE -ne 0) { throw 'Native C compile failed' }
+              $lines = @(& .\observer.exe)
+              if ($LASTEXITCODE -ne 0 -or $lines.Count -ne 1) { throw 'Owned process job test failed' }
+              $d = $lines[0] | ConvertFrom-Json -ErrorAction Stop
+              if ($d.scope -ne 'owned-test-job-only' -or $d.totalProcesses -ne 2 -or
+                  $d.activeProcesses -ne 0 -or $d.ownerExitedNormally -ne $true -or
+                  $d.productionQualified -ne $false) { throw 'Unexpected scoped result' }
+              Write-Output $lines[0]
+          } finally { Pop-Location }
