@@ -1,0 +1,86 @@
+[
+  {
+    "bytes": 606858,
+    "externals": [
+      "electron",
+      "node:child_process",
+      "node:crypto",
+      "node:fs",
+      "node:fs/promises",
+      "node:module",
+      "node:net",
+      "node:path",
+      "node:perf_hooks",
+      "node:string_decoder",
+      "node:url",
+      "ssh2"
+    ],
+    "name": "main",
+    "sha256": "49dc9771c6a2ef4aeeaae6a52db783de23bf5e7d949b7b9f3fd1f902e9668fef"
+  },
+  {
+    "bytes": 48257,
+    "externals": [
+      "electron"
+    ],
+    "name": "preload",
+    "sha256": "58ff8b0b88e66eff5df61c1a993cf07f9539c44a30320a7ba896c141a4beeb5c"
+  },
+  {
+    "bytes": 96410,
+    "externals": [
+      "node:crypto",
+      "node:fs",
+      "node:module",
+      "node:path"
+    ],
+    "name": "linux-setup-review",
+    "sha256": "b24354ece18453d1066ae9af9fc89f113218f5d86854b380efba3d53c1cad8e7"
+  },
+  {
+    "bytes": 370958,
+    "externals": [
+      "node:child_process",
+      "node:crypto",
+      "node:fs",
+      "node:module",
+      "node:net",
+      "node:os",
+      "node:path",
+      "node:util"
+    ],
+    "name": "linux-setup-install",
+    "sha256": "f56412d4874ee73bf19898bad8be6fcc05fd5c9887c71524d62469f824002c76"
+  },
+  {
+    "bytes": 277717,
+    "externals": [
+      "node:child_process",
+      "node:crypto",
+      "node:fs",
+      "node:fs/promises",
+      "node:module",
+      "node:net",
+      "node:os",
+      "node:path",
+      "node:stream",
+      "node:util",
+      "node:zlib"
+    ],
+    "name": "linux-setup-bootstrap",
+    "sha256": "7990e62e7331be994e9d5a203581fe5f93cdff59c1446560f5c087c0ffea309c"
+  },
+  {
+    "bytes": 169916,
+    "externals": [
+      "node:crypto",
+      "node:http",
+      "node:net",
+      "node:perf_hooks",
+      "node:string_decoder",
+      "ssh2"
+    ],
+    "name": "gateway",
+    "sha256": "01273bd3468262525b02b9e1f91e449a37569f0d6199d94e886bc44a76f8cd23"
+  }
+]
