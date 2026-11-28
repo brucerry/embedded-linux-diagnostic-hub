@@ -17,4 +17,4 @@ jobs:
         run: |
           set -eu
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          /usr/bin/python3 -B -I runner-owned-preflight.py --run-benign-probe
+          /usr/bin/python3 -B -I runner-main-first-probe.py
