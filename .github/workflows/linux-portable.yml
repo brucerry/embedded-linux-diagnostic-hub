@@ -24,22 +24,23 @@ jobs:
               with:
                   node-version: '24'
                   cache: npm
-            - run: npm ci
-            - run: npm run verify
-            - name: Build isolated JS runtime and require reviewed memory policy
-              # No dependency mutation: the memory launcher derives and verifies its own JS-only SSH bundle.
-              # Policy must still come from final combined-candidate calibration and review.
+            - name: Check reviewed Linux memory policy inputs before installing dependencies
               env:
-                  HUB_MEMORY_POLICY: ${{ vars.HUB_MEMORY_POLICY }}
+                  HUB_MEMORY_POLICY_JSON: ${{ vars.HUB_MEMORY_POLICY_JSON }}
                   HUB_MEMORY_POLICY_SHA256: ${{ vars.HUB_MEMORY_POLICY_SHA256 }}
               run: |
-                  mkdir -p validation/memory
-                  if [ -z "$HUB_MEMORY_POLICY" ] || ! [[ "$HUB_MEMORY_POLICY_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
-                      echo '{"status":"blocked","reason":"Reviewed exact-source/runtime memory policy and independent SHA256 are required"}' > validation/memory/ci-adoption-blocked.json
-                      echo '::error::Memory gate blocked: provide the exact reviewed Ubuntu policy and its independently approved SHA256 first.'
+                  if ! node scripts/ci/verify-linux-memory-policy.mjs preflight; then
+                      mkdir -p validation/memory
+                      printf '%s\n' '{"status":"blocked","reason":"Reviewed memory policy input refused before dependency install"}' > validation/memory/ci-adoption-blocked.json
                       exit 1
                   fi
-                  npm run test:memory:fast -- --policy="$HUB_MEMORY_POLICY" --policy-sha256="$HUB_MEMORY_POLICY_SHA256"
+            - run: npm ci
+            - run: npm run verify
+            - name: Stage and enforce the memory policy against this exact runtime
+              env:
+                  HUB_MEMORY_POLICY_JSON: ${{ vars.HUB_MEMORY_POLICY_JSON }}
+                  HUB_MEMORY_POLICY_SHA256: ${{ vars.HUB_MEMORY_POLICY_SHA256 }}
+              run: node scripts/ci/verify-linux-memory-policy.mjs enforce
               timeout-minutes: 3
             - name: Retain memory diagnostic receipt, including failures
               if: always()
