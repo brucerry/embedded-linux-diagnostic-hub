@@ -43,3 +43,5 @@ jobs:
         run: npm run build:desktop
       - name: Read and syntax-check the five output files without running them
         run: ${{ matrix.python }} -B .github/ci/v060-desktop-command/produce.py . --lane ${{ matrix.lane }} --check
+      - name: Run the guarded in-memory updater fixtures with the reviewed compiler
+        run: npm run test:updater-memory

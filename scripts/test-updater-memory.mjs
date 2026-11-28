@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import ts from 'typescript';
+import { selectReviewedBinding } from './lib/desktop-compiler-binding.mjs';
 import {
     updaterMemoryTests,
     updaterMemoryPath,
@@ -25,18 +25,20 @@ const require = createRequire(import.meta.url),
     read = (p) => fs.readFileSync(p, 'utf8');
 assert.equal(require('path').posix, path.posix, 'The adapter must use the Node core path API.');
 const lock = JSON.parse(read(path.join(root, 'package-lock.json')));
-const binaryPackage = `@esbuild/${process.platform}-${process.arch}`;
-const binaryManifest = fs.realpathSync(require.resolve(binaryPackage + '/package.json'));
-const binaryMetadata = JSON.parse(read(binaryManifest));
-const esbuildVersion = JSON.parse(read(require.resolve('esbuild/package.json'))).version;
-assert.equal(binaryMetadata.version, esbuildVersion);
-assert.equal(esbuildVersion, lock.packages['node_modules/esbuild'].version);
-assert.equal(binaryMetadata.version, lock.packages['node_modules/' + binaryPackage].version);
-const binary = path.join(
-    path.dirname(binaryManifest),
-    process.platform === 'win32' ? 'esbuild.exe' : 'bin/esbuild',
-);
+const compilerManifest = path.join(root, 'node_modules', 'rolldown', 'package.json');
+const selected = selectReviewedBinding({
+    platform: process.platform,
+    arch: process.arch,
+    glibcVersion: process.platform === 'linux' ? process.report.getReport().header.glibcVersionRuntime : undefined,
+    env: process.env,
+}, lock, JSON.parse(read(compilerManifest)));
+const binaryManifest = path.join(root, 'node_modules', selected.name, 'package.json');
+assert.equal(JSON.parse(read(binaryManifest)).version, selected.version);
+const binary = path.join(path.dirname(binaryManifest), selected.filename);
 assert.ok(fs.lstatSync(binary).isFile());
+assert.equal(fs.realpathSync(binary), binary, 'Compiler binary must be local to the selected tree.');
+const { default: ts } = await import('typescript');
+const { rolldown } = await import('rolldown');
 const semverManifest = fs.realpathSync(require.resolve('semver/package.json'));
 const semverRoot = path.dirname(semverManifest);
 assert.equal(
@@ -54,7 +56,9 @@ const guard = fileURLToPath(new URL('./lib/updater-memory-network-guard.cjs', im
 for (const file of [
     fileURLToPath(import.meta.url),
     fileURLToPath(new URL('./lib/updater-memory-test-plan.mjs', import.meta.url)),
+    fileURLToPath(new URL('./lib/desktop-compiler-binding.mjs', import.meta.url)),
     guard,
+    compilerManifest,
     binaryManifest,
     semverManifest,
     typescriptManifest,
@@ -173,24 +177,31 @@ function unchanged() {
 }
 async function compile(entry, fixture, output, probe = undefined) {
     unchanged();
-    const args = [
-        binary,
-        entry,
-        '--bundle',
-        '--platform=node',
-        '--format=cjs',
-        '--outfile=' + output,
-        '--metafile=' + output + '.json',
-    ];
-    for (const name of ['node:fs', 'node:fs/promises'])
-        args.push('--alias:' + name + '=./' + fixture);
-    args.push('--alias:node:path=./' + updaterMemoryPath);
-    await command(args);
+    const permit = ['node:assert/strict','node:test','node:crypto','path'];
+    const alias = {
+       'node:fs': path.join(root,fixture),
+       'node:fs/promises': path.join(root,fixture),
+       'node:path': path.join(root,updaterMemoryPath),
+    };
+    const warnings = [];
+    const bundle = await rolldown({ input:entry, platform:'node', external:permit,
+        plugins:[{name:'updater-inert-alias',resolveId:{order:'pre',handler(id){return alias[id]??null;}}}],
+        onwarn(w){warnings.push(w.message);},
+    });
+    let chunk;
+    try {
+        const emitted = await bundle.write({file:output,format:'cjs',codeSplitting:false});
+        assert.equal(emitted.output.length,1);
+        chunk = emitted.output[0];
+        assert.equal(chunk.type,'chunk');
+    } finally { await bundle.close(); }
+    assert.deepEqual(warnings,[]);
     assert.ok(fs.statSync(output).size <= 2 * 1024 ** 2, 'Updater test bundle is oversized.');
-    const meta = JSON.parse(read(output + '.json'));
-    const inputs = Object.keys(meta.inputs).map((name) =>
-        fs.realpathSync(path.resolve(root, name)),
-    );
+    const emitted = [...chunk.imports,...chunk.dynamicImports].filter(n=>n!==path.basename(output));
+    assert.deepEqual(chunk.dynamicImports, []);
+    const meta = {outputs:{[output]:{imports:emitted.map(name=>({path:name,external:true}))}}};
+    const inputs = Object.keys(chunk.modules).filter(f=>!f.startsWith('\0')).map(f=>fs.realpathSync(path.resolve(root,f)));
+    fs.writeFileSync(output + '.json', JSON.stringify({meta,inputs}), {flag:'wx'});
     assertUpdaterBundle(meta, inputs, {
         root,
         semverRoot,

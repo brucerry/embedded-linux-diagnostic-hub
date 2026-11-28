@@ -127,7 +127,7 @@ def main():
     deps = json.loads((here / "compile-deps.json").read_bytes())
     native = "@rolldown/binding-" + a.lane
     allowed = (*COMPILER, native, *deps)
-    need(len(allowed) == len(set(allowed)) == 22, "unexpected dependency closure")
+    need(len(allowed) == len(set(allowed)) == 23, "unexpected dependency closure")
     cache = None
     if a.local_cache_dir:
         cache = {}
