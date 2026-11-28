@@ -1,0 +1,57 @@
+name: Hub macOS owned-child ABI preflight
+
+on:
+  push:
+    branches: [ci/v060-macos-owned-abi-8078fb5]
+
+permissions:
+  contents: read
+
+jobs:
+  native-abi:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.event.repository.private == false && github.event_name == 'push' && github.ref == 'refs/heads/ci/v060-macos-owned-abi-8078fb5' && github.run_attempt == 1
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Compile and inspect only one owned child
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          test "$(git rev-parse HEAD^)" = 8078fb5f83b4d87c70e9806b1f90881a5c26da05
+          test "$(git rev-parse 'HEAD^^{tree}')" = e2b3d22a30a5a20be0c299a337dcf2144c13603d
+          test -z "$(git status --porcelain --untracked-files=all)"
+          work="$(mktemp -d "$RUNNER_TEMP/hub-owned-abi.XXXXXXXX")"
+          src=tests/native-preflight/macos-owned-child-abi.c
+          printf '%s  %s\n' 43a68b18b7e24e95e7bb9302ffdb5579fca4fcf4f37ff26b48f329b0b76a7e48 "$src" | shasum -a 256 -c
+          xcrun --sdk macosx clang -Wall -Wextra -Werror -pedantic -std=c11 "$src" -o "$work/observer"
+          test "$(lipo -archs "$work/observer")" = "$EXPECTED_ARCH"
+          "$work/observer" > "$work/result.json"
+          python3 - "$work/result.json" <<'PY'
+          import json,sys
+          with open(sys.argv[1]) as f: d=json.load(f)
+          assert d["scope"]=="owned-child-abi-preflight"
+          assert d["stableParentAndBirth"] is True and d["waitpidReaped"] is True
+          assert d["pidAfterReap"] in ("not_observed","different_instance")
+          assert type(d["detailBytes"]) is int and 0<d["detailBytes"]<=4096
+          assert d["productionQualified"] is False
+          print(d)
+          PY
