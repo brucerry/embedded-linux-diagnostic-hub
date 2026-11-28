@@ -45,3 +45,19 @@ jobs:
         run: ${{ matrix.python }} -B .github/ci/v060-desktop-command/produce.py . --lane ${{ matrix.lane }} --check
       - name: Run the guarded in-memory updater fixtures with the reviewed compiler
         run: npm run test:updater-memory
+      - name: Compile and parse the isolated Gateway bundle without running it
+        if: matrix.lane == 'linux-x64-gnu'
+        run: |
+          npm run build:gateway:reviewed
+          node --check .gateway-rolldown-review/main.cjs
+      - name: Test Linux evidence boundaries with harmless and synthetic fixtures only
+        if: matrix.lane == 'linux-x64-gnu'
+        run: >-
+          node --test --test-isolation=none
+          tests/linux-native-package-readback.test.mjs
+          tests/linux-native-scope-observation.test.mjs
+          tests/linux-owned-launch-observation.test.mjs
+          tests/reviewed-gateway-tar.test.mjs
+          tests/staged-native-node-entry.test.mjs
+          tests/staged-runtime-binding.test.ts
+          tests/installer-lifecycle-evidence.test.ts
