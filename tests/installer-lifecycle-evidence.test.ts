@@ -172,3 +172,32 @@ test('both initial ingestion and final readback invoke the semantic installer ga
     assert.match(code, /await verifyInstallerEvidence\(\s*installerRoot,\s*receipt.installer,/);
     assert.match(code, /readBoundedReceiptBytes\(\s*path.join\(installerRoot,\s*'receipt.json'\)/);
 });
+
+test('Linux folder and AppImage launch receipts are not interchangeable, even after rehashing', async () => {
+    for (const layout of ['linux-folder', 'linux-appimage']) {
+        const f = installerMemoryFixture('linux-x64');
+        const selected = layout + ':offline-launch';
+        const other = layout === 'linux-folder' ? '.AppImage' : '.tar.gz';
+        f.change(selected, (value: any) => {
+            value.package = f.expected.artifacts.find((asset: any) => asset.name.endsWith(other));
+            assert.ok(value.package);
+        });
+        await assert.rejects(
+            consumeInstallerLifecycleEvidence(f.receipt, f.expected, f.read),
+            /different package/,
+        );
+    }
+});
+
+test('a rehashed Linux offline-launch claim cannot substitute for the native producer', async () => {
+    for (const layout of ['linux-folder', 'linux-appimage']) {
+        const f = installerMemoryFixture('linux-x64');
+        f.change(layout + ':offline-launch', (value: any) => {
+            value.observation = { launch: true, bridge: true, exited: true };
+        });
+        await assert.rejects(
+            consumeInstallerLifecycleEvidence(f.receipt, f.expected, f.read),
+            /Unsupported installer observation contract/,
+        );
+    }
+});
