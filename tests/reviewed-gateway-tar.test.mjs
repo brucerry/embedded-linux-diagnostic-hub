@@ -14,14 +14,17 @@ const files = () => new Map(GATEWAY_PAYLOAD_FILES.map((name) => [name, Buffer.fr
 test('packaged bundle matches the separate compiler and archive readback', () => {
     const map = files();
     const bundleSHA256 = digest(map.get(main));
+    const sourceCommit = "4".repeat(40), sourceTree = "5".repeat(40);
     const receipt = Buffer.from(JSON.stringify({ schemaVersion: 1,
-        kind: 'isolated-gateway-compiler-readback', bundleSHA256, runtimeExecuted: false, releaseAdmission: false }));
-    const selection = { bundleSHA256, receiptSHA256: digest(receipt) };
+        kind: 'isolated-gateway-compiler-readback', sourceCommit, sourceTree, bundleSHA256, runtimeExecuted: false, releaseAdmission: false }));
+    const selection = { bundleSHA256, sourceCommit, sourceTree, receiptSHA256: digest(receipt) };
     const raw = encodeReviewedGatewayTar(map, receipt, selection);
     assert.deepEqual(verifyReviewedGatewayTarMember(raw, bundleSHA256),
         { bundleSHA256, releaseAdmission: false });
     assert.throws(() => encodeReviewedGatewayTar(map, Buffer.concat([receipt, Buffer.from(' ')]), selection),
         /Different selected compiler receipt/);
+    assert.throws(() => encodeReviewedGatewayTar(map, receipt, {...selection, sourceTree: '6'.repeat(40)}),
+        /different sourceTree/);
     map.set(main, Buffer.from('previous conventional Gateway distribution'));
     assert.throws(() => encodeReviewedGatewayTar(map, receipt, selection), /Stale or substituted/);
     assert.throws(() => verifyReviewedGatewayTarMember(encodeGatewayTar(map), bundleSHA256),

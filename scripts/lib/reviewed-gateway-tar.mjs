@@ -9,7 +9,8 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const valid = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
 /** Compiler review only. The caller selects receipt and bundle separately.
- * Entry hash is not complete source identity. No trust or release verdict.
+ * Clean checkout identity is separately selected, never inferred from one entry hash.
+ * No trust or release verdict.
  */
 export function encodeReviewedGatewayTar(files, receiptBytes, selection) {
     assert.ok(valid(selection.receiptSHA256) && valid(selection.bundleSHA256));
@@ -19,6 +20,10 @@ export function encodeReviewedGatewayTar(files, receiptBytes, selection) {
     assert.ok(record && typeof record === 'object' && !Array.isArray(record));
     assert.ok(record.kind === 'isolated-gateway-compiler-readback' && record.schemaVersion === 1
         && record.runtimeExecuted === false && record.releaseAdmission === false);
+    for (const name of ['sourceCommit', 'sourceTree']) {
+        assert.ok(typeof selection[name] === 'string' && /^[a-f0-9]{40}$/.test(selection[name]));
+        assert.equal(record[name], selection[name], 'Receipt belongs to a different ' + name);
+    }
     assert.equal(record.bundleSHA256, selection.bundleSHA256, 'Receipt belongs to a different bundle');
     const main = files.get(MAIN);
     assert.ok(Buffer.isBuffer(main) && main.length > 0 && main.length <= WEB_ARCHIVE_LIMITS.member);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
@@ -31,7 +32,23 @@ const binding = path.join(root, 'node_modules', selected.name, selected.filename
 assert.ok((await lstat(binding)).isFile());
 assert.equal(await realpath(binding), binding, 'Compiler binary must be local to the selected tree.');
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+const git = (...args) => execFileSync('git', ['--no-optional-locks', ...args], {
+    cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 5000,
+}).trimEnd();
+const captureGatewaySource = () => {
+    const sourceCommit = git('rev-parse', 'HEAD');
+    const sourceTree = git('rev-parse', 'HEAD^{tree}');
+    for (const value of [sourceCommit, sourceTree]) assert.match(value, /^[a-f0-9]{40}$/);
+    assert.equal(git('diff', '--name-only', '--no-ext-diff', 'HEAD', '--'), '',
+        'Gateway review requires unchanged tracked source.');
+    return { sourceCommit, sourceTree };
+};
+const trackedSources = gatewayReview ? new Set(git('ls-files', '-z').split('\0')) : undefined;
+if (gatewayReview)
+    assert.equal(git('status', '--porcelain=v1', '--untracked-files=all'), '',
+        'Gateway review requires a clean starting checkout.');
 const gatewayBefore = gatewayReview ? {
+    ...captureGatewaySource(),
     lockSHA256: sha256(await readFile(path.join(root, 'package-lock.json'))),
     entrySHA256: sha256(await readFile(path.join(root, 'gateway', 'main.ts'))),
     bindingSHA256: sha256(await readFile(binding)),
@@ -71,12 +88,22 @@ try {
                     'SSH runtime must never be inlined.');
             }
             if (gatewayReview) {
+                const projectModules = output[0].moduleIds.filter((id) => id !== '\0rolldown/runtime.js').map((id) =>
+                    path.relative(root, id).split(path.sep).join('/')).filter((id) =>
+                    !id.startsWith('node_modules/'));
+                assert.ok(projectModules.includes(input));
+                for (const name of projectModules) {
+                    assert.ok(!name.startsWith('../') && !path.isAbsolute(name) && trackedSources.has(name),
+                        'Gateway input is not a tracked application module: ' + name);
+                    assert.equal(await realpath(path.join(root, name)), path.join(root, name));
+                }
                 const record = {
                     schemaVersion: 1,
                     kind: 'isolated-gateway-compiler-readback',
                     sourceEntry: input,
                     compiler: { wrapper: wrapper.version, binding: selected.name, node: process.versions.node },
                     ...gatewayBefore,
+                    trackedModuleCount: projectModules.length,
                     bundleSHA256: sha256(await readFile(path.join(temporary, filename))),
                     imports: [...new Set(runtimeImports)].sort(),
                     runtimeExecuted: false,
@@ -85,6 +112,9 @@ try {
                 assert.equal(sha256(await readFile(path.join(root, 'package-lock.json'))), record.lockSHA256);
                 assert.equal(sha256(await readFile(path.join(root, input))), record.entrySHA256);
                 assert.equal(sha256(await readFile(binding)), record.bindingSHA256);
+                assert.deepEqual(captureGatewaySource(), {
+                    sourceCommit: record.sourceCommit, sourceTree: record.sourceTree,
+                });
                 await writeFile(path.join(temporary, 'compiler-readback.json'),
                     JSON.stringify(record, null, 2) + '\n', {flag: 'wx'});
             }
