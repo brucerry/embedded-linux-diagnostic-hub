@@ -1,0 +1,30 @@
+name: Hub v0.6.0 renderer-only rehearsal
+on:
+  push:
+    branches: [ci/v060-web-renderer-8078fb5]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    if: github.repository == 'brucerry/embedded-linux-diagnostic-hub' && github.ref == 'refs/heads/ci/v060-web-renderer-8078fb5'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out isolated harness
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Check out exact candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: '8078fb5f83b4d87c70e9806b1f90881a5c26da05'
+          path: candidate
+          persist-credentials: false
+      - name: Use reviewed Node version without npm cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24.21.0'
+          package-manager-cache: false
+      - name: Produce and verify portable renderer in this job only
+        run: python3 -B harness/.github/ci/v060-web/produce.py candidate
