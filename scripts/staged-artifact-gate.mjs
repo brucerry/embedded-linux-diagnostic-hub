@@ -260,7 +260,7 @@ if (mode === 'build-setup') {
             runCase(id, command, env, directory, output, receipt.cases);
         const identity = async (id, executable, asset, extra = {}) => {
             const destination = path.join(directory, id + '.json');
-            await run(id, [node, tsx, 'tests/staged-artifact-native.mts'], {
+            await run(id, [node, '--experimental-strip-types', 'tests/staged-artifact-native.mts'], {
                 HUB_TEST_EXECUTABLE: executable,
                 HUB_STAGED_IDENTITY: destination,
                 HUB_STAGED_ASSET: asset,
