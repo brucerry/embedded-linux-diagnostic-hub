@@ -3,6 +3,8 @@ import importlib.util
 import os
 from pathlib import Path
 import secrets
+import select
+import sys
 import subprocess
 import tempfile
 import time
@@ -59,7 +61,7 @@ def wait_until(test, deadline, message):
     raise ValueError(message)
 
 
-def run(exit_type):
+def run(exit_type, require_empty=False):
     unit = f"hub-v060-probe-{secrets.token_hex(12)}.service"
     with tempfile.TemporaryDirectory(prefix="hub-main-first-") as tmp:
         d = Path(tmp)
@@ -109,16 +111,36 @@ def run(exit_type):
                         "helper survival did not follow a normal main exit")
                 return True
             wait_until(main_first, end, "main-first exit not observed")
-            with path.open("rb") as events:
+            if not require_empty:
+                # Separate main-first survival from the race at cgroup removal.
                 (d / "helper-exit").touch()
-                def empty():
+                require(proc.wait(timeout=3) == 0 and (d / "helper-natural-return").is_file(),
+                        "helper natural completion not confirmed")
+                return "natural_main_first_helper_completion"
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+            try:
+                st = os.fstat(fd)
+                require((st.st_dev, st.st_ino) == (identity.st_dev, identity.st_ino),
+                        "unexpected scope identity at attachment")
+                def snapshot():
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    return os.read(fd, 1025).decode("ascii")
+                require(preflight.receipt.populated(snapshot()), "scope not populated at attachment")
+                watcher = select.poll()
+                watcher.register(fd, select.POLLPRI | select.POLLERR)
+                (d / "helper-exit").touch()
+                empty = False
+                while time.monotonic() < end and not empty:
+                    if not watcher.poll(100):
+                        continue
                     try:
-                        events.seek(0)
-                        raw = events.read(1025).decode("ascii")
-                        return bool(raw) and not preflight.receipt.populated(raw)
+                        value = snapshot()
                     except OSError:
-                        return False
-                wait_until(empty, end, "owned cgroup empty transition not observed")
+                        break  # Disappearance is not the same as observing an empty scope.
+                    empty = bool(value) and not preflight.receipt.populated(value)
+                require(empty, "owned cgroup empty transition not observed")
+            finally:
+                os.close(fd)
             require(proc.wait(timeout=3) == 0 and (d / "helper-natural-return").is_file(),
                     "helper natural completion not confirmed")
             return "natural_main_first_helper_then_empty"
@@ -133,8 +155,11 @@ def run(exit_type):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) != 2 or sys.argv[1] not in ("main-first", "empty", "default-control"):
+        raise SystemExit("Expected one explicit runner fixture")
     if not preflight.hosted_candidate() or not preflight.user_manager_ready():
         raise SystemExit("Unsupported hosted runner")
-    print(run("cgroup"), flush=True)
-    print(run("main"), flush=True)
+    mode = sys.argv[1]
+    print(run("main" if mode == "default-control" else "cgroup",
+              require_empty=mode == "empty"), flush=True)
     print("readiness_only_not_installer_qualification", flush=True)

@@ -13,8 +13,14 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Check an unprivileged owned test service only
-        run: |
-          set -eu
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          /usr/bin/python3 -B -I runner-main-first-probe.py
+      - name: Verify exact isolated source
+        id: source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Confirm main exits first while the helper survives and later finishes
+        run: /usr/bin/python3 -B -I runner-main-first-probe.py main-first
+      - name: Confirm natural empty through the same pre-armed cgroup descriptor
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: /usr/bin/python3 -B -I runner-main-first-probe.py empty
+      - name: Confirm default main-exit control does not preserve the helper
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: /usr/bin/python3 -B -I runner-main-first-probe.py default-control
